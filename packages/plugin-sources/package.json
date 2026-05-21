@@ -1,0 +1,23 @@
+{
+  "name": "@canopy/plugin-sources",
+  "version": "0.0.0",
+  "description": "Resolve Canopy plugins from GitHub, npm, or uploaded zips into a common artifact.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@canopy/core": "workspace:*",
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3"
+  }
+}

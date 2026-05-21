@@ -1,0 +1,17 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.github
+.wrangler
+.claude
+
+# never bake secrets into the image
+**/.dev.vars
+
+# the drive root — runtime user data; the container uses the /data volume instead
+storage
+
+*.log
+.DS_Store
+*.tsbuildinfo

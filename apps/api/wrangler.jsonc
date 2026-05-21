@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "canopy",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-05-01",
+
+  // Serve the built SPA from Static Assets; run the Worker first only for the API.
+  "assets": {
+    "directory": "../portal/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // The user's drive. Create with: wrangler r2 bucket create canopy-drive
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "canopy-drive" }],
+
+  // Non-secret config. Secrets (OIDC_CLIENT_SECRET, SESSION_SECRET, and
+  // GITHUB_TOKEN for a private repo) go via `wrangler secret put NAME`. The OIDC
+  // redirect URI is derived from the request origin (your deployed URL) —
+  // register <your-url>/api/auth/callback on the OIDC client; set APP_BASE_URL
+  // only to override that. GITHUB_REPO backs the read-only docs + demo mounts,
+  // read live from GitHub (so they aren't bundled and need no R2 bucket).
+  "vars": {
+    "OIDC_ISSUER": "https://token.sesamy.dev",
+    "OIDC_CLIENT_ID": "canopy",
+    "OIDC_AUDIENCE": "urn:canopy",
+    "GITHUB_REPO": "sesamyab/canopy",
+    "GITHUB_BRANCH": "main"
+  },
+
+  "observability": { "enabled": true }
+}

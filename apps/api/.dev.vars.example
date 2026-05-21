@@ -1,0 +1,24 @@
+# Copy to apps/api/.dev.vars and fill in to enable login.
+# Without these, the API runs with auth disabled (anonymous browsing).
+
+# Your authhero (or any OIDC) issuer — discovery is read from
+# ${OIDC_ISSUER}/.well-known/openid-configuration
+OIDC_ISSUER=https://your-tenant.authhero.example
+
+# A confidential client registered in authhero, with this redirect URI allowed:
+#   http://localhost:5768/api/auth/callback
+OIDC_CLIENT_ID=
+OIDC_CLIENT_SECRET=
+
+# Optional overrides
+# OIDC_REDIRECT_URI=http://localhost:5768/api/auth/callback
+# OIDC_SCOPES=openid profile email
+# OIDC_AUDIENCE=urn:canopy
+# APP_BASE_URL=http://localhost:5768
+# SESSION_TTL=28800
+
+# Read the docs + demo drive live from GitHub instead of the in-repo folders
+# (so they aren't bundled). Unset → falls back to local docs/ and demo/.
+# GITHUB_REPO=owner/repo
+# GITHUB_BRANCH=main
+# GITHUB_TOKEN=        # only for private repos / higher rate limits

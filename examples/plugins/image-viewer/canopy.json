@@ -1,0 +1,19 @@
+{
+  "id": "image-viewer",
+  "name": "Image Viewer",
+  "version": "0.1.0",
+  "description": "Renders images (PNG, JPEG, GIF, WebP, SVG, HEIC) inside a sandboxed preview.",
+  "icon": "image",
+  "color": "38 92% 50%",
+  "entry": "index.js",
+  "capabilities": [{ "kind": "item:read" }],
+  "contributes": {
+    "viewers": [
+      {
+        "id": "image",
+        "title": "Image",
+        "match": ["image/*", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic", ".avif"]
+      }
+    ]
+  }
+}

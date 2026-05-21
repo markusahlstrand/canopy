@@ -1,0 +1,85 @@
+/**
+ * Declarative UI contribution points. A plugin describes what it adds to the
+ * host UI via its manifest; the host renders the slots. Plugins do NOT ship
+ * arbitrary client JS in v1 — these descriptors are the surface.
+ */
+
+export interface ContextMenuContribution {
+  id: string;
+  label: string;
+  /** lucide icon name. */
+  icon?: string;
+  /** Restrict to item kinds (e.g. ["pdf","image"]); omit = all items. */
+  when?: { kinds?: string[] };
+}
+
+/** A panel the plugin renders into the right-hand rail. */
+export interface RailPanelContribution {
+  id: string;
+  title: string;
+  icon?: string;
+}
+
+/** A full-content view shown when the plugin is opened from the sidebar. */
+export interface DetailViewContribution {
+  id: string;
+  title: string;
+}
+
+/** A field the plugin adds to the file preview details grid. */
+export interface DetailFieldContribution {
+  id: string;
+  label: string;
+}
+
+/**
+ * A sandboxed viewer the plugin renders for matching file types. The host loads
+ * the plugin's viewer code into an isolated, opaque-origin iframe and hands it
+ * only the previewed file's bytes — never host DOM, cookies, or storage. See
+ * the runtime-agnostic protocol in the host's plugin-viewer surface.
+ */
+export interface ViewerContribution {
+  id: string;
+  /** Label shown on the preview surface (e.g. "PDF", "Image"). */
+  title?: string;
+  /**
+   * MIME types and/or file extensions this viewer handles. Each entry is one of:
+   * an exact MIME (`"application/pdf"`), a MIME wildcard (`"image/*"`), a
+   * dot-extension (`".heic"`), or a bare extension (`"pdf"`). Matched against the
+   * previewed file's MIME and extension.
+   */
+  match: string[];
+}
+
+/** How the plugin appears in the plugin store. */
+export interface StoreListing {
+  category: "Productivity" | "Finance" | "Lifestyle" | "Security" | "Media" | "Wellness";
+  tagline: string;
+  popular?: boolean;
+}
+
+export interface Contributions {
+  contextMenu?: ContextMenuContribution[];
+  railPanel?: RailPanelContribution;
+  detailView?: DetailViewContribution;
+  detailFields?: DetailFieldContribution[];
+  viewers?: ViewerContribution[];
+  store?: StoreListing;
+}
+
+/**
+ * Pure matcher: does a viewer's `match` list cover this file? Shared by the host
+ * preview surface and any server-side resolution. `ext` may include or omit the
+ * leading dot. Comparison is case-insensitive.
+ */
+export function viewerMatches(match: string[], file: { mime?: string; ext?: string }): boolean {
+  const mime = file.mime?.toLowerCase().split(";")[0]?.trim();
+  const ext = file.ext?.toLowerCase().replace(/^\./, "");
+  return match.some((raw) => {
+    const pat = raw.toLowerCase().trim();
+    if (pat.startsWith(".")) return !!ext && ext === pat.slice(1);
+    if (pat.endsWith("/*")) return !!mime && mime.startsWith(pat.slice(0, -1));
+    if (pat.includes("/")) return !!mime && mime === pat;
+    return !!ext && ext === pat; // bare extension, e.g. "pdf"
+  });
+}

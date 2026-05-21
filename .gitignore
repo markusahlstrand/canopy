@@ -1,0 +1,25 @@
+node_modules/
+dist/
+build/
+.turbo/
+.wrangler/
+coverage/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# local drive storage — real user files live here at runtime and must never be
+# committed. The demo drive's fixtures are a tracked folder at the repo root
+# (./demo), not under here.
+/storage/
+
+# editor / os
+.DS_Store
+*.local
+.idea/
+.vscode/*
+!.vscode/extensions.json

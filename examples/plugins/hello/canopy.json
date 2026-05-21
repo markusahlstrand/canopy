@@ -1,0 +1,14 @@
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "0.1.0",
+  "icon": "plugin",
+  "color": "262 60% 55%",
+  "entry": "index.js",
+  "capabilities": [{ "kind": "item:read" }],
+  "serverHooks": ["enrichItem"],
+  "contributes": {
+    "contextMenu": [{ "id": "hello.greet", "label": "Say hello" }],
+    "store": { "category": "Productivity", "tagline": "A tiny example plugin." }
+  }
+}

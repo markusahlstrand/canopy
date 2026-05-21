@@ -1,0 +1,19 @@
+{
+  "id": "pdf-viewer",
+  "name": "PDF Viewer",
+  "version": "0.1.0",
+  "description": "Renders PDF files inline using the browser's native PDF engine, inside a sandboxed preview.",
+  "icon": "file-text",
+  "color": "0 72% 51%",
+  "entry": "index.js",
+  "capabilities": [{ "kind": "item:read" }],
+  "contributes": {
+    "viewers": [
+      {
+        "id": "pdf",
+        "title": "PDF",
+        "match": ["application/pdf", ".pdf"]
+      }
+    ]
+  }
+}

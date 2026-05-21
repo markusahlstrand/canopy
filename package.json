@@ -1,0 +1,26 @@
+{
+  "name": "canopy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "An extensible, plugin-driven portal. First app: a drive over bring-your-own storage.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.10.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"pnpm --filter @canopy/api dev\" \"pnpm --filter @canopy/portal dev\"",
+    "dev:web": "pnpm --filter @canopy/portal dev",
+    "dev:api": "pnpm --filter @canopy/api dev",
+    "build": "pnpm -r build",
+    "start": "pnpm --filter @canopy/portal build && pnpm --filter @canopy/api start",
+    "deploy": "pnpm --filter @canopy/portal build && pnpm --filter @canopy/api deploy",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "~6.0.3"
+  }
+}
