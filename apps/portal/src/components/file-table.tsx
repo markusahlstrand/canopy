@@ -36,8 +36,8 @@ export interface SortState {
 
 interface FileTableProps {
   files: FileItem[];
-  selection: Set<number>;
-  onSelectionChange: (s: Set<number>) => void;
+  selection: Set<string>;
+  onSelectionChange: (s: Set<string>) => void;
   onOpen: (f: FileItem) => void;
   sort: SortState;
   onSort: (key: SortKey) => void;
@@ -98,7 +98,7 @@ export function FileTable({
 }: FileTableProps) {
   const lastIndex = useRef<number | null>(null);
 
-  function handleRowClick(e: React.MouseEvent, index: number, id: number) {
+  function handleRowClick(e: React.MouseEvent, index: number, id: string) {
     const next = new Set(selection);
     if (e.shiftKey && lastIndex.current != null) {
       const [a, b] = [lastIndex.current, index].sort((x, y) => x - y);

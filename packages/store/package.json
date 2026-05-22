@@ -1,0 +1,25 @@
+{
+  "name": "@canopy/store",
+  "version": "0.0.0",
+  "description": "Database-backed file store for Canopy: content-addressed blobs with per-tenant dedup, file records, versions, and permissions.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.15.9"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3",
+    "vitest": "^3.2.4"
+  }
+}

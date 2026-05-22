@@ -1,0 +1,19 @@
+{
+  "id": "markdown-editor",
+  "name": "Markdown",
+  "version": "0.1.0",
+  "description": "View and edit Markdown documents with a rich editor (Toast UI Editor), saving changes back to the drive. Falls back to a plain-text editor offline.",
+  "icon": "file-text",
+  "color": "212 92% 50%",
+  "entry": "index.js",
+  "capabilities": [{ "kind": "item:read" }, { "kind": "item:write" }],
+  "contributes": {
+    "viewers": [
+      {
+        "id": "markdown",
+        "title": "Markdown",
+        "match": ["text/markdown", ".md", ".markdown", ".mdx"]
+      }
+    ]
+  }
+}

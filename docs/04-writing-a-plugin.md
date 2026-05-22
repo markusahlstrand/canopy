@@ -151,8 +151,27 @@ That's the whole capability handoff: a viewer sees the file it's previewing and 
 The host auto-resizes the frame to its content, so plugins don't manage layout. The bridge
 protocol (host ↔ iframe `postMessage`) lives in `apps/portal/src/components/plugin-viewer.tsx`;
 `PluginViewer` is mounted from the file preview when a viewer matches. See
-`examples/plugins/pdf-viewer` for a PDF showcase that uses the browser's native engine — no
-external libraries, fully offline.
+`examples/plugins/pdf-viewer` for a PDF showcase — the browser's native PDF plugin is blocked
+inside a sandboxed frame, so it renders with **pdf.js to a `<canvas>`** (loaded from a CDN,
+with a blob-backed worker so it runs under the opaque origin), falling back to a download link
+if pdf.js can't load.
+
+### Editing — the write half of the handoff
+
+A viewer can also **edit**. The host hands the file in with a `writable` flag; to save, the
+plugin emits `save` with the new content, and the host writes it back — but only to the file
+currently being previewed, never a path the plugin chooses:
+
+```js
+ctx.emit("save", { content });        // → host PUTs to this one file
+// host replies: { type: "canopy:save-result", ok, error? }
+```
+
+`examples/plugins/markdown-editor` is the full example: it declares `item:write`, mounts
+[Toast UI Editor](https://ui.toast.com/tui-editor) (a rich Markdown + WYSIWYG editor, loaded
+from a CDN), and saves with ⌘/Ctrl-S or the Save button. If the CDN is unreachable it degrades
+to a plain-text editor that still saves. The host performs the write through the same
+`PUT /api/file` the drive uses, so per-user scoping and the storage connector apply unchanged.
 
 ## Adding a storage connector instead
 

@@ -6,7 +6,7 @@ import { PluginViewer } from "@/components/plugin-viewer";
 import { findViewer } from "@/plugins/viewers";
 import { cn } from "@/lib/utils";
 import { FILE_KIND_COLOR, STORAGE, type FileItem } from "@/lib/mock-data";
-import { fileUrl } from "@/lib/api";
+import { contentUrl, saveFileVersion } from "@/lib/api";
 
 function Handle() {
   return <div className="mx-auto mt-2 mb-1 h-1.5 w-9 shrink-0 rounded-full bg-border" />;
@@ -114,9 +114,15 @@ export function FileDetailSheet({
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[18px] pb-8">
             {/* preview */}
             {(() => {
-              const viewer = file.path ? findViewer(file.name) : undefined;
-              return viewer && file.path ? (
-                <PluginViewer key={file.path} file={{ source: viewer.source, name: file.name, url: fileUrl(file.path) }} className="mt-1" />
+              const viewer = file.kind !== "folder" ? findViewer(file.name) : undefined;
+              const editable = viewer?.plugin === "markdown-editor";
+              return viewer ? (
+                <PluginViewer
+                  key={file.id}
+                  file={{ source: viewer.source, name: file.name, url: contentUrl(file.id) }}
+                  className="mt-1"
+                  onSaveContent={editable ? (text) => saveFileVersion(file.id, text) : undefined}
+                />
               ) : (
                 <div
                   className="grid place-items-center rounded-2xl border border-dashed py-8 text-center"
@@ -146,7 +152,7 @@ export function FileDetailSheet({
               <ActionTile
                 icon="download"
                 label="Save"
-                onClick={() => file.path && window.open(fileUrl(file.path), "_blank")}
+                onClick={() => file.kind !== "folder" && window.open(contentUrl(file.id), "_blank")}
               />
               <ActionTile icon="star" label={file.starred ? "Starred" : "Star"} active={file.starred} />
               <ActionTile icon="more" label="More" />

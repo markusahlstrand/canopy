@@ -22,7 +22,7 @@ import { TweaksPanel } from "@/components/tweaks-panel";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import { type FileItem, type FileKind } from "@/lib/mock-data";
-import { listFiles, fileUrl, uploadFiles, deleteFile, fetchMe, loginUrl, logout, type Me } from "@/lib/api";
+import { listFiles, contentUrl, uploadFiles, deleteFile, fetchMe, loginUrl, logout, type Me } from "@/lib/api";
 import { createRegistry, DEFAULT_INSTALLED, PLUGIN_UI } from "@/plugins";
 import { ACCENT_HSL, ACCENT_HSL_DARK, DEFAULT_TWEAKS, FONT_STACK, type Tweaks } from "@/lib/tweaks";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -93,7 +93,7 @@ function DesktopApp() {
     const a = readUrlState().active;
     return a.startsWith("plugin:") ? a.slice(7) : (installedIds[0] ?? "");
   });
-  const [selection, setSelection] = useState<Set<number>>(new Set());
+  const [selection, setSelection] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"list" | "grid">("list");
   const [sort, setSort] = useState<SortState>({ key: "modified", dir: "desc" });
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -256,11 +256,11 @@ function DesktopApp() {
   }
 
   async function deleteSelected() {
-    const targets = files.filter((f) => selection.has(f.id) && f.path != null);
+    const targets = files.filter((f) => selection.has(f.id) && f.kind !== "folder");
     const n = targets.length;
     setSelection(new Set());
     try {
-      await Promise.all(targets.map((f) => deleteFile(f.path!)));
+      await Promise.all(targets.map((f) => deleteFile(f.id)));
       reload();
       toast(`${n} item${n === 1 ? "" : "s"} deleted`);
     } catch (err) {
@@ -271,9 +271,9 @@ function DesktopApp() {
 
   async function onFileAction(action: string, f: FileItem) {
     if (action === "Delete") {
-      if (f.path == null) return;
+      if (f.kind === "folder") return;
       try {
-        await deleteFile(f.path);
+        await deleteFile(f.id);
         reload();
         toast("1 item deleted", { description: f.name });
       } catch (err) {
@@ -281,8 +281,8 @@ function DesktopApp() {
       }
     } else if (action === "Star") {
       setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, starred: !x.starred } : x)));
-    } else if ((action === "Download" || action === "Copy link") && f.path != null) {
-      window.open(fileUrl(f.path), "_blank");
+    } else if ((action === "Download" || action === "Copy link") && f.kind !== "folder") {
+      window.open(contentUrl(f.id), "_blank");
     } else {
       toast(action, { description: f.name });
     }
@@ -481,7 +481,7 @@ function DesktopApp() {
 
       <PluginStore open={storeOpen} onOpenChange={setStoreOpen} installedIds={installedIds} onInstall={installPlugin} />
 
-      <FilePreview file={previewFile} onClose={() => setPreviewFile(null)} />
+      <FilePreview file={previewFile} onClose={() => setPreviewFile(null)} onSaved={reload} />
 
       <TweaksPanel t={tweaks} setTweak={setTweak} />
 

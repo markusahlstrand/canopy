@@ -4,6 +4,7 @@ import { viewerMatches, type ViewerContribution } from "@canopy/core";
 // resolved third-party plugin (zip/github/npm) would take, just without a fetch.
 import imageViewerSource from "../../../../examples/plugins/image-viewer/index.js?raw";
 import pdfViewerSource from "../../../../examples/plugins/pdf-viewer/index.js?raw";
+import markdownEditorSource from "../../../../examples/plugins/markdown-editor/index.js?raw";
 
 /** A viewer the host can mount: a contribution plus the code that implements it. */
 export interface InstalledViewer extends ViewerContribution {
@@ -19,6 +20,13 @@ export interface InstalledViewer extends ViewerContribution {
  * bundled samples directly.
  */
 export const VIEWERS: InstalledViewer[] = [
+  {
+    plugin: "markdown-editor",
+    id: "markdown",
+    title: "Markdown",
+    match: ["text/markdown", ".md", ".markdown", ".mdx"],
+    source: markdownEditorSource,
+  },
   {
     plugin: "image-viewer",
     id: "image",

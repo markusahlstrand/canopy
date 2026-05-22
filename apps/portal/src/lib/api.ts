@@ -47,46 +47,145 @@ function fmtDate(iso?: string): string {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
 }
 
-function toFileItem(entry: StorageEntry, id: number): FileItem {
+const join = (dir: string, name: string) => [dir, name].filter(Boolean).join("/");
+
+/** SHA-256 of bytes as lowercase hex (browser Web Crypto). */
+async function sha256hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes as unknown as BufferSource);
+  let hex = "";
+  for (const b of new Uint8Array(digest)) hex += b.toString(16).padStart(2, "0");
+  return hex;
+}
+
+// ── the drive (DB-backed, content-addressed) ─────────────────────────────────
+
+/** Shape of a file record returned by the API (FileWithVersion). */
+interface ApiFile {
+  id: string;
+  name: string;
+  metadata: Record<string, unknown>;
+  updatedAt: string;
+  version: { size: number; mime: string | null } | null;
+}
+interface DriveListing {
+  path: string;
+  files: ApiFile[];
+  folders: string[];
+}
+
+/** List a virtual folder of the user's drive. Returns folders first, then files. */
+export async function listFiles(dir = ""): Promise<FileItem[]> {
+  const res = await fetch(`/api/files?path=${encodeURIComponent(dir)}`);
+  if (res.status === 401) return []; // not signed in → empty drive
+  if (!res.ok) throw new Error(`list failed: ${res.status}`);
+  const data: DriveListing = await res.json();
+  const folders: FileItem[] = data.folders.map((name) => ({
+    id: `folder:${join(dir, name)}`,
+    name,
+    kind: "folder",
+    modified: "—",
+    size: "—",
+    path: join(dir, name),
+  }));
+  const files: FileItem[] = data.files.map((f) => ({
+    id: f.id,
+    name: f.name,
+    kind: kindForName(f.name),
+    modified: fmtDate(f.updatedAt),
+    size: humanSize(f.version?.size),
+    path: dir,
+  }));
+  return [...folders, ...files];
+}
+
+/** URL to stream a drive file's current version. */
+export function contentUrl(id: string): string {
+  return `/api/files/${id}/content`;
+}
+
+/** Store bytes content-addressed, skipping the upload if the blob already exists. Returns the hash. */
+async function uploadBlob(bytes: Uint8Array): Promise<string> {
+  const hash = await sha256hex(bytes);
+  const prep = await fetch("/api/uploads/prepare", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ hash, size: bytes.byteLength }),
+  });
+  if (!prep.ok) throw new Error(`prepare failed: ${prep.status}`);
+  const { exists } = (await prep.json()) as { exists: boolean };
+  if (!exists) {
+    const put = await fetch(`/api/uploads/${hash}`, { method: "PUT", body: bytes as unknown as BodyInit });
+    if (!put.ok) throw new Error(`upload failed: ${put.status}`);
+  }
+  return hash;
+}
+
+/** Upload files into a virtual folder: hash → dedup-prepare → (PUT if new) → create record. */
+export async function uploadFiles(dir: string, files: File[]): Promise<number> {
+  for (const file of files) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const hash = await uploadBlob(bytes);
+    const res = await fetch("/api/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: file.name, hash, mime: file.type || undefined, path: dir }),
+    });
+    if (!res.ok) throw new Error(`create failed: ${res.status}`);
+  }
+  return files.length;
+}
+
+/** Save new text content as a NEW version of a file (metadata untouched). */
+export async function saveFileVersion(id: string, text: string, mime = "text/markdown"): Promise<void> {
+  const bytes = new TextEncoder().encode(text);
+  const hash = await uploadBlob(bytes);
+  const res = await fetch(`/api/files/${id}/versions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ hash, mime }),
+  });
+  if (!res.ok) throw new Error(`save failed: ${res.status}`);
+}
+
+/** Soft-delete a drive file by id. */
+export async function deleteFile(id: string): Promise<void> {
+  const res = await fetch(`/api/files/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+}
+
+// ── read-only mounts (docs / demo) ───────────────────────────────────────────
+
+function mountEntryToItem(mount: string, e: StorageEntry): FileItem {
   return {
-    id,
-    name: entry.name,
-    kind: entry.kind === "folder" ? "folder" : kindForName(entry.name),
-    modified: fmtDate(entry.modifiedAt),
-    size: entry.kind === "folder" ? "—" : humanSize(entry.size),
-    path: entry.path,
+    id: `${mount}:${e.path}`,
+    name: e.name,
+    kind: e.kind === "folder" ? "folder" : kindForName(e.name),
+    modified: fmtDate(e.modifiedAt),
+    size: e.kind === "folder" ? "—" : humanSize(e.size),
+    path: e.path,
   };
 }
 
-export async function listFiles(path: string, mount = "local"): Promise<FileItem[]> {
+/** List a read-only mount (e.g. the docs mount). */
+export async function listMount(path: string, mount: string): Promise<FileItem[]> {
   const res = await fetch(`/api/files?mount=${mount}&path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`list failed: ${res.status}`);
   const page: Page<StorageEntry> = await res.json();
-  return page.items.map((entry, i) => toFileItem(entry, i + 1));
+  return page.items.map((e) => mountEntryToItem(mount, e));
 }
 
-export function fileUrl(path: string, mount = "local"): string {
+/** URL for a file on a read-only mount. */
+export function mountFileUrl(path: string, mount: string): string {
   return `/api/file?mount=${mount}&path=${encodeURIComponent(path)}`;
 }
 
-export async function readText(path: string, mount = "local"): Promise<string> {
-  const res = await fetch(fileUrl(path, mount));
+export async function readText(path: string, mount: string): Promise<string> {
+  const res = await fetch(mountFileUrl(path, mount));
   if (!res.ok) throw new Error(`read failed: ${res.status}`);
   return res.text();
 }
 
-export async function uploadFiles(dir: string, files: File[]): Promise<number> {
-  const form = new FormData();
-  for (const f of files) form.append("file", f);
-  const res = await fetch(`/api/upload?path=${encodeURIComponent(dir)}`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`upload failed: ${res.status}`);
-  return files.length;
-}
-
-export async function deleteFile(path: string): Promise<void> {
-  const res = await fetch(`/api/file?path=${encodeURIComponent(path)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`delete failed: ${res.status}`);
-}
+// ── auth ─────────────────────────────────────────────────────────────────────
 
 export interface AuthUser {
   sub: string;

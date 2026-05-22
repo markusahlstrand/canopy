@@ -11,8 +11,12 @@
     "run_worker_first": ["/api/*"]
   },
 
-  // The user's drive. Create with: wrangler r2 bucket create canopy-drive
+  // Content-addressed blobs. Create with: wrangler r2 bucket create canopy-drive
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "canopy-drive" }],
+
+  // File/version/blob/permission metadata. Create with: wrangler d1 create canopy
+  // then paste the returned database_id here.
+  "d1_databases": [{ "binding": "DB", "database_name": "canopy", "database_id": "REPLACE_WITH_D1_DATABASE_ID" }],
 
   // Non-secret config. Secrets (OIDC_CLIENT_SECRET, SESSION_SECRET, and
   // GITHUB_TOKEN for a private repo) go via `wrangler secret put NAME`. The OIDC

@@ -15,6 +15,7 @@
     "@canopy/connector-local": "workspace:*",
     "@canopy/connector-r2": "workspace:*",
     "@canopy/core": "workspace:*",
+    "@canopy/store": "workspace:*",
     "@hono/node-server": "^1.14.4",
     "hono": "^4.10.3"
   },

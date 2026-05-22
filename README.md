@@ -12,6 +12,7 @@ mobile shell.
 ```
 packages/
   core/                 @canopy/core             interfaces: StorageConnector, PluginRuntime, registry, contributions, plugin sources
+  store/                @canopy/store            DB-backed drive: content-addressed blobs + dedup, files, versions, permissions (D1/libsql + R2/fs)
   plugin-sources/       @canopy/plugin-sources   resolve plugins from a GitHub folder, npm, or an uploaded zip
   connectors/
     local/              @canopy/connector-local  Node filesystem
@@ -22,9 +23,37 @@ apps/
   api/                  @canopy/api              portable Hono API — Node entry (node.ts) + Worker entry (worker.ts)
   portal/               @canopy/portal           Vite + React SPA (the Drive UI; desktop + mobile)
 examples/
-  plugins/              sample plugins — a hook plugin + sandboxed image and PDF viewers
+  plugins/              sample plugins — a hook plugin, sandboxed image/PDF viewers, a markdown editor
 demo/                   sample files for the anonymous demo drive (tracked; runtime data lives in storage/, which is gitignored)
 ```
+
+## Storage model
+
+The drive is **database-backed** (`@canopy/store`): the primary object is a *file record*, not a
+file. Three concerns stay separate — an immutable, content-addressed **blob** (the bytes,
+identified by SHA-256, stored once, reference-counted), a mutable **file** (id, name, metadata,
+pointer to its current version), and a **version** (binds a file to its content at a point in
+time). Metadata edits don't create versions; content changes don't touch metadata. Metadata is a
+JSON column with expression indexes (no EAV); **virtual folders** are derived from a `metadata.path`
+value, so the bytes stay flat.
+
+Content is **polymorphic**: a version is either a Canopy-owned `blob` (dedup'd, refcounted) or an
+`external` pointer into a connected store the user owns (filesystem / S3 / R2), indexed by key +
+etag. *(The connected/indexed path and its long-running crawl — Cloudflare Workflows on the edge,
+an in-process runner on Node — are in progress.)*
+
+- **Dedup is per-tenant by default.** The blob key is namespaced `tenant/<sha256>` (tenant = the
+  user's `sub`), so identical bytes dedup only within one tenant — cross-tenant dedup would leak
+  which files exist. Global dedup is an explicit opt-in (`CANOPY_GLOBAL_DEDUP=1`).
+- **Uploads are verified.** The client sends the hash to `POST /uploads/prepare`; on a miss it
+  `PUT`s the bytes, and the server re-hashes them before storing — the client's hash is never
+  trusted as the key.
+- **`?embed=true`** on `GET /files/:id/content` is intended to project a subset of metadata into
+  the file on the way out (XMP for images/PDF, core properties for docx) where the format supports
+  it. The flag is wired; per-format projection currently passes the bytes through unchanged.
+
+Storage adapters are swappable: **D1 + R2** on Cloudflare, **libsql (SQLite) + filesystem** on
+Node/Docker. Schema is applied by a numbered migration runner on boot.
 
 ## Develop
 

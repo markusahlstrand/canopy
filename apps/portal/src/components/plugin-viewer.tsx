@@ -21,6 +21,14 @@ import { useEffect, useRef, useState } from "react";
  *   iframe → host  { type: "canopy:rendered" }                viewer mounted ok
  *   iframe → host  { type: "canopy:error", message }          load/render failed
  *   iframe → host  { type: "canopy:action", action, data }    plugin-emitted event
+ *
+ * Saving (editors): a plugin requests a write by emitting `action: "save"` with
+ * `{ content }`. The host writes it back — but only to the file currently being
+ * previewed (`file.url`), never a path the plugin chooses — and reports the
+ * outcome. That's the write half of the capability handoff.
+ *
+ *   iframe → host  { type: "canopy:action", action: "save", data: { content } }
+ *   host → iframe  { type: "canopy:save-result", ok, error? }
  */
 
 const BOOTSTRAP = `<!doctype html>
@@ -86,12 +94,34 @@ type Status = "loading" | "ready" | "error";
 /**
  * Mount with a `key` tied to the file (e.g. `key={file.url}`) so a new file
  * remounts the component — the iframe and its state reset cleanly per file.
+ *
+ * `writable` lets an editor plugin save back to this file; `onSaved` fires after
+ * a successful write so the host can refresh metadata.
  */
-export function PluginViewer({ file, className }: { file: ViewerFile; className?: string }) {
+export function PluginViewer({
+  file,
+  className,
+  onSaved,
+  onSaveContent,
+}: {
+  file: ViewerFile;
+  className?: string;
+  onSaved?: () => void;
+  /** When provided, the viewer can save: the host persists the edited text (as a new version). */
+  onSaveContent?: (content: string) => Promise<void>;
+}) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(240);
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState<string | null>(null);
+  const writable = !!onSaveContent;
+
+  // Keep the latest callbacks without making them deps — a new identity each
+  // parent render would otherwise re-init the iframe (and reset an open editor).
+  const cbRef = useRef({ onSaved, onSaveContent });
+  useEffect(() => {
+    cbRef.current = { onSaved, onSaveContent };
+  }, [onSaved, onSaveContent]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -102,7 +132,13 @@ export function PluginViewer({ file, className }: { file: ViewerFile; className?
     async function onMessage(e: MessageEvent) {
       // Only trust messages from *this* iframe's window (origin is "null" / opaque).
       if (e.source !== iframe?.contentWindow) return;
-      const msg = e.data as { type?: string; height?: number; message?: string };
+      const msg = e.data as {
+        type?: string;
+        height?: number;
+        message?: string;
+        action?: string;
+        data?: { content?: string };
+      };
       if (msg?.type === "canopy:viewer-ready") {
         try {
           const res = await fetch(file.url);
@@ -111,7 +147,7 @@ export function PluginViewer({ file, className }: { file: ViewerFile; className?
           const mime = res.headers.get("content-type") ?? "application/octet-stream";
           if (cancelled) return;
           iframe?.contentWindow?.postMessage(
-            { type: "canopy:init", code: file.source, file: { name: file.name, mime, bytes } },
+            { type: "canopy:init", code: file.source, file: { name: file.name, mime, bytes, writable } },
             "*",
             [bytes],
           );
@@ -128,6 +164,20 @@ export function PluginViewer({ file, className }: { file: ViewerFile; className?
       } else if (msg?.type === "canopy:error") {
         setError(msg.message ?? "viewer error");
         setStatus("error");
+      } else if (msg?.type === "canopy:action" && msg.action === "save") {
+        // The host persists the edited text (a new version), scoped to THIS file.
+        const reply = (ok: boolean, err?: string) =>
+          iframe?.contentWindow?.postMessage({ type: "canopy:save-result", ok, error: err }, "*");
+        const save = cbRef.current.onSaveContent;
+        if (!save) return reply(false, "this file is read-only");
+        try {
+          await save(msg.data?.content ?? "");
+          if (cancelled) return;
+          reply(true);
+          cbRef.current.onSaved?.();
+        } catch (err) {
+          if (!cancelled) reply(false, (err as Error).message);
+        }
       }
     }
 
@@ -136,7 +186,7 @@ export function PluginViewer({ file, className }: { file: ViewerFile; className?
       cancelled = true;
       window.removeEventListener("message", onMessage);
     };
-  }, [file.url, file.source, file.name]);
+  }, [file.url, file.source, file.name, writable]);
 
   if (status === "error") {
     return (

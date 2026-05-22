@@ -8,6 +8,7 @@ own publishable npm packages alongside the core.
 ```
 packages/
   core/                 @canopy/core             interfaces only, zero runtime deps   [built]
+  store/                @canopy/store            DB-backed drive: blobs+dedup, files, versions  [built]
   plugin-sources/       @canopy/plugin-sources   resolve github / npm / zip plugins   [built]
   runtimes/
     node/               @canopy/runtime-node     isolated-vm sandbox adapter          [planned]
@@ -55,43 +56,53 @@ A `StorageEntry` is deliberately neutral — `kind` is just `"file" | "folder"`,
 `size` and `modifiedAt`. It carries no notion of "PDF" or "image"; that's a UI concern the
 portal derives from the file extension.
 
-## How a request flows today
+## How a request flows
 
-The portal is a static SPA; it can't touch a filesystem or a bucket directly. So reads go
-through the API:
+The portal is a static SPA; it can't touch a database or a bucket directly, so everything
+goes through the API. The **drive** is database-backed (`@canopy/store`), so a listing is a
+query, not a bucket crawl:
 
 ```
 portal (browser)
-  └─ GET /api/files?mount=local&path=Documents
-       └─ @canopy/api (Hono)  ── picks the "local" connector
-            └─ @canopy/connector-local  ── reads node:fs
-                 └─ Page<StorageEntry>  ──►  JSON  ──►  mapped to the UI's FileItem
+  └─ GET /api/files?path=Documents
+       └─ @canopy/api (Hono)  ── tenant = signed-in user's sub
+            └─ @canopy/store  ── SELECT files WHERE json_extract(metadata,'$.path') = ?
+                 └─ { files, folders }  ──►  JSON  ──►  mapped to the UI's FileItem
 ```
 
-The API is **mount-keyed**: `createApp(connectors)` takes a map like
-`{ local: driveConnector, docs: docsConnector }`, and every route reads `?mount=`. One
-deployment can expose several connectors at once — that's how the Docs plugin gets a
-read-only `docs` mount next to your drive.
+Uploads are content-addressed: the browser hashes the bytes, calls `POST /api/uploads/prepare`,
+and only `PUT`s the bytes on a miss (dedup); then `POST /api/files` creates the record. Downloads
+stream from `GET /api/files/:id/content`.
 
-Routes that exist today: `GET /api/files`, `GET /api/file`, `PUT /api/file`,
-`DELETE /api/file`, `POST /api/upload`, `GET /api/health`.
+Alongside the drive, the API still exposes **read-only mounts** over a plain `StorageConnector`
+keyed by `?mount=` — that's how the Docs plugin reads the `docs` mount (and the anonymous `demo`
+drive) live from GitHub.
+
+Routes: `POST /api/uploads/prepare`, `PUT /api/uploads/:token`, `POST/GET /api/files`,
+`GET /api/files/:id`, `GET /api/files/:id/content`, `PATCH /api/files/:id/metadata`,
+`POST /api/files/:id/versions`, `DELETE /api/files/:id`, `GET /api/files?mount=…` (read-only),
+`GET /api/file?mount=…` (read-only), `GET /api/health`, and `/api/auth/*`.
 
 ## Deployment
 
-- **Today (Node):** `apps/api/src/node.ts` serves the Hono app via `@hono/node-server`; the
-  portal runs on Vite and proxies `/api` to it. This is the local/dev/Docker path.
-- **Planned (Cloudflare):** the same `app.ts` runs unchanged on a Worker; a Worker entry
-  serves the built SPA assets and the API routes together, with R2 as the connector. Hono's
-  portability is the whole reason `app.ts` is split from `node.ts`.
+- **Node / Docker:** `apps/api/src/node.ts` serves the Hono app via `@hono/node-server` (the portal
+  proxies `/api` to it in dev, or it serves the built SPA in single-process mode). Storage is
+  **libsql (SQLite) + the filesystem**.
+- **Cloudflare:** the same `app.ts` runs on a single Worker — Static Assets serve the SPA, the
+  Worker handles `/api/*`, storage is **D1 (metadata) + R2 (blobs)**. Hono's portability is the
+  whole reason `app.ts` is split from `node.ts`. See [Deploying](deploying).
 
-## The index vs. storage model _(planned)_
+## Two content origins (the index vs. source-of-truth model)
 
-The hard problem Canopy is built around: the bucket is the source of truth, but listing and
-searching it live doesn't scale. The plan is a SQL **index** that mirrors entries, kept
-fresh by:
+Canopy is built around the tension between an index and the bytes' source of truth, and it
+resolves it with **two kinds of version**:
 
-- the connector's optional `changes()` feed where the backend supports eventing, and
-- a periodic crawl + lazy reconcile-on-read where it doesn't (e.g. plain R2).
+- **Managed (`blob`).** Canopy owns the bytes: content-addressed in R2/fs by SHA-256, stored
+  once, reference-counted, with the database as the source of truth. This is the default drive.
+- **Connected (`external`) — in progress.** You point Canopy at a filesystem / S3 / R2 you own;
+  it **indexes** the objects (by key + etag) into the same `files`/`file_versions` tables as
+  references. There the bucket is the source of truth and the DB is a cache, kept fresh by the
+  connector's `changes()` feed where available, else a periodic crawl. The crawl is a long-running
+  job — a **Cloudflare Workflow** on the edge, an in-process runner on Node.
 
-Vector and full-text search layer on top of that index later. None of this is built yet —
-today the local connector lists straight from the filesystem on every request.
+Vector and full-text search layer on top of the index later.

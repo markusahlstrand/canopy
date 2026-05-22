@@ -2,7 +2,7 @@
   "id": "pdf-viewer",
   "name": "PDF Viewer",
   "version": "0.1.0",
-  "description": "Renders PDF files inline using the browser's native PDF engine, inside a sandboxed preview.",
+  "description": "Renders PDF files to canvas with pdf.js inside a sandboxed preview (loads pdf.js from a CDN; falls back to a download link offline).",
   "icon": "file-text",
   "color": "0 72% 51%",
   "entry": "index.js",

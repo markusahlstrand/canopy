@@ -1,30 +1,31 @@
 export type FileKind = "folder" | "pdf" | "image" | "note" | "doc" | "audio" | "video";
 
 export interface FileItem {
-  id: number;
+  /** File-record id (uuid) for real files; a synthetic `folder:<path>` for folders. */
+  id: string;
   name: string;
   kind: FileKind;
   modified: string;
   size: string;
   sharedWith?: string[];
   starred?: boolean;
-  /** Connector-relative path, present for items backed by a real storage connector. */
+  /** For folders: the navigate-to virtual path. For files: the folder they live in. */
   path?: string;
 }
 
 export const DEFAULT_FILES: FileItem[] = [
-  { id: 1, name: "Family photos", kind: "folder", modified: "Apr 14, 2026", size: "2.3 GB", sharedWith: ["Maya", "Daniel", "Lily", "Nora"], starred: true },
-  { id: 2, name: "House", kind: "folder", modified: "Apr 12, 2026", size: "184 MB", sharedWith: ["Maya", "Daniel"] },
-  { id: 3, name: "Kids' school", kind: "folder", modified: "Apr 09, 2026", size: "67 MB", sharedWith: ["Maya", "Daniel"] },
-  { id: 4, name: "Maya birthday — 7.heic", kind: "image", modified: "Mar 28, 2026", size: "4.8 MB", sharedWith: ["Daniel", "Lily"] },
-  { id: 5, name: "House lease 2024.pdf", kind: "pdf", modified: "Mar 22, 2026", size: "1.2 MB", sharedWith: ["Maya", "Daniel"], starred: true },
-  { id: 6, name: "Pediatrician notes.md", kind: "note", modified: "Mar 14, 2026", size: "8 KB" },
-  { id: 7, name: "Tax return — joint.pdf", kind: "pdf", modified: "Feb 11, 2026", size: "920 KB" },
-  { id: 8, name: "Trip planning.doc", kind: "doc", modified: "Jan 30, 2026", size: "42 KB", sharedWith: ["Maya", "Daniel", "Nora"] },
-  { id: 9, name: "Lily — drawings", kind: "folder", modified: "Jan 22, 2026", size: "412 MB", sharedWith: ["Maya", "Lily"] },
-  { id: 10, name: "Wifi & router login.md", kind: "note", modified: "Jan 14, 2026", size: "2 KB", sharedWith: ["Maya", "Daniel"] },
-  { id: 11, name: "Birthday cake recipe.md", kind: "note", modified: "Jan 8, 2026", size: "3 KB" },
-  { id: 12, name: "Insurance — auto.pdf", kind: "pdf", modified: "Dec 28, 2025", size: "640 KB" },
+  { id: "1", name: "Family photos", kind: "folder", modified: "Apr 14, 2026", size: "2.3 GB", sharedWith: ["Maya", "Daniel", "Lily", "Nora"], starred: true },
+  { id: "2", name: "House", kind: "folder", modified: "Apr 12, 2026", size: "184 MB", sharedWith: ["Maya", "Daniel"] },
+  { id: "3", name: "Kids' school", kind: "folder", modified: "Apr 09, 2026", size: "67 MB", sharedWith: ["Maya", "Daniel"] },
+  { id: "4", name: "Maya birthday — 7.heic", kind: "image", modified: "Mar 28, 2026", size: "4.8 MB", sharedWith: ["Daniel", "Lily"] },
+  { id: "5", name: "House lease 2024.pdf", kind: "pdf", modified: "Mar 22, 2026", size: "1.2 MB", sharedWith: ["Maya", "Daniel"], starred: true },
+  { id: "6", name: "Pediatrician notes.md", kind: "note", modified: "Mar 14, 2026", size: "8 KB" },
+  { id: "7", name: "Tax return — joint.pdf", kind: "pdf", modified: "Feb 11, 2026", size: "920 KB" },
+  { id: "8", name: "Trip planning.doc", kind: "doc", modified: "Jan 30, 2026", size: "42 KB", sharedWith: ["Maya", "Daniel", "Nora"] },
+  { id: "9", name: "Lily — drawings", kind: "folder", modified: "Jan 22, 2026", size: "412 MB", sharedWith: ["Maya", "Lily"] },
+  { id: "10", name: "Wifi & router login.md", kind: "note", modified: "Jan 14, 2026", size: "2 KB", sharedWith: ["Maya", "Daniel"] },
+  { id: "11", name: "Birthday cake recipe.md", kind: "note", modified: "Jan 8, 2026", size: "3 KB" },
+  { id: "12", name: "Insurance — auto.pdf", kind: "pdf", modified: "Dec 28, 2025", size: "640 KB" },
 ];
 
 /** hsl channel triples ("H S% L%") so callers can build hsl() with alpha. */

@@ -6,7 +6,7 @@ import { FileIcon } from "@/components/file-icon";
 import { AvatarGroup, PersonAvatar } from "@/components/person-avatar";
 import { PluginViewer } from "@/components/plugin-viewer";
 import { findViewer } from "@/plugins/viewers";
-import { fileUrl } from "@/lib/api";
+import { contentUrl, saveFileVersion } from "@/lib/api";
 import { FILE_KIND_COLOR, STORAGE, CURRENT_USER, type FileItem } from "@/lib/mock-data";
 
 const COMMENTS = [
@@ -23,7 +23,15 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
   );
 }
 
-export function FilePreview({ file, onClose }: { file: FileItem | null; onClose: () => void }) {
+export function FilePreview({
+  file,
+  onClose,
+  onSaved,
+}: {
+  file: FileItem | null;
+  onClose: () => void;
+  onSaved?: () => void;
+}) {
   return (
     <Sheet open={!!file} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-[640px] max-w-[92vw] gap-0 sm:max-w-[640px]">
@@ -47,9 +55,15 @@ export function FilePreview({ file, onClose }: { file: FileItem | null; onClose:
 
             <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
               {(() => {
-                const viewer = file.path ? findViewer(file.name) : undefined;
-                return viewer && file.path ? (
-                  <PluginViewer key={file.path} file={{ source: viewer.source, name: file.name, url: fileUrl(file.path) }} />
+                const viewer = file.kind !== "folder" ? findViewer(file.name) : undefined;
+                const editable = viewer?.plugin === "markdown-editor";
+                return viewer ? (
+                  <PluginViewer
+                    key={file.id}
+                    file={{ source: viewer.source, name: file.name, url: contentUrl(file.id) }}
+                    onSaved={onSaved}
+                    onSaveContent={editable ? (text) => saveFileVersion(file.id, text) : undefined}
+                  />
                 ) : (
                   <div
                     className="grid h-52 place-items-center rounded-lg border-2 border-dashed text-center"

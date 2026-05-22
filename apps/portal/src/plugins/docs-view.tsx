@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { listFiles, readText } from "@/lib/api";
+import { listMount, readText } from "@/lib/api";
 import type { FileItem } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
@@ -24,7 +24,7 @@ export function DocsView() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    listFiles("", "docs")
+    listMount("", "docs")
       .then((items) => {
         const md = items.filter((f) => f.kind !== "folder" && /\.md$/i.test(f.name));
         setDocs(md);
