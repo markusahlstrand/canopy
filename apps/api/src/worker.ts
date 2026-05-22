@@ -2,6 +2,7 @@ import type { StorageConnector } from "@canopy/core";
 import { createGithubConnector } from "@canopy/connector-github";
 import {
   FileService,
+  createCache,
   createD1Db,
   createR2BlobStore,
   createSqlBlobRepo,
@@ -12,7 +13,8 @@ import {
   type D1Like,
   type R2BucketLike,
 } from "@canopy/store";
-import { createApp } from "./app";
+import { createApp, type DataSourceDeps } from "./app";
+import { DATA_SOURCES } from "./data-sources";
 import { createAuthApp } from "./auth/routes";
 import { readAuthConfig, type EnvVars } from "./auth/config";
 
@@ -22,7 +24,7 @@ interface WorkerEnv {
   BUCKET: R2BucketLike;
   /** D1 database holding file/version/blob/permission metadata. */
   DB: D1Like;
-  /** GitHub repo ("owner/repo") backing the read-only docs + demo mounts. */
+  /** GitHub repo ("owner/repo") backing the read-only documentation + demo mounts. */
   GITHUB_REPO?: string;
   GITHUB_BRANCH?: string;
   GITHUB_TOKEN?: string;
@@ -42,7 +44,7 @@ let schemaReady: Promise<void> | undefined;
 /**
  * Single Cloudflare Worker: serves /api/* (the Hono app); everything else comes
  * from Static Assets. The drive is D1 (metadata) + R2 (content-addressed blobs);
- * docs/demo are read-only GitHub mounts.
+ * documentation/demo are read-only GitHub mounts.
  */
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
@@ -53,12 +55,22 @@ export default {
     const service = new FileService(db, blobs, createSqlBlobRepo(db));
 
     const readonlyMounts: Record<string, StorageConnector> = {};
+    let demoDefaults: Record<string, Record<string, string>> = {};
     if (env.GITHUB_REPO) {
       const [owner, repo] = env.GITHUB_REPO.split("/");
-      const gh = (id: string, basePath: string) =>
-        createGithubConnector(id, { owner: owner!, repo: repo!, branch: env.GITHUB_BRANCH, basePath, token: env.GITHUB_TOKEN });
-      readonlyMounts.docs = gh("docs", "docs");
+      const cfg = { owner: owner!, repo: repo!, branch: env.GITHUB_BRANCH, token: env.GITHUB_TOKEN };
+      const gh = (id: string, basePath: string) => createGithubConnector(id, { ...cfg, basePath });
+      readonlyMounts.documentation = gh("documentation", "documentation");
       readonlyMounts.demo = gh("demo", "demo");
+      // Env GITHUB_REPO/TOKEN = the public demo default for tasks (issues) and
+      // calendar (milestones + releases), until a user connects their own repo.
+      demoDefaults = {
+        github: {
+          repo: env.GITHUB_REPO,
+          ...(env.GITHUB_BRANCH ? { branch: env.GITHUB_BRANCH } : {}),
+          ...(env.GITHUB_TOKEN ? { token: env.GITHUB_TOKEN } : {}),
+        },
+      };
     }
 
     const onLogin = async (u: { sub: string; email?: string; name?: string; picture?: string; emailVerified?: boolean }) => {
@@ -68,11 +80,18 @@ export default {
     };
 
     const authConfig = readAuthConfig(env as unknown as EnvVars);
+    const dataSources: DataSourceDeps = {
+      plugins: DATA_SOURCES,
+      demoDefaults,
+      cache: createCache(db),
+      secret: authConfig?.sessionSecret,
+    };
     const app = createApp({
       auth: createAuthApp(authConfig, onLogin),
       authConfig,
       readonlyMounts,
       drive: { service, blobs },
+      dataSources,
     });
     return app.fetch(request, env);
   },

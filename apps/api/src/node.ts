@@ -5,9 +5,18 @@ import { existsSync, mkdirSync } from "node:fs";
 import { createLocalConnector } from "@canopy/connector-local";
 import { createGithubConnector } from "@canopy/connector-github";
 import type { StorageConnector } from "@canopy/core";
-import { FileService, createSqlBlobRepo, ensurePersonalSpace, resolveInvites, runMigrations, upsertUser } from "@canopy/store";
+import {
+  FileService,
+  createCache,
+  createSqlBlobRepo,
+  ensurePersonalSpace,
+  resolveInvites,
+  runMigrations,
+  upsertUser,
+} from "@canopy/store";
 import { createFsBlobStore, createLibsqlDb } from "@canopy/store/node";
-import { createApp } from "./app";
+import { createApp, type DataSourceDeps } from "./app";
+import { DATA_SOURCES } from "./data-sources";
 import { readAuthConfig } from "./auth/config";
 import { createAuthApp } from "./auth/routes";
 
@@ -26,8 +35,8 @@ mkdirSync(dataRoot, { recursive: true });
 const dbPath = resolve(dataRoot, "canopy.db");
 const blobsRoot = resolve(dataRoot, "blobs");
 
-// docs + demo are read-only mounts — from GitHub when GITHUB_REPO is set, else local.
-const docsRoot = resolve(process.cwd(), "../../docs");
+// documentation + demo are read-only mounts — from GitHub when GITHUB_REPO is set, else local.
+const documentationRoot = resolve(process.cwd(), "../../documentation");
 const demoRoot = resolve(process.cwd(), "../../demo");
 const ghRepo = process.env.GITHUB_REPO; // "owner/repo"
 const [ghOwner, ghName] = (ghRepo ?? "").split("/");
@@ -35,8 +44,13 @@ const ghBranch = process.env.GITHUB_BRANCH || "main";
 const ghToken = process.env.GITHUB_TOKEN;
 const fromGithub = (id: string, basePath: string): StorageConnector =>
   createGithubConnector(id, { owner: ghOwner!, repo: ghName!, branch: ghBranch, basePath, token: ghToken });
-const docs = ghRepo ? fromGithub("docs", "docs") : createLocalConnector("docs", docsRoot);
+const documentation = ghRepo
+  ? fromGithub("documentation", "documentation")
+  : createLocalConnector("documentation", documentationRoot);
 const demo = ghRepo ? fromGithub("demo", "demo") : createLocalConnector("demo", demoRoot);
+
+// GitHub also feeds the tasks (issues) and calendar (milestones + releases) plugins.
+const githubCfg = ghRepo ? { owner: ghOwner!, repo: ghName!, branch: ghBranch, token: ghToken } : null;
 
 // The drive: libsql (SQLite) metadata + filesystem blob store.
 const db = createLibsqlDb(`file:${dbPath}`);
@@ -62,11 +76,29 @@ const onLogin = async (u: { sub: string; email?: string; name?: string; picture?
   await ensurePersonalSpace(db, u.sub);
 };
 
+const dataSources: DataSourceDeps = {
+  plugins: DATA_SOURCES,
+  // Env GITHUB_REPO/TOKEN = the public demo default (shown to everyone until a
+  // user connects their own repo in the GitHub plugin's settings).
+  demoDefaults: githubCfg
+    ? {
+        github: {
+          repo: `${githubCfg.owner}/${githubCfg.repo}`,
+          ...(githubCfg.branch ? { branch: githubCfg.branch } : {}),
+          ...(githubCfg.token ? { token: githubCfg.token } : {}),
+        },
+      }
+    : {},
+  cache: createCache(db),
+  secret: authConfig?.sessionSecret,
+};
+
 const app = createApp({
   auth: createAuthApp(authConfig, onLogin),
   authConfig,
-  readonlyMounts: { docs, demo },
+  readonlyMounts: { documentation, demo },
   drive: { service, blobs },
+  dataSources,
 });
 
 // Single-process mode: if the built SPA exists, serve it from this same server.
@@ -82,7 +114,7 @@ const port = Number(process.env.PORT ?? 8787);
 serve({ fetch: app.fetch, port }, (info) => {
   console.log(`canopy api → http://localhost:${info.port}`);
   console.log(`  drive       → sqlite:${dbPath} + blobs:${blobsRoot} (per-user)`);
-  console.log(`  docs + demo → ${ghRepo ? `github:${ghRepo}@${ghBranch}` : `${docsRoot} / ${demoRoot}`}`);
+  console.log(`  documentation + demo → ${ghRepo ? `github:${ghRepo}@${ghBranch}` : `${documentationRoot} / ${demoRoot}`}`);
   console.log(`  auth        → ${authConfig ? authConfig.issuer : "not configured (anonymous)"}`);
   console.log(`  ui          → ${serveSpa ? distDir : "served by Vite (dev)"}`);
 });

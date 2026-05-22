@@ -1,6 +1,6 @@
 # Writing a plugin
 
-The page you're reading is rendered by a plugin. The **Docs plugin** is a good first example
+The page you're reading is rendered by a plugin. The **Documentation plugin** is a good first example
 because it touches both halves of the system: it declares a storage capability and it
 contributes a UI view. We'll build it up step by step — every snippet below is the real code.
 
@@ -10,25 +10,25 @@ contributes a UI view. We'll build it up step by step — every snippet below is
 
 ## 1. Declare the manifest
 
-A plugin starts as a `PluginManifest`. The Docs plugin asks for read access to one storage
+A plugin starts as a `PluginManifest`. The Documentation plugin asks for read access to one storage
 mount and says it contributes a full-page detail view:
 
 ```ts
 // apps/portal/src/plugins/manifests.ts
-const docs: PluginManifest = {
-  id: "docs",
-  name: "Docs",
+const documentation: PluginManifest = {
+  id: "documentation",
+  name: "Documentation",
   version: "0.1.0",
   icon: "book",
   color: "212 70% 48%",
-  capabilities: [{ kind: "storage:read", connectors: ["docs"] }],
+  capabilities: [{ kind: "storage:read", connectors: ["documentation"] }],
   contributes: {
-    detailView: { id: "docs-detail", title: "Docs" },
+    detailView: { id: "documentation-detail", title: "Documentation" },
   },
 };
 ```
 
-That's the entire declarative surface. The host now knows Docs exists, what it's allowed to
+That's the entire declarative surface. The host now knows Documentation exists, what it's allowed to
 touch, and that it owns a detail view.
 
 ## 2. Register it
@@ -48,23 +48,23 @@ export function createRegistry(installedIds: string[]): PluginRegistry {
 }
 ```
 
-Docs is in `DEFAULT_INSTALLED`, so it's registered at startup and shows up in the sidebar
+Documentation is in `DEFAULT_INSTALLED`, so it's registered at startup and shows up in the sidebar
 under "Plugins".
 
 ## 3. Build the view, using only granted access
 
-The plugin's job is to read markdown from the `docs` mount and render it. It reaches storage
-through the host API — the same `?mount=docs` it declared a capability for — never directly:
+The plugin's job is to read markdown from the `documentation` mount and render it. It reaches storage
+through the host API — the same `?mount=documentation` it declared a capability for — never directly:
 
 ```tsx
-// apps/portal/src/plugins/docs-view.tsx (trimmed)
-export function DocsView() {
+// apps/portal/src/plugins/documentation-view.tsx (trimmed)
+export function DocumentationView() {
   const [docs, setDocs] = useState<FileItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState("");
 
   useEffect(() => {
-    listFiles("", "docs").then((items) => {           // GET /api/files?mount=docs
+    listFiles("", "documentation").then((items) => {  // GET /api/files?mount=documentation
       const md = items.filter((f) => /\.md$/i.test(f.name));
       setDocs(md);
       setSelected((s) => s ?? md[0]?.path ?? null);
@@ -72,7 +72,7 @@ export function DocsView() {
   }, []);
 
   useEffect(() => {
-    if (selected) readText(selected, "docs").then(setContent);   // GET /api/file?mount=docs
+    if (selected) readText(selected, "documentation").then(setContent);   // GET /api/file?mount=documentation
   }, [selected]);
 
   return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
@@ -82,9 +82,9 @@ export function DocsView() {
 The data path end to end:
 
 ```
-DocsView ─ listFiles("", "docs") ─► GET /api/files?mount=docs
-                                       └─ @canopy/api picks the "docs" connector
-                                            └─ @canopy/connector-local reads ./docs
+DocumentationView ─ listFiles("", "documentation") ─► GET /api/files?mount=documentation
+                                       └─ @canopy/api picks the "documentation" connector
+                                            └─ @canopy/connector-local reads ./documentation
 ```
 
 ## 4. Connect the view to the contribution
@@ -95,12 +95,12 @@ Until the sandbox can ship plugin code, that mapping lives in `PLUGIN_UI`:
 ```ts
 // apps/portal/src/plugins/index.tsx
 export const PLUGIN_UI: Record<string, PluginUI> = {
-  docs: { DetailView: DocsView },
+  documentation: { DetailView: DocumentationView },
   // …
 };
 ```
 
-When you open Docs from the sidebar, the host looks up `PLUGIN_UI["docs"].DetailView` and
+When you open Documentation from the sidebar, the host looks up `PLUGIN_UI["documentation"].DetailView` and
 renders it in the content area. That's the whole plugin.
 
 ## File viewers (sandboxed)
@@ -195,13 +195,13 @@ Mounting it is one line where the API is assembled:
 // apps/api/src/node.ts
 const app = createApp({
   local: createLocalConnector("local", driveRoot),
-  docs:  createLocalConnector("docs", docsRoot),   // the mount this Docs plugin reads
+  documentation: createLocalConnector("documentation", documentationRoot),   // the mount this Documentation plugin reads
 });
 ```
 
 A new backend (say R2) means a new package implementing the same `StorageConnector` interface
 — nothing in the core or the portal changes. That's the slim-core payoff: the drive doesn't
-know what R2 is, and the Docs plugin doesn't know it's reading from a folder on disk.
+know what R2 is, and the Documentation plugin doesn't know it's reading from a folder on disk.
 
 ## Checklist
 

@@ -1,11 +1,13 @@
 import type { Page, StorageConnector, StorageEntry } from "@canopy/core";
 
+export * from "./providers";
+
 export interface GithubConnectorConfig {
   owner: string;
   repo: string;
   /** Default "main". */
   branch?: string;
-  /** Repo subdirectory this connector is rooted at, e.g. "docs". */
+  /** Repo subdirectory this connector is rooted at, e.g. "documentation". */
   basePath?: string;
   /** Optional token for higher rate limits / private repos. */
   token?: string;
@@ -28,7 +30,7 @@ function encodePath(p: string): string {
 
 /**
  * Read-only connector over a GitHub repository (Contents API). Lets the demo
- * drive and the docs mount be read live from GitHub instead of being bundled
+ * drive and the documentation mount be read live from GitHub instead of being bundled
  * into the deployment. Writes are rejected.
  */
 export function createGithubConnector(id: string, config: GithubConnectorConfig): StorageConnector {

@@ -144,6 +144,70 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    // App passwords — per-device tokens for Basic-auth clients (e.g. WebDAV in
+    // Finder) that can't do OIDC. Only the hash is stored; the token is shown once.
+    version: 5,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS app_passwords (
+         id           TEXT PRIMARY KEY,
+         user_sub     TEXT NOT NULL,
+         name         TEXT NOT NULL,
+         token_hash   TEXT NOT NULL,
+         created_at   TEXT NOT NULL,
+         last_used_at TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_app_passwords_user ON app_passwords (user_sub)`,
+      `CREATE INDEX IF NOT EXISTS idx_app_passwords_hash ON app_passwords (token_hash)`,
+    ],
+  },
+  {
+    // KV cache — short-TTL JSON blobs for external API responses (e.g. GitHub
+    // issues/releases) so plugin data endpoints stay well under rate limits.
+    version: 6,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS kv_cache (
+         k          TEXT PRIMARY KEY,
+         v          TEXT NOT NULL,
+         expires_at INTEGER NOT NULL
+       )`,
+    ],
+  },
+  {
+    // Single-use invite links to a space. Unlike a share-by-email grant (which
+    // pre-binds an address), the token is opaque and not bound to anyone — whoever
+    // signs in and accepts joins at `role`. Consumed on first accept (accepted_by
+    // set) or once expires_at passes; the token lives in the URL.
+    version: 7,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS space_invites (
+         token       TEXT PRIMARY KEY,
+         space_id    TEXT NOT NULL,
+         role        TEXT NOT NULL,                 -- 'owner' | 'editor' | 'viewer'
+         created_by  TEXT NOT NULL,
+         created_at  TEXT NOT NULL,
+         expires_at  TEXT,                          -- null = never expires
+         accepted_by TEXT,                          -- null = unused (single-use)
+         accepted_at TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_space_invites_space ON space_invites (space_id)`,
+    ],
+  },
+  {
+    // Per-user, per-plugin settings (e.g. the GitHub source's repo + token). The
+    // `config` JSON is opaque to the store; the API encrypts any secret fields
+    // (the token) before persisting and decrypts them on read.
+    version: 8,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS plugin_settings (
+         user_sub   TEXT NOT NULL,
+         plugin_id  TEXT NOT NULL,
+         config     TEXT NOT NULL DEFAULT '{}',
+         updated_at TEXT NOT NULL,
+         PRIMARY KEY (user_sub, plugin_id)
+       )`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

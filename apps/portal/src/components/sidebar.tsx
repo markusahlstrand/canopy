@@ -39,6 +39,7 @@ interface SidebarProps {
   onCreateSpace: () => void;
   onNewFolder: () => void;
   onUpload: () => void;
+  onConnectDevice: () => void;
   auth: Me;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -106,6 +107,7 @@ export function Sidebar({
   onCreateSpace,
   onNewFolder,
   onUpload,
+  onConnectDevice,
   auth,
   onSignIn,
   onSignOut,
@@ -285,7 +287,10 @@ export function Sidebar({
                       <Icon name="more" size={16} />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuContent align="end" className="w-52">
+                    <DropdownMenuItem onClick={onConnectDevice}>
+                      <Icon name="cloud" size={15} /> Connect a device…
+                    </DropdownMenuItem>
                     <DropdownMenuItem onClick={onSignOut}>
                       <Icon name="log-out" size={15} /> Sign out
                     </DropdownMenuItem>

@@ -1,148 +1,167 @@
-import { Plus } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { PersonAvatar } from "@/components/person-avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { TONE_COLOR } from "@/lib/mock-data";
+import type { CalendarEvent, Task, TaskStatus } from "@/lib/api";
+import { useCalendar, useTasks } from "./data";
 
-const DAYS = ["Sun May 3", "Mon May 4", "Tue May 5", "Wed May 6", "Thu May 7", "Fri May 8", "Sat May 9"];
-const HOURS = ["8 AM", "9 AM", "10 AM", "11 AM", "12 PM", "1 PM", "2 PM", "3 PM", "4 PM", "5 PM", "6 PM", "7 PM"];
-const EVENTS = [
-  { day: 0, start: 1, len: 1, title: "Lily violin", tone: "info" },
-  { day: 1, start: 3, len: 1, title: "Standup", tone: "primary" },
-  { day: 2, start: 8, len: 2, title: "Family dinner", tone: "primary" },
-  { day: 3, start: 5, len: 1, title: "Maya — recital", tone: "berry" },
-  { day: 4, start: 0, len: 1, title: "Yoga", tone: "accent" },
-  { day: 5, start: 1, len: 1, title: "Pediatrician", tone: "info" },
-  { day: 6, start: 6, len: 2, title: "Soccer game", tone: "primary" },
+const STATUS_COLUMNS: { status: TaskStatus; title: string; color: string }[] = [
+  { status: "todo", title: "To do", color: "212 70% 48%" },
+  { status: "in_progress", title: "In progress", color: "145 33% 36%" },
+  { status: "blocked", title: "Blocked", color: "0 72% 51%" },
+  { status: "done", title: "Done", color: "220 9% 46%" },
 ];
-const ROW_H = 44;
 
-export function CalendarWeekView() {
+/** A small pill telling the user whether they're seeing live or sample data. */
+function SourcePill({ source }: { source: "github" | "sample" }) {
+  if (source === "github") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2 py-0.5 text-[11.5px] font-medium text-primary">
+        <span className="size-1.5 rounded-full bg-primary" /> Live from GitHub
+      </span>
+    );
+  }
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
-      <div className="grid border-b" style={{ gridTemplateColumns: "60px repeat(7, 1fr)" }}>
-        <div />
-        {DAYS.map((d) => (
-          <div key={d} className="border-l px-3 py-2.5 text-[12.5px] font-medium text-muted-foreground">
-            {d}
-          </div>
-        ))}
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-[11.5px] text-muted-foreground">
+      Sample data · install the GitHub plugin for live data
+    </span>
+  );
+}
+
+function TaskCard({ t }: { t: Task }) {
+  const done = t.status === "done";
+  const Title = t.url ? "a" : "span";
+  return (
+    <div className="rounded-md border bg-muted/50 p-2.5" style={{ opacity: done ? 0.6 : 1 }}>
+      <div className="flex items-center gap-2">
+        <Checkbox defaultChecked={done} />
+        <Title
+          {...(t.url ? { href: t.url, target: "_blank", rel: "noreferrer" } : {})}
+          className={`flex-1 truncate text-[13.5px] font-medium ${done ? "line-through" : ""} ${t.url ? "hover:underline" : ""}`}
+        >
+          {t.title}
+        </Title>
+        {t.assignee && <PersonAvatar name={t.assignee} size="xs" />}
       </div>
-      <div className="grid" style={{ gridTemplateColumns: "60px repeat(7, 1fr)" }}>
-        <div>
-          {HOURS.map((h) => (
-            <div
-              key={h}
-              className="border-t px-2 text-right font-mono text-[11px] text-muted-foreground"
-              style={{ height: ROW_H, lineHeight: `${ROW_H}px` }}
-            >
-              {h}
-            </div>
+      {(t.due || t.priority === "high" || (t.labels && t.labels.length > 0)) && !done && (
+        <div className="ml-6 mt-1.5 flex flex-wrap items-center gap-1.5">
+          {t.due && (
+            <span className="font-mono text-[11.5px] text-muted-foreground">
+              {new Date(t.due).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+            </span>
+          )}
+          {t.priority === "high" && (
+            <Badge variant="outline" className="border-destructive/40 px-1 py-0 text-[10px] text-destructive">
+              High
+            </Badge>
+          )}
+          {t.labels?.slice(0, 2).map((l) => (
+            <Badge key={l} variant="outline" className="px-1 py-0 text-[10px] text-muted-foreground">
+              {l}
+            </Badge>
           ))}
         </div>
-        {DAYS.map((d, di) => (
-          <div key={d} className="relative border-l">
-            {HOURS.map((_, hi) => (
-              <div key={hi} className="border-t" style={{ height: ROW_H }} />
-            ))}
-            {EVENTS.filter((e) => e.day === di).map((e, i) => (
-              <div
-                key={i}
-                className="absolute overflow-hidden rounded-md px-2 py-1 text-[11.5px] font-medium"
-                style={{
-                  top: e.start * ROW_H + 3,
-                  left: 4,
-                  right: 4,
-                  height: e.len * ROW_H - 6,
-                  background: `hsl(${TONE_COLOR[e.tone]} / 0.16)`,
-                  borderLeft: `3px solid hsl(${TONE_COLOR[e.tone]})`,
-                }}
-              >
-                {e.title}
+      )}
+    </div>
+  );
+}
+
+export function TasksKanban() {
+  const { tasks, source, loading } = useTasks();
+  const byStatus = (s: TaskStatus) => tasks.filter((t) => t.status === s);
+  return (
+    <div className="flex flex-col gap-3.5">
+      <div className="flex items-center gap-2">
+        <SourcePill source={source} />
+        {loading && <span className="text-[12px] text-muted-foreground">Loading…</span>}
+      </div>
+      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+        {STATUS_COLUMNS.map((col) => {
+          const items = byStatus(col.status);
+          return (
+            <div key={col.status} className="flex flex-col gap-2 rounded-lg border bg-card p-3.5">
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="size-2 rounded-full" style={{ background: `hsl(${col.color})` }} />
+                <span className="text-[13.5px] font-semibold">{col.title}</span>
+                <span className="font-mono text-xs text-muted-foreground">{items.length}</span>
               </div>
-            ))}
-          </div>
-        ))}
+              {items.map((t) => (
+                <TaskCard key={t.id} t={t} />
+              ))}
+              {items.length === 0 && <div className="rounded-md border border-dashed p-3 text-center text-[12px] text-muted-foreground">Nothing here</div>}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-const COLUMNS = [
-  {
-    title: "Up next",
-    color: "145 33% 36%",
-    items: [
-      { title: "Renew home insurance", due: "Today", who: "Maya", high: true },
-      { title: "Schedule Lily's checkup", due: "Tomorrow", who: "Daniel" },
-      { title: "Buy gift for Nora", due: "May 18", who: "Maya" },
-      { title: "Pick up dry cleaning", due: "May 19", who: "Daniel" },
-    ],
-  },
-  {
-    title: "Later",
-    color: "212 70% 48%",
-    items: [
-      { title: "Plan summer trip", due: "Jun", who: "Maya" },
-      { title: "Service the car", due: "Jun 5", who: "Daniel" },
-      { title: "Tax extension", due: "Jul", who: "Maya" },
-    ],
-  },
-  {
-    title: "Done this week",
-    color: "220 9% 46%",
-    items: [
-      { title: "Sort tax documents", who: "Daniel", done: true },
-      { title: "Order soccer cleats", who: "Maya", done: true },
-      { title: "Sign permission slip", who: "Maya", done: true },
-    ],
-  },
-] as const;
+const KIND_LABEL: Record<NonNullable<CalendarEvent["kind"]>, string> = {
+  milestone: "Milestone",
+  release: "Release",
+  issue: "Issue",
+  event: "Event",
+};
 
-export function TasksKanban() {
+/** Group events by calendar day, preserving chronological order. */
+function groupByDay(events: CalendarEvent[]): { day: string; items: CalendarEvent[] }[] {
+  const sorted = [...events].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const groups: { day: string; items: CalendarEvent[] }[] = [];
+  for (const e of sorted) {
+    const day = new Date(e.start).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    const last = groups[groups.length - 1];
+    if (last && last.day === day) last.items.push(e);
+    else groups.push({ day, items: [e] });
+  }
+  return groups;
+}
+
+export function CalendarView() {
+  const { events, source, loading } = useCalendar();
+  const groups = groupByDay(events);
   return (
-    <div className="grid grid-cols-3 gap-3.5">
-      {COLUMNS.map((col) => (
-        <div key={col.title} className="flex flex-col gap-2 rounded-lg border bg-card p-3.5">
-          <div className="mb-1.5 flex items-center gap-2">
-            <span className="size-2 rounded-full" style={{ background: `hsl(${col.color})` }} />
-            <span className="text-[13.5px] font-semibold">{col.title}</span>
-            <span className="font-mono text-xs text-muted-foreground">{col.items.length}</span>
-          </div>
-          {col.items.map((t, i) => (
-            <div
-              key={i}
-              className="rounded-md border bg-muted/50 p-2.5"
-              style={{ opacity: "done" in t && t.done ? 0.6 : 1 }}
-            >
-              <div className="flex items-center gap-2">
-                <Checkbox defaultChecked={"done" in t && t.done} />
-                <span className={`flex-1 text-[13.5px] font-medium ${"done" in t && t.done ? "line-through" : ""}`}>
-                  {t.title}
-                </span>
-                <PersonAvatar name={t.who} size="xs" />
-              </div>
-              {"due" in t && t.due && !("done" in t && t.done) && (
-                <div className="ml-6 mt-1.5 flex items-center gap-1.5">
-                  <span
-                    className={`font-mono text-[11.5px] ${"high" in t && t.high ? "font-semibold text-destructive" : "text-muted-foreground"}`}
-                  >
-                    {t.due}
-                  </span>
-                  {"high" in t && t.high && (
-                    <Badge variant="outline" className="border-destructive/40 px-1 py-0 text-[10px] text-destructive">
-                      High
-                    </Badge>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-          <button className="mt-1 flex items-center gap-1.5 rounded-md px-1 py-1 text-[13px] text-muted-foreground hover:bg-accent/60">
-            <Plus size={13} /> Add task
-          </button>
+    <div className="flex max-w-2xl flex-col gap-3.5">
+      <div className="flex items-center gap-2">
+        <SourcePill source={source} />
+        {loading && <span className="text-[12px] text-muted-foreground">Loading…</span>}
+      </div>
+      {groups.length === 0 && !loading && (
+        <div className="rounded-lg border border-dashed p-8 text-center text-[13px] text-muted-foreground">
+          No upcoming milestones or releases.
         </div>
-      ))}
+      )}
+      <div className="flex flex-col gap-4">
+        {groups.map((g) => (
+          <div key={g.day} className="flex gap-4">
+            <div className="w-28 shrink-0 pt-1 text-[12.5px] font-medium text-muted-foreground">{g.day}</div>
+            <div className="flex flex-1 flex-col gap-2">
+              {g.items.map((e) => {
+                const tone = e.tone && TONE_COLOR[e.tone] ? TONE_COLOR[e.tone] : TONE_COLOR.primary;
+                const Title = e.url ? "a" : "span";
+                return (
+                  <div key={e.id} className="flex items-center gap-2.5 rounded-lg border bg-card p-2.5">
+                    <span className="h-8 w-1 shrink-0 rounded-full" style={{ background: `hsl(${tone})` }} />
+                    <Title
+                      {...(e.url ? { href: e.url, target: "_blank", rel: "noreferrer" } : {})}
+                      className={`flex-1 truncate text-[13.5px] font-medium ${e.url ? "hover:underline" : ""}`}
+                    >
+                      {e.title}
+                    </Title>
+                    {e.kind && (
+                      <Badge variant="outline" className="px-1.5 py-0 text-[10.5px] text-muted-foreground">
+                        {KIND_LABEL[e.kind]}
+                      </Badge>
+                    )}
+                    {e.url && <ExternalLink size={13} className="text-muted-foreground" />}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

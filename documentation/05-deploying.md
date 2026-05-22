@@ -14,22 +14,54 @@ one origin. There are two targets, and both reuse the same portable Hono app (`a
 
 ## Cloudflare (single Worker + Static Assets)
 
-The Worker entry is `apps/api/src/worker.ts`; configuration is `apps/api/wrangler.jsonc`. The
-key bits:
+The Worker entry is `apps/api/src/worker.ts`; configuration is `apps/api/wrangler.jsonc`. That
+file is **gitignored** because it holds your own D1 `database_id` (which points at your
+Cloudflare account) — copy the tracked template to create it:
+
+```bash
+cp apps/api/wrangler.example.jsonc apps/api/wrangler.jsonc
+```
+
+The key bits:
 
 - `assets.directory: "../portal/dist"` — the built SPA is uploaded as static assets.
 - `not_found_handling: "single-page-application"` — unmatched paths fall back to `index.html`.
-- `run_worker_first: ["/api/*"]` — the Worker handles the API; everything else is served
-  straight from the asset store, so the Worker isn't even invoked for static files.
+- `run_worker_first: ["/api/*", "/dav/*"]` — the Worker handles the API and WebDAV; everything
+  else is served straight from the asset store, so the Worker isn't even invoked for static files.
 - `d1_databases` — the `DB` binding holds the drive's metadata (files, versions, blob
   refcounts, permissions). The schema is applied by a migration runner on first request.
 - `r2_buckets` — the `BUCKET` binding holds the content-addressed **blobs**. Workers have no
   filesystem, so on Cloudflare the drive is always D1 + R2 (the libsql/fs adapters are Node-only).
 
+### Config: tracked template, gitignored copy
+
+Canopy is open source, so the committed config can't carry one deployment's account-specific
+identifiers. The split mirrors the `.dev.vars` / `.dev.vars.example` convention:
+
+| File | Tracked? | Holds |
+| --- | --- | --- |
+| `wrangler.example.jsonc` | ✅ committed | the template — shared, non-secret config with `database_id` left as `REPLACE_WITH_D1_DATABASE_ID` |
+| `wrangler.jsonc` | 🚫 gitignored | your real config — the same file with **your** D1 `database_id` filled in |
+
+You make the gitignored copy once with `cp apps/api/wrangler.example.jsonc apps/api/wrangler.jsonc`,
+then paste in the `database_id` that `wrangler d1 create` prints. Wrangler auto-discovers
+`wrangler.jsonc`, so `wrangler dev` / `wrangler deploy` / `pnpm deploy` just work — no flags.
+
+Why not a secret? A D1 `database_id` configures a **binding**, which Wrangler resolves at
+*deploy* time from the config file; secrets (`wrangler secret put`) are *runtime* env vars
+the Worker reads at request time and can't wire up a binding. (The id isn't actually a
+credential — it only identifies the database within your account, which is reachable only with
+your Cloudflare API token — but keeping it out of the repo stops forks from pointing at it.)
+
+> **Maintainers:** when you add shared config (a new `var`, binding, or route), update
+> `wrangler.example.jsonc` too — existing clones won't pick it up automatically, since their
+> real `wrangler.jsonc` is gitignored.
+
 ### Deploy steps
 
 ```bash
-# 1. Create the R2 bucket (blobs) and the D1 database (metadata)
+# 1. Create your local config, then the R2 bucket (blobs) and D1 database (metadata)
+cp apps/api/wrangler.example.jsonc apps/api/wrangler.jsonc
 wrangler r2 bucket create canopy-drive
 wrangler d1 create canopy
 #    → paste the printed database_id into d1_databases[0].database_id in wrangler.jsonc
@@ -54,10 +86,10 @@ cd apps/api && wrangler deploy --dry-run
 
 ### Notes
 
-- **Docs + demo come from GitHub.** Set `GITHUB_REPO` (e.g. `owner/repo`, optional
-  `GITHUB_BRANCH`, and `GITHUB_TOKEN` for a private repo) and the read-only **docs** mount and
+- **Documentation + demo come from GitHub.** Set `GITHUB_REPO` (e.g. `owner/repo`, optional
+  `GITHUB_BRANCH`, and `GITHUB_TOKEN` for a private repo) and the read-only **documentation** mount and
   the **anonymous demo drive** are read live from the repo via `@canopy/connector-github` — no
-  files bundled, no R2 bucket for them. Unset (dev), they fall back to the in-repo `docs/` and
+  files bundled, no R2 bucket for them. Unset (dev), they fall back to the in-repo `documentation/` and
   `demo/` folders. Signed-in users' drives are the real connector (local FS / R2).
 - **`wrangler dev`** (the local Cloudflare runtime) needs `workerd`, whose native build pnpm
   blocks by default — run `pnpm approve-builds` once if you want it. `wrangler deploy` does

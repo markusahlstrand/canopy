@@ -76,3 +76,19 @@ currently passes the bytes through unchanged.
 The drive runs on **D1 + R2** on Cloudflare and **libsql (SQLite) + the filesystem** on
 Node/Docker, behind `Db` and `BlobStore` interfaces. The schema is applied by a numbered,
 forward-only migration runner on boot.
+
+## Connecting a device (WebDAV)
+
+The drive is also reachable over **WebDAV** at `/dav`, so you can mount it in Finder
+(*Go → Connect to Server…*), Windows Explorer, or any WebDAV client. This phase is
+**read-only** (`OPTIONS`, `PROPFIND`, `GET`/`HEAD`); write verbs come later.
+
+The mount root mirrors the app: your personal files and folders at the top level, with each
+**group space** you belong to appearing as a sub-collection. Virtual folders (`metadata.path`)
+become real directory levels over the protocol, and a file's bytes stream from its current
+version.
+
+Clients can't carry an OIDC session, so WebDAV authenticates with **app passwords** instead
+— per-device Basic-auth tokens you mint in *Connect a device…* (the account menu). The token
+is shown **once** on creation and stored only as a SHA-256 hash; sign in with any username and
+the token as the password. Revoke a device anytime and that mount stops working immediately.

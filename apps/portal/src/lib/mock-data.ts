@@ -70,14 +70,7 @@ export interface CatalogItem {
 export const PLUGIN_CATALOG: CatalogItem[] = [
   { id: "calendar", icon: "calendar", label: "Calendar", category: "Productivity", tagline: "Shared family calendar with smart conflicts", popular: true, color: "145 33% 36%" },
   { id: "tasks", icon: "check-square", label: "Tasks", category: "Productivity", tagline: "A real to-do list for the household", popular: true, color: "212 70% 48%" },
-  { id: "notes", icon: "file-text", label: "Notes", category: "Productivity", tagline: "Markdown notes that sync everywhere", color: "262 60% 55%" },
-  { id: "budgets", icon: "wallet", label: "Budgets", category: "Finance", tagline: "Track spending by category, monthly", color: "20 85% 52%" },
-  { id: "recipes", icon: "chef-hat", label: "Recipes", category: "Lifestyle", tagline: "Save and share family recipes", color: "346 70% 50%" },
-  { id: "passwords", icon: "key-round", label: "Passwords", category: "Security", tagline: "End-to-end encrypted password vault", color: "240 6% 35%" },
-  { id: "photos", icon: "image", label: "Photos", category: "Media", tagline: "Albums, faces, and timelines", popular: true, color: "38 92% 50%" },
-  { id: "meals", icon: "utensils", label: "Meals", category: "Lifestyle", tagline: "Weekly menus the family can edit", color: "190 70% 42%" },
-  { id: "bookmarks", icon: "bookmark", label: "Bookmarks", category: "Productivity", tagline: "Shared web bookmarks, tagged", color: "262 60% 55%" },
-  { id: "habits", icon: "flame", label: "Habits", category: "Wellness", tagline: "Tiny streaks for the whole house", color: "12 80% 55%" },
+  { id: "github", icon: "github", label: "GitHub", category: "Productivity", tagline: "Sync issues to Tasks, releases & milestones to Calendar", popular: true, color: "240 6% 20%" },
 ];
 
 export const STORAGE = { label: "Cloudflare R2", used: "12.4 GB", total: "50 GB", percent: 25 };

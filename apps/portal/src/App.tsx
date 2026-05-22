@@ -32,6 +32,7 @@ import {
   contentUrl,
   uploadFiles,
   deleteFile,
+  setStarred,
   setSpaceMounted,
   fetchMe,
   loginUrl,
@@ -41,7 +42,10 @@ import {
   type Overview,
 } from "@/lib/api";
 import { SpaceMembersDialog } from "@/components/space-members-dialog";
+import { InviteGate } from "@/components/invite-gate";
+import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
 import { createRegistry, DEFAULT_INSTALLED, PLUGIN_UI } from "@/plugins";
+import { PluginDataProvider } from "@/plugins/data";
 import { ACCENT_HSL, ACCENT_HSL_DARK, DEFAULT_TWEAKS, FONT_STACK, type Tweaks } from "@/lib/tweaks";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { DemoBanner } from "@/components/demo-banner";
@@ -94,6 +98,7 @@ export default function App() {
   return (
     <Suspense fallback={<div className="grid h-screen place-items-center text-sm text-muted-foreground">Loading…</div>}>
       {isMobile ? <MobileApp /> : <DesktopApp />}
+      <InviteGate />
     </Suspense>
   );
 }
@@ -137,7 +142,7 @@ function DesktopApp() {
     setAuth((a) => ({ ...a, user: null }));
   };
 
-  // Default landing page: Docs when arriving not-signed-in (no explicit ?view=).
+  // Default landing page: Documentation when arriving not-signed-in (no explicit ?view=).
   // Applied once when auth first resolves; doesn't lock navigation afterwards.
   const initialHadView = useMemo(() => new URLSearchParams(window.location.search).has("view"), []);
   const docsDefaultApplied = useRef(false);
@@ -145,8 +150,8 @@ function DesktopApp() {
     if (docsDefaultApplied.current || !auth.authConfigured) return;
     docsDefaultApplied.current = true;
     if (!auth.user && !initialHadView) {
-      setActive("plugin:docs");
-      setActivePlugin("docs");
+      setActive("plugin:documentation");
+      setActivePlugin("documentation");
     }
   }, [auth, initialHadView]);
 
@@ -154,6 +159,7 @@ function DesktopApp() {
   const [storeOpen, setStoreOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const [membersSpace, setMembersSpace] = useState<{ id: string; name: string } | null>(null);
+  const [connectOpen, setConnectOpen] = useState(false);
   const [overview, setOverview] = useState<Overview>({ files: 0, bytes: 0 });
   const [sharedCount, setSharedCount] = useState(0);
   const [dragOver, setDragOver] = useState(false);
@@ -391,7 +397,15 @@ function DesktopApp() {
         toast("Delete failed", { description: (err as Error).message });
       }
     } else if (action === "Star") {
-      setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, starred: !x.starred } : x)));
+      const next = !f.starred;
+      setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, starred: next } : x))); // optimistic
+      if (f.kind === "folder") return; // virtual folders have no record to persist to
+      try {
+        await setStarred(f.id, next);
+      } catch (err) {
+        setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, starred: !next } : x))); // rollback
+        toast("Couldn't update star", { description: (err as Error).message });
+      }
     } else if ((action === "Download" || action === "Copy link") && f.kind !== "folder") {
       window.open(contentUrl(f.id), "_blank");
     } else {
@@ -443,6 +457,7 @@ function DesktopApp() {
   const showRail = tweaks.showRail && installed.length > 0 && active !== "home";
 
   return (
+    <PluginDataProvider githubInstalled={installedIds.includes("github")}>
     <div className="flex h-screen flex-col">
       <OfflineBanner />
       <DemoBanner auth={auth} onSignIn={signIn} />
@@ -478,6 +493,7 @@ function DesktopApp() {
         onCreateSpace={createSpaceFlow}
         onNewFolder={createFolderFlow}
         onUpload={() => uploadInputRef.current?.click()}
+        onConnectDevice={() => setConnectOpen(true)}
         auth={auth}
         onSignIn={signIn}
         onSignOut={signOut}
@@ -655,6 +671,8 @@ function DesktopApp() {
         />
       )}
 
+      <ConnectDeviceDialog open={connectOpen} onOpenChange={setConnectOpen} />
+
       <TweaksPanel t={tweaks} setTweak={setTweak} />
 
       <input
@@ -671,6 +689,7 @@ function DesktopApp() {
       <Toaster position="bottom-right" />
       </div>
     </div>
+    </PluginDataProvider>
   );
 }
 

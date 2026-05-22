@@ -95,6 +95,7 @@ function toFileItems(data: DriveListing, dir: string): FileItem[] {
     sharedWith: f.sharedWith,
     owner: f.ownerLabel,
     location: data.spaceName,
+    starred: !!f.metadata?.starred,
   }));
   return [...folders, ...files];
 }
@@ -172,6 +173,16 @@ export async function deleteFile(id: string): Promise<void> {
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
 }
 
+/** Star/unstar a file — persisted as `metadata.starred` (a metadata edit, no new version). */
+export async function setStarred(id: string, starred: boolean): Promise<void> {
+  const res = await fetch(`/api/files/${id}/metadata`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ starred }),
+  });
+  if (!res.ok) throw new Error(`star failed: ${res.status}`);
+}
+
 /** Create an empty folder at a virtual path within a space. */
 export async function createFolder(path: string, spaceId?: string): Promise<void> {
   const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
@@ -235,6 +246,34 @@ export async function setSpaceMounted(spaceId: string, mounted: boolean): Promis
   });
 }
 
+export interface AppPassword {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export async function listAppPasswords(): Promise<AppPassword[]> {
+  const res = await fetch("/api/app-passwords");
+  if (!res.ok) return [];
+  return (await res.json()) as AppPassword[];
+}
+
+/** Create an app password; returns the plaintext token ONCE. */
+export async function createAppPassword(name: string): Promise<{ id: string; token: string }> {
+  const res = await fetch("/api/app-passwords", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`create failed: ${res.status}`);
+  return (await res.json()) as { id: string; token: string };
+}
+
+export async function deleteAppPassword(id: string): Promise<void> {
+  await fetch(`/api/app-passwords/${id}`, { method: "DELETE" });
+}
+
 export interface Member {
   sub: string;
   role: Role;
@@ -269,6 +308,68 @@ export async function removeMember(spaceId: string, principal: string): Promise<
     body: JSON.stringify({ sub: principal }),
   });
   if (!res.ok) throw new Error(`remove member failed: ${res.status}`);
+}
+
+// ── invite links (single-use) ─────────────────────────────────────────────────
+
+export interface SpaceInvite {
+  token: string;
+  spaceId: string;
+  role: Role;
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+export type InviteStatus = "valid" | "used" | "expired" | "not_found";
+
+export interface InviteInfo {
+  status: InviteStatus;
+  spaceId?: string;
+  spaceName?: string;
+  role?: Role;
+}
+
+/** The shareable URL for an invite token. */
+export function inviteUrl(token: string): string {
+  return `${window.location.origin}/?invite=${encodeURIComponent(token)}`;
+}
+
+/** Mint a single-use invite link for a space at a role. Owner only. */
+export async function createInvite(spaceId: string, role: Role): Promise<SpaceInvite> {
+  const res = await fetch(`/api/spaces/${spaceId}/invites`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `create invite failed: ${res.status}`);
+  return (await res.json()) as SpaceInvite;
+}
+
+/** Active (unused, unexpired) invite links for a space. */
+export async function listInvites(spaceId: string): Promise<SpaceInvite[]> {
+  const res = await fetch(`/api/spaces/${spaceId}/invites`);
+  if (!res.ok) return [];
+  return (await res.json()) as SpaceInvite[];
+}
+
+/** Revoke an invite link before it's used. */
+export async function revokeInvite(spaceId: string, token: string): Promise<void> {
+  const res = await fetch(`/api/spaces/${spaceId}/invites/${encodeURIComponent(token)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`revoke invite failed: ${res.status}`);
+}
+
+/** Preview an invite link — what space/role it grants and whether it's still valid. No sign-in needed. */
+export async function getInvite(token: string): Promise<InviteInfo> {
+  const res = await fetch(`/api/invites/${encodeURIComponent(token)}`);
+  if (!res.ok) return { status: "not_found" };
+  return (await res.json()) as InviteInfo;
+}
+
+/** Redeem an invite link — the signed-in account joins the space. */
+export async function acceptInvite(token: string): Promise<{ spaceId: string; alreadyMember: boolean }> {
+  const res = await fetch(`/api/invites/${encodeURIComponent(token)}/accept`, { method: "POST" });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `accept invite failed: ${res.status}`);
+  return (await res.json()) as { spaceId: string; alreadyMember: boolean };
 }
 
 export interface Grant {
@@ -309,7 +410,7 @@ export async function unshareFile(fileId: string, grant: Grant): Promise<void> {
   if (!res.ok) throw new Error(`unshare failed: ${res.status}`);
 }
 
-// ── read-only mounts (docs / demo) ───────────────────────────────────────────
+// ── read-only mounts (documentation / demo) ──────────────────────────────────
 
 function mountEntryToItem(mount: string, e: StorageEntry): FileItem {
   return {
@@ -322,7 +423,7 @@ function mountEntryToItem(mount: string, e: StorageEntry): FileItem {
   };
 }
 
-/** List a read-only mount (e.g. the docs mount). */
+/** List a read-only mount (e.g. the documentation mount). */
 export async function listMount(path: string, mount: string): Promise<FileItem[]> {
   const res = await fetch(`/api/files?mount=${mount}&path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`list failed: ${res.status}`);
@@ -363,6 +464,110 @@ export async function fetchMe(): Promise<Me> {
   } catch {
     return { user: null, authConfigured: false };
   }
+}
+
+// ── plugin data sources (tasks / calendar) ───────────────────────────────────
+
+export type TaskStatus = "todo" | "in_progress" | "blocked" | "done";
+
+export interface Task {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  assignee?: string;
+  due?: string;
+  labels?: string[];
+  priority?: "low" | "normal" | "high";
+  url?: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  start: string;
+  end?: string;
+  allDay?: boolean;
+  kind?: "milestone" | "release" | "issue" | "event";
+  url?: string;
+  tone?: string;
+}
+
+/** What external sources are connected (e.g. GitHub), so views show live vs. sample. */
+export interface Integrations {
+  /** Source plugin ids available on the server. */
+  sources: string[];
+  /** The connected GitHub source id, or null if none resolves for the caller. */
+  sourceId: string | null;
+  /** The resolved repo (for display), or null. */
+  repo: string | null;
+  /** True when falling back to the server's demo default (not the caller's own). */
+  usingDefault: boolean;
+}
+
+export async function getIntegrations(): Promise<Integrations> {
+  const empty: Integrations = { sources: [], sourceId: null, repo: null, usingDefault: false };
+  try {
+    const res = await fetch("/api/integrations");
+    if (!res.ok) return empty;
+    return (await res.json()) as Integrations;
+  } catch {
+    return empty;
+  }
+}
+
+// ── generic plugin settings (schema-driven) ───────────────────────────────────
+
+export interface PluginConfigField {
+  key: string;
+  label: string;
+  type: "string" | "secret" | "url" | "boolean";
+  required?: boolean;
+}
+
+export interface PluginSettings {
+  fields: PluginConfigField[];
+  /** Current non-secret values. */
+  values: Record<string, string>;
+  /** Keys of secret fields that have a stored value (the value itself is never sent). */
+  secretsSet: string[];
+}
+
+/** Fetch a source plugin's settings schema + current values (secrets redacted). */
+export async function getPluginSettings(pluginId: string): Promise<PluginSettings | null> {
+  const res = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/settings`);
+  if (!res.ok) return null;
+  return (await res.json()) as PluginSettings;
+}
+
+/**
+ * Save a plugin's settings. Omit a key to leave it unchanged; an empty secret is
+ * treated as "keep existing" server-side (so the user needn't re-enter the token).
+ */
+export async function savePluginSettings(pluginId: string, values: Record<string, string>): Promise<void> {
+  const res = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/settings`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ values }),
+  });
+  if (!res.ok) throw new Error(`save settings failed: ${res.status}`);
+}
+
+/** Tasks from the connected source. `source` is null when nothing is connected. */
+export async function getTasks(): Promise<{ source: string | null; tasks: Task[] }> {
+  const res = await fetch("/api/tasks");
+  if (!res.ok) return { source: null, tasks: [] };
+  return (await res.json()) as { source: string | null; tasks: Task[] };
+}
+
+/** Calendar events from the connected source. `source` is null when none. */
+export async function getCalendar(range?: { from: string; to: string }): Promise<{
+  source: string | null;
+  events: CalendarEvent[];
+}> {
+  const q = range ? `?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}` : "";
+  const res = await fetch(`/api/calendar${q}`);
+  if (!res.ok) return { source: null, events: [] };
+  return (await res.json()) as { source: string | null; events: CalendarEvent[] };
 }
 
 export function loginUrl(returnTo: string): string {

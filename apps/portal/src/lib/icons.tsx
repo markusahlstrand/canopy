@@ -34,6 +34,7 @@ import {
   Settings,
   LogOut,
   Puzzle,
+  GitBranch,
   BookOpen,
   Folder,
   Package,
@@ -44,6 +45,7 @@ import {
   Archive,
   NotebookText,
   CloudOff,
+  Link2,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -88,6 +90,7 @@ const MAP: Record<string, LucideIcon> = {
   settings: Settings,
   "log-out": LogOut,
   plugin: Puzzle,
+  github: GitBranch,
   book: BookOpen,
   folder: Folder,
   package: Package,
@@ -98,6 +101,7 @@ const MAP: Record<string, LucideIcon> = {
   archive: Archive,
   note: NotebookText,
   "cloud-off": CloudOff,
+  link: Link2,
 };
 
 export function Icon({

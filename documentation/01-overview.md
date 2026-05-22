@@ -39,16 +39,16 @@ planned.
   dedup + reference counting, file records, versions, and permissions. Adapters for **D1 + R2**
   (Cloudflare) and **libsql + filesystem** (Node).
 - `@canopy/api` — a portable Hono server exposing the drive (`/uploads`, `/files`) plus read-only
-  `docs`/`demo` mounts over a `StorageConnector`.
+  `documentation`/`demo` mounts over a `StorageConnector`.
 - Connectors: `@canopy/connector-local`, `@canopy/connector-r2`, and read-only
-  `@canopy/connector-github` (serves the docs + demo drive from a repo).
+  `@canopy/connector-github` (serves the documentation + demo drive from a repo).
 - **OIDC / authhero** auth (BFF with an encrypted cookie session) and **single-Worker Cloudflare
   deployment** (Static Assets + D1 + R2), plus a Node/Docker single-process mode.
 - **Sharing & spaces** — relation-tuple (Zanzibar-lite) access control: per-file grants + shared
   **spaces** (a family is a group space that appears as a folder inside My Drive), share-by-email
   with pending invites, and roles (owner/editor/viewer).
 - `@canopy/portal` — the Vite + React SPA (desktop + mobile), with first-party Calendar, Tasks,
-  and Docs plugins, **sandboxed file viewers** (image, PDF, a Markdown editor), and `@canopy/plugin-sources`
+  and Documentation plugins, **sandboxed file viewers** (image, PDF, a Markdown editor), and `@canopy/plugin-sources`
   for resolving plugins from GitHub/npm/zip.
 
 **Planned (designed, not yet implemented):**
@@ -69,4 +69,4 @@ Anything marked _planned_ is design intent, not running code.
 - [Storage & files](storage-and-files) — blobs, files, versions, dedup, and virtual folders.
 - [Sharing & spaces](sharing-and-spaces) — spaces, roles, share-by-email, and the access model.
 - [How plugins work](how-plugins-work) — the plugin model, contributions, capabilities.
-- [Writing a plugin](writing-a-plugin) — a hands-on walk-through using this very Docs plugin.
+- [Writing a plugin](writing-a-plugin) — a hands-on walk-through using this very Documentation plugin.

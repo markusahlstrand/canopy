@@ -15,7 +15,25 @@ import {
   type SpaceMember,
   type SpaceView,
 } from "./spaces";
-import { findUserByEmail } from "./users";
+import {
+  acceptInvite as redeemInvite,
+  createInvite,
+  getInvite,
+  inviteStatus,
+  listInvites,
+  revokeInvite,
+  type InviteStatus,
+  type SpaceInvite,
+} from "./invites";
+import { ensureUser, findUserByEmail } from "./users";
+import {
+  createAppPassword as createAppPwd,
+  deleteAppPassword as deleteAppPwd,
+  listAppPasswords as listAppPwds,
+  verifyAppPassword as verifyAppPwd,
+  type AppPassword,
+} from "./app-passwords";
+import { deletePluginSettings, getPluginSettings, setPluginSettings } from "./plugin-settings";
 
 export class NotFoundError extends Error {
   constructor(message = "not found") {
@@ -188,6 +206,11 @@ export class FileService {
     return ensurePersonalSpace(this.db, userSub);
   }
 
+  /** Backfill the caller's directory entry from their session profile (idempotent). */
+  ensureUser(profile: { sub: string; email?: string | null; name?: string | null; picture?: string | null }): Promise<void> {
+    return ensureUser(this.db, profile);
+  }
+
   /** Spaces the caller can see, with role + mount preference (switcher / My Drive). */
   async spaces(userSub: string): Promise<SpaceView[]> {
     await ensurePersonalSpace(this.db, userSub); // always at least "My Drive"
@@ -235,6 +258,53 @@ export class FileService {
   /** Resolve an email to a known user (for turning share-by-email into a user grant). */
   resolveEmail(email: string) {
     return findUserByEmail(this.db, email);
+  }
+
+  // ── invite links (single-use space invites) ─────────────────────────────────
+
+  /** Mint a single-use invite link to a space, at a role. Requires owner. */
+  async createSpaceInvite(caller: Caller, spaceId: string, role: Role): Promise<SpaceInvite> {
+    await this.requireSpace(caller.sub, spaceId, "owner");
+    return createInvite(this.db, { spaceId, role, createdBy: caller.sub });
+  }
+
+  /** Active (unused, unexpired) invite links for a space. Requires owner. */
+  async spaceInvites(caller: Caller, spaceId: string): Promise<SpaceInvite[]> {
+    await this.requireSpace(caller.sub, spaceId, "owner");
+    return listInvites(this.db, spaceId);
+  }
+
+  /** Revoke an invite link before it's used. Requires owner. */
+  async revokeSpaceInvite(caller: Caller, spaceId: string, token: string): Promise<void> {
+    await this.requireSpace(caller.sub, spaceId, "owner");
+    await revokeInvite(this.db, spaceId, token);
+  }
+
+  /**
+   * Preview an invite link for the landing page — space name, role, and whether
+   * it's still good. No auth: a recipient sees what they're joining before they
+   * sign in. Returns only `status` when the token is unknown/used/expired.
+   */
+  async inviteInfo(token: string): Promise<{ status: InviteStatus; spaceId?: string; spaceName?: string; role?: Role }> {
+    const invite = await getInvite(this.db, token);
+    const status = inviteStatus(invite);
+    if (!invite || status === "not_found") return { status: "not_found" };
+    const space = await getSpace(this.db, invite.spaceId);
+    return { status, spaceId: invite.spaceId, spaceName: space?.name, role: invite.role };
+  }
+
+  /**
+   * Redeem an invite link: the caller joins the space at the link's role. The
+   * caller's account (whichever they signed in with) becomes the member, so the
+   * recipient effectively picks their identity by how they authenticate.
+   */
+  async acceptSpaceInvite(caller: Caller, token: string): Promise<{ spaceId: string; alreadyMember: boolean }> {
+    const res = await redeemInvite(this.db, token, caller.sub);
+    if (!res.ok) {
+      if (res.reason === "not_found") throw new NotFoundError("invite not found");
+      throw new Error(res.reason === "expired" ? "This invite link has expired." : "This invite link has already been used.");
+    }
+    return { spaceId: res.spaceId, alreadyMember: res.alreadyMember };
   }
 
   // ── uploads (into a space the caller can write to) ──────────────────────────
@@ -294,6 +364,47 @@ export class FileService {
     const file = await this.requirePerm(caller, id, "viewer");
     const version = file.currentVersionId ? await this.loadVersion(file.currentVersionId) : null;
     return { ...file, version };
+  }
+
+  /** Resolve a file by its virtual path within a space (for WebDAV). Requires viewer+. */
+  async getByPath(userSub: string, spaceId: string, path: string): Promise<FileWithVersion | null> {
+    await this.requireSpace(userSub, spaceId, "viewer");
+    const segs = normPath(path).split("/");
+    const name = segs.pop() ?? "";
+    const dir = segs.join("/");
+    if (!name) return null;
+    const row = await this.db.first<JoinedRow>(
+      `SELECT f.*, ${VERSION_COLS}
+       FROM files f LEFT JOIN file_versions v ON v.id = f.current_version_id
+       WHERE f.tenant_id = ? AND f.deleted_at IS NULL AND json_extract(f.metadata, '$.path') = ? AND f.name = ?`,
+      [spaceId, dir, name],
+    );
+    return row ? joinedToFileWithVersion(row) : null;
+  }
+
+  // ── app passwords (Basic-auth tokens for WebDAV etc.) ───────────────────────
+  createAppPassword(userSub: string, name: string) {
+    return createAppPwd(this.db, userSub, name);
+  }
+  verifyAppPassword(token: string) {
+    return verifyAppPwd(this.db, token);
+  }
+  listAppPasswords(userSub: string): Promise<AppPassword[]> {
+    return listAppPwds(this.db, userSub);
+  }
+  deleteAppPassword(userSub: string, id: string) {
+    return deleteAppPwd(this.db, userSub, id);
+  }
+
+  // ── per-user plugin settings (opaque JSON; API encrypts secret fields) ──────
+  getPluginSettings(userSub: string, pluginId: string): Promise<string | null> {
+    return getPluginSettings(this.db, userSub, pluginId);
+  }
+  setPluginSettings(userSub: string, pluginId: string, config: string): Promise<void> {
+    return setPluginSettings(this.db, userSub, pluginId, config);
+  }
+  deletePluginSettings(userSub: string, pluginId: string): Promise<void> {
+    return deletePluginSettings(this.db, userSub, pluginId);
   }
 
   /** The current version's blob key for streaming a managed download. Requires viewer+. */

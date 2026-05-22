@@ -16,7 +16,7 @@ packages/
   connectors/
     local/              @canopy/connector-local  local filesystem connector           [built]
     r2/                 @canopy/connector-r2     Cloudflare R2 connector               [built]
-    github/             @canopy/connector-github read-only repo connector (docs+demo)  [built]
+    github/             @canopy/connector-github read-only repo connector (documentation+demo)  [built]
 apps/
   api/                  @canopy/api              portable Hono server                 [built]
   portal/               @canopy/portal           Vite + React SPA                     [built]
@@ -75,7 +75,7 @@ and only `PUT`s the bytes on a miss (dedup); then `POST /api/files` creates the 
 stream from `GET /api/files/:id/content`.
 
 Alongside the drive, the API still exposes **read-only mounts** over a plain `StorageConnector`
-keyed by `?mount=` — that's how the Docs plugin reads the `docs` mount (and the anonymous `demo`
+keyed by `?mount=` — that's how the Documentation plugin reads the `documentation` mount (and the anonymous `demo`
 drive) live from GitHub.
 
 Routes: `POST /api/uploads/prepare`, `PUT /api/uploads/:token`, `POST/GET /api/files`,

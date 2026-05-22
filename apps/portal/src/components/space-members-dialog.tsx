@@ -5,11 +5,22 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Icon } from "@/lib/icons";
 import { PersonAvatar } from "@/components/person-avatar";
-import { addMember, listMembers, removeMember, type Member, type Role } from "@/lib/api";
+import {
+  addMember,
+  createInvite,
+  inviteUrl,
+  listInvites,
+  listMembers,
+  removeMember,
+  revokeInvite,
+  type Member,
+  type Role,
+  type SpaceInvite,
+} from "@/lib/api";
 
 const ROLES: Role[] = ["viewer", "editor", "owner"];
 
-/** Manage who belongs to a space (a family/group). Members must have signed in once. */
+/** Manage who belongs to a space (a family/group): add members, mint invite links. */
 export function SpaceMembersDialog({
   spaceId,
   spaceName,
@@ -22,21 +33,28 @@ export function SpaceMembersDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [members, setMembers] = useState<Member[]>([]);
+  const [invites, setInvites] = useState<SpaceInvite[]>([]);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("editor");
+  const [linkRole, setLinkRole] = useState<Role>("editor");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
-  const inviteLink = `${window.location.origin}/?space=${spaceId}`;
-  async function copyLink() {
+  async function copy(token: string) {
     try {
-      await navigator.clipboard.writeText(inviteLink);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      await navigator.clipboard.writeText(inviteUrl(token));
+      setCopied(token);
+      setTimeout(() => setCopied((c) => (c === token ? null : c)), 1500);
     } catch {
       /* clipboard blocked — ignore */
     }
+  }
+
+  async function refresh() {
+    const [m, inv] = await Promise.all([listMembers(spaceId), listInvites(spaceId)]);
+    setMembers(m);
+    setInvites(inv);
   }
 
   useEffect(() => {
@@ -44,9 +62,10 @@ export function SpaceMembersDialog({
     let cancelled = false;
     void (async () => {
       try {
-        const m = await listMembers(spaceId);
+        const [m, inv] = await Promise.all([listMembers(spaceId), listInvites(spaceId)]);
         if (!cancelled) {
           setMembers(m);
+          setInvites(inv);
           setError(null);
         }
       } catch (e) {
@@ -63,7 +82,7 @@ export function SpaceMembersDialog({
     setError(null);
     try {
       await fn();
-      setMembers(await listMembers(spaceId));
+      await refresh();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -73,13 +92,14 @@ export function SpaceMembersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[460px]">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-[460px]">
         <DialogHeader>
           <DialogTitle className="truncate">Members of “{spaceName}”</DialogTitle>
         </DialogHeader>
 
         <form
-          className="flex items-center gap-2"
+          className="flex shrink-0 items-center gap-2"
+          autoComplete="off"
           onSubmit={(e) => {
             e.preventDefault();
             if (!email.trim()) return;
@@ -95,6 +115,10 @@ export function SpaceMembersDialog({
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="flex-1"
+            autoComplete="off"
+            data-bwignore
+            data-1p-ignore
+            data-lpignore="true"
           />
           <Select value={role} onValueChange={(v) => setRole(v as Role)}>
             <SelectTrigger className="w-[104px]" size="sm">
@@ -113,18 +137,62 @@ export function SpaceMembersDialog({
           </Button>
         </form>
 
-        {/* Copyable invite link — recipients sign in here and any pending invite resolves. */}
-        <div className="flex items-center gap-2 rounded-lg bg-muted/60 px-2.5 py-1.5">
-          <Icon name="users" size={14} className="text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">{inviteLink}</span>
-          <Button variant="ghost" size="sm" onClick={() => void copyLink()}>
-            {copied ? "Copied" : "Copy link"}
-          </Button>
+        {/* Invite links: one-time tokens. Whoever opens one signs in (with any
+            account) and joins at the link's role — no email needed up front. */}
+        <div className="flex shrink-0 flex-col gap-1.5 rounded-lg bg-muted/60 p-2.5">
+          <div className="flex items-center gap-2">
+            <Icon name="link" size={14} className="text-muted-foreground" />
+            <span className="flex-1 text-[12.5px] font-medium">Invite link</span>
+            <Select value={linkRole} onValueChange={(v) => setLinkRole(v as Role)}>
+              <SelectTrigger className="w-[100px]" size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ROLES.map((r) => (
+                  <SelectItem key={r} value={r} className="capitalize">
+                    {r}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => void run(async () => void (await createInvite(spaceId, linkRole)))}
+            >
+              Create
+            </Button>
+          </div>
+          {invites.length === 0 ? (
+            <p className="text-[12px] text-muted-foreground">
+              No active links. Create one to invite someone — it works once, then expires.
+            </p>
+          ) : (
+            invites.map((inv) => (
+              <div key={inv.token} className="flex items-center gap-2 rounded-md bg-background px-2 py-1.5">
+                <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground">
+                  {inviteUrl(inv.token)}
+                </span>
+                <span className="shrink-0 text-[11px] capitalize text-muted-foreground">{inv.role}</span>
+                <Button variant="ghost" size="sm" className="shrink-0" onClick={() => void copy(inv.token)}>
+                  {copied === inv.token ? "Copied" : "Copy"}
+                </Button>
+                <button
+                  className="shrink-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
+                  disabled={busy}
+                  onClick={() => void run(() => revokeInvite(spaceId, inv.token))}
+                  aria-label="Revoke link"
+                >
+                  <Icon name="x" size={15} />
+                </button>
+              </div>
+            ))
+          )}
         </div>
 
-        {error && <p className="text-[12.5px] text-destructive">{error}</p>}
+        {error && <p className="shrink-0 text-[12.5px] text-destructive">{error}</p>}
 
-        <div className="flex flex-col gap-1.5">
+        <div className="-mx-1 flex flex-1 flex-col gap-1.5 overflow-y-auto px-1">
           {members.map((m) => (
             <div key={m.sub || m.email} className="flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5">
               <PersonAvatar name={m.name ?? m.email ?? m.sub} size="md" />
@@ -146,9 +214,9 @@ export function SpaceMembersDialog({
             </div>
           ))}
         </div>
-        <p className="text-[12px] text-muted-foreground">
-          Invite anyone by email. If they don't have an account yet, send them the link above — they'll
-          get access the moment they sign in.
+        <p className="shrink-0 text-[12px] text-muted-foreground">
+          Add someone by email, or send a one-time invite link. Either way they get access the moment
+          they sign in — with whichever account they choose.
         </p>
       </DialogContent>
     </Dialog>

@@ -174,10 +174,72 @@ describe("FileService over libsql", () => {
     expect(item.sharedWith).not.toContain("Me"); // owner's own grant is excluded
   });
 
+  it("getByPath resolves a file by its virtual path (for WebDAV)", async () => {
+    await upload("lease.pdf", "x", { path: "Documents" });
+    expect((await svc.getByPath(USER, space, "Documents/lease.pdf"))?.name).toBe("lease.pdf");
+    expect(await svc.getByPath(USER, space, "Documents/missing.pdf")).toBeNull();
+  });
+
+  it("app passwords: create → verify → delete", async () => {
+    const { id, token } = await svc.createAppPassword(USER, "Mac");
+    expect(await svc.verifyAppPassword(token)).toBe(USER);
+    expect(await svc.verifyAppPassword("nope")).toBeNull();
+    expect((await svc.listAppPasswords(USER)).find((p) => p.id === id)?.name).toBe("Mac");
+    await svc.deleteAppPassword(USER, id);
+    expect(await svc.verifyAppPassword(token)).toBeNull();
+  });
+
   it("soft-deleted files disappear from listings", async () => {
     const f = await upload("temp.txt", "bye");
     await svc.deleteFile({ sub: USER }, f.id);
     const root = await svc.list(USER, space, "");
     expect(root.files).toHaveLength(0);
+  });
+
+  it("plugin settings: round-trip, upsert, and per-user isolation", async () => {
+    expect(await svc.getPluginSettings(USER, "github")).toBeNull();
+
+    await svc.setPluginSettings(USER, "github", JSON.stringify({ repo: "a/b" }));
+    expect(JSON.parse((await svc.getPluginSettings(USER, "github"))!)).toEqual({ repo: "a/b" });
+
+    // upsert replaces
+    await svc.setPluginSettings(USER, "github", JSON.stringify({ repo: "c/d", token: "enc" }));
+    expect(JSON.parse((await svc.getPluginSettings(USER, "github"))!)).toEqual({ repo: "c/d", token: "enc" });
+
+    // another user has their own
+    expect(await svc.getPluginSettings("user-2", "github")).toBeNull();
+
+    await svc.deletePluginSettings(USER, "github");
+    expect(await svc.getPluginSettings(USER, "github")).toBeNull();
+  });
+
+  it("invite link: create → preview → accept grants membership; single-use", async () => {
+    const fam = await svc.createSpace({ sub: USER }, "Family");
+    const invite = await svc.createSpaceInvite({ sub: USER }, fam.id, "editor");
+
+    // Preview works without a caller (the landing page shows it before sign-in).
+    const info = await svc.inviteInfo(invite.token);
+    expect(info).toMatchObject({ status: "valid", spaceName: "Family", role: "editor" });
+
+    // Bob opens the link and accepts → becomes an editor member of the space.
+    const res = await svc.acceptSpaceInvite({ sub: "bob" }, invite.token);
+    expect(res).toEqual({ spaceId: fam.id, alreadyMember: false });
+    const members = await svc.spaceMembers({ sub: USER }, fam.id);
+    expect(members.find((m) => m.sub === "bob")?.role).toBe("editor");
+
+    // Single-use: a second person can't reuse it, and it's no longer listed/valid.
+    await expect(svc.acceptSpaceInvite({ sub: "carol" }, invite.token)).rejects.toThrow(/already been used/);
+    expect(await svc.spaceInvites({ sub: USER }, fam.id)).toHaveLength(0);
+    expect((await svc.inviteInfo(invite.token)).status).toBe("used");
+  });
+
+  it("invite link: only an owner can mint or revoke; revoke kills the link", async () => {
+    const fam = await svc.createSpace({ sub: USER }, "Team");
+    await expect(svc.createSpaceInvite({ sub: "stranger" }, fam.id, "viewer")).rejects.toBeInstanceOf(PermissionError);
+
+    const invite = await svc.createSpaceInvite({ sub: USER }, fam.id, "viewer");
+    await svc.revokeSpaceInvite({ sub: USER }, fam.id, invite.token);
+    expect((await svc.inviteInfo(invite.token)).status).toBe("not_found");
+    await expect(svc.acceptSpaceInvite({ sub: "bob" }, invite.token)).rejects.toThrow(/invite not found/);
   });
 });

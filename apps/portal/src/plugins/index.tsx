@@ -2,10 +2,11 @@ import { lazy, type ComponentType } from "react";
 import { PluginRegistry } from "@canopy/core";
 import { buildManifest } from "./manifests";
 import { CalendarPanel, TasksPanel } from "./rail-panels";
-import { CalendarWeekView, TasksKanban } from "./detail-views";
+import { CalendarView, TasksKanban } from "./detail-views";
+import { GithubView } from "./github-view";
 
 // Lazy-loaded: pulls react-markdown + remark-gfm into a separate chunk.
-const DocsView = lazy(() => import("./docs-view").then((m) => ({ default: m.DocsView })));
+const DocumentationView = lazy(() => import("./documentation-view").then((m) => ({ default: m.DocumentationView })));
 
 /**
  * Host-side render map for plugin UI contributions. Manifests stay declarative
@@ -19,9 +20,10 @@ export interface PluginUI {
 }
 
 export const PLUGIN_UI: Record<string, PluginUI> = {
-  docs: { DetailView: DocsView },
-  calendar: { RailPanel: CalendarPanel, DetailView: CalendarWeekView },
+  documentation: { DetailView: DocumentationView },
+  calendar: { RailPanel: CalendarPanel, DetailView: CalendarView },
   tasks: { RailPanel: TasksPanel, DetailView: TasksKanban },
+  github: { DetailView: GithubView },
 };
 
 /** Build a registry holding the manifests for the given installed plugin ids. */

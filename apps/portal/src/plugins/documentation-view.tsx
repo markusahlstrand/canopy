@@ -14,17 +14,18 @@ function title(name: string): string {
 }
 
 /**
- * Docs plugin detail view. Reads markdown from the `docs` storage mount via the
- * host API (the plugin's declared storage:read capability) and renders it.
+ * Documentation plugin detail view. Reads markdown from the `documentation`
+ * storage mount via the host API (the plugin's declared storage:read
+ * capability) and renders it.
  */
-export function DocsView() {
+export function DocumentationView() {
   const [docs, setDocs] = useState<FileItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    listMount("", "docs")
+    listMount("", "documentation")
       .then((items) => {
         const md = items.filter((f) => f.kind !== "folder" && /\.md$/i.test(f.name));
         setDocs(md);
@@ -35,7 +36,7 @@ export function DocsView() {
 
   useEffect(() => {
     if (!selected) return;
-    readText(selected, "docs")
+    readText(selected, "documentation")
       .then(setContent)
       .catch((err: Error) => setError(err.message));
   }, [selected]);
@@ -43,7 +44,7 @@ export function DocsView() {
   if (error) {
     return (
       <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-        Couldn't load docs. Is the API running and is there a <code className="font-mono">docs/</code> folder?
+        Couldn't load documentation. Is the API running and is there a <code className="font-mono">documentation/</code> folder?
         <div className="mt-1 font-mono text-[12px]">{error}</div>
       </div>
     );
@@ -67,7 +68,7 @@ export function DocsView() {
             {title(d.name)}
           </button>
         ))}
-        {docs.length === 0 && <div className="px-2 text-[13px] text-muted-foreground">No docs yet.</div>}
+        {docs.length === 0 && <div className="px-2 text-[13px] text-muted-foreground">No documentation yet.</div>}
       </nav>
 
       <article className="prose prose-sm dark:prose-invert max-w-[680px] prose-headings:tracking-tight prose-pre:bg-muted prose-pre:text-foreground prose-code:before:content-none prose-code:after:content-none">

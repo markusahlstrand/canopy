@@ -56,7 +56,7 @@ interface Contributions {
 }
 ```
 
-Calendar contributes a `railPanel` and a `detailView`; Tasks does the same; Docs contributes
+Calendar contributes a `railPanel` and a `detailView`; Tasks does the same; Documentation contributes
 only a `detailView`. The sidebar, rail, context menus, and store are all built by querying
 the registry — so a first-party plugin and a third-party one light up the same surfaces the
 same way.
@@ -71,12 +71,12 @@ type Capability =
   | { kind: "item:read" }
   | { kind: "item:write" }
   | { kind: "index:query" }
-  | { kind: "storage:read"; connectors?: string[] }  // e.g. just the "docs" mount
+  | { kind: "storage:read"; connectors?: string[] }  // e.g. just the "documentation" mount
   | { kind: "net:fetch"; hosts: string[] }           // outbound only to these hosts
   | { kind: "kv" };
 ```
 
-The Docs plugin, for example, declares `{ kind: "storage:read", connectors: ["docs"] }`.
+The Documentation plugin, for example, declares `{ kind: "storage:read", connectors: ["documentation"] }`.
 
 > **Status:** capabilities are declared and recorded today, but **not yet enforced** — there
 > is no broker handing out scoped objects, because there is no sandbox yet. Enforcement
@@ -104,7 +104,7 @@ adapters are not built yet.
 
 ## How first-party plugins run *right now*
 
-Until the sandbox lands, Calendar, Tasks, and Docs ship as **first-party, in-process**
+Until the sandbox lands, Calendar, Tasks, and Documentation ship as **first-party, in-process**
 plugins. The split is:
 
 - **Declarative half** — each plugin's `PluginManifest` is registered in the
@@ -116,9 +116,9 @@ plugins. The split is:
 ```ts
 // apps/portal/src/plugins/index.tsx
 export const PLUGIN_UI: Record<string, PluginUI> = {
-  docs:     { DetailView: DocsView },
-  calendar: { RailPanel: CalendarPanel, DetailView: CalendarWeekView },
-  tasks:    { RailPanel: TasksPanel,    DetailView: TasksKanban },
+  documentation: { DetailView: DocumentationView },
+  calendar:      { RailPanel: CalendarPanel, DetailView: CalendarWeekView },
+  tasks:         { RailPanel: TasksPanel, DetailView: TasksKanban },
 };
 ```
 

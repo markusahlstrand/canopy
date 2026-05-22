@@ -4,6 +4,8 @@
  * arbitrary client JS in v1 — these descriptors are the surface.
  */
 
+import type { ConnectorConfigField } from "./storage";
+
 export interface ContextMenuContribution {
   id: string;
   label: string;
@@ -58,6 +60,20 @@ export interface StoreListing {
   popular?: boolean;
 }
 
+/**
+ * Declares that the plugin contributes one or more typed data sources (a server
+ * adapter implementing TaskProvider / CalendarProvider). Installing such a plugin
+ * connects its data into the matching host plugins (tasks, calendar). The actual
+ * provider factory is registered host-side, keyed by plugin id — this descriptor
+ * is just what the plugin advertises.
+ */
+export interface DataSourceContribution {
+  /** Which host surfaces this plugin can feed. */
+  provides: ("tasks" | "calendar")[];
+  /** Config the source needs to connect (e.g. a repo). */
+  config?: ConnectorConfigField[];
+}
+
 export interface Contributions {
   contextMenu?: ContextMenuContribution[];
   railPanel?: RailPanelContribution;
@@ -65,6 +81,7 @@ export interface Contributions {
   detailFields?: DetailFieldContribution[];
   viewers?: ViewerContribution[];
   store?: StoreListing;
+  dataSource?: DataSourceContribution;
 }
 
 /**

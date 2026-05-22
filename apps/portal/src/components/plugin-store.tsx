@@ -8,7 +8,7 @@ import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import { PLUGIN_CATALOG } from "@/lib/mock-data";
 
-const CATEGORIES = ["All", "Productivity", "Finance", "Lifestyle", "Security", "Media", "Wellness"];
+const CATEGORIES = ["All", "Productivity"];
 
 interface PluginStoreProps {
   open: boolean;

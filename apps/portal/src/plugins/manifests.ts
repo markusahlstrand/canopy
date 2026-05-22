@@ -15,23 +15,32 @@ const RICH_CONTRIBUTIONS: Record<string, Contributions> = {
     detailView: { id: "tasks-detail", title: "Tasks" },
     contextMenu: [{ id: "tasks.create", label: "Create task from file", icon: "circle-check" }],
   },
+  github: {
+    detailView: { id: "github-detail", title: "GitHub" },
+    dataSource: { provides: ["tasks", "calendar"] },
+  },
+};
+
+/** Plugin ids whose contribution is a data source (no item access). */
+const DATA_SOURCE_CAPS: Record<string, PluginManifest["capabilities"]> = {
+  github: [{ kind: "net:fetch", hosts: ["api.github.com"] }],
 };
 
 /**
  * Built-in plugins that ship with the host and aren't published in the store
- * catalog. Docs reads markdown from the `docs` storage mount — a plugin that
+ * catalog. Documentation reads markdown from the `documentation` storage mount — a plugin that
  * combines a storage-read capability with a UI contribution.
  */
 const BUILTIN_MANIFESTS: Record<string, PluginManifest> = {
-  docs: {
-    id: "docs",
-    name: "Docs",
+  documentation: {
+    id: "documentation",
+    name: "Documentation",
     version: "0.1.0",
     icon: "book",
     color: "212 70% 48%",
-    capabilities: [{ kind: "storage:read", connectors: ["docs"] }],
+    capabilities: [{ kind: "storage:read", connectors: ["documentation"] }],
     contributes: {
-      detailView: { id: "docs-detail", title: "Docs" },
+      detailView: { id: "documentation-detail", title: "Documentation" },
     },
   },
 };
@@ -47,7 +56,7 @@ export function buildManifest(id: string): PluginManifest | undefined {
     version: "0.1.0",
     icon: cat.icon,
     color: cat.color,
-    capabilities: [{ kind: "item:read" }],
+    capabilities: DATA_SOURCE_CAPS[id] ?? [{ kind: "item:read" }],
     contributes: {
       store: { category: cat.category, tagline: cat.tagline, popular: cat.popular },
       ...RICH_CONTRIBUTIONS[id],
@@ -55,4 +64,4 @@ export function buildManifest(id: string): PluginManifest | undefined {
   };
 }
 
-export const DEFAULT_INSTALLED = ["docs", "calendar", "tasks"];
+export const DEFAULT_INSTALLED = ["documentation", "calendar", "tasks"];

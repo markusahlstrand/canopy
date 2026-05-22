@@ -7,10 +7,14 @@ import {
   NotFoundError,
   PermissionError,
   type BlobStore,
+  type Cache,
   type FileService,
 } from "@canopy/store";
 import type { AuthConfig } from "./auth/config";
 import { getSessionUser } from "./auth/routes";
+import { registerWebdav } from "./webdav";
+import type { ServerDataSource } from "./data-sources";
+import { decryptString, encryptString } from "./crypto";
 
 const MIME: Record<string, string> = {
   pdf: "application/pdf",
@@ -36,24 +40,41 @@ export interface DriveDeps {
   blobs: BlobStore;
 }
 
+/**
+ * Data-source plugins (e.g. GitHub) that feed the tasks/calendar host plugins.
+ * Each user configures a source via its settings (repo + optional token, stored
+ * encrypted per-user); `demoDefaults` is the env-provided fallback config shown to
+ * everyone (incl. anonymous) so the public demo works without sign-in. `cache`
+ * memoizes upstream responses to respect rate limits; `secret` encrypts stored
+ * secret fields at rest.
+ */
+export interface DataSourceDeps {
+  plugins?: ServerDataSource[];
+  demoDefaults?: Record<string, Record<string, string>>;
+  cache?: Cache;
+  secret?: string;
+}
+
 export interface AppDeps {
   auth?: Hono;
   authConfig?: AuthConfig | null;
-  /** Read-only mounts (docs, demo) served from a StorageConnector — NOT the drive. */
+  /** Read-only mounts (documentation, demo) served from a StorageConnector — NOT the drive. */
   readonlyMounts?: Record<string, StorageConnector>;
   /** The user's drive, backed by @canopy/store (D1/libsql + R2/fs). */
   drive?: DriveDeps;
+  /** Connected data-source plugins feeding tasks/calendar. */
+  dataSources?: DataSourceDeps;
 }
 
 /**
  * Portable Canopy API. The **drive** is the DB-backed file service from
  * @canopy/store (files as records, content-addressed blobs, versions); the
- * read-only `docs`/`demo` mounts are still plain StorageConnectors over GitHub.
+ * read-only `documentation`/`demo` mounts are still plain StorageConnectors over GitHub.
  * Tenant = the signed-in user's `sub`.
  */
 export function createApp(deps: AppDeps) {
   const app = new Hono();
-  const { authConfig = null, readonlyMounts = {}, drive } = deps;
+  const { authConfig = null, readonlyMounts = {}, drive, dataSources } = deps;
 
   app.use("/api/*", cors());
   if (deps.auth) app.route("/api/auth", deps.auth);
@@ -68,7 +89,13 @@ export function createApp(deps: AppDeps) {
   async function callerOf(c: Context): Promise<{ sub: string; email: string } | null> {
     if (!authConfig) return { sub: "demo", email: "" };
     const user = await getSessionUser(c, authConfig);
-    return user ? { sub: user.sub, email: user.email ?? "" } : null;
+    if (!user) return null;
+    // Backfill the directory from the session's id_token claims. The login
+    // callback already does this, but a long-lived session (or a reset dev DB)
+    // can outlive the row — without this the member/sharing UI falls back to the
+    // raw sub. INSERT-OR-IGNORE makes it a no-op once the row exists.
+    if (drive) await drive.service.ensureUser(user);
+    return { sub: user.sub, email: user.email ?? "" };
   }
 
   // The target space for an upload/list/create: `?space=` or the caller's personal space.
@@ -89,8 +116,8 @@ export function createApp(deps: AppDeps) {
     }
   }
 
-  // ── read-only mounts (docs/demo) ────────────────────────────────────────────
-  // Kept on the legacy path-based shape so the Docs plugin works unchanged.
+  // ── read-only mounts (documentation/demo) ───────────────────────────────────
+  // Kept on the legacy path-based shape so the Documentation plugin works unchanged.
 
   app.get("/api/file", async (c) => {
     const mount = c.req.query("mount");
@@ -164,6 +191,35 @@ export function createApp(deps: AppDeps) {
     await drive!.service.removeSpaceMember(caller, c.req.param("id")!, sub);
     return c.json({ ok: true });
   }));
+
+  // Invite links — single-use, role baked in. Owner mints / lists / revokes.
+  app.post("/api/spaces/:id/invites", driveRoute(async (c, caller) => {
+    const { role } = await c.req.json<{ role: "owner" | "editor" | "viewer" }>();
+    if (!role) return c.json({ error: "role required" }, 400);
+    return c.json(await drive!.service.createSpaceInvite(caller, c.req.param("id")!, role), 201);
+  }));
+
+  app.get("/api/spaces/:id/invites", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.spaceInvites(caller, c.req.param("id")!)),
+  ));
+
+  app.delete("/api/spaces/:id/invites/:token", driveRoute(async (c, caller) => {
+    await drive!.service.revokeSpaceInvite(caller, c.req.param("id")!, c.req.param("token")!);
+    return c.json({ ok: true });
+  }));
+
+  // Opening an invite link: preview needs no sign-in (so recipients see what
+  // they're joining); accepting does (the signed-in account becomes the member).
+  app.get("/api/invites/:token", (c) =>
+    handle(c, async () => {
+      if (!drive) return c.json({ error: "no drive configured" }, 404);
+      return c.json(await drive.service.inviteInfo(c.req.param("token")!));
+    }),
+  );
+
+  app.post("/api/invites/:token/accept", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.acceptSpaceInvite(caller, c.req.param("token")!)),
+  ));
 
   // Pin/unpin a space into My Drive (the merged vs. switcher preference).
   app.patch("/api/spaces/:id/prefs", driveRoute(async (c, caller) => {
@@ -274,6 +330,149 @@ export function createApp(deps: AppDeps) {
     await drive!.service.unshareGrant(caller, c.req.param("id")!, body);
     return c.json({ ok: true });
   }));
+
+  // ── app passwords (for WebDAV / Basic-auth clients) ─────────────────────────
+
+  app.get("/api/app-passwords", driveRoute(async (_c, caller) => _c.json(await drive!.service.listAppPasswords(caller.sub))));
+
+  // Returns the plaintext token ONCE — it isn't recoverable later.
+  app.post("/api/app-passwords", driveRoute(async (c, caller) => {
+    const { name } = await c.req.json<{ name?: string }>();
+    const { id, token } = await drive!.service.createAppPassword(caller.sub, name ?? "Device");
+    return c.json({ id, token }, 201);
+  }));
+
+  app.delete("/api/app-passwords/:id", driveRoute(async (c, caller) => {
+    await drive!.service.deleteAppPassword(caller.sub, c.req.param("id")!);
+    return c.json({ ok: true });
+  }));
+
+  // ── plugin data sources (tasks / calendar) ──────────────────────────────────
+  // A source's config is per-user (stored encrypted); `demoDefaults` is the
+  // public fallback shown to everyone so the logged-out demo still has data.
+  // Responses are cached briefly to stay under upstream rate limits.
+  const SOURCE_TTL_MS = 5 * 60 * 1000;
+  const sourcePlugins = dataSources?.plugins ?? [];
+  const findSource = (id: string) => sourcePlugins.find((p) => p.id === id);
+
+  /** The caller's saved config for a plugin (secrets decrypted), or the demo default. */
+  async function resolveConfig(c: Context, pluginId: string): Promise<{ config: Record<string, string>; own: boolean } | null> {
+    const src = findSource(pluginId);
+    if (!src) return null;
+    const caller = await callerOf(c);
+    if (caller && drive) {
+      const raw = await drive.service.getPluginSettings(caller.sub, pluginId);
+      if (raw) {
+        const stored = JSON.parse(raw) as Record<string, string>;
+        const config: Record<string, string> = {};
+        for (const f of src.configFields) {
+          const v = stored[f.key];
+          if (v == null) continue;
+          if (f.type === "secret") {
+            const dec = dataSources?.secret ? await decryptString(dataSources.secret, v) : null;
+            if (dec != null) config[f.key] = dec;
+          } else {
+            config[f.key] = v;
+          }
+        }
+        // Use the caller's own config only if every required field is present.
+        if (src.configFields.filter((f) => f.required).every((f) => config[f.key])) return { config, own: true };
+      }
+    }
+    const demo = dataSources?.demoDefaults?.[pluginId];
+    return demo ? { config: demo, own: false } : null;
+  }
+
+  // What's connected for the caller, so the client can show live vs. configure.
+  app.get("/api/integrations", (c) =>
+    handle(c, async () => {
+      const out: Record<string, unknown> = { sources: sourcePlugins.map((p) => p.id) };
+      const gh = await resolveConfig(c, "github");
+      out.sourceId = gh ? "github" : null;
+      out.repo = gh?.config.repo ?? null;
+      out.usingDefault = gh ? !gh.own : false;
+      return c.json(out);
+    }),
+  );
+
+  app.get("/api/tasks", (c) =>
+    handle(c, async () => {
+      const resolved = await resolveConfig(c, "github");
+      const provider = resolved && findSource("github")?.build(resolved.config).tasks;
+      if (!resolved || !provider) return c.json({ source: null, tasks: [] });
+      const key = `tasks:github:${resolved.config.repo}`;
+      const tasks = dataSources?.cache
+        ? await dataSources.cache.wrap(key, SOURCE_TTL_MS, () => provider.listTasks())
+        : await provider.listTasks();
+      return c.json({ source: "github", tasks });
+    }),
+  );
+
+  app.get("/api/calendar", (c) =>
+    handle(c, async () => {
+      const resolved = await resolveConfig(c, "github");
+      const provider = resolved && findSource("github")?.build(resolved.config).calendar;
+      if (!resolved || !provider) return c.json({ source: null, events: [] });
+      // Default window: 30 days back through 90 days ahead (covers releases + milestones).
+      const now = Date.now();
+      const from = c.req.query("from") ?? new Date(now - 30 * 864e5).toISOString();
+      const to = c.req.query("to") ?? new Date(now + 90 * 864e5).toISOString();
+      const key = `calendar:github:${resolved.config.repo}:${from}:${to}`;
+      const events = dataSources?.cache
+        ? await dataSources.cache.wrap(key, SOURCE_TTL_MS, () => provider.listEvents({ from, to }))
+        : await provider.listEvents({ from, to });
+      return c.json({ source: "github", events });
+    }),
+  );
+
+  // ── per-user plugin settings (generic, schema-driven) ───────────────────────
+  // The field schema is server-authoritative; secret values are encrypted at rest
+  // and NEVER returned to the client (only whether each secret is set).
+  app.get("/api/plugins/:id/settings", driveRoute(async (c, caller) => {
+    const src = findSource(c.req.param("id")!);
+    if (!src) return c.json({ error: "unknown source plugin" }, 404);
+    const raw = await drive!.service.getPluginSettings(caller.sub, src.id);
+    const stored = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    const values: Record<string, string> = {};
+    const secretsSet: string[] = [];
+    for (const f of src.configFields) {
+      if (f.type === "secret") {
+        if (stored[f.key]) secretsSet.push(f.key);
+      } else if (stored[f.key] != null) {
+        values[f.key] = stored[f.key]!;
+      }
+    }
+    return c.json({ fields: src.configFields, values, secretsSet });
+  }));
+
+  app.put("/api/plugins/:id/settings", driveRoute(async (c, caller) => {
+    const src = findSource(c.req.param("id")!);
+    if (!src) return c.json({ error: "unknown source plugin" }, 404);
+    const body = await c.req.json<{ values: Record<string, string | null> }>();
+    const raw = await drive!.service.getPluginSettings(caller.sub, src.id);
+    const stored = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    for (const f of src.configFields) {
+      if (!(f.key in body.values)) continue; // omitted = unchanged
+      const v = body.values[f.key];
+      if (v == null || v === "") {
+        // Empty secret = keep existing (so the user needn't re-enter it); empty
+        // non-secret = clear the field.
+        if (f.type !== "secret") delete stored[f.key];
+        continue;
+      }
+      if (f.type === "secret") {
+        if (!dataSources?.secret) return c.json({ error: "server has no SESSION_SECRET to encrypt secrets" }, 500);
+        stored[f.key] = await encryptString(dataSources.secret, v);
+      } else {
+        stored[f.key] = v;
+      }
+    }
+    await drive!.service.setPluginSettings(caller.sub, src.id, JSON.stringify(stored));
+    return c.json({ ok: true });
+  }));
+
+  // WebDAV mount (read-only) — Basic auth via an app password, outside /api.
+  if (drive) registerWebdav(app, drive);
 
   return app;
 }

@@ -17,7 +17,7 @@ packages/
   connectors/
     local/              @canopy/connector-local  Node filesystem
     r2/                 @canopy/connector-r2     Cloudflare R2
-    github/             @canopy/connector-github read-only; serves the docs + demo drive from a repo
+    github/             @canopy/connector-github read-only; serves the documentation + demo drive from a repo
   runtimes/             (planned) sandbox adapters for dynamic plugin code
 apps/
   api/                  @canopy/api              portable Hono API — Node entry (node.ts) + Worker entry (worker.ts)
@@ -73,7 +73,7 @@ fans out across databases.
 - **Surface, not silo.** A space is a shared *context*; the drive surfaces it as a folder, and
   (planned) the calendar would surface the same space as a shared calendar.
 
-See [`docs/07-sharing-and-spaces.md`](docs/07-sharing-and-spaces.md). Link sharing
+See [`documentation/07-sharing-and-spaces.md`](documentation/07-sharing-and-spaces.md). Link sharing
 ("anyone with the link") and folder-level sharing are planned.
 
 ## Develop
@@ -123,10 +123,12 @@ docker run -p 8787:8787 -v /srv/files:/data canopy   # add -e SESSION_SECRET=…
 
 Canopy deploys as a **single Worker**: the API runs on the Worker and the built SPA is
 served from Cloudflare **Static Assets**. Storage is **R2** (Workers have no filesystem).
-Config is in `apps/api/wrangler.jsonc`.
+Config is in `apps/api/wrangler.jsonc` — gitignored (it holds your own D1 `database_id`), so
+copy the tracked `wrangler.example.jsonc` template first.
 
 ```bash
 # one-time setup
+cp apps/api/wrangler.example.jsonc apps/api/wrangler.jsonc
 wrangler r2 bucket create canopy-drive
 cd apps/api
 wrangler secret put OIDC_CLIENT_SECRET     # if your OIDC client is confidential
@@ -139,8 +141,8 @@ pnpm deploy        # from the repo root: builds the portal, then `wrangler deplo
 ```
 
 `wrangler deploy --dry-run` validates the bundle and bindings without deploying. For the
-in-app guide, open the **Docs** plugin → _Deploying_. For the architecture, see
-[`docs/02-architecture.md`](docs/02-architecture.md).
+in-app guide, open the **Documentation** plugin → _Deploying_. For the architecture, see
+[`documentation/02-architecture.md`](documentation/02-architecture.md).
 
 ## License
 
