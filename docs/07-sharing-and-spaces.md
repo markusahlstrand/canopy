@@ -42,11 +42,22 @@ Open a file → **Share**. Add someone **by email** with a role, or share with a
 Server-side, every grant is a **relation tuple** — `file#role@subject`, where the subject is a
 user, an email, or a space's members. Membership and per-file grants are the same primitive.
 
-## Managing a space's members
+## Inviting & managing members
 
-Open a group space → **Members**. Add people by email (they must have signed in once — space
-membership is by account, unlike per-file email invites) and assign each a role; remove anyone
-who shouldn't be there.
+Open a group space → **Members** and add anyone **by email**:
+
+- If they already have an account, they join immediately.
+- If they don't, it's a **pending invite**. Share the **copyable invite link** from the same
+  dialog (over chat, SMS, however) — when they sign in with that email, the invite resolves and
+  they become a member. Canopy never creates the account; they sign up with your identity
+  provider themselves.
+
+Assign each person a role, and remove members or pending invites anytime.
+
+This is **Canopy-native**: authentication stays with your OIDC provider (AuthHero/Auth0/…),
+but membership and invites live in Canopy — so it works with any provider and isn't tied to a
+vendor-specific "organizations" feature. Invites only resolve against a **verified** email, so
+nobody can claim one by signing up with someone else's address.
 
 ## How access is decided
 

@@ -50,22 +50,27 @@ export async function addMember(db: Db, spaceId: string, userSub: string, role: 
   await writeTuple(db, { objectType: "space", objectId: spaceId, relation: role, subjectType: "user", subjectId: userSub });
 }
 
-export async function removeMember(db: Db, spaceId: string, userSub: string): Promise<void> {
+/** Remove a member or a pending invite. `principal` is a user sub or an invited email. */
+export async function removeMember(db: Db, spaceId: string, principal: string): Promise<void> {
   for (const role of ["owner", "editor", "viewer"] as const) {
-    await deleteTuple(db, { objectType: "space", objectId: spaceId, relation: role, subjectType: "user", subjectId: userSub });
+    await deleteTuple(db, { objectType: "space", objectId: spaceId, relation: role, subjectType: "user", subjectId: principal });
+    await deleteTuple(db, { objectType: "space", objectId: spaceId, relation: role, subjectType: "email", subjectId: principal });
   }
 }
 
 export interface SpaceMember {
+  /** The user's sub, or "" for a pending email invite. */
   sub: string;
   role: Role;
   email: string | null;
   name: string | null;
+  /** True for an email invite not yet claimed (the person hasn't signed in). */
+  pending: boolean;
 }
 
-/** Members of a space (with directory info where known), for a member list UI. */
+/** Members of a space + pending email invites (with directory info where known). */
 export async function listMembers(db: Db, spaceId: string): Promise<SpaceMember[]> {
-  const rows = await db.all<{ sub: string; relation: string; email: string | null; name: string | null }>(
+  const userRows = await db.all<{ sub: string; relation: string; email: string | null; name: string | null }>(
     `SELECT t.subject_id AS sub, t.relation AS relation, u.email AS email, u.name AS name
        FROM relation_tuples t LEFT JOIN users u ON u.sub = t.subject_id
        WHERE t.object_type = 'space' AND t.object_id = ? AND t.subject_type = 'user'
@@ -73,7 +78,16 @@ export async function listMembers(db: Db, spaceId: string): Promise<SpaceMember[
        ORDER BY CASE t.relation WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, u.name`,
     [spaceId],
   );
-  return rows.map((r) => ({ sub: r.sub, role: r.relation as Role, email: r.email, name: r.name }));
+  const inviteRows = await db.all<{ email: string; relation: string }>(
+    `SELECT subject_id AS email, relation FROM relation_tuples
+       WHERE object_type = 'space' AND object_id = ? AND subject_type = 'email'
+         AND relation IN ('owner','editor','viewer')`,
+    [spaceId],
+  );
+  return [
+    ...userRows.map((r) => ({ sub: r.sub, role: r.relation as Role, email: r.email, name: r.name, pending: false })),
+    ...inviteRows.map((r) => ({ sub: "", role: r.relation as Role, email: r.email, name: null, pending: true })),
+  ];
 }
 
 export async function getSpace(db: Db, id: string): Promise<Space | null> {

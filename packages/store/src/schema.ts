@@ -130,6 +130,20 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    // Explicit (empty) folders. Folders are otherwise virtual — derived from
+    // files' metadata.path — so this lets an empty folder exist before any file
+    // is put in it. `path` is the full virtual path, e.g. "Documents/2026".
+    version: 4,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS folders (
+         space_id   TEXT NOT NULL,
+         path       TEXT NOT NULL,
+         created_at TEXT NOT NULL,
+         PRIMARY KEY (space_id, path)
+       )`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

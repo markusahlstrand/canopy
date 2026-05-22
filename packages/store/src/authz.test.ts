@@ -115,6 +115,18 @@ describe("spaces helpers", () => {
     expect(after.find((s) => s.id === fam.id)?.mounted).toBe(false);
   });
 
+  it("a pending email invite to a space shows as pending and resolves to membership on login", async () => {
+    const fam = await createSpace(db, { name: "Family", createdBy: "maya" });
+    await writeTuple(db, { objectType: "space", objectId: fam.id, relation: "editor", subjectType: "email", subjectId: "nina@x.com" });
+
+    expect(await spaceRole(db, fam.id, "nina-sub")).toBeNull(); // not a member until claimed
+    const members = await listMembers(db, fam.id);
+    expect(members.find((m) => m.email === "nina@x.com" && m.pending)).toBeTruthy();
+
+    await resolveInvites(db, "nina-sub", "nina@x.com"); // verified login
+    expect(await spaceRole(db, fam.id, "nina-sub")).toBe("editor");
+  });
+
   it("resolveInvites turns a pending email grant into a user grant on login", async () => {
     await writeTuple(db, { objectType: "file", objectId: "F9", relation: "viewer", subjectType: "email", subjectId: "nora@x.com" });
     expect(await fileRole(db, "F9", "nora-sub")).toBeNull(); // not yet, by sub

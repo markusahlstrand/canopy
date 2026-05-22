@@ -54,9 +54,11 @@ if (authConfig && !authConfig.sessionSecret) {
 
 // On login: record the user in the directory, resolve pending email invites,
 // and ensure their personal space exists.
-const onLogin = async (u: { sub: string; email?: string; name?: string; picture?: string }) => {
+const onLogin = async (u: { sub: string; email?: string; name?: string; picture?: string; emailVerified?: boolean }) => {
   await upsertUser(db, u);
-  await resolveInvites(db, u.sub, u.email);
+  // Only resolve email invites for a verified address — otherwise someone could
+  // claim an invite by signing up with another person's email.
+  if (u.emailVerified) await resolveInvites(db, u.sub, u.email);
   await ensurePersonalSpace(db, u.sub);
 };
 

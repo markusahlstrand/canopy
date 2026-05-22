@@ -37,6 +37,8 @@ interface SidebarProps {
   currentSpace: string;
   onOpenSpace: (id: string) => void;
   onCreateSpace: () => void;
+  onNewFolder: () => void;
+  onUpload: () => void;
   auth: Me;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -102,6 +104,8 @@ export function Sidebar({
   currentSpace,
   onOpenSpace,
   onCreateSpace,
+  onNewFolder,
+  onUpload,
   auth,
   onSignIn,
   onSignOut,
@@ -136,15 +140,27 @@ export function Sidebar({
 
       {/* New button */}
       <div className={cn("px-3 pb-2", collapsed && "px-2")}>
-        <Button className="w-full justify-center gap-1.5" size={collapsed ? "icon" : "default"}>
-          <Icon name="plus" size={16} strokeWidth={2.25} />
-          {!collapsed && (
-            <>
-              <span className="flex-1 text-left">New</span>
-              <Icon name="chevron-down" size={14} />
-            </>
-          )}
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button className="w-full justify-center gap-1.5" size={collapsed ? "icon" : "default"}>
+              <Icon name="plus" size={16} strokeWidth={2.25} />
+              {!collapsed && (
+                <>
+                  <span className="flex-1 text-left">New</span>
+                  <Icon name="chevron-down" size={14} />
+                </>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            <DropdownMenuItem onClick={onNewFolder}>
+              <Icon name="folder" size={15} /> New folder
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onUpload}>
+              <Icon name="upload" size={15} /> Upload files
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Main nav */}

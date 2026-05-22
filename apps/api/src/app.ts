@@ -197,6 +197,20 @@ export function createApp(deps: AppDeps) {
     return c.json(await drive!.service.createFile(space, caller.sub, body), 201);
   }));
 
+  // Create an (empty) folder in a space.
+  app.post("/api/folders", driveRoute(async (c, caller) => {
+    const { path } = await c.req.json<{ path: string }>();
+    if (!path) return c.json({ error: "path required" }, 400);
+    const space = await resolveSpace(c, caller.sub);
+    return c.json(await drive!.service.createFolder(space, caller.sub, path), 201);
+  }));
+
+  // Lightweight stats for the dashboard (file count + bytes used in a space).
+  app.get("/api/overview", driveRoute(async (c, caller) => {
+    const space = await resolveSpace(c, caller.sub);
+    return c.json(await drive!.service.overview(caller.sub, space));
+  }));
+
   app.get("/api/files/:id", driveRoute(async (c, caller) =>
     c.json(await drive!.service.getFile(caller, c.req.param("id")!)),
   ));

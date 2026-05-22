@@ -27,6 +27,8 @@ import {
   listShared,
   listSpaces,
   createSpace,
+  createFolder,
+  getOverview,
   contentUrl,
   uploadFiles,
   deleteFile,
@@ -36,6 +38,7 @@ import {
   logout,
   type Me,
   type SpaceView,
+  type Overview,
 } from "@/lib/api";
 import { SpaceMembersDialog } from "@/components/space-members-dialog";
 import { createRegistry, DEFAULT_INSTALLED, PLUGIN_UI } from "@/plugins";
@@ -151,7 +154,20 @@ function DesktopApp() {
   const [storeOpen, setStoreOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const [membersSpace, setMembersSpace] = useState<{ id: string; name: string } | null>(null);
+  const [overview, setOverview] = useState<Overview>({ files: 0, bytes: 0 });
+  const [sharedCount, setSharedCount] = useState(0);
   const [dragOver, setDragOver] = useState(false);
+
+  // Dashboard stats (personal space): file count, bytes used, and how many files
+  // are shared with me. Refreshed alongside the drive.
+  useEffect(() => {
+    getOverview()
+      .then(setOverview)
+      .catch(() => setOverview({ files: 0, bytes: 0 }));
+    listShared()
+      .then((s) => setSharedCount(s.length))
+      .catch(() => setSharedCount(0));
+  }, [refreshKey, auth.user, auth.authConfigured]);
 
   // Apply theme + accent + font to the document root.
   useEffect(() => {
@@ -278,6 +294,22 @@ function DesktopApp() {
       toast(`Created “${name.trim()}”`, { description: "Share files into it or add members." });
     } catch (err) {
       toast("Couldn't create space", { description: (err as Error).message });
+    }
+  }
+
+  async function createFolderFlow() {
+    if (space === "shared") {
+      toast("Open a drive or space to create a folder");
+      return;
+    }
+    const name = window.prompt("Folder name");
+    if (!name?.trim()) return;
+    try {
+      await createFolder([path, name.trim()].filter(Boolean).join("/"), space || undefined);
+      reload();
+      toast(`Created “${name.trim()}”`);
+    } catch (err) {
+      toast("Couldn't create folder", { description: (err as Error).message });
     }
   }
 
@@ -444,6 +476,8 @@ function DesktopApp() {
         currentSpace={active === "drive" ? space : ""}
         onOpenSpace={openSpace}
         onCreateSpace={createSpaceFlow}
+        onNewFolder={createFolderFlow}
+        onUpload={() => uploadInputRef.current?.click()}
         auth={auth}
         onSignIn={signIn}
         onSignOut={signOut}
@@ -466,7 +500,17 @@ function DesktopApp() {
         <main className="relative flex-1 overflow-auto">
           <div className="mx-auto max-w-[1280px] px-8 pb-8 pt-[22px]">
             {active === "home" ? (
-              <HomeView installed={installed} files={files} onOpenPlugin={(id) => navigate(`plugin:${id}`)} onOpenFile={setPreviewFile} />
+              <HomeView
+                installed={installed}
+                files={files}
+                spaces={spaces}
+                overview={overview}
+                sharedCount={sharedCount}
+                userName={auth.user?.name ?? auth.user?.email}
+                onOpenPlugin={(id) => navigate(`plugin:${id}`)}
+                onOpenFile={setPreviewFile}
+                onOpenSpace={openSpace}
+              />
             ) : active === "trash" ? (
               <EmptyState />
             ) : active.startsWith("plugin:") ? (

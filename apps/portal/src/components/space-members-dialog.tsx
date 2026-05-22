@@ -26,6 +26,18 @@ export function SpaceMembersDialog({
   const [role, setRole] = useState<Role>("editor");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const inviteLink = `${window.location.origin}/?space=${spaceId}`;
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — ignore */
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -101,19 +113,31 @@ export function SpaceMembersDialog({
           </Button>
         </form>
 
+        {/* Copyable invite link — recipients sign in here and any pending invite resolves. */}
+        <div className="flex items-center gap-2 rounded-lg bg-muted/60 px-2.5 py-1.5">
+          <Icon name="users" size={14} className="text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">{inviteLink}</span>
+          <Button variant="ghost" size="sm" onClick={() => void copyLink()}>
+            {copied ? "Copied" : "Copy link"}
+          </Button>
+        </div>
+
         {error && <p className="text-[12.5px] text-destructive">{error}</p>}
 
         <div className="flex flex-col gap-1.5">
           {members.map((m) => (
-            <div key={m.sub} className="flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5">
+            <div key={m.sub || m.email} className="flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5">
               <PersonAvatar name={m.name ?? m.email ?? m.sub} size="md" />
-              <span className="min-w-0 flex-1 truncate text-[13.5px]">{m.name ?? m.email ?? m.sub}</span>
+              <span className="min-w-0 flex-1 truncate text-[13.5px]">
+                {m.name ?? m.email ?? m.sub}
+                {m.pending && <span className="ml-1.5 text-[11px] text-muted-foreground">· invited</span>}
+              </span>
               <span className="text-[12px] capitalize text-muted-foreground">{m.role}</span>
               {m.role !== "owner" && (
                 <button
                   className="text-muted-foreground hover:text-destructive disabled:opacity-40"
                   disabled={busy}
-                  onClick={() => void run(() => removeMember(spaceId, m.sub))}
+                  onClick={() => void run(() => removeMember(spaceId, m.sub || m.email || ""))}
                   aria-label="Remove member"
                 >
                   <Icon name="x" size={15} />
@@ -123,7 +147,8 @@ export function SpaceMembersDialog({
           ))}
         </div>
         <p className="text-[12px] text-muted-foreground">
-          People you add must have signed in once. Share a file by email to invite someone new.
+          Invite anyone by email. If they don't have an account yet, send them the link above — they'll
+          get access the moment they sign in.
         </p>
       </DialogContent>
     </Dialog>

@@ -11,6 +11,9 @@ export interface FileItem {
   starred?: boolean;
   /** For folders: the navigate-to virtual path. For files: the folder they live in. */
   path?: string;
+  /** Display owner (resolved name/email) and location (space name), for the preview. */
+  owner?: string;
+  location?: string;
 }
 
 export const DEFAULT_FILES: FileItem[] = [

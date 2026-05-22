@@ -29,7 +29,7 @@ function kindForName(name: string): FileKind {
   return EXT_KIND[ext] ?? "doc";
 }
 
-function humanSize(bytes?: number): string {
+export function humanSize(bytes?: number): string {
   if (bytes == null) return "—";
   if (bytes < 1000) return `${bytes} B`;
   const units = ["KB", "MB", "GB", "TB"];
@@ -59,16 +59,19 @@ async function sha256hex(bytes: Uint8Array): Promise<string> {
 
 // ── the drive (DB-backed, content-addressed) ─────────────────────────────────
 
-/** Shape of a file record returned by the API (FileWithVersion). */
+/** Shape of a file record returned by the API (an enriched FileWithVersion). */
 interface ApiFile {
   id: string;
   name: string;
   metadata: Record<string, unknown>;
   updatedAt: string;
+  ownerLabel?: string;
+  sharedWith?: string[];
   version: { size: number; mime: string | null } | null;
 }
 interface DriveListing {
   path: string;
+  spaceName?: string;
   files: ApiFile[];
   folders: string[];
 }
@@ -89,6 +92,9 @@ function toFileItems(data: DriveListing, dir: string): FileItem[] {
     modified: fmtDate(f.updatedAt),
     size: humanSize(f.version?.size),
     path: dir,
+    sharedWith: f.sharedWith,
+    owner: f.ownerLabel,
+    location: data.spaceName,
   }));
   return [...folders, ...files];
 }
@@ -166,6 +172,30 @@ export async function deleteFile(id: string): Promise<void> {
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
 }
 
+/** Create an empty folder at a virtual path within a space. */
+export async function createFolder(path: string, spaceId?: string): Promise<void> {
+  const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
+  const res = await fetch(`/api/folders${sp}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) throw new Error(`create folder failed: ${res.status}`);
+}
+
+export interface Overview {
+  files: number;
+  bytes: number;
+}
+
+/** File count + bytes used in a space (for the dashboard). */
+export async function getOverview(spaceId?: string): Promise<Overview> {
+  const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
+  const res = await fetch(`/api/overview${sp}`);
+  if (!res.ok) return { files: 0, bytes: 0 };
+  return (await res.json()) as Overview;
+}
+
 // ── spaces + sharing ─────────────────────────────────────────────────────────
 
 export type Role = "owner" | "editor" | "viewer";
@@ -210,6 +240,8 @@ export interface Member {
   role: Role;
   email: string | null;
   name: string | null;
+  /** A pending email invite (the person hasn't signed in yet). */
+  pending: boolean;
 }
 
 export async function listMembers(spaceId: string): Promise<Member[]> {
@@ -218,21 +250,23 @@ export async function listMembers(spaceId: string): Promise<Member[]> {
   return (await res.json()) as Member[];
 }
 
-/** Add a member by email (they must have signed in once). */
-export async function addMember(spaceId: string, email: string, role: Role): Promise<void> {
+/** Add a member by email. Returns the member (or a pending invite if they have no account yet). */
+export async function addMember(spaceId: string, email: string, role: Role): Promise<Member> {
   const res = await fetch(`/api/spaces/${spaceId}/members`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email, role }),
   });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `add member failed: ${res.status}`);
+  return (await res.json()) as Member;
 }
 
-export async function removeMember(spaceId: string, sub: string): Promise<void> {
+/** Remove a member or pending invite by principal (a user sub or an invited email). */
+export async function removeMember(spaceId: string, principal: string): Promise<void> {
   const res = await fetch(`/api/spaces/${spaceId}/members`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sub }),
+    body: JSON.stringify({ sub: principal }),
   });
   if (!res.ok) throw new Error(`remove member failed: ${res.status}`);
 }

@@ -35,7 +35,9 @@ plus indexes, never an EAV table.
 
 Folders are **virtual**: a file's folder is just its `metadata.path` (e.g. `Documents/2026`).
 Listing a folder returns the files at that path plus the child folder names derived from the
-set of paths. Storage stays flat; the tree is computed.
+set of paths. Storage stays flat; the tree is computed. You can also create an **empty folder**
+— it's recorded explicitly (a row in `folders`) so it shows up before it has any files, and is
+merged into the derived tree.
 
 ## Uploading (content-addressed, de-duplicated)
 

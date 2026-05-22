@@ -61,9 +61,9 @@ export default {
       readonlyMounts.demo = gh("demo", "demo");
     }
 
-    const onLogin = async (u: { sub: string; email?: string; name?: string; picture?: string }) => {
+    const onLogin = async (u: { sub: string; email?: string; name?: string; picture?: string; emailVerified?: boolean }) => {
       await upsertUser(db, u);
-      await resolveInvites(db, u.sub, u.email);
+      if (u.emailVerified) await resolveInvites(db, u.sub, u.email); // verified email only
       await ensurePersonalSpace(db, u.sub);
     };
 

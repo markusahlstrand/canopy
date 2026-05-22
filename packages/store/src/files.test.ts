@@ -4,6 +4,7 @@ import { createSqlBlobRepo } from "./repo";
 import { runMigrations } from "./schema";
 import { FileService, PermissionError } from "./files";
 import { ensurePersonalSpace } from "./spaces";
+import { upsertUser } from "./users";
 import { sha256hex } from "./hash";
 import type { BlobStore } from "./blob-store";
 import type { Db } from "./db";
@@ -146,6 +147,31 @@ describe("FileService over libsql", () => {
     expect(shared.map((x) => x.name)).toEqual(["shared-note.md"]);
     // bob can read but not delete
     await expect(svc.deleteFile({ sub: "bob" }, f.id)).rejects.toBeInstanceOf(PermissionError);
+  });
+
+  it("creates an empty folder that persists in listings, and overview counts files", async () => {
+    await svc.createFolder(space, USER, "Photos");
+    const root = await svc.list(USER, space, "");
+    expect(root.folders).toContain("Photos");
+
+    await upload("a.txt", "aaa");
+    await upload("b.txt", "bbbbb");
+    const ov = await svc.overview(USER, space);
+    expect(ov.files).toBe(2);
+    expect(ov.bytes).toBe(8); // 3 + 5
+  });
+
+  it("list enriches files with shared-with labels, an owner label, and the space name", async () => {
+    await upsertUser(db, { sub: USER, email: "me@x.com", name: "Me" });
+    const f = await upload("doc.md", "hi");
+    await svc.shareGrant({ sub: USER }, f.id, { subjectType: "email", subjectId: "friend@x.com", role: "viewer" });
+
+    const root = await svc.list(USER, space, "");
+    expect(root.spaceName).toBe("My Drive");
+    const item = root.files.find((x) => x.name === "doc.md")!;
+    expect(item.ownerLabel).toBe("Me");
+    expect(item.sharedWith).toContain("friend@x.com");
+    expect(item.sharedWith).not.toContain("Me"); // owner's own grant is excluded
   });
 
   it("soft-deleted files disappear from listings", async () => {

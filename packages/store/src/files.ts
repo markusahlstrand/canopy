@@ -7,6 +7,7 @@ import {
   addMember,
   createSpace as createGroupSpace,
   ensurePersonalSpace,
+  getSpace,
   listMembers,
   listSpacesForUser,
   removeMember,
@@ -145,6 +146,13 @@ function joinedToFileWithVersion(r: JoinedRow): FileWithVersion {
   };
 }
 
+/** A listed file enriched for display: who it's shared with + a friendly owner label. */
+export interface ListedFile extends FileWithVersion {
+  /** Labels (emails / names / space names) the file is shared with, beyond its owner. */
+  sharedWith: string[];
+  ownerLabel: string;
+}
+
 export interface CreateFileInput {
   name: string;
   hash: string;
@@ -204,16 +212,19 @@ export class FileService {
   }
 
   /**
-   * Add a member by email. Requires owner on the space. The invitee must already
-   * exist in the directory (have signed in once) — space membership is by `sub`,
-   * not a pending email invite (per-file sharing supports email invites instead).
+   * Add a member by email. Requires owner. If they already have an account it's a
+   * direct grant; otherwise a **pending invite** (an `email:` space grant) that
+   * resolves to membership when they first sign in with that (verified) email.
    */
   async addSpaceMember(caller: Caller, spaceId: string, email: string, role: Role): Promise<SpaceMember> {
     await this.requireSpace(caller.sub, spaceId, "owner");
     const user = await findUserByEmail(this.db, email);
-    if (!user) throw new NotFoundError("no such user — they must sign in once before joining a space");
-    await addMember(this.db, spaceId, user.sub, role);
-    return { sub: user.sub, role, email: user.email, name: user.name };
+    if (user) {
+      await addMember(this.db, spaceId, user.sub, role);
+      return { sub: user.sub, role, email: user.email, name: user.name, pending: false };
+    }
+    await writeTuple(this.db, { objectType: "space", objectId: spaceId, relation: role, subjectType: "email", subjectId: email });
+    return { sub: "", role, email, name: null, pending: true };
   }
 
   async removeSpaceMember(caller: Caller, spaceId: string, sub: string): Promise<void> {
@@ -293,8 +304,12 @@ export class FileService {
     return { key: version.blobKey, version };
   }
 
-  /** List a virtual folder within a space the caller can see. */
-  async list(userSub: string, spaceId: string, dir = ""): Promise<{ path: string; files: FileWithVersion[]; folders: string[] }> {
+  /** List a virtual folder within a space the caller can see, enriched for display. */
+  async list(
+    userSub: string,
+    spaceId: string,
+    dir = "",
+  ): Promise<{ path: string; spaceName: string; files: ListedFile[]; folders: string[] }> {
     await this.requireSpace(userSub, spaceId, "viewer");
     const path = normPath(dir);
     const rows = await this.db.all<JoinedRow>(
@@ -308,11 +323,86 @@ export class FileService {
       `SELECT DISTINCT json_extract(metadata, '$.path') AS p FROM files WHERE tenant_id = ? AND deleted_at IS NULL`,
       [spaceId],
     );
-    return { path, files: rows.map(joinedToFileWithVersion), folders: subfolders(path, pathRows.map((r) => r.p ?? "")) };
+    // Empty folders are explicit rows; non-empty ones are derived from file paths.
+    const folderRows = await this.db.all<{ path: string }>("SELECT path FROM folders WHERE space_id = ?", [spaceId]);
+    const allPaths = [...pathRows.map((r) => r.p ?? ""), ...folderRows.map((r) => r.path)];
+
+    const items = rows.map(joinedToFileWithVersion);
+    const files = await this.enrichForDisplay(items);
+    const space = await getSpace(this.db, spaceId);
+    return { path, spaceName: space?.name ?? "My Drive", files, folders: subfolders(path, allPaths) };
+  }
+
+  /** Attach `sharedWith` labels + an `ownerLabel` to listed files (batched lookups). */
+  private async enrichForDisplay(items: FileWithVersion[]): Promise<ListedFile[]> {
+    if (items.length === 0) return [];
+    const ids = items.map((f) => f.id);
+    const grants = await this.db.all<{ object_id: string; subject_type: string; subject_id: string }>(
+      `SELECT object_id, subject_type, subject_id FROM relation_tuples
+       WHERE object_type = 'file' AND relation IN ('owner','editor','viewer')
+         AND object_id IN (${ids.map(() => "?").join(",")})`,
+      ids,
+    );
+    const userSubs = new Set([...items.map((f) => f.ownerId), ...grants.filter((g) => g.subject_type === "user").map((g) => g.subject_id)]);
+    const spaceIds = new Set(grants.filter((g) => g.subject_type === "space").map((g) => g.subject_id));
+    const users = userSubs.size
+      ? await this.db.all<{ sub: string; email: string | null; name: string | null }>(
+          `SELECT sub, email, name FROM users WHERE sub IN (${[...userSubs].map(() => "?").join(",")})`,
+          [...userSubs],
+        )
+      : [];
+    const spaceRows = spaceIds.size
+      ? await this.db.all<{ id: string; name: string }>(
+          `SELECT id, name FROM spaces WHERE id IN (${[...spaceIds].map(() => "?").join(",")})`,
+          [...spaceIds],
+        )
+      : [];
+    const userLabel = (sub: string) => {
+      const u = users.find((x) => x.sub === sub);
+      return u?.name || u?.email || sub;
+    };
+    const labelFor = (g: { subject_type: string; subject_id: string }) =>
+      g.subject_type === "email" ? g.subject_id : g.subject_type === "space" ? (spaceRows.find((s) => s.id === g.subject_id)?.name ?? "a space") : userLabel(g.subject_id);
+
+    const byFile = new Map<string, string[]>();
+    for (const g of grants) {
+      const file = items.find((f) => f.id === g.object_id)!;
+      if (g.subject_type === "user" && g.subject_id === file.ownerId) continue; // skip the owner's own grant
+      const arr = byFile.get(g.object_id) ?? [];
+      const label = labelFor(g);
+      if (!arr.includes(label)) arr.push(label);
+      byFile.set(g.object_id, arr);
+    }
+    return items.map((f) => ({ ...f, sharedWith: byFile.get(f.id) ?? [], ownerLabel: userLabel(f.ownerId) }));
+  }
+
+  /** Create an (empty) folder at a virtual path. Requires editor+ on the space. */
+  async createFolder(spaceId: string, userSub: string, path: string): Promise<{ path: string }> {
+    await this.requireSpace(userSub, spaceId, "editor");
+    const p = normPath(path);
+    if (!p) throw new NotFoundError("folder path required");
+    await this.db.run("INSERT OR IGNORE INTO folders (space_id, path, created_at) VALUES (?, ?, ?)", [
+      spaceId,
+      p,
+      new Date().toISOString(),
+    ]);
+    return { path: p };
+  }
+
+  /** Lightweight stats for a space (file count + bytes used). Requires viewer+. */
+  async overview(userSub: string, spaceId: string): Promise<{ files: number; bytes: number }> {
+    await this.requireSpace(userSub, spaceId, "viewer");
+    const row = await this.db.first<{ files: number; bytes: number }>(
+      `SELECT COUNT(*) AS files, COALESCE(SUM(v.size), 0) AS bytes
+       FROM files f LEFT JOIN file_versions v ON v.id = f.current_version_id
+       WHERE f.tenant_id = ? AND f.deleted_at IS NULL`,
+      [spaceId],
+    );
+    return { files: row?.files ?? 0, bytes: row?.bytes ?? 0 };
   }
 
   /** Files shared directly with the caller that live outside their own spaces. */
-  async listSharedWithMe(userSub: string): Promise<FileWithVersion[]> {
+  async listSharedWithMe(userSub: string): Promise<ListedFile[]> {
     const mine = await memberSpaceIds(this.db, userSub);
     const notIn = mine.length ? `AND f.tenant_id NOT IN (${mine.map(() => "?").join(",")})` : "";
     const rows = await this.db.all<JoinedRow>(
@@ -325,7 +415,7 @@ export class FileService {
        GROUP BY f.id ORDER BY f.name`,
       [userSub, ...mine],
     );
-    return rows.map(joinedToFileWithVersion);
+    return this.enrichForDisplay(rows.map(joinedToFileWithVersion));
   }
 
   /** Merge into the metadata JSON. Does NOT create a new version. Requires editor+. */

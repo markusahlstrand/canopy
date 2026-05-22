@@ -65,8 +65,11 @@ fans out across databases.
   co-accessed by their members. A group space surfaces as a **folder inside My Drive** (the
   merged, "family" feel) and can be **unpinned** to a sidebar switcher per user.
 - **Per-file sharing.** Grant a person (by email) or a whole space a role — **owner ⊇ editor ⊇
-  viewer**. Sharing by email to someone who hasn't signed in yet stores a **pending invite** that
-  resolves on their first login.
+  viewer**.
+- **Canopy-native invites.** Invite anyone to a file or space **by email**. If they don't have
+  an account yet it's a **pending invite** — share the **copyable invite link**, and it resolves
+  the moment they sign in with that (**verified**) email. Authentication stays with your OIDC
+  provider; membership lives in Canopy, so it's not tied to a vendor "organizations" feature.
 - **Surface, not silo.** A space is a shared *context*; the drive surfaces it as a folder, and
   (planned) the calendar would surface the same space as a shared calendar.
 

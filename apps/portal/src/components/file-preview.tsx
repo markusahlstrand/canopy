@@ -94,14 +94,14 @@ export function FilePreview({
                 <Detail label="Modified">
                   <span className="font-mono">{file.modified}</span>
                 </Detail>
-                <Detail label="Owner">{CURRENT_USER.name}</Detail>
+                <Detail label="Owner">{file.owner ?? CURRENT_USER.name}</Detail>
                 <Detail label="Shared with">
                   {file.sharedWith?.length ? <AvatarGroup people={file.sharedWith} /> : "Only you"}
                 </Detail>
                 <Detail label="Location">
                   <span className="flex items-center gap-1.5">
                     <Icon name="cloud" size={14} className="text-muted-foreground" />
-                    {STORAGE.label}
+                    {file.location ?? STORAGE.label}
                   </span>
                 </Detail>
               </div>
