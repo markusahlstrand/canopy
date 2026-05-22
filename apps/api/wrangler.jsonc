@@ -28,7 +28,7 @@
     "OIDC_ISSUER": "https://token.sesamy.dev",
     "OIDC_CLIENT_ID": "canopy",
     "OIDC_AUDIENCE": "urn:canopy",
-    "GITHUB_REPO": "sesamyab/canopy",
+    "GITHUB_REPO": "markusahlstrand/canopy",
     "GITHUB_BRANCH": "main"
   },
 
