@@ -73,12 +73,7 @@ interface DriveListing {
   folders: string[];
 }
 
-/** List a virtual folder of the user's drive. Returns folders first, then files. */
-export async function listFiles(dir = ""): Promise<FileItem[]> {
-  const res = await fetch(`/api/files?path=${encodeURIComponent(dir)}`);
-  if (res.status === 401) return []; // not signed in → empty drive
-  if (!res.ok) throw new Error(`list failed: ${res.status}`);
-  const data: DriveListing = await res.json();
+function toFileItems(data: DriveListing, dir: string): FileItem[] {
   const folders: FileItem[] = data.folders.map((name) => ({
     id: `folder:${join(dir, name)}`,
     name,
@@ -98,15 +93,32 @@ export async function listFiles(dir = ""): Promise<FileItem[]> {
   return [...folders, ...files];
 }
 
+/** List a virtual folder of a space (default: personal). Folders first, then files. */
+export async function listFiles(dir = "", spaceId?: string): Promise<FileItem[]> {
+  const sp = spaceId ? `&space=${encodeURIComponent(spaceId)}` : "";
+  const res = await fetch(`/api/files?path=${encodeURIComponent(dir)}${sp}`);
+  if (res.status === 401) return []; // not signed in → empty drive
+  if (!res.ok) throw new Error(`list failed: ${res.status}`);
+  return toFileItems(await res.json(), dir);
+}
+
+/** Files shared directly with the caller (outside their own spaces). */
+export async function listShared(): Promise<FileItem[]> {
+  const res = await fetch("/api/files?shared=1");
+  if (!res.ok) return [];
+  return toFileItems(await res.json(), "");
+}
+
 /** URL to stream a drive file's current version. */
 export function contentUrl(id: string): string {
   return `/api/files/${id}/content`;
 }
 
-/** Store bytes content-addressed, skipping the upload if the blob already exists. Returns the hash. */
-async function uploadBlob(bytes: Uint8Array): Promise<string> {
+/** Store bytes content-addressed in a space, skipping the upload if it already exists. Returns the hash. */
+async function uploadBlob(bytes: Uint8Array, spaceId?: string): Promise<string> {
+  const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
   const hash = await sha256hex(bytes);
-  const prep = await fetch("/api/uploads/prepare", {
+  const prep = await fetch(`/api/uploads/prepare${sp}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ hash, size: bytes.byteLength }),
@@ -114,18 +126,19 @@ async function uploadBlob(bytes: Uint8Array): Promise<string> {
   if (!prep.ok) throw new Error(`prepare failed: ${prep.status}`);
   const { exists } = (await prep.json()) as { exists: boolean };
   if (!exists) {
-    const put = await fetch(`/api/uploads/${hash}`, { method: "PUT", body: bytes as unknown as BodyInit });
+    const put = await fetch(`/api/uploads/${hash}${sp}`, { method: "PUT", body: bytes as unknown as BodyInit });
     if (!put.ok) throw new Error(`upload failed: ${put.status}`);
   }
   return hash;
 }
 
-/** Upload files into a virtual folder: hash → dedup-prepare → (PUT if new) → create record. */
-export async function uploadFiles(dir: string, files: File[]): Promise<number> {
+/** Upload files into a virtual folder of a space: hash → dedup-prepare → (PUT if new) → create record. */
+export async function uploadFiles(dir: string, files: File[], spaceId?: string): Promise<number> {
+  const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
   for (const file of files) {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const hash = await uploadBlob(bytes);
-    const res = await fetch("/api/files", {
+    const hash = await uploadBlob(bytes, spaceId);
+    const res = await fetch(`/api/files${sp}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: file.name, hash, mime: file.type || undefined, path: dir }),
@@ -135,10 +148,10 @@ export async function uploadFiles(dir: string, files: File[]): Promise<number> {
   return files.length;
 }
 
-/** Save new text content as a NEW version of a file (metadata untouched). */
-export async function saveFileVersion(id: string, text: string, mime = "text/markdown"): Promise<void> {
+/** Save new text content as a NEW version of a file (metadata untouched). Blob goes in the file's space. */
+export async function saveFileVersion(id: string, text: string, mime = "text/markdown", spaceId?: string): Promise<void> {
   const bytes = new TextEncoder().encode(text);
-  const hash = await uploadBlob(bytes);
+  const hash = await uploadBlob(bytes, spaceId);
   const res = await fetch(`/api/files/${id}/versions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -151,6 +164,115 @@ export async function saveFileVersion(id: string, text: string, mime = "text/mar
 export async function deleteFile(id: string): Promise<void> {
   const res = await fetch(`/api/files/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+}
+
+// ── spaces + sharing ─────────────────────────────────────────────────────────
+
+export type Role = "owner" | "editor" | "viewer";
+
+export interface SpaceView {
+  id: string;
+  name: string;
+  kind: "personal" | "group";
+  role: Role;
+  mounted: boolean;
+}
+
+/** Spaces the caller can see, with their role + mount preference. */
+export async function listSpaces(): Promise<SpaceView[]> {
+  const res = await fetch("/api/spaces");
+  if (!res.ok) return [];
+  return (await res.json()) as SpaceView[];
+}
+
+/** Create a shared (group) space. */
+export async function createSpace(name: string): Promise<{ id: string; name: string }> {
+  const res = await fetch("/api/spaces", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`create space failed: ${res.status}`);
+  return (await res.json()) as { id: string; name: string };
+}
+
+/** Pin/unpin a space into My Drive. */
+export async function setSpaceMounted(spaceId: string, mounted: boolean): Promise<void> {
+  await fetch(`/api/spaces/${spaceId}/prefs`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mounted }),
+  });
+}
+
+export interface Member {
+  sub: string;
+  role: Role;
+  email: string | null;
+  name: string | null;
+}
+
+export async function listMembers(spaceId: string): Promise<Member[]> {
+  const res = await fetch(`/api/spaces/${spaceId}/members`);
+  if (!res.ok) throw new Error(`members failed: ${res.status}`);
+  return (await res.json()) as Member[];
+}
+
+/** Add a member by email (they must have signed in once). */
+export async function addMember(spaceId: string, email: string, role: Role): Promise<void> {
+  const res = await fetch(`/api/spaces/${spaceId}/members`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, role }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `add member failed: ${res.status}`);
+}
+
+export async function removeMember(spaceId: string, sub: string): Promise<void> {
+  const res = await fetch(`/api/spaces/${spaceId}/members`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sub }),
+  });
+  if (!res.ok) throw new Error(`remove member failed: ${res.status}`);
+}
+
+export interface Grant {
+  relation: Role;
+  subjectType: "user" | "space" | "email";
+  subjectId: string;
+  subjectRelation?: string;
+}
+
+/** Current grants on a file (for the Share dialog). */
+export async function listGrants(fileId: string): Promise<Grant[]> {
+  const res = await fetch(`/api/files/${fileId}/grants`);
+  if (!res.ok) throw new Error(`grants failed: ${res.status}`);
+  return (await res.json()) as Grant[];
+}
+
+/** Share a file with a person (by email) or a space, at a role. */
+export async function shareFile(
+  fileId: string,
+  subject: { subjectType: "user" | "space" | "email"; subjectId: string },
+  role: Role,
+): Promise<void> {
+  const res = await fetch(`/api/files/${fileId}/grants`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...subject, role }),
+  });
+  if (!res.ok) throw new Error(`share failed: ${res.status}`);
+}
+
+/** Revoke a grant. */
+export async function unshareFile(fileId: string, grant: Grant): Promise<void> {
+  const res = await fetch(`/api/files/${fileId}/grants`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(grant),
+  });
+  if (!res.ok) throw new Error(`unshare failed: ${res.status}`);
 }
 
 // ── read-only mounts (docs / demo) ───────────────────────────────────────────

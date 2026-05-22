@@ -5,7 +5,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { createLocalConnector } from "@canopy/connector-local";
 import { createGithubConnector } from "@canopy/connector-github";
 import type { StorageConnector } from "@canopy/core";
-import { FileService, createSqlBlobRepo, runMigrations } from "@canopy/store";
+import { FileService, createSqlBlobRepo, ensurePersonalSpace, resolveInvites, runMigrations, upsertUser } from "@canopy/store";
 import { createFsBlobStore, createLibsqlDb } from "@canopy/store/node";
 import { createApp } from "./app";
 import { readAuthConfig } from "./auth/config";
@@ -52,8 +52,16 @@ if (authConfig && !authConfig.sessionSecret) {
   console.warn("  ⚠ SESSION_SECRET not set — using an ephemeral key (sessions reset on restart)");
 }
 
+// On login: record the user in the directory, resolve pending email invites,
+// and ensure their personal space exists.
+const onLogin = async (u: { sub: string; email?: string; name?: string; picture?: string }) => {
+  await upsertUser(db, u);
+  await resolveInvites(db, u.sub, u.email);
+  await ensurePersonalSpace(db, u.sub);
+};
+
 const app = createApp({
-  auth: createAuthApp(authConfig),
+  auth: createAuthApp(authConfig, onLogin),
   authConfig,
   readonlyMounts: { docs, demo },
   drive: { service, blobs },

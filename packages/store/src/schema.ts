@@ -78,6 +78,58 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    // Sharing — relation-tuple (Zanzibar-lite) access control. A `files.tenant_id`
+    // value is now a *space id*. Access derives from tuples + a recursive check,
+    // so `file_permissions` is superseded (left in place, unused).
+    version: 2,
+    statements: [
+      // User directory — upserted on login so files can be shared by email.
+      `CREATE TABLE IF NOT EXISTS users (
+         sub        TEXT PRIMARY KEY,
+         email      TEXT,
+         name       TEXT,
+         picture    TEXT,
+         updated_at TEXT NOT NULL
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)`,
+      // A space (drive): "personal" (one per user) or "group" (e.g. a family).
+      `CREATE TABLE IF NOT EXISTS spaces (
+         id         TEXT PRIMARY KEY,
+         name       TEXT NOT NULL,
+         kind       TEXT NOT NULL,                 -- 'personal' | 'group'
+         created_by TEXT NOT NULL,
+         created_at TEXT NOT NULL
+       )`,
+      // Relation tuples: object#relation@subject, subject optionally a userset
+      // (subject_relation, e.g. space:fam#member). '' = a direct subject.
+      `CREATE TABLE IF NOT EXISTS relation_tuples (
+         object_type      TEXT NOT NULL,           -- 'file' | 'space'
+         object_id        TEXT NOT NULL,
+         relation         TEXT NOT NULL,           -- 'owner' | 'editor' | 'viewer' | 'space'
+         subject_type     TEXT NOT NULL,           -- 'user' | 'space' | 'email'
+         subject_id       TEXT NOT NULL,
+         subject_relation TEXT NOT NULL DEFAULT '',-- '' | 'member'
+         PRIMARY KEY (object_type, object_id, relation, subject_type, subject_id, subject_relation)
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_tuples_subject ON relation_tuples (subject_type, subject_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_tuples_object ON relation_tuples (object_type, object_id, relation)`,
+    ],
+  },
+  {
+    // Per-user, per-space presentation preference: a "mounted" group space shows
+    // inline in My Drive (the merged/family feel); unmounted lives in the
+    // switcher only. No row = mounted by default. (Personal space is always shown.)
+    version: 3,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS space_prefs (
+         user_sub TEXT NOT NULL,
+         space_id TEXT NOT NULL,
+         mounted  INTEGER NOT NULL DEFAULT 1,
+         PRIMARY KEY (user_sub, space_id)
+       )`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

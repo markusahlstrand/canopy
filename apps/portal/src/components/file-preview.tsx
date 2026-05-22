@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ShareDialog } from "@/components/share-dialog";
 import { Icon } from "@/lib/icons";
 import { FileIcon } from "@/components/file-icon";
 import { AvatarGroup, PersonAvatar } from "@/components/person-avatar";
@@ -27,16 +29,23 @@ export function FilePreview({
   file,
   onClose,
   onSaved,
+  space,
 }: {
   file: FileItem | null;
   onClose: () => void;
   onSaved?: () => void;
+  /** The space the file lives in (so a saved version's blob lands there). */
+  space?: string;
 }) {
+  const [shareOpen, setShareOpen] = useState(false);
   return (
     <Sheet open={!!file} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-[640px] max-w-[92vw] gap-0 sm:max-w-[640px]">
         {file && (
           <>
+            {file.kind !== "folder" && (
+              <ShareDialog fileId={file.id} fileName={file.name} open={shareOpen} onOpenChange={setShareOpen} />
+            )}
             <SheetHeader className="flex-row items-center gap-3 border-b space-y-0">
               <FileIcon kind={file.kind} />
               <div className="min-w-0 flex-1">
@@ -45,10 +54,10 @@ export function FilePreview({
                   {file.size} · {file.modified}
                 </div>
               </div>
-              <Button variant="outline" size="sm" className="gap-1.5">
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(contentUrl(file.id), "_blank")}>
                 <Icon name="download" size={14} /> Download
               </Button>
-              <Button variant="outline" size="sm" className="gap-1.5">
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setShareOpen(true)}>
                 <Icon name="share" size={14} /> Share
               </Button>
             </SheetHeader>
@@ -62,7 +71,7 @@ export function FilePreview({
                     key={file.id}
                     file={{ source: viewer.source, name: file.name, url: contentUrl(file.id) }}
                     onSaved={onSaved}
-                    onSaveContent={editable ? (text) => saveFileVersion(file.id, text) : undefined}
+                    onSaveContent={editable ? (text) => saveFileVersion(file.id, text, undefined, space) : undefined}
                   />
                 ) : (
                   <div

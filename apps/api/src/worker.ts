@@ -5,7 +5,10 @@ import {
   createD1Db,
   createR2BlobStore,
   createSqlBlobRepo,
+  ensurePersonalSpace,
+  resolveInvites,
   runMigrations,
+  upsertUser,
   type D1Like,
   type R2BucketLike,
 } from "@canopy/store";
@@ -58,9 +61,15 @@ export default {
       readonlyMounts.demo = gh("demo", "demo");
     }
 
+    const onLogin = async (u: { sub: string; email?: string; name?: string; picture?: string }) => {
+      await upsertUser(db, u);
+      await resolveInvites(db, u.sub, u.email);
+      await ensurePersonalSpace(db, u.sub);
+    };
+
     const authConfig = readAuthConfig(env as unknown as EnvVars);
     const app = createApp({
-      auth: createAuthApp(authConfig),
+      auth: createAuthApp(authConfig, onLogin),
       authConfig,
       readonlyMounts,
       drive: { service, blobs },

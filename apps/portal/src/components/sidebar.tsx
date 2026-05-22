@@ -12,7 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { STORAGE, CURRENT_USER } from "@/lib/mock-data";
-import type { Me } from "@/lib/api";
+import type { Me, SpaceView } from "@/lib/api";
 
 function initialsOf(s: string): string {
   const parts = s.split(/[\s@.]+/).filter(Boolean);
@@ -21,8 +21,7 @@ function initialsOf(s: string): string {
 
 const NAV = [
   { id: "home", icon: "home", label: "Home" },
-  { id: "drive", icon: "my-drive", label: "My Drive", count: 84 },
-  { id: "family", icon: "family", label: "Family", count: 3 },
+  { id: "drive", icon: "my-drive", label: "My Drive" },
   { id: "starred", icon: "starred", label: "Starred" },
   { id: "trash", icon: "trash", label: "Trash" },
 ];
@@ -34,6 +33,10 @@ interface SidebarProps {
   onOpenStore: () => void;
   collapsed: boolean;
   onToggle: () => void;
+  spaces: SpaceView[];
+  currentSpace: string;
+  onOpenSpace: (id: string) => void;
+  onCreateSpace: () => void;
   auth: Me;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -95,10 +98,15 @@ export function Sidebar({
   onOpenStore,
   collapsed,
   onToggle,
+  spaces,
+  currentSpace,
+  onOpenSpace,
+  onCreateSpace,
   auth,
   onSignIn,
   onSignOut,
 }: SidebarProps) {
+  const groupSpaces = spaces.filter((s) => s.kind === "group");
   const realUser = auth.user;
   const displayUser = realUser
     ? {
@@ -146,13 +154,49 @@ export function Sidebar({
             key={n.id}
             icon={n.icon}
             label={n.label}
-            count={n.count}
-            active={active === n.id}
+            // "My Drive" is the personal space; highlight only when no group space is open.
+            active={n.id === "drive" ? active === "drive" && !currentSpace : active === n.id}
             collapsed={collapsed}
             onClick={() => onNavigate(n.id)}
           />
         ))}
       </nav>
+
+      {/* Spaces (families / groups) — also surfaced inline in My Drive when mounted */}
+      {!collapsed && (
+        <div className="mt-4 px-3">
+          <div className="mb-1 flex items-center justify-between px-2.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Spaces</span>
+            <button
+              onClick={onCreateSpace}
+              title="New space"
+              className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-accent"
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {groupSpaces.map((s) => (
+              <NavRow
+                key={s.id}
+                icon="users"
+                label={s.name}
+                active={active === "drive" && currentSpace === s.id}
+                collapsed={false}
+                onClick={() => onOpenSpace(s.id)}
+              />
+            ))}
+            {groupSpaces.length === 0 && (
+              <button
+                onClick={onCreateSpace}
+                className="flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13.5px] text-muted-foreground hover:bg-accent/60"
+              >
+                <Icon name="users" size={17} /> New space…
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Plugins */}
       <div className={cn("mt-5 flex min-h-0 flex-1 flex-col px-3", collapsed && "px-2")}>

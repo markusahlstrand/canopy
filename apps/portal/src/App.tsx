@@ -22,21 +22,37 @@ import { TweaksPanel } from "@/components/tweaks-panel";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import { type FileItem, type FileKind } from "@/lib/mock-data";
-import { listFiles, contentUrl, uploadFiles, deleteFile, fetchMe, loginUrl, logout, type Me } from "@/lib/api";
+import {
+  listFiles,
+  listShared,
+  listSpaces,
+  createSpace,
+  contentUrl,
+  uploadFiles,
+  deleteFile,
+  setSpaceMounted,
+  fetchMe,
+  loginUrl,
+  logout,
+  type Me,
+  type SpaceView,
+} from "@/lib/api";
+import { SpaceMembersDialog } from "@/components/space-members-dialog";
 import { createRegistry, DEFAULT_INSTALLED, PLUGIN_UI } from "@/plugins";
 import { ACCENT_HSL, ACCENT_HSL_DARK, DEFAULT_TWEAKS, FONT_STACK, type Tweaks } from "@/lib/tweaks";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { DemoBanner } from "@/components/demo-banner";
 import { OfflineBanner } from "@/components/offline-banner";
 
-function readUrlState(): { active: string; path: string } {
+function readUrlState(): { active: string; path: string; space: string } {
   const p = new URLSearchParams(window.location.search);
-  return { active: p.get("view") ?? "drive", path: p.get("path") ?? "" };
+  return { active: p.get("view") ?? "drive", path: p.get("path") ?? "", space: p.get("space") ?? "" };
 }
 
-function urlForState(active: string, path: string): string {
+function urlForState(active: string, path: string, space: string): string {
   const params = new URLSearchParams();
   if (active !== "drive") params.set("view", active);
+  if (space) params.set("space", space);
   if (path) params.set("path", path);
   const qs = params.toString();
   return window.location.pathname + (qs ? `?${qs}` : "");
@@ -98,6 +114,9 @@ function DesktopApp() {
   const [sort, setSort] = useState<SortState>({ key: "modified", dir: "desc" });
   const [files, setFiles] = useState<FileItem[]>([]);
   const [path, setPath] = useState(() => readUrlState().path);
+  // "" = personal space, "shared" = files shared with me, else a group space id.
+  const [space, setSpace] = useState(() => readUrlState().space);
+  const [spaces, setSpaces] = useState<SpaceView[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const reload = () => setRefreshKey((k) => k + 1);
@@ -131,6 +150,7 @@ function DesktopApp() {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [storeOpen, setStoreOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  const [membersSpace, setMembersSpace] = useState<{ id: string; name: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   // Apply theme + accent + font to the document root.
@@ -159,19 +179,20 @@ function DesktopApp() {
     return () => document.removeEventListener("keydown", onKey);
   }, [tweaks.theme]);
 
-  // Reflect the current view + folder in the URL so refresh and back/forward work.
+  // Reflect the current view + space + folder in the URL so refresh / back-forward work.
   useEffect(() => {
-    const url = urlForState(active, path);
+    const url = urlForState(active, path, space);
     if (url !== window.location.pathname + window.location.search) {
       window.history.pushState(null, "", url);
     }
-  }, [active, path]);
+  }, [active, path, space]);
 
   useEffect(() => {
     function onPop() {
       const s = readUrlState();
       setActive(s.active);
       setPath(s.path);
+      setSpace(s.space);
       setSelection(new Set());
       if (s.active.startsWith("plugin:")) setActivePlugin(s.active.slice(7));
     }
@@ -179,14 +200,34 @@ function DesktopApp() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  // Load real files from the local connector whenever the current path changes.
+  // The spaces the user can see (personal + groups), for mounting + the switcher.
+  useEffect(() => {
+    listSpaces()
+      .then(setSpaces)
+      .catch(() => setSpaces([]));
+  }, [refreshKey, auth.user, auth.authConfigured]);
+
+  // Load the current location. At the personal root, mounted group spaces appear
+  // as folders (the merged "family" feel) alongside a "Shared with me" entry.
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
-    listFiles(path)
+    const load = space === "shared" ? listShared() : listFiles(path, space || undefined);
+    load
       .then((items) => {
         if (cancelled) return;
-        setFiles(items);
+        let composed = items;
+        if (space === "" && path === "") {
+          const mounts: FileItem[] = spaces
+            .filter((s) => s.kind === "group" && s.mounted)
+            .map((s) => ({ id: `space:${s.id}`, name: s.name, kind: "folder", modified: "—", size: "—" }));
+          composed = [
+            ...mounts,
+            { id: "__shared", name: "Shared with me", kind: "folder", modified: "—", size: "—" },
+            ...items,
+          ];
+        }
+        setFiles(composed);
         setSelection(new Set());
       })
       .catch((err: Error) => {
@@ -197,9 +238,27 @@ function DesktopApp() {
     return () => {
       cancelled = true;
     };
-  }, [path, refreshKey]);
+  }, [space, path, refreshKey, spaces]);
+
+  function openSpace(id: string) {
+    setActive("drive");
+    setSpace(id);
+    setPath("");
+    setSelection(new Set());
+  }
+
+  async function togglePin(id: string, mounted: boolean) {
+    try {
+      await setSpaceMounted(id, mounted);
+      setSpaces(await listSpaces());
+    } catch (err) {
+      toast("Couldn't update", { description: (err as Error).message });
+    }
+  }
 
   function openItem(f: FileItem) {
+    if (f.id.startsWith("space:")) return openSpace(f.id.slice(6)); // a mounted group space
+    if (f.id === "__shared") return openSpace("shared"); // "Shared with me"
     if (f.kind === "folder" && f.path != null) setPath(f.path);
     else setPreviewFile(f);
   }
@@ -209,12 +268,29 @@ function DesktopApp() {
     setSelection(new Set());
   }
 
+  async function createSpaceFlow() {
+    const name = window.prompt("Name your shared space (e.g. Family)");
+    if (!name?.trim()) return;
+    try {
+      const s = await createSpace(name.trim());
+      setSpaces(await listSpaces());
+      openSpace(s.id);
+      toast(`Created “${name.trim()}”`, { description: "Share files into it or add members." });
+    } catch (err) {
+      toast("Couldn't create space", { description: (err as Error).message });
+    }
+  }
+
   async function upload(fileList: FileList | null) {
     const files = fileList ? Array.from(fileList) : [];
     if (files.length === 0) return;
-    toast("Upload started", { description: `${files.length} file(s) → ${path || "My Drive"}` });
+    if (space === "shared") {
+      toast("Open a drive or space to upload");
+      return;
+    }
+    toast("Upload started", { description: `${files.length} file(s) → ${path || "drive"}` });
     try {
-      await uploadFiles(path, files);
+      await uploadFiles(path, files, space || undefined);
       reload();
       toast(`${files.length} file(s) uploaded`);
     } catch (err) {
@@ -243,7 +319,10 @@ function DesktopApp() {
   function navigate(id: string) {
     setActive(id);
     setSelection(new Set());
-    if (id === "drive") setPath("");
+    if (id === "drive") {
+      setSpace("");
+      setPath("");
+    }
     if (id.startsWith("plugin:")) setActivePlugin(id.replace("plugin:", ""));
   }
 
@@ -308,20 +387,26 @@ function DesktopApp() {
           ? (path.split("/").filter(Boolean).pop() ?? "Recent")
           : "Recent";
 
+  const spaceName = space && space !== "shared" ? (spaces.find((s) => s.id === space)?.name ?? "Space") : null;
+  const driveCrumb =
+    space === "shared"
+      ? ["Shared with me"]
+      : spaceName
+        ? [spaceName, ...path.split("/").filter(Boolean)]
+        : path
+          ? ["My Drive", ...path.split("/").filter(Boolean)]
+          : ["My Drive", "All files"];
+
   const breadcrumb =
     active === "home"
       ? ["Home"]
-      : active === "family"
-        ? ["Family", "Shared"]
-        : active === "starred"
-          ? ["Starred"]
-          : active === "trash"
-            ? ["Trash"]
-            : active.startsWith("plugin:")
-              ? [installed.find((p) => `plugin:${p.id}` === active)?.name ?? "Plugin"]
-              : path
-                ? ["My Drive", ...path.split("/").filter(Boolean)]
-                : ["My Drive", "All files"];
+      : active === "starred"
+        ? ["Starred"]
+        : active === "trash"
+          ? ["Trash"]
+          : active.startsWith("plugin:")
+            ? [installed.find((p) => `plugin:${p.id}` === active)?.name ?? "Plugin"]
+            : driveCrumb;
 
   const showRail = tweaks.showRail && installed.length > 0 && active !== "home";
 
@@ -355,6 +440,10 @@ function DesktopApp() {
         onOpenStore={() => setStoreOpen(true)}
         collapsed={tweaks.sidebarCollapsed}
         onToggle={() => setTweak("sidebarCollapsed", !tweaks.sidebarCollapsed)}
+        spaces={spaces}
+        currentSpace={active === "drive" ? space : ""}
+        onOpenSpace={openSpace}
+        onCreateSpace={createSpaceFlow}
         auth={auth}
         onSignIn={signIn}
         onSignOut={signOut}
@@ -410,6 +499,31 @@ function DesktopApp() {
                     </>
                   ) : (
                     <>
+                      {spaceName && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1.5"
+                            onClick={() => setMembersSpace({ id: space, name: spaceName })}
+                          >
+                            <Icon name="users" size={14} /> Members
+                          </Button>
+                          {(() => {
+                            const pinned = spaces.find((s) => s.id === space)?.mounted ?? true;
+                            return (
+                              <Button
+                                variant={pinned ? "secondary" : "outline"}
+                                size="sm"
+                                className="gap-1.5"
+                                onClick={() => void togglePin(space, !pinned)}
+                              >
+                                <Icon name="my-drive" size={14} /> {pinned ? "In My Drive" : "Pin to My Drive"}
+                              </Button>
+                            );
+                          })()}
+                        </>
+                      )}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button variant="outline" size="sm" className="gap-1.5">
@@ -481,7 +595,21 @@ function DesktopApp() {
 
       <PluginStore open={storeOpen} onOpenChange={setStoreOpen} installedIds={installedIds} onInstall={installPlugin} />
 
-      <FilePreview file={previewFile} onClose={() => setPreviewFile(null)} onSaved={reload} />
+      <FilePreview
+        file={previewFile}
+        onClose={() => setPreviewFile(null)}
+        onSaved={reload}
+        space={space === "shared" ? undefined : space || undefined}
+      />
+
+      {membersSpace && (
+        <SpaceMembersDialog
+          spaceId={membersSpace.id}
+          spaceName={membersSpace.name}
+          open={!!membersSpace}
+          onOpenChange={(o) => !o && setMembersSpace(null)}
+        />
+      )}
 
       <TweaksPanel t={tweaks} setTweak={setTweak} />
 

@@ -1,0 +1,122 @@
+import type { Db } from "./db";
+import type { Role, Space } from "./types";
+import { deleteTuple, memberSpaceIds, spaceRole, writeTuple } from "./authz";
+
+interface SpaceRow {
+  id: string;
+  name: string;
+  kind: string;
+  created_by: string;
+  created_at: string;
+}
+const toSpace = (r: SpaceRow): Space => ({
+  id: r.id,
+  name: r.name,
+  kind: r.kind === "group" ? "group" : "personal",
+  createdBy: r.created_by,
+  createdAt: r.created_at,
+});
+
+/** Deterministic personal-space id for a user. */
+export const personalSpaceId = (userSub: string): string => `personal:${userSub}`;
+
+/** Ensure the user's personal space exists (idempotent). Returns its id. */
+export async function ensurePersonalSpace(db: Db, userSub: string): Promise<string> {
+  const id = personalSpaceId(userSub);
+  await db.run(
+    `INSERT OR IGNORE INTO spaces (id, name, kind, created_by, created_at) VALUES (?, 'My Drive', 'personal', ?, ?)`,
+    [id, userSub, new Date().toISOString()],
+  );
+  await writeTuple(db, { objectType: "space", objectId: id, relation: "owner", subjectType: "user", subjectId: userSub });
+  return id;
+}
+
+/** Create a shared (group) space owned by its creator. */
+export async function createSpace(db: Db, input: { name: string; createdBy: string }): Promise<Space> {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await db.run(
+    `INSERT INTO spaces (id, name, kind, created_by, created_at) VALUES (?, ?, 'group', ?, ?)`,
+    [id, input.name, input.createdBy, now],
+  );
+  await writeTuple(db, { objectType: "space", objectId: id, relation: "owner", subjectType: "user", subjectId: input.createdBy });
+  return { id, name: input.name, kind: "group", createdBy: input.createdBy, createdAt: now };
+}
+
+/** Grant a user a role in a space (a tuple `space:<id>#<role>@user:<sub>`). */
+export async function addMember(db: Db, spaceId: string, userSub: string, role: Role): Promise<void> {
+  // One role per member: clear any existing role grants first.
+  await removeMember(db, spaceId, userSub);
+  await writeTuple(db, { objectType: "space", objectId: spaceId, relation: role, subjectType: "user", subjectId: userSub });
+}
+
+export async function removeMember(db: Db, spaceId: string, userSub: string): Promise<void> {
+  for (const role of ["owner", "editor", "viewer"] as const) {
+    await deleteTuple(db, { objectType: "space", objectId: spaceId, relation: role, subjectType: "user", subjectId: userSub });
+  }
+}
+
+export interface SpaceMember {
+  sub: string;
+  role: Role;
+  email: string | null;
+  name: string | null;
+}
+
+/** Members of a space (with directory info where known), for a member list UI. */
+export async function listMembers(db: Db, spaceId: string): Promise<SpaceMember[]> {
+  const rows = await db.all<{ sub: string; relation: string; email: string | null; name: string | null }>(
+    `SELECT t.subject_id AS sub, t.relation AS relation, u.email AS email, u.name AS name
+       FROM relation_tuples t LEFT JOIN users u ON u.sub = t.subject_id
+       WHERE t.object_type = 'space' AND t.object_id = ? AND t.subject_type = 'user'
+         AND t.relation IN ('owner','editor','viewer')
+       ORDER BY CASE t.relation WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, u.name`,
+    [spaceId],
+  );
+  return rows.map((r) => ({ sub: r.sub, role: r.relation as Role, email: r.email, name: r.name }));
+}
+
+export async function getSpace(db: Db, id: string): Promise<Space | null> {
+  const row = await db.first<SpaceRow>("SELECT * FROM spaces WHERE id = ?", [id]);
+  return row ? toSpace(row) : null;
+}
+
+/** Spaces the user can see (personal + any group they belong to). */
+export async function listSpaces(db: Db, userSub: string): Promise<Space[]> {
+  const ids = await memberSpaceIds(db, userSub);
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await db.all<SpaceRow>(`SELECT * FROM spaces WHERE id IN (${placeholders}) ORDER BY kind, name`, ids);
+  return rows.map(toSpace);
+}
+
+/** A space plus this user's role + mount preference (for the switcher / My Drive). */
+export interface SpaceView extends Space {
+  role: Role;
+  /** Show inline in My Drive (true by default; personal is always true). */
+  mounted: boolean;
+}
+
+export async function listSpacesForUser(db: Db, userSub: string): Promise<SpaceView[]> {
+  const spaces = await listSpaces(db, userSub);
+  const out: SpaceView[] = [];
+  for (const s of spaces) {
+    const role = (await spaceRole(db, s.id, userSub)) ?? "viewer";
+    const pref = await db.first<{ mounted: number }>(
+      "SELECT mounted FROM space_prefs WHERE user_sub = ? AND space_id = ?",
+      [userSub, s.id],
+    );
+    const mounted = s.kind === "personal" ? true : pref ? pref.mounted === 1 : true;
+    out.push({ ...s, role, mounted });
+  }
+  return out;
+}
+
+/** Set whether a group space is mounted inline in the user's drive. */
+export async function setMounted(db: Db, userSub: string, spaceId: string, mounted: boolean): Promise<void> {
+  await db.run(
+    `INSERT INTO space_prefs (user_sub, space_id, mounted) VALUES (?, ?, ?)
+     ON CONFLICT(user_sub, space_id) DO UPDATE SET mounted = excluded.mounted`,
+    [userSub, spaceId, mounted ? 1 : 0],
+  );
+}

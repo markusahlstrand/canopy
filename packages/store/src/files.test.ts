@@ -3,6 +3,7 @@ import { createLibsqlDb } from "./db-libsql";
 import { createSqlBlobRepo } from "./repo";
 import { runMigrations } from "./schema";
 import { FileService, PermissionError } from "./files";
+import { ensurePersonalSpace } from "./spaces";
 import { sha256hex } from "./hash";
 import type { BlobStore } from "./blob-store";
 import type { Db } from "./db";
@@ -33,27 +34,29 @@ function memStore() {
   return { store, map };
 }
 
-const TENANT = "user-1";
+const USER = "user-1";
 const enc = (s: string) => new TextEncoder().encode(s);
 
 let db: Db;
 let store: ReturnType<typeof memStore>;
 let svc: FileService;
+let space: string;
 
 beforeEach(async () => {
   db = createLibsqlDb(":memory:");
   await runMigrations(db);
   store = memStore();
   svc = new FileService(db, store.store, createSqlBlobRepo(db));
+  space = await ensurePersonalSpace(db, USER);
 });
 
 /** Full client flow: hash → prepare → (upload if miss) → create file. */
 async function upload(name: string, content: string, opts: { path?: string; metadata?: Record<string, unknown> } = {}) {
   const bytes = enc(content);
   const hash = await sha256hex(bytes);
-  const prep = await svc.prepareUpload(TENANT, hash);
-  if (!prep.exists) await svc.commitUpload(TENANT, hash, bytes);
-  return svc.createFile(TENANT, TENANT, { name, hash, mime: "text/plain", path: opts.path, metadata: opts.metadata });
+  const prep = await svc.prepareUpload(space, USER, hash);
+  if (!prep.exists) await svc.commitUpload(space, USER, hash, bytes);
+  return svc.createFile(space, USER, { name, hash, mime: "text/plain", path: opts.path, metadata: opts.metadata });
 }
 
 describe("FileService over libsql", () => {
@@ -67,7 +70,7 @@ describe("FileService over libsql", () => {
     const blobRows = await db.all<{ n: number }>("SELECT COUNT(*) AS n FROM blobs");
     expect(blobRows[0]!.n).toBe(1);
 
-    const { key } = await svc.getContentKey(TENANT, TENANT, a.id);
+    const { key } = await svc.getContentKey({ sub: USER }, a.id);
     const stream = await store.store.get(key);
     expect(await new Response(stream).text()).toBe("same bytes");
   });
@@ -76,7 +79,7 @@ describe("FileService over libsql", () => {
     const f = await upload("doc.md", "# hi", { metadata: { tag: "x" } });
     const before = f.currentVersionId;
 
-    const patched = await svc.patchMetadata(TENANT, TENANT, f.id, { tag: "y", starred: true });
+    const patched = await svc.patchMetadata({ sub: USER }, f.id, { tag: "y", starred: true });
     expect(patched.currentVersionId).toBe(before);
     expect(patched.metadata.tag).toBe("y");
     expect(patched.metadata.starred).toBe(true);
@@ -90,9 +93,9 @@ describe("FileService over libsql", () => {
 
     const bytes = enc("v2 contents");
     const hash = await sha256hex(bytes);
-    await svc.prepareUpload(TENANT, hash);
-    await svc.commitUpload(TENANT, hash, bytes);
-    const updated = await svc.addVersion(TENANT, TENANT, f.id, { hash, mime: "text/plain" });
+    await svc.prepareUpload(space, USER, hash);
+    await svc.commitUpload(space, USER, hash, bytes);
+    const updated = await svc.addVersion({ sub: USER }, f.id, { hash, mime: "text/plain" });
 
     expect(updated.currentVersionId).not.toBe(f.currentVersionId);
     expect(updated.metadata.tag).toBe("keep");
@@ -106,11 +109,11 @@ describe("FileService over libsql", () => {
     const b = await upload("b.txt", "shared");
     const key = a.version!.blobKey!;
 
-    await svc.deleteFile(TENANT, TENANT, a.id); // ref 2 → 1, blob kept
+    await svc.deleteFile({ sub: USER }, a.id); // ref 2 → 1, blob kept
     expect(store.map.has(key)).toBe(true);
     expect((await db.first<{ ref_count: number }>("SELECT ref_count FROM blobs WHERE hash = ?", [key]))?.ref_count).toBe(1);
 
-    await svc.deleteFile(TENANT, TENANT, b.id); // ref 1 → 0, blob gone
+    await svc.deleteFile({ sub: USER }, b.id); // ref 1 → 0, blob gone
     expect(store.map.has(key)).toBe(false);
     expect(await db.first("SELECT 1 FROM blobs WHERE hash = ?", [key])).toBeNull();
   });
@@ -120,24 +123,35 @@ describe("FileService over libsql", () => {
     await upload("lease.pdf", "l", { path: "Documents" });
     await upload("photo.jpg", "p", { path: "Documents/2026" });
 
-    const root = await svc.list(TENANT, TENANT, "");
+    const root = await svc.list(USER, space, "");
     expect(root.files.map((f) => f.name)).toEqual(["root.txt"]);
     expect(root.folders).toEqual(["Documents"]);
 
-    const docs = await svc.list(TENANT, TENANT, "Documents");
+    const docs = await svc.list(USER, space, "Documents");
     expect(docs.files.map((f) => f.name)).toEqual(["lease.pdf"]);
     expect(docs.folders).toEqual(["2026"]);
   });
 
   it("enforces resource permissions (a stranger can't read)", async () => {
     const f = await upload("secret.txt", "shh");
-    await expect(svc.getFile(TENANT, "intruder", f.id)).rejects.toBeInstanceOf(PermissionError);
+    await expect(svc.getFile({ sub: "intruder" }, f.id)).rejects.toBeInstanceOf(PermissionError);
+  });
+
+  it("a file shared with another user becomes visible to them", async () => {
+    const f = await upload("shared-note.md", "hello", { path: "" });
+    // grant bob viewer directly on the file
+    await svc.shareGrant({ sub: USER }, f.id, { subjectType: "user", subjectId: "bob", role: "viewer" });
+    expect((await svc.getFile({ sub: "bob" }, f.id)).name).toBe("shared-note.md");
+    const shared = await svc.listSharedWithMe("bob");
+    expect(shared.map((x) => x.name)).toEqual(["shared-note.md"]);
+    // bob can read but not delete
+    await expect(svc.deleteFile({ sub: "bob" }, f.id)).rejects.toBeInstanceOf(PermissionError);
   });
 
   it("soft-deleted files disappear from listings", async () => {
     const f = await upload("temp.txt", "bye");
-    await svc.deleteFile(TENANT, TENANT, f.id);
-    const root = await svc.list(TENANT, TENANT, "");
+    await svc.deleteFile({ sub: USER }, f.id);
+    const root = await svc.list(USER, space, "");
     expect(root.files).toHaveLength(0);
   });
 });

@@ -63,7 +63,10 @@ function safeReturn(c: Ctx, cfg: AuthConfig, returnTo: string | undefined): stri
  * server-side store. When `cfg` is null, auth is unconfigured: /me reports
  * anonymous and login is unavailable, so the app still runs.
  */
-export function createAuthApp(cfg: AuthConfig | null) {
+/** Called after a successful login — e.g. to upsert the user directory + resolve invites. */
+export type OnLogin = (user: { sub: string; email?: string; name?: string; picture?: string }) => Promise<void>;
+
+export function createAuthApp(cfg: AuthConfig | null, onLogin?: OnLogin) {
   const app = new Hono();
 
   app.get("/me", async (c) => {
@@ -154,6 +157,13 @@ export function createAuthApp(cfg: AuthConfig | null) {
         expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
       };
       setCookie(c, SID, await seal(cfg.sessionSecret, session), cookieOpts(isHttps(c), cfg.sessionTtlSeconds));
+      // Best-effort: record the user in the directory + resolve pending invites.
+      try {
+        const u = session.user as { sub: string; email?: string; name?: string; picture?: string };
+        await onLogin?.({ sub: u.sub, email: u.email, name: u.name, picture: u.picture });
+      } catch {
+        /* directory upkeep must never block login */
+      }
       return c.redirect(safeReturn(c, cfg, pending.returnTo));
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);

@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { ShareDialog } from "@/components/share-dialog";
 import { Icon } from "@/lib/icons";
 import { FileIcon } from "@/components/file-icon";
 import { PersonAvatar } from "@/components/person-avatar";
@@ -106,12 +108,16 @@ export function FileDetailSheet({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const [shareOpen, setShareOpen] = useState(false);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="bottom" className="h-[92dvh] gap-0 rounded-t-[20px] p-0">
         <Handle />
         {file && (
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[18px] pb-8">
+            {file.kind !== "folder" && (
+              <ShareDialog fileId={file.id} fileName={file.name} open={shareOpen} onOpenChange={setShareOpen} />
+            )}
             {/* preview */}
             {(() => {
               const viewer = file.kind !== "folder" ? findViewer(file.name) : undefined;
@@ -148,7 +154,7 @@ export function FileDetailSheet({
 
             {/* action grid */}
             <div className="mt-3 grid grid-cols-4 gap-2">
-              <ActionTile icon="share" label="Share" />
+              <ActionTile icon="share" label="Share" onClick={() => file.kind !== "folder" && setShareOpen(true)} />
               <ActionTile
                 icon="download"
                 label="Save"

@@ -44,11 +44,13 @@ import {
   Archive,
   NotebookText,
   CloudOff,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties } from "react";
 
 const MAP: Record<string, LucideIcon> = {
+  x: X,
   home: House,
   "my-drive": HardDrive,
   family: Users,

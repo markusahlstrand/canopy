@@ -59,6 +59,24 @@ export interface Connection {
   createdAt: string;
 }
 
+/** A drive: one personal space per user, plus shared "group" spaces (e.g. a family). */
+export interface Space {
+  id: string;
+  name: string;
+  kind: "personal" | "group";
+  createdBy: string;
+  createdAt: string;
+}
+
+/** Directory entry, upserted on login so files can be shared by email. */
+export interface User {
+  sub: string;
+  email: string | null;
+  name: string | null;
+  picture: string | null;
+  updatedAt: string;
+}
+
 export type IndexStatus = "queued" | "running" | "done" | "error";
 
 /** One crawl of a connection. Resumable via `cursor`. */

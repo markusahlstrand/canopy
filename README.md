@@ -55,6 +55,24 @@ an in-process runner on Node — are in progress.)*
 Storage adapters are swappable: **D1 + R2** on Cloudflare, **libsql (SQLite) + filesystem** on
 Node/Docker. Schema is applied by a numbered migration runner on boot.
 
+## Sharing & spaces
+
+Access control is **relation tuples** in the spirit of Google Zanzibar (ReBAC) — but small: a
+single recursive SQL query over one `relation_tuples` table, kept centralized so a check never
+fans out across databases.
+
+- **Spaces.** Every user has a **personal** space; **group** spaces (a family, a team) are
+  co-accessed by their members. A group space surfaces as a **folder inside My Drive** (the
+  merged, "family" feel) and can be **unpinned** to a sidebar switcher per user.
+- **Per-file sharing.** Grant a person (by email) or a whole space a role — **owner ⊇ editor ⊇
+  viewer**. Sharing by email to someone who hasn't signed in yet stores a **pending invite** that
+  resolves on their first login.
+- **Surface, not silo.** A space is a shared *context*; the drive surfaces it as a folder, and
+  (planned) the calendar would surface the same space as a shared calendar.
+
+See [`docs/07-sharing-and-spaces.md`](docs/07-sharing-and-spaces.md). Link sharing
+("anyone with the link") and folder-level sharing are planned.
+
 ## Develop
 
 Requires Node 22 (`.nvmrc`) and pnpm.
