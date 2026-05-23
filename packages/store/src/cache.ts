@@ -1,11 +1,13 @@
 import type { Db } from "./db";
 
 /**
- * Tiny TTL cache over the `kv_cache` table (migration v6). Used to memoize
- * external API responses (e.g. GitHub issues/releases) across requests so the
- * data endpoints don't hammer a rate-limited upstream. Values are JSON.
+ * SQLite/D1-backed TTL cache over the `kv_cache` table (migration v6) — the
+ * portable {@link CacheStore} backend that works identically on libsql (local)
+ * and D1 (Cloudflare). Memoizes external API responses (e.g. GitHub issues) so
+ * data endpoints don't hammer a rate-limited upstream. Structurally implements
+ * `@canopy/core`'s CacheStore (kept import-free so store stays core-independent).
  */
-export function createCache(db: Db) {
+export function createSqlCacheStore(db: Db) {
   return {
     async get<T>(key: string): Promise<T | null> {
       const row = await db.first<{ v: string; expires_at: number }>(
@@ -44,4 +46,4 @@ export function createCache(db: Db) {
   };
 }
 
-export type Cache = ReturnType<typeof createCache>;
+export type SqlCacheStore = ReturnType<typeof createSqlCacheStore>;

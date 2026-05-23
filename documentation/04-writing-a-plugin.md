@@ -106,6 +106,56 @@ export const PLUGIN_UI: Record<string, PluginUI> = {
 When you open Documentation from the sidebar, the host looks up `PLUGIN_UI["documentation"].DetailView` and
 renders it in the content area. That's the whole plugin.
 
+## A data-source plugin (GitHub)
+
+The Documentation plugin reads bytes; the **GitHub** plugin feeds _typed records_ into the
+Tasks and Calendar plugins. It's the worked example of a [data source](how-plugins-work). Its
+manifest declares a `dataSource` contribution plus the one host it may reach:
+
+```ts
+// apps/portal/src/plugins/manifests.ts (shape)
+{
+  id: "github",
+  name: "GitHub",
+  capabilities: [{ kind: "net:fetch", hosts: ["api.github.com"] }],
+  contributes: { dataSource: { provides: ["tasks", "calendar"] } },
+}
+```
+
+The trusted half lives server-side: a `ServerDataSource` that declares its config schema and
+builds normalized providers, wrapping each upstream call in the **scoped cache** it's handed:
+
+```ts
+// apps/api/src/data-sources.ts (trimmed)
+export const githubDataSource: ServerDataSource = {
+  id: "github",
+  configFields: [
+    { key: "repo",   label: "Repository (owner/repo or URL)", type: "url", required: true },
+    { key: "branch", label: "Branch (default: main)",         type: "string" },
+    { key: "token",  label: "Token — only for private repos", type: "secret" },
+  ],
+  build(config, ctx) {
+    const cfg = parseRepo(config.repo);                     // owner/repo
+    const tasks = createGithubTaskProvider("github", cfg);  // issues → Task[]
+    return {
+      tasks: { id: "github", listTasks: () =>
+        ctx?.cache ? ctx.cache.wrap(`tasks:${cfg.owner}/${cfg.repo}`, 5*60_000, () => tasks.listTasks())
+                   : tasks.listTasks() },
+      // calendar: milestones + releases → CalendarEvent[]
+    };
+  },
+};
+```
+
+That's the whole contract: **declare** `configFields` + a `dataSource`, **implement** the
+provider, and **cache** through the store you're given. Everything else is the host's:
+
+- the portal renders the settings form from `configFields` and saves it per-user via
+  `PUT /api/plugins/github/settings` (the `token` is encrypted, never read back);
+- `GET /api/tasks` / `GET /api/calendar` resolve the caller's config (or the demo default),
+  build the providers with a `(plugin, user)`-scoped cache, and return normalized JSON;
+- the Tasks and Calendar plugins call those endpoints — they never mention GitHub.
+
 ## File viewers (sandboxed)
 
 A **viewer** is a plugin that renders a file type in the preview surface — a PDF, an image,

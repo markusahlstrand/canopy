@@ -1,10 +1,21 @@
 # How plugins work
 
-Canopy has **two distinct kinds of plugins**. They share the word "plugin" but almost
-nothing else — different trust levels, different execution models. Keeping them separate is
-a deliberate design choice.
+Canopy has **several kinds of plugin**, separated by **trust level** and execution model.
+They share the word "plugin" but almost nothing else; keeping them apart is a deliberate
+design choice:
 
-## 1. Storage connectors — trusted, typed I/O
+- **Trusted, in-process adapters** run inside the API and _are_ the I/O boundary, so they
+  aren't sandboxed — **storage connectors** (raw bytes) and **data sources** (typed records
+  like tasks or calendar events).
+- **Sandboxed extensions** run untrusted code in isolation and only ever touch what the host
+  explicitly grants — **file viewers** (client-side iframe sandbox, shipping today) and
+  server-hook **extension plugins** (the `PluginRuntime` sandbox, planned).
+
+Whichever kind, the rule is the same: a plugin **declares** what it is and what it needs, and
+the host hands back a **narrow, scoped API** — never ambient access. The rest of this page is
+that contract.
+
+## 1. Storage connectors — trusted, typed I/O (bytes)
 
 A connector is a thin, well-defined adapter over a storage backend. It implements
 `StorageConnector` and is packaged with a factory:
@@ -23,7 +34,41 @@ They are not sandboxed, because they _are_ the I/O boundary. `@canopy/connector-
 `@canopy/connector-r2`, and the read-only `@canopy/connector-github` all implement this exact
 same interface.
 
-## 2. Extension plugins — declarative, sandboxed _(server-hook sandbox planned)_
+## 2. Data sources — trusted, typed records
+
+Where a connector serves _bytes_, a **data source** serves _typed records_ into a host plugin:
+GitHub issues into **Tasks**, milestones and releases into **Calendar**. Like a connector it's
+trusted code in the API (it holds tokens and calls third-party APIs), and it normalizes some
+external system into a host-defined shape, so the UI never learns where the data came from:
+
+```ts
+interface TaskProvider     { listTasks(): Promise<Task[]>; }
+interface CalendarProvider { listEvents(range: CalendarRange): Promise<CalendarEvent[]>; }
+```
+
+A source plugin declares which surfaces it feeds (a `dataSource` contribution, below) and what
+config it needs; the host registers a factory that builds the providers from a saved config:
+
+```ts
+interface ServerDataSource {
+  id: string;                              // "github"
+  configFields: ConnectorConfigField[];    // repo (required), branch, token (secret)
+  build(config, ctx?: { cache?: CacheStore }): { tasks?: TaskProvider; calendar?: CalendarProvider };
+}
+```
+
+The host exposes the normalized data over stable endpoints the Tasks/Calendar plugins call —
+`GET /api/tasks`, `GET /api/calendar` — and reports what's connected via `GET /api/integrations`.
+Config is **per-user** (see _Configuration & settings_ below); when a user hasn't connected
+their own source the host falls back to a public **demo default**, so the logged-out demo still
+has data.
+
+`build` is handed a **cache scoped to that plugin + user**, and the adapter owns its own TTL —
+GitHub caches for 5 minutes to stay under the API rate limit. That cache is a swappable
+`CacheStore` (see _A shared, swappable cache_ below), so a source caches identically on Node and
+Cloudflare.
+
+## 3. Extension plugins — declarative, sandboxed _(server-hook sandbox planned)_
 
 Extension plugins add UI and behaviour. A plugin is described by a **manifest** — what it
 is, what it's allowed to do, and what it contributes to the host:
@@ -52,14 +97,16 @@ interface Contributions {
   railPanel?: RailPanelContribution;        // a panel in the right-hand rail
   detailView?: DetailViewContribution;      // a full-page view, opened from the sidebar
   detailFields?: DetailFieldContribution[]; // extra rows in the file preview
+  viewers?: ViewerContribution[];           // sandboxed file-type viewers (see writing-a-plugin)
+  dataSource?: DataSourceContribution;      // declares typed providers (tasks / calendar)
   store?: StoreListing;                     // how it appears in the plugin store
 }
 ```
 
 Calendar contributes a `railPanel` and a `detailView`; Tasks and Documentation contribute only a
-`detailView`. The sidebar, rail, context menus, and store are all built by querying
-the registry — so a first-party plugin and a third-party one light up the same surfaces the
-same way.
+`detailView`; GitHub contributes a `dataSource`. The sidebar, rail, context menus, and store are
+all built by querying the registry — so a first-party plugin and a third-party one light up the
+same surfaces the same way.
 
 ### The capability model
 
@@ -78,9 +125,50 @@ type Capability =
 
 The Documentation plugin, for example, declares `{ kind: "storage:read", connectors: ["documentation"] }`.
 
-> **Status:** capabilities are declared and recorded today, but **not yet enforced** — there
-> is no broker handing out scoped objects, because there is no sandbox yet. Enforcement
-> arrives with the runtime below.
+### What a plugin receives — `CapabilityGrants`
+
+Declaring a capability is one half; the other is what the host hands back. A **broker** turns
+declared capabilities into a single `grants` object of scoped host functions — this is the
+**entire API surface** a sandboxed plugin can call. No ambient globals, no bare `fetch`, no DOM:
+
+```ts
+interface CapabilityGrants {
+  fetch?:      (input: string, init?: RequestInit) => Promise<Response>;   // net:fetch — granted hosts only
+  getItem?:    (id: string) => Promise<unknown>;                           // item:read
+  queryIndex?: (query: unknown) => Promise<unknown>;                       // index:query
+  kv?: { get(key: string): Promise<string | null>; put(key: string, value: string): Promise<void> }; // kv
+}
+```
+
+The `kv` grant is backed by the shared cache layer (next section), **namespaced per plugin +
+user** so one plugin can't read another's — or another user's — keys. The runtime injects the
+whole object differently per adapter: as Worker `env` bindings + `globalOutbound` under
+`cf-loader`, as the restricted context object under `node`. The broker
+(`grantsForManifest(manifest, { cache, userSub })`) is runtime-agnostic; only the injection differs.
+
+> **Status:** the `kv` grant and the broker exist today; `fetch` / `getItem` / `queryIndex` are
+> declared and recorded but **not yet enforced**, because the server-hook sandbox that would
+> inject them isn't built yet. Enforcement arrives with the runtime below. (The trusted GitHub
+> data source already uses the same scoped cache directly.)
+
+### A shared, swappable cache (`CacheStore`)
+
+External calls are memoized through a small interface so every backend looks the same to the
+code (and to plugins via `kv`):
+
+```ts
+interface CacheStore {
+  get<T>(key: string): Promise<T | null>;
+  set(key: string, value: unknown, ttlMs: number): Promise<void>;
+  wrap<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T>;   // get-or-compute
+}
+```
+
+Two backends ship: `createSqlCacheStore(db)` (the `kv_cache` table — works on libsql locally and
+D1 on Cloudflare) and `createCacheApiCacheStore()` (Cloudflare's `caches.default`, chosen on the
+Worker). `scopedCache(base, prefix)` wraps any store to prefix every key — the mechanism behind
+the per-plugin / per-user isolation above. Because the interface is the boundary, the GitHub
+source caches for 5 minutes identically on Node and the edge.
 
 ### The runtime — a switchable sandbox _(planned)_
 
@@ -101,6 +189,26 @@ adapters are not built yet.
 > code in an opaque-origin `<iframe sandbox="allow-scripts">` and receive only the previewed
 > file. That's the client-side counterpart to the server-hook runtime above — see
 > [Writing a plugin → File viewers](04-writing-a-plugin.md).
+
+## Configuration & settings
+
+A plugin that needs configuration — a data source's repo and token, say — declares
+`configFields` (the same `ConnectorConfigField[]` a connector uses). That schema is
+**server-authoritative**: the portal renders a generic settings form from it, so there's no
+plugin-specific settings UI to write. Values are saved **per user** via
+`GET`/`PUT /api/plugins/:id/settings`.
+
+Secret fields (`type: "secret"`, e.g. a token) get special handling:
+
+- **encrypted at rest** — AES-GCM, keyed by the server's `SESSION_SECRET`, before they touch
+  the database;
+- **never returned to the client** — the settings response reports only whether each secret is
+  _set_, not its value. A token round-trips through the form once and is never readable from the
+  browser again.
+
+That's why a public repo needs no token at all, while a private one takes a token that stays
+server-side. The same `(plugin, user)` scoping flows into the cache, so one user's private data
+is never served to another.
 
 ## How first-party plugins run *right now*
 

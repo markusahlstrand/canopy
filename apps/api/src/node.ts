@@ -7,7 +7,7 @@ import { createGithubConnector } from "@canopy/connector-github";
 import type { StorageConnector } from "@canopy/core";
 import {
   FileService,
-  createCache,
+  createSqlCacheStore,
   createSqlBlobRepo,
   ensurePersonalSpace,
   resolveInvites,
@@ -89,7 +89,7 @@ const dataSources: DataSourceDeps = {
         },
       }
     : {},
-  cache: createCache(db),
+  cache: createSqlCacheStore(db),
   secret: authConfig?.sessionSecret,
 };
 

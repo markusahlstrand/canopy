@@ -2,7 +2,6 @@ import type { StorageConnector } from "@canopy/core";
 import { createGithubConnector } from "@canopy/connector-github";
 import {
   FileService,
-  createCache,
   createD1Db,
   createR2BlobStore,
   createSqlBlobRepo,
@@ -15,6 +14,7 @@ import {
 } from "@canopy/store";
 import { createApp, type DataSourceDeps } from "./app";
 import { DATA_SOURCES } from "./data-sources";
+import { createCacheApiCacheStore } from "./cache-api";
 import { createAuthApp } from "./auth/routes";
 import { readAuthConfig, type EnvVars } from "./auth/config";
 
@@ -83,7 +83,7 @@ export default {
     const dataSources: DataSourceDeps = {
       plugins: DATA_SOURCES,
       demoDefaults,
-      cache: createCache(db),
+      cache: createCacheApiCacheStore(),
       secret: authConfig?.sessionSecret,
     };
     const app = createApp({

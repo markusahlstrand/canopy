@@ -1,13 +1,12 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
-import type { StorageConnector } from "@canopy/core";
+import { scopedCache, type CacheStore, type StorageConnector } from "@canopy/core";
 import {
   BlobHashMismatchError,
   BlobMissingError,
   NotFoundError,
   PermissionError,
   type BlobStore,
-  type Cache,
   type Caller,
   type FileService,
 } from "@canopy/store";
@@ -52,7 +51,7 @@ export interface DriveDeps {
 export interface DataSourceDeps {
   plugins?: ServerDataSource[];
   demoDefaults?: Record<string, Record<string, string>>;
-  cache?: Cache;
+  cache?: CacheStore;
   secret?: string;
 }
 
@@ -383,13 +382,19 @@ export function createApp(deps: AppDeps) {
   // ── plugin data sources (tasks / calendar) ──────────────────────────────────
   // A source's config is per-user (stored encrypted); `demoDefaults` is the
   // public fallback shown to everyone so the logged-out demo still has data.
-  // Responses are cached briefly to stay under upstream rate limits.
-  const SOURCE_TTL_MS = 5 * 60 * 1000;
+  // The adapter owns its own caching (TTL) via the scoped cache it's handed.
   const sourcePlugins = dataSources?.plugins ?? [];
   const findSource = (id: string) => sourcePlugins.find((p) => p.id === id);
 
-  /** The caller's saved config for a plugin (secrets decrypted), or the demo default. */
-  async function resolveConfig(c: Context, pluginId: string): Promise<{ config: Record<string, string>; own: boolean } | null> {
+  /**
+   * The caller's saved config for a plugin (secrets decrypted), or the demo
+   * default — plus a cache `scope` that isolates this caller's cached data from
+   * everyone else's (so a private repo's data can't leak across users).
+   */
+  async function resolveConfig(
+    c: Context,
+    pluginId: string,
+  ): Promise<{ config: Record<string, string>; own: boolean; scope: string } | null> {
     const src = findSource(pluginId);
     if (!src) return null;
     const caller = await callerOf(c);
@@ -409,11 +414,20 @@ export function createApp(deps: AppDeps) {
           }
         }
         // Use the caller's own config only if every required field is present.
-        if (src.configFields.filter((f) => f.required).every((f) => config[f.key])) return { config, own: true };
+        if (src.configFields.filter((f) => f.required).every((f) => config[f.key]))
+          return { config, own: true, scope: `u:${caller.sub}:${pluginId}` };
       }
     }
     const demo = dataSources?.demoDefaults?.[pluginId];
-    return demo ? { config: demo, own: false } : null;
+    return demo ? { config: demo, own: false, scope: `demo:${pluginId}` } : null;
+  }
+
+  // Build a source's providers, handing the adapter a cache scoped to this caller.
+  function providersFor(pluginId: string, resolved: { config: Record<string, string>; scope: string }) {
+    const src = findSource(pluginId);
+    if (!src) return {};
+    const cache = dataSources?.cache ? scopedCache(dataSources.cache, resolved.scope) : undefined;
+    return src.build(resolved.config, { cache });
   }
 
   // What's connected for the caller, so the client can show live vs. configure.
@@ -431,30 +445,22 @@ export function createApp(deps: AppDeps) {
   app.get("/api/tasks", (c) =>
     handle(c, async () => {
       const resolved = await resolveConfig(c, "github");
-      const provider = resolved && findSource("github")?.build(resolved.config).tasks;
-      if (!resolved || !provider) return c.json({ source: null, tasks: [] });
-      const key = `tasks:github:${resolved.config.repo}`;
-      const tasks = dataSources?.cache
-        ? await dataSources.cache.wrap(key, SOURCE_TTL_MS, () => provider.listTasks())
-        : await provider.listTasks();
-      return c.json({ source: "github", tasks });
+      const provider = resolved ? providersFor("github", resolved).tasks : undefined;
+      if (!provider) return c.json({ source: null, tasks: [] });
+      return c.json({ source: "github", tasks: await provider.listTasks() });
     }),
   );
 
   app.get("/api/calendar", (c) =>
     handle(c, async () => {
       const resolved = await resolveConfig(c, "github");
-      const provider = resolved && findSource("github")?.build(resolved.config).calendar;
-      if (!resolved || !provider) return c.json({ source: null, events: [] });
+      const provider = resolved ? providersFor("github", resolved).calendar : undefined;
+      if (!provider) return c.json({ source: null, events: [] });
       // Default window: 30 days back through 90 days ahead (covers releases + milestones).
       const now = Date.now();
       const from = c.req.query("from") ?? new Date(now - 30 * 864e5).toISOString();
       const to = c.req.query("to") ?? new Date(now + 90 * 864e5).toISOString();
-      const key = `calendar:github:${resolved.config.repo}:${from}:${to}`;
-      const events = dataSources?.cache
-        ? await dataSources.cache.wrap(key, SOURCE_TTL_MS, () => provider.listEvents({ from, to }))
-        : await provider.listEvents({ from, to });
-      return c.json({ source: "github", events });
+      return c.json({ source: "github", events: await provider.listEvents({ from, to }) });
     }),
   );
 

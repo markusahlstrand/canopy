@@ -83,6 +83,11 @@ Routes: `POST /api/uploads/prepare`, `PUT /api/uploads/:token`, `POST/GET /api/f
 `POST /api/files/:id/versions`, `DELETE /api/files/:id`, `GET /api/files?mount=…` (read-only),
 `GET /api/file?mount=…` (read-only), `GET /api/health`, and `/api/auth/*`.
 
+The same server also hosts the **plugin API**: `GET/PUT /api/plugins/installed` (a user's install
+set), `GET/PUT /api/plugins/:id/settings` (per-user config; secrets encrypted), and the data-source
+endpoints `GET /api/tasks`, `GET /api/calendar`, `GET /api/integrations`. See
+[How plugins work](how-plugins-work) for the contract behind these.
+
 ## Deployment
 
 - **Node / Docker:** `apps/api/src/node.ts` serves the Hono app via `@hono/node-server` (the portal
