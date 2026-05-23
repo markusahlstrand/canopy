@@ -97,6 +97,7 @@ function toFileItems(data: DriveListing, dir: string): FileItem[] {
     owner: f.ownerLabel,
     location: data.spaceName,
     starred: !!f.metadata?.starred,
+    labels: Array.isArray(f.metadata?.labels) ? (f.metadata.labels as string[]) : undefined,
   }));
   return [...folders, ...files];
 }
@@ -166,6 +167,30 @@ export async function saveFileVersion(id: string, text: string, mime = "text/mar
     body: JSON.stringify({ hash, mime }),
   });
   if (!res.ok) throw new Error(`save failed: ${res.status}`);
+}
+
+/** One entry in a file's version history (newest first from the API). */
+export interface FileVersion {
+  id: string;
+  size: number;
+  mime: string | null;
+  source: "blob" | "external";
+  createdAt: string;
+  createdBy: string;
+  createdByLabel: string;
+}
+
+/** A file's version history, newest first (the first entry is the current version). */
+export async function listVersions(id: string): Promise<FileVersion[]> {
+  const res = await fetch(`/api/files/${id}/versions`);
+  if (!res.ok) return [];
+  return (await res.json()) as FileVersion[];
+}
+
+/** Restore an older version — appends its content as the new current version. */
+export async function restoreVersion(id: string, versionId: string): Promise<void> {
+  const res = await fetch(`/api/files/${id}/versions/${versionId}/restore`, { method: "POST" });
+  if (!res.ok) throw new Error(`restore version failed: ${res.status}`);
 }
 
 /** Move a drive file to Trash (recoverable). */

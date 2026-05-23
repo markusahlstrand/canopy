@@ -4,6 +4,7 @@ import { buildManifest } from "./manifests";
 import { CalendarPanel } from "./rail-panels";
 import { CalendarView, TasksView } from "./detail-views";
 import { GithubView } from "./github-view";
+import { DocumentAiView } from "./document-ai-view";
 
 // Lazy-loaded: pulls react-markdown + remark-gfm into a separate chunk.
 const DocumentationView = lazy(() => import("./documentation-view").then((m) => ({ default: m.DocumentationView })));
@@ -24,6 +25,7 @@ export const PLUGIN_UI: Record<string, PluginUI> = {
   calendar: { RailPanel: CalendarPanel, DetailView: CalendarView },
   tasks: { DetailView: TasksView },
   github: { DetailView: GithubView },
+  "document-ai": { DetailView: DocumentAiView },
 };
 
 /** Build a registry holding the manifests for the given installed plugin ids. */

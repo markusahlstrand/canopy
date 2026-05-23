@@ -21,11 +21,16 @@ const RICH_CONTRIBUTIONS: Record<string, Contributions> = {
     detailView: { id: "github-detail", title: "GitHub" },
     dataSource: { provides: ["tasks", "calendar"] },
   },
+  "document-ai": {
+    detailView: { id: "document-ai-detail", title: "Document AI" },
+  },
 };
 
 /** Capability overrides for plugins that don't use the default item:read grant. */
 const CAPABILITY_OVERRIDES: Record<string, PluginManifest["capabilities"]> = {
   github: [{ kind: "net:fetch", hosts: ["api.github.com"] }],
+  // Document AI reads each added file and writes a type label to its metadata, via Gemini.
+  "document-ai": [{ kind: "net:fetch", hosts: ["generativelanguage.googleapis.com"] }, { kind: "item:read" }, { kind: "item:write" }],
   // Documentation reads markdown from the read-only `documentation` storage mount.
   documentation: [{ kind: "storage:read", connectors: ["documentation"] }],
 };

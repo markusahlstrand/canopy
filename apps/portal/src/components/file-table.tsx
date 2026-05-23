@@ -283,6 +283,14 @@ export function FileTable({
                         <FileIcon kind={f.kind} />
                         <span className="truncate font-medium">{f.name}</span>
                         {f.starred && <Star size={13} className="shrink-0 fill-warning text-warning" />}
+                        {f.labels?.slice(0, 2).map((l) => (
+                          <span
+                            key={l}
+                            className="hidden shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10.5px] font-medium text-primary sm:inline"
+                          >
+                            {l}
+                          </span>
+                        ))}
                       </div>
                     </td>
                     <td className="px-3">

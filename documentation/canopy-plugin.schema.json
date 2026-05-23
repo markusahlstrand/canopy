@@ -1,0 +1,248 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://canopy.dev/schemas/canopy-plugin.schema.json",
+  "title": "Canopy plugin manifest (canopy.json)",
+  "description": "Schema for a Canopy plugin manifest. Mirrors PluginManifest + Contributions in @canopy/core. A plugin DECLARES what it is, what it may access (capabilities), and what it contributes to the host UI; the host grants only what is declared.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "version", "capabilities"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional pointer to this schema for editor autocomplete."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Stable, unique, kebab-case plugin id (e.g. \"image-viewer\"). Used everywhere the plugin is referenced."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable display name (e.g. \"Image Viewer\")."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+",
+      "description": "Semver version, e.g. \"0.1.0\"."
+    },
+    "description": {
+      "type": "string",
+      "description": "One-sentence summary of what the plugin does."
+    },
+    "icon": {
+      "type": "string",
+      "description": "lucide icon name shown on sidebar / rail / store surfaces (e.g. \"image\", \"file-text\", \"sparkles\")."
+    },
+    "color": {
+      "type": "string",
+      "description": "HSL accent string WITHOUT the hsl() wrapper, e.g. \"38 92% 50%\". Used for tinted icon backgrounds.",
+      "pattern": "^\\d{1,3}\\s+\\d{1,3}%\\s+\\d{1,3}%$"
+    },
+    "entry": {
+      "type": "string",
+      "description": "Entry module path within the source folder/zip, relative to the manifest. Defaults to \"index.js\"."
+    },
+    "capabilities": {
+      "type": "array",
+      "description": "What the host will grant. Nothing is ambient — declare only what you need. A viewer needs just { \"kind\": \"item:read\" }.",
+      "items": { "$ref": "#/definitions/capability" }
+    },
+    "serverHooks": {
+      "type": "array",
+      "description": "Server-side hooks the plugin implements. Runs inside the (planned) server sandbox.",
+      "items": { "type": "string", "enum": ["enrichItem", "transformUpload"] }
+    },
+    "contributes": { "$ref": "#/definitions/contributions" }
+  },
+  "definitions": {
+    "capability": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "item:read" } },
+          "description": "Read the bytes/metadata of the item being acted on (every viewer needs this)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "item:write" } },
+          "description": "Write back to the item being acted on (editor viewers; saves only to the current file)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "index:query" } },
+          "description": "Query the host's file index."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "storage:read" },
+            "connectors": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Restrict to specific storage mounts, e.g. [\"documentation\"]. Omit = all readable mounts."
+            }
+          },
+          "description": "Read files from a storage mount through the host API."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "hosts"],
+          "properties": {
+            "kind": { "const": "net:fetch" },
+            "hosts": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "description": "Allow-list of hostnames the plugin may fetch from, e.g. [\"api.github.com\"]."
+            }
+          },
+          "description": "Outbound fetch, restricted to the named hosts only."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "kv" } },
+          "description": "A small per-plugin, per-user key/value store (backed by the shared cache)."
+        }
+      ]
+    },
+    "contributions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Declarative UI surface. The plugin describes what it adds; the host renders the slots.",
+      "properties": {
+        "contextMenu": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "label"],
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "icon": { "type": "string", "description": "lucide icon name." },
+              "when": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kinds": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Restrict to item kinds (e.g. [\"pdf\",\"image\"]); omit = all items."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "railPanel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "title"],
+          "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "icon": { "type": "string" }
+          },
+          "description": "A panel the plugin renders into the right-hand rail."
+        },
+        "detailView": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "title"],
+          "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" }
+          },
+          "description": "A full-page view opened from the sidebar."
+        },
+        "detailFields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "label"],
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" }
+            }
+          },
+          "description": "Extra rows in the file preview details grid."
+        },
+        "viewers": {
+          "type": "array",
+          "description": "Sandboxed file-type viewers. The host loads the entry module into an opaque-origin iframe and hands it only the previewed file's bytes.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "match"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string", "description": "Label shown on the preview surface (e.g. \"PDF\")." },
+              "match": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string" },
+                "description": "MIME types and/or extensions handled. Each entry is an exact MIME (\"application/pdf\"), a MIME wildcard (\"image/*\"), a dot-extension (\".heic\"), or a bare extension (\"pdf\")."
+              }
+            }
+          }
+        },
+        "store": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["category", "tagline"],
+          "properties": {
+            "category": {
+              "type": "string",
+              "enum": ["Productivity", "Finance", "Lifestyle", "Security", "Media", "Wellness", "Help"]
+            },
+            "tagline": { "type": "string", "description": "Short blurb shown on the store card." },
+            "popular": { "type": "boolean" }
+          },
+          "description": "How the plugin appears in the plugin store."
+        },
+        "dataSource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provides"],
+          "properties": {
+            "provides": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "enum": ["tasks", "calendar"] },
+              "description": "Which host surfaces this plugin feeds typed records into."
+            },
+            "config": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/configField" },
+              "description": "Config the source needs to connect (rendered as a settings form)."
+            }
+          },
+          "description": "Declares typed data providers (tasks / calendar). The provider factory is registered host-side, keyed by plugin id."
+        }
+      }
+    },
+    "configField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label", "type"],
+      "properties": {
+        "key": { "type": "string" },
+        "label": { "type": "string" },
+        "type": { "type": "string", "enum": ["string", "secret", "url", "boolean"] },
+        "required": { "type": "boolean" }
+      }
+    }
+  }
+}

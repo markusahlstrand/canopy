@@ -5,8 +5,9 @@ They share the word "plugin" but almost nothing else; keeping them apart is a de
 design choice:
 
 - **Trusted, in-process adapters** run inside the API and _are_ the I/O boundary, so they
-  aren't sandboxed — **storage connectors** (raw bytes) and **data sources** (typed records
-  like tasks or calendar events).
+  aren't sandboxed — **storage connectors** (raw bytes), **data sources** (typed records like
+  tasks or calendar events), and **processors** (derive something when a file changes, e.g. an
+  AI label).
 - **Sandboxed extensions** run untrusted code in isolation and only ever touch what the host
   explicitly grants — **file viewers** (client-side iframe sandbox, shipping today) and
   server-hook **extension plugins** (the `PluginRuntime` sandbox, planned).
@@ -68,7 +69,33 @@ GitHub caches for 5 minutes to stay under the API rate limit. That cache is a sw
 `CacheStore` (see _A shared, swappable cache_ below), so a source caches identically on Node and
 Cloudflare.
 
-## 3. Extension plugins — declarative, sandboxed _(server-hook sandbox planned)_
+## 3. Server-side processors — trusted, run on change
+
+A **processor** acts on a file when it changes and derives something from it. The built-in
+**Document AI** plugin is the example: it classifies each added document with Google Gemini
+Flash and writes a type label into the file's `metadata.labels`. Like a connector or data
+source it's trusted code in the API, and it declares its config (an API key) the same way —
+stored encrypted per-user:
+
+```ts
+interface DocumentProcessor {
+  id: string;
+  configFields: ConnectorConfigField[];                                   // apiKey (secret), model
+  label(file: { name; mime; bytes }, config): Promise<string[]>;          // labels to merge
+}
+```
+
+The host runs it on `POST /api/files` **off the response path**, so it never slows an upload —
+`ctx.waitUntil` on a Worker, a background promise on Node. It reads the new file's bytes once,
+calls each configured processor, and merges the labels back with a normal metadata patch (a
+metadata edit, so **no new version**). Failures are swallowed — labeling must never break an
+upload. It currently fires on **new uploads only**.
+
+This is the **trusted, first-party form** of the planned `enrichItem` / `transformUpload`
+sandbox hooks (below): the same shape and the same `metadata` write — only _where the code
+runs_ changes when the sandbox lands.
+
+## 4. Extension plugins — declarative, sandboxed _(server-hook sandbox planned)_
 
 Extension plugins add UI and behaviour. A plugin is described by a **manifest** — what it
 is, what it's allowed to do, and what it contributes to the host:

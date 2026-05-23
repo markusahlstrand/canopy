@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
-import { scopedCache, type CacheStore, type StorageConnector } from "@canopy/core";
+import { scopedCache, type CacheStore, type ConnectorConfigField, type StorageConnector } from "@canopy/core";
 import {
   BlobHashMismatchError,
   BlobMissingError,
@@ -14,6 +14,7 @@ import type { AuthConfig } from "./auth/config";
 import { getSessionUser } from "./auth/routes";
 import { registerWebdav } from "./webdav";
 import type { ServerDataSource } from "./data-sources";
+import type { DocumentProcessor } from "./processors";
 import { decryptString, encryptString } from "./crypto";
 
 const MIME: Record<string, string> = {
@@ -33,6 +34,31 @@ function mimeFor(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   return MIME[ext] ?? "application/octet-stream";
 }
+
+/** Read up to `cap` bytes from a stream (so processors never load a huge file). */
+async function readCapped(stream: ReadableStream<Uint8Array>, cap: number): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < cap) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  void reader.cancel().catch(() => {});
+  const out = new Uint8Array(Math.min(total, cap));
+  let off = 0;
+  for (const ch of chunks) {
+    if (off >= out.byteLength) break;
+    const n = Math.min(ch.byteLength, out.byteLength - off);
+    out.set(ch.subarray(0, n), off);
+    off += n;
+  }
+  return out;
+}
+
+const PROCESSOR_MAX_BYTES = 8 * 1024 * 1024;
 
 /** The DB-backed drive: a file service plus the blob store for streaming downloads. */
 export interface DriveDeps {
@@ -64,6 +90,10 @@ export interface AppDeps {
   drive?: DriveDeps;
   /** Connected data-source plugins feeding tasks/calendar. */
   dataSources?: DataSourceDeps;
+  /** Server-side document processors run when a file is added (e.g. AI labeling). */
+  processors?: DocumentProcessor[];
+  /** Keep background work (e.g. labeling) alive after the response — `ctx.waitUntil` on a Worker. */
+  waitUntil?: (p: Promise<unknown>) => void;
 }
 
 /**
@@ -82,7 +112,10 @@ const ANON_DEFAULT_PLUGINS = ["documentation", ...DEFAULT_PLUGINS];
  */
 export function createApp(deps: AppDeps) {
   const app = new Hono();
-  const { authConfig = null, readonlyMounts = {}, drive, dataSources } = deps;
+  const { authConfig = null, readonlyMounts = {}, drive, dataSources, processors = [] } = deps;
+  // Run background work via the host's keep-alive (Worker ctx.waitUntil) if given;
+  // on Node a bare promise survives because the process stays up.
+  const runBackground = (p: Promise<unknown>) => (deps.waitUntil ? deps.waitUntil(p) : void p);
 
   app.use("/api/*", cors());
   if (deps.auth) app.route("/api/auth", deps.auth);
@@ -139,6 +172,65 @@ export function createApp(deps: AppDeps) {
     c.header("Content-Disposition", `inline; filename="${encodeURIComponent(entry.name)}"`);
     return c.body(await connector.read(path));
   });
+
+  // Read a plugin's saved config for a user, decrypting secret fields.
+  async function decryptedSettings(
+    sub: string,
+    plugin: { id: string; configFields: ConnectorConfigField[] },
+  ): Promise<Record<string, string>> {
+    if (!drive) return {};
+    const raw = await drive.service.getPluginSettings(sub, plugin.id);
+    if (!raw) return {};
+    const stored = JSON.parse(raw) as Record<string, string>;
+    const out: Record<string, string> = {};
+    for (const f of plugin.configFields) {
+      const v = stored[f.key];
+      if (v == null) continue;
+      if (f.type === "secret") {
+        const dec = dataSources?.secret ? await decryptString(dataSources.secret, v) : null;
+        if (dec != null) out[f.key] = dec;
+      } else {
+        out[f.key] = v;
+      }
+    }
+    return out;
+  }
+
+  // Best-effort: run configured document processors over a freshly-added file and
+  // merge any labels into its metadata. Runs in the background (does not block the
+  // upload response). On a Worker, pass this to ctx.waitUntil; a future migration
+  // moves it onto the task runner (the `enrichItem` hook) — see the plugin docs.
+  async function labelFileInBackground(sub: string, file: Awaited<ReturnType<FileService["createFile"]>>): Promise<void> {
+    if (processors.length === 0 || !drive) return;
+    const blobKey = file.version?.blobKey;
+    if (!blobKey) return;
+    try {
+      const stream = await drive.blobs.get(blobKey);
+      if (!stream) return;
+      const bytes = await readCapped(stream, PROCESSOR_MAX_BYTES);
+      const mime = file.version?.mime ?? mimeFor(file.name);
+      const labels = new Set<string>();
+      for (const p of processors) {
+        const config = await decryptedSettings(sub, p);
+        const required = p.configFields.filter((f) => f.required);
+        if (!required.every((f) => config[f.key])) {
+          console.log(`[processor:${p.id}] skip "${file.name}" — not configured for this user`);
+          continue;
+        }
+        console.log(`[processor:${p.id}] processing "${file.name}" (${mime}, ${bytes.byteLength} bytes)`);
+        const out = await p.label({ name: file.name, mime, bytes }, config);
+        console.log(`[processor:${p.id}] "${file.name}" → ${out.length ? out.join(", ") : "(no label)"}`);
+        for (const l of out) labels.add(l);
+      }
+      if (labels.size === 0) return;
+      const existing = Array.isArray(file.metadata?.labels) ? (file.metadata.labels as string[]) : [];
+      await drive.service.patchMetadata({ sub }, file.id, { labels: [...new Set([...existing, ...labels])] });
+      console.log(`[processor] saved labels for "${file.name}": ${[...labels].join(", ")}`);
+    } catch (err) {
+      // Best-effort: never surface to the upload, but do log so failures are visible.
+      console.warn(`[processor] failed for "${file.name}": ${(err as Error).message}`);
+    }
+  }
 
   // ── the drive ───────────────────────────────────────────────────────────────
 
@@ -273,7 +365,9 @@ export function createApp(deps: AppDeps) {
     const body = await c.req.json<{ name: string; hash: string; mime?: string; path?: string; metadata?: Record<string, unknown> }>();
     if (!body.name || !body.hash) return c.json({ error: "name and hash required" }, 400);
     const space = await resolveSpace(c, caller.sub);
-    return c.json(await drive!.service.createFile(space, caller.sub, body), 201);
+    const file = await drive!.service.createFile(space, caller.sub, body);
+    runBackground(labelFileInBackground(caller.sub, file)); // AI labeling, off the response path
+    return c.json(file, 201);
   }));
 
   // Create an (empty) folder in a space.
@@ -318,11 +412,22 @@ export function createApp(deps: AppDeps) {
   }));
 
   // New content version — never alters metadata. Dedup applies to its blob.
+  // Rapid successive saves by the same author coalesce into the current version.
   app.post("/api/files/:id/versions", driveRoute(async (c, caller) => {
     const body = await c.req.json<{ hash: string; mime?: string }>();
     if (!body.hash) return c.json({ error: "hash required" }, 400);
     return c.json(await drive!.service.addVersion(caller, c.req.param("id")!, body));
   }));
+
+  // Version history (newest first).
+  app.get("/api/files/:id/versions", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.listVersions(caller, c.req.param("id")!)),
+  ));
+
+  // Restore an older version: appends its content as the new current version.
+  app.post("/api/files/:id/versions/:versionId/restore", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.restoreVersion(caller, c.req.param("id")!, c.req.param("versionId")!)),
+  ));
 
   // Soft-delete (→ Trash) by default; `?permanent=1` purges the file + its content.
   app.delete("/api/files/:id", driveRoute(async (c, caller) => {
@@ -385,6 +490,9 @@ export function createApp(deps: AppDeps) {
   // The adapter owns its own caching (TTL) via the scoped cache it's handed.
   const sourcePlugins = dataSources?.plugins ?? [];
   const findSource = (id: string) => sourcePlugins.find((p) => p.id === id);
+  // Any plugin that has user-configurable settings (data sources + processors).
+  const findConfigurable = (id: string): { id: string; configFields: ConnectorConfigField[] } | undefined =>
+    findSource(id) ?? processors.find((p) => p.id === id);
 
   /**
    * The caller's saved config for a plugin (secrets decrypted), or the demo
@@ -468,8 +576,8 @@ export function createApp(deps: AppDeps) {
   // The field schema is server-authoritative; secret values are encrypted at rest
   // and NEVER returned to the client (only whether each secret is set).
   app.get("/api/plugins/:id/settings", driveRoute(async (c, caller) => {
-    const src = findSource(c.req.param("id")!);
-    if (!src) return c.json({ error: "unknown source plugin" }, 404);
+    const src = findConfigurable(c.req.param("id")!);
+    if (!src) return c.json({ error: "unknown plugin" }, 404);
     const raw = await drive!.service.getPluginSettings(caller.sub, src.id);
     const stored = raw ? (JSON.parse(raw) as Record<string, string>) : {};
     const values: Record<string, string> = {};
@@ -485,8 +593,8 @@ export function createApp(deps: AppDeps) {
   }));
 
   app.put("/api/plugins/:id/settings", driveRoute(async (c, caller) => {
-    const src = findSource(c.req.param("id")!);
-    if (!src) return c.json({ error: "unknown source plugin" }, 404);
+    const src = findConfigurable(c.req.param("id")!);
+    if (!src) return c.json({ error: "unknown plugin" }, 404);
     const body = await c.req.json<{ values: Record<string, string | null> }>();
     const raw = await drive!.service.getPluginSettings(caller.sub, src.id);
     const stored = raw ? (JSON.parse(raw) as Record<string, string>) : {};

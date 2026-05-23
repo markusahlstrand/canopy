@@ -179,6 +179,20 @@ export interface ListedFile extends FileWithVersion {
   ownerLabel: string;
 }
 
+/** A version in a file's history, with a friendly label for who created it. */
+export interface VersionEntry extends FileVersion {
+  createdByLabel: string;
+}
+
+/**
+ * How long the current version stays open to coalescing. Successive blob saves by
+ * the same author within this window collapse into that version instead of
+ * appending a new one — so one editing session is one version, not hundreds. The
+ * version "seals" once it's older than the window (measured from when it was first
+ * created, so continuous editing still cuts a fresh version each window).
+ */
+export const DEFAULT_COALESCE_WINDOW_MS = 10 * 60_000;
+
 export interface CreateFileInput {
   name: string;
   hash: string;
@@ -204,7 +218,7 @@ export class FileService {
     private readonly db: Db,
     private readonly store: BlobStore,
     private readonly repo: BlobRepo,
-    private readonly opts: { globalDedup?: boolean } = {},
+    private readonly opts: { globalDedup?: boolean; versionCoalesceWindowMs?: number } = {},
   ) {}
 
   keyFor(spaceId: string, hash: string): string {
@@ -586,13 +600,44 @@ export class FileService {
     return this.getFile(caller, id);
   }
 
-  /** Add a new version (new content) without touching metadata. Requires editor+. */
+  /**
+   * Add a new version (new content) without touching metadata. Requires editor+.
+   *
+   * Successive saves by the same author within the coalesce window collapse into
+   * the current version instead of appending a new row — see
+   * {@link DEFAULT_COALESCE_WINDOW_MS}. The blob the version pointed at is released
+   * (removed if nothing else references it), so coalescing never grows storage.
+   */
   async addVersion(caller: Caller, id: string, input: { hash: string; mime?: string }): Promise<FileWithVersion> {
     const file = await this.requirePerm(caller, id, "editor");
     const key = this.keyFor(file.tenantId, input.hash); // blob lives in the file's space
     const blob = await this.repo.find(key);
     if (!blob) throw new BlobMissingError();
     const now = new Date().toISOString();
+
+    const head = file.currentVersionId
+      ? await this.db.first<VersionRow>("SELECT * FROM file_versions WHERE id = ?", [file.currentVersionId])
+      : null;
+    const windowMs = this.opts.versionCoalesceWindowMs ?? DEFAULT_COALESCE_WINDOW_MS;
+    const coalesce =
+      !!head &&
+      head.source === "blob" &&
+      head.created_by === caller.sub &&
+      Date.now() - new Date(head.created_at).getTime() < windowMs;
+
+    if (coalesce && head) {
+      // Replace the current version's content in place; keep its id + created_at
+      // (the window anchor) so the history shows one entry per editing session.
+      await this.db.batch([
+        { sql: "UPDATE file_versions SET blob_hash = ?, mime = ?, size = ? WHERE id = ?", params: [key, input.mime ?? null, blob.size, head.id] },
+        { sql: "UPDATE files SET updated_at = ? WHERE id = ?", params: [now, id] },
+      ]);
+      // Balance refcounts: drop the superseded content, or — if the same bytes were
+      // re-saved — the extra ref the upload step reserved for a row we didn't add.
+      if (head.blob_hash) await releaseBlob(this.repo, this.store, head.blob_hash);
+      return this.getFile(caller, id);
+    }
+
     const versionId = crypto.randomUUID();
     await this.db.batch([
       {
@@ -601,6 +646,57 @@ export class FileService {
         params: [versionId, id, key, input.mime ?? null, blob.size, now, caller.sub],
       },
       { sql: "UPDATE files SET current_version_id = ?, updated_at = ? WHERE id = ?", params: [versionId, now, id] },
+    ]);
+    return this.getFile(caller, id);
+  }
+
+  /** A file's version history, newest first, each labelled with who created it. Requires viewer+. */
+  async listVersions(caller: Caller, id: string): Promise<VersionEntry[]> {
+    await this.requirePerm(caller, id, "viewer");
+    const rows = await this.db.all<VersionRow>(
+      "SELECT * FROM file_versions WHERE file_id = ? ORDER BY created_at DESC, rowid DESC",
+      [id],
+    );
+    const versions = rows.map(toVersion);
+    const subs = [...new Set(versions.map((v) => v.createdBy))];
+    const users = subs.length
+      ? await this.db.all<{ sub: string; email: string | null; name: string | null }>(
+          `SELECT sub, email, name FROM users WHERE sub IN (${subs.map(() => "?").join(",")})`,
+          subs,
+        )
+      : [];
+    const label = (sub: string) => {
+      const u = users.find((x) => x.sub === sub);
+      return u?.name || u?.email || sub;
+    };
+    return versions.map((v) => ({ ...v, createdByLabel: label(v.createdBy) }));
+  }
+
+  /**
+   * Restore an older version by making its content the current version. Requires
+   * editor+. Non-destructive: appends a new version pointing at the old content
+   * (so the restore is itself a history entry) and never coalesces.
+   */
+  async restoreVersion(caller: Caller, id: string, versionId: string): Promise<FileWithVersion> {
+    const file = await this.requirePerm(caller, id, "editor");
+    if (file.currentVersionId === versionId) return this.getFile(caller, id);
+    const target = await this.db.first<VersionRow>(
+      "SELECT * FROM file_versions WHERE id = ? AND file_id = ?",
+      [versionId, id],
+    );
+    if (!target) throw new NotFoundError("version not found");
+    if (target.source !== "blob" || !target.blob_hash) throw new NotFoundError("cannot restore a non-blob version");
+    // A new row references the same blob, so take a ref (fails if it was GC'd).
+    if ((await this.repo.increment(target.blob_hash)) == null) throw new BlobMissingError();
+    const now = new Date().toISOString();
+    const newId = crypto.randomUUID();
+    await this.db.batch([
+      {
+        sql: `INSERT INTO file_versions (id, file_id, source, blob_hash, mime, size, created_at, created_by)
+              VALUES (?, ?, 'blob', ?, ?, ?, ?, ?)`,
+        params: [newId, id, target.blob_hash, target.mime, target.size, now, caller.sub],
+      },
+      { sql: "UPDATE files SET current_version_id = ?, updated_at = ? WHERE id = ?", params: [newId, now, id] },
     ]);
     return this.getFile(caller, id);
   }

@@ -14,6 +14,8 @@ export interface FileItem {
   /** Display owner (resolved name/email) and location (space name), for the preview. */
   owner?: string;
   location?: string;
+  /** Type labels (e.g. from the Document AI plugin), stored in metadata.labels. */
+  labels?: string[];
 }
 
 export const DEFAULT_FILES: FileItem[] = [
@@ -71,6 +73,7 @@ export const PLUGIN_CATALOG: CatalogItem[] = [
   { id: "calendar", icon: "calendar", label: "Calendar", category: "Productivity", tagline: "Shared family calendar with smart conflicts", popular: true, color: "145 33% 36%" },
   { id: "tasks", icon: "check-square", label: "Tasks", category: "Productivity", tagline: "A real to-do list for the household", popular: true, color: "212 70% 48%" },
   { id: "github", icon: "github", label: "GitHub", category: "Productivity", tagline: "Sync issues to Tasks, releases & milestones to Calendar", popular: true, color: "240 6% 20%" },
+  { id: "document-ai", icon: "sparkles", label: "Document AI", category: "Productivity", tagline: "Auto-label each document by type with Gemini Flash", popular: true, color: "262 60% 55%" },
   { id: "documentation", icon: "book", label: "Documentation", category: "Help", tagline: "How Canopy works — guides for using it and building plugins", color: "212 70% 48%" },
 ];
 

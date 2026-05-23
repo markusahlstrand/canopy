@@ -156,6 +156,44 @@ provider, and **cache** through the store you're given. Everything else is the h
   build the providers with a `(plugin, user)`-scoped cache, and return normalized JSON;
 - the Tasks and Calendar plugins call those endpoints — they never mention GitHub.
 
+## A server-side processor (Document AI)
+
+A **processor** acts on a file when it changes instead of contributing UI. The **Document AI**
+plugin classifies each added document with Google Gemini Flash and tags it. It declares its
+config (an API key) and a `label` function — that's the whole plugin:
+
+```ts
+// apps/api/src/processors.ts (trimmed)
+export const documentAiProcessor: DocumentProcessor = {
+  id: "document-ai",
+  configFields: [
+    { key: "apiKey", label: "Google AI API key", type: "secret", required: true },
+    { key: "model",  label: "Model (default: gemini-3.5-flash)", type: "string" },
+  ],
+  async label(file, config) {
+    const type = await classifyDocument({ ...config, name: file.name, mime: file.mime, bytes: file.bytes });
+    return type ? [type] : [];   // merged into metadata.labels
+  },
+};
+```
+
+The host owns everything around it: on `POST /api/files` it reads the new file's bytes once,
+runs each configured processor **off the response path** (`ctx.waitUntil` on Cloudflare, a
+background promise on Node), and writes the merged labels back with a metadata patch — a
+metadata edit, so **no new version**. The classifier is just a `fetch` to Gemini (the text for
+text files, the PDF/image sent inline otherwise), and the API key reuses the same encrypted
+`/api/plugins/:id/settings` flow as a data source — so it's stored server-side and never
+returned to the browser.
+
+```
+upload ─► POST /api/files ─► createFile ─┐                       (response returns immediately)
+                                          └─ waitUntil: read bytes ─► Gemini Flash ─► metadata.labels
+```
+
+Like data sources, this runs trusted and first-party today; it's the exact shape the sandboxed
+`enrichItem` / `transformUpload` hook will take once the runtime lands. The label then shows in
+the file's preview details.
+
 ## File viewers (sandboxed)
 
 A **viewer** is a plugin that renders a file type in the preview surface — a PDF, an image,

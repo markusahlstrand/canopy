@@ -111,3 +111,33 @@ resolves it with **two kinds of version**:
   job — a **Cloudflare Workflow** on the edge, an in-process runner on Node.
 
 Vector and full-text search layer on top of the index later.
+
+## Real-time editing (planned)
+
+Documents edited in the portal (Markdown first) are collaborative: edits sync live between
+everyone with the doc open. The model is a CRDT (**Yjs**) with **one room per document** —
+every editor of a doc converges on a single authoritative instance that relays updates,
+holds the merged state, and persists it through the same `StorageConnector` the drive uses.
+Cursors and presence are ephemeral and never persisted. Saved versions are periodic Markdown
+snapshots into `file_versions`; autosave overwrites one mutable HEAD, so typing doesn't churn
+the version history.
+
+The room is the only runtime-specific piece, and either way it speaks the standard Yjs sync
+protocol over WebSocket, so the client is identical:
+
+- **Cloudflare** — the room is a **Durable Object**, addressed by document id. The DO is the
+  global single instance for that doc and uses the WebSocket Hibernation API, so idle docs
+  cost nothing.
+- **Node** — the room is an in-process `Map<docId, room>` over a `ws` server.
+
+> **Limitation — collaboration assumes a single Node instance.** On Node the
+> one-room-per-document guarantee holds only *within a single process*: the authoritative
+> room lives in memory, keyed by document id, with no shared backplane. Run two or more Node
+> replicas behind a load balancer and two editors of the same document can land on different
+> replicas — each gets its own room, they won't see each other's edits, and the two HEADs
+> diverge on save. Scaling the Node target horizontally would require routing every
+> connection for a document to the same replica (sticky / consistent-hash by document id) or
+> a pub/sub layer between replicas; **neither is implemented**, so the Node deployment is
+> single-instance for live editing. Cloudflare has no such limit — a Durable Object is
+> globally single-instance per id by construction, so deploy there if the realtime layer
+> needs to scale.

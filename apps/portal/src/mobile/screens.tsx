@@ -3,8 +3,8 @@ import { Icon } from "@/lib/icons";
 import { FileIcon } from "@/components/file-icon";
 import { PersonAvatar, AvatarGroup } from "@/components/person-avatar";
 import { cn } from "@/lib/utils";
-import { listFiles } from "@/lib/api";
-import { STORAGE, type FileItem, type FileKind } from "@/lib/mock-data";
+import { listFiles, listShared, type SpaceView } from "@/lib/api";
+import { PLUGIN_CATALOG, STORAGE, type FileItem, type FileKind } from "@/lib/mock-data";
 
 function SectionHeader({ title, onMore }: { title: string; onMore?: () => void }) {
   return (
@@ -75,10 +75,14 @@ const ACTIVITY = [
 
 export function HomeScreen({
   userName,
+  spaceCount,
+  installed,
   onOpenFile,
   onNav,
 }: {
   userName: string;
+  spaceCount: number;
+  installed: string[];
   onOpenFile: (f: FileItem) => void;
   onNav: (view: string) => void;
 }) {
@@ -86,6 +90,12 @@ export function HomeScreen({
   useEffect(() => {
     listFiles("").then((items) => setRecent(items.slice(0, 6))).catch(() => setRecent([]));
   }, []);
+
+  // Up to three installed apps to preview, resolved from the store catalog.
+  const apps = installed
+    .map((id) => PLUGIN_CATALOG.find((c) => c.id === id))
+    .filter((c): c is (typeof PLUGIN_CATALOG)[number] => !!c)
+    .slice(0, 3);
 
   return (
     <div className="px-[18px] pt-2.5">
@@ -117,13 +127,20 @@ export function HomeScreen({
             <div className="h-full rounded-full bg-primary" style={{ width: `${STORAGE.percent}%` }} />
           </div>
         </div>
-        <div className="flex flex-col gap-1 rounded-2xl border bg-card p-3.5">
+        <button
+          onClick={() => onNav("spaces")}
+          className="flex flex-col gap-1 rounded-2xl border bg-card p-3.5 text-left"
+        >
           <div className="flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
-            <Icon name="users" size={13} style={{ color: "hsl(327 60% 55%)" }} /> Family
+            <Icon name="users" size={13} style={{ color: "hsl(327 60% 55%)" }} /> Spaces
           </div>
-          <div className="text-[20px] font-semibold tracking-tight">4 members</div>
-          <div className="text-[12px] text-muted-foreground">62 shared files</div>
-        </div>
+          <div className="text-[20px] font-semibold tracking-tight">
+            {spaceCount} {spaceCount === 1 ? "space" : "spaces"}
+          </div>
+          <div className="text-[12px] text-muted-foreground">
+            {spaceCount === 0 ? "Tap to create one" : "Shared with people"}
+          </div>
+        </button>
       </div>
 
       {/* recent */}
@@ -143,13 +160,14 @@ export function HomeScreen({
         {recent.length === 0 && <div className="py-4 text-[13px] text-muted-foreground">No recent files.</div>}
       </div>
 
-      {/* plugins */}
-      <SectionHeader title="Plugins" />
+      {/* apps */}
+      <SectionHeader title="Apps" onMore={() => onNav("apps")} />
       <div className="mb-6 flex flex-col gap-2">
-        <PluginRow color="212 92% 50%" icon="calendar" label="Calendar" hint="3 events today" badge="3" onClick={() => onNav("plugins")} />
-        <PluginRow color="38 92% 50%" icon="check-square" label="Tasks" hint="4 due this week" badge="4" dot onClick={() => onNav("plugins")} />
-        <button onClick={() => onNav("plugins")} className="flex items-center gap-2.5 rounded-xl border border-dashed px-3.5 py-2.5 text-[13.5px] font-medium text-muted-foreground">
-          <Icon name="package" size={16} /> Browse plugin store
+        {apps.map((a) => (
+          <AppRow key={a.id} color={a.color} icon={a.icon} label={a.label} hint={a.tagline} onClick={() => onNav("apps")} />
+        ))}
+        <button onClick={() => onNav("apps")} className="flex items-center gap-2.5 rounded-xl border border-dashed px-3.5 py-2.5 text-[13.5px] font-medium text-muted-foreground">
+          <Icon name="grid" size={16} /> Browse apps
         </button>
       </div>
 
@@ -172,7 +190,7 @@ export function HomeScreen({
   );
 }
 
-function PluginRow({
+function AppRow({
   color,
   icon,
   label,
@@ -217,7 +235,17 @@ const CHIPS: { id: string; label: string; kinds?: FileKind[]; folders?: boolean 
   { id: "notes", label: "Notes", kinds: ["note"] },
 ];
 
+// Top-level sources within Files — the same sub-views the desktop sidebar
+// exposes (My Drive / Starred / Shared), here as a segmented control.
+type Source = "drive" | "starred" | "shared";
+const SOURCES: { id: Source; label: string }[] = [
+  { id: "drive", label: "Files" },
+  { id: "starred", label: "Starred" },
+  { id: "shared", label: "Shared" },
+];
+
 export function DriveScreen({ onOpenFile }: { onOpenFile: (f: FileItem) => void }) {
+  const [source, setSource] = useState<Source>("drive");
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<FileItem[]>([]);
   const [filter, setFilter] = useState("all");
@@ -225,59 +253,89 @@ export function DriveScreen({ onOpenFile }: { onOpenFile: (f: FileItem) => void 
 
   useEffect(() => {
     setError(null);
-    listFiles(path).then(setFiles).catch((e: Error) => {
-      setFiles([]);
-      setError(e.message);
-    });
-  }, [path]);
+    // "Starred" mirrors the desktop: filter the drive root rather than a global
+    // query (there's no list-starred endpoint). "Shared" uses its own listing.
+    const load = source === "shared" ? listShared() : listFiles(source === "starred" ? "" : path);
+    load
+      .then((items) => setFiles(source === "starred" ? items.filter((f) => f.starred) : items))
+      .catch((e: Error) => {
+        setFiles([]);
+        setError(e.message);
+      });
+  }, [source, path]);
 
   const filtered = useMemo(() => {
+    if (source !== "drive") return files;
     const chip = CHIPS.find((c) => c.id === filter);
     if (!chip || chip.id === "all") return files;
     return files.filter((f) => (chip.folders ? f.kind === "folder" : chip.kinds?.includes(f.kind)));
-  }, [files, filter]);
+  }, [files, filter, source]);
 
   const segments = path.split("/").filter(Boolean);
+  const title = source === "starred" ? "Starred" : source === "shared" ? "Shared with me" : segments[segments.length - 1] ?? "My Drive";
 
   function open(f: FileItem) {
-    if (f.kind === "folder" && f.path != null) setPath(f.path);
+    if (source === "drive" && f.kind === "folder" && f.path != null) setPath(f.path);
     else onOpenFile(f);
   }
 
   return (
     <div>
-      <div className="px-[18px] pb-3.5 pt-2">
-        <div className="mb-2 flex items-center gap-1 whitespace-nowrap text-[12.5px] font-medium text-muted-foreground">
-          <Icon name="cloud" size={12} className="text-primary" />
-          <button onClick={() => setPath("")} className="shrink-0">{STORAGE.label}</button>
-          <Icon name="chevron-right" size={11} />
-          <span className="shrink-0 font-semibold text-foreground">{segments[segments.length - 1] ?? "My Drive"}</span>
-        </div>
-        <h1 className="text-[30px] font-semibold tracking-tight">{segments[segments.length - 1] ?? "My Drive"}</h1>
-        <div className="mt-1 font-mono text-[13px] text-muted-foreground">{filtered.length} items</div>
-      </div>
-
-      <div className="px-[18px] pb-3">
-        <SearchPill label="Search My Drive" compact />
-      </div>
-
-      <div className="flex gap-2 overflow-x-auto px-[18px] pb-3.5 [scrollbar-width:none]">
-        {CHIPS.map((c) => {
-          const active = filter === c.id;
+      {/* Source switch */}
+      <div className="flex gap-2 px-[18px] pb-3 pt-2">
+        {SOURCES.map((s) => {
+          const active = source === s.id;
           return (
             <button
-              key={c.id}
-              onClick={() => setFilter(c.id)}
+              key={s.id}
+              onClick={() => setSource(s.id)}
               className={cn(
-                "h-8 shrink-0 whitespace-nowrap rounded-full px-3.5 text-[13px] font-medium transition-colors",
+                "h-8 flex-1 rounded-full text-[13px] font-medium transition-colors",
                 active ? "bg-primary text-primary-foreground" : "border bg-card text-foreground/80",
               )}
             >
-              {c.label}
+              {s.label}
             </button>
           );
         })}
       </div>
+
+      <div className="px-[18px] pb-3.5">
+        {source === "drive" && (
+          <div className="mb-2 flex items-center gap-1 whitespace-nowrap text-[12.5px] font-medium text-muted-foreground">
+            <Icon name="cloud" size={12} className="text-primary" />
+            <button onClick={() => setPath("")} className="shrink-0">{STORAGE.label}</button>
+            <Icon name="chevron-right" size={11} />
+            <span className="shrink-0 font-semibold text-foreground">{title}</span>
+          </div>
+        )}
+        <h1 className="text-[30px] font-semibold tracking-tight">{title}</h1>
+        <div className="mt-1 font-mono text-[13px] text-muted-foreground">{filtered.length} items</div>
+      </div>
+
+      <div className="px-[18px] pb-3">
+        <SearchPill label={`Search ${source === "drive" ? "My Drive" : title}`} compact />
+      </div>
+
+      {source === "drive" && (
+        <div className="flex gap-2 overflow-x-auto px-[18px] pb-3.5 [scrollbar-width:none]">
+          {CHIPS.map((c) => {
+            const active = filter === c.id;
+            return (
+              <button
+                key={c.id}
+                onClick={() => setFilter(c.id)}
+                className={cn(
+                  "h-8 shrink-0 whitespace-nowrap rounded-full px-3.5 text-[13px] font-medium transition-colors",
+                  active ? "bg-primary text-primary-foreground" : "border bg-card text-foreground/80",
+                )}
+              >
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {error ? (
         <div className="mx-[18px] rounded-xl border border-dashed p-6 text-center text-[13px] text-muted-foreground">
@@ -288,138 +346,191 @@ export function DriveScreen({ onOpenFile }: { onOpenFile: (f: FileItem) => void 
           {filtered.map((f) => (
             <MFileRow key={f.id} file={f} onClick={() => open(f)} />
           ))}
-          {filtered.length === 0 && <div className="px-[18px] py-8 text-center text-[13px] text-muted-foreground">Nothing here.</div>}
+          {filtered.length === 0 && (
+            <div className="px-[18px] py-8 text-center text-[13px] text-muted-foreground">
+              {source === "starred" ? "Nothing starred yet." : source === "shared" ? "Nothing shared with you." : "Nothing here."}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-// ── Family ──────────────────────────────────────────────────────────────
+// ── Spaces ────────────────────────────────────────────────────────────────
 
-const FAMILY = [
-  { name: "Maya", role: "You", storage: "5.2 GB" },
-  { name: "Daniel", role: "Partner", storage: "4.1 GB" },
-  { name: "Lily", role: "Kid · 9", storage: "2.4 GB" },
-  { name: "Nora", role: "Kid · 12", storage: "0.7 GB" },
-];
+const ROLE_LABEL: Record<string, string> = { owner: "Owner", editor: "Can edit", viewer: "Can view" };
 
-export function FamilyScreen({ onOpenFile }: { onOpenFile: (f: FileItem) => void }) {
-  const [shared, setShared] = useState<FileItem[]>([]);
-  useEffect(() => {
-    listFiles("").then((items) => setShared(items.slice(0, 6))).catch(() => setShared([]));
-  }, []);
+export function SpacesScreen({ spaces, onOpenFile }: { spaces: SpaceView[]; onOpenFile: (f: FileItem) => void }) {
+  // A space the user has drilled into (its files), or null at the list level.
+  const [open, setOpen] = useState<SpaceView | null>(null);
+  const groups = spaces.filter((s) => s.kind === "group");
+
+  if (open) return <SpaceFilesScreen space={open} onBack={() => setOpen(null)} onOpenFile={onOpenFile} />;
 
   return (
     <div>
       <div className="px-[18px] pb-4 pt-2">
-        <h1 className="text-[30px] font-semibold tracking-tight">Family</h1>
-        <div className="mt-1 text-[13px] text-muted-foreground">4 members · 62 shared files</div>
+        <h1 className="text-[30px] font-semibold tracking-tight">Spaces</h1>
+        <div className="mt-1 text-[13px] text-muted-foreground">
+          {groups.length === 0
+            ? "Shared spaces for your family, projects or groups."
+            : `${groups.length} ${groups.length === 1 ? "space" : "spaces"} shared with you`}
+        </div>
       </div>
 
-      <div className="-mx-[18px] mb-6 flex gap-3 overflow-x-auto px-[18px] [scrollbar-width:none]">
-        {FAMILY.map((p) => (
-          <div key={p.name} className="flex w-[110px] shrink-0 flex-col items-center gap-2 rounded-2xl border bg-card p-3.5 text-center">
-            <PersonAvatar name={p.name} size="lg" className="size-[52px] text-base" />
-            <div className="text-[13.5px] font-semibold">{p.name}</div>
-            <div className="-mt-1 text-[11px] text-muted-foreground">{p.role}</div>
-            <div className="rounded-full bg-muted px-2 py-0.5 font-mono text-[10.5px] text-muted-foreground">{p.storage}</div>
-          </div>
-        ))}
-        <button className="flex w-[110px] shrink-0 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed p-3.5 text-muted-foreground">
-          <span className="grid size-[52px] place-items-center rounded-full bg-muted">
-            <Icon name="plus" size={22} />
+      {groups.length === 0 ? (
+        <div className="mx-[18px] flex flex-col items-center gap-3 rounded-2xl border border-dashed p-8 text-center">
+          <span className="grid size-12 place-items-center rounded-full bg-muted text-muted-foreground">
+            <Icon name="users" size={22} />
           </span>
-          <span className="text-[12.5px] font-medium">Invite</span>
-        </button>
-      </div>
-
-      <div className="px-[18px] pb-2">
-        <SectionHeader title="Shared with family" />
-      </div>
-      <div className="border-y bg-card">
-        {shared.map((f) => (
-          <MFileRow key={f.id} file={f} onClick={() => onOpenFile(f)} />
-        ))}
-      </div>
+          <div className="text-[14px] font-medium">No spaces yet</div>
+          <div className="max-w-[240px] text-[12.5px] text-muted-foreground">
+            Create a space to share files with the people you choose — like a “Family” space.
+          </div>
+          <button className="mt-1 h-9 rounded-full bg-primary px-4 text-[13px] font-semibold text-primary-foreground">
+            Create a space
+          </button>
+        </div>
+      ) : (
+        <div className="border-y bg-card">
+          {groups.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setOpen(s)}
+              className="flex w-full items-center gap-3 border-b px-[18px] py-3 text-left last:border-0"
+            >
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+                <Icon name="users" size={18} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[14.5px] font-medium">{s.name}</div>
+                <div className="mt-0.5 text-[11.5px] text-muted-foreground">{ROLE_LABEL[s.role] ?? s.role}</div>
+              </div>
+              <Icon name="chevron-right" size={14} className="shrink-0 text-muted-foreground" />
+            </button>
+          ))}
+          <button className="flex w-full items-center gap-3 px-[18px] py-3 text-left text-muted-foreground">
+            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted">
+              <Icon name="plus" size={18} />
+            </span>
+            <span className="text-[14px] font-medium">New space…</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-// ── Plugins ─────────────────────────────────────────────────────────────
+function SpaceFilesScreen({
+  space,
+  onBack,
+  onOpenFile,
+}: {
+  space: SpaceView;
+  onBack: () => void;
+  onOpenFile: (f: FileItem) => void;
+}) {
+  const [path, setPath] = useState("");
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setError(null);
+    listFiles(path, space.id)
+      .then(setFiles)
+      .catch((e: Error) => {
+        setFiles([]);
+        setError(e.message);
+      });
+  }, [space.id, path]);
 
-const STORE = [
-  { color: "327 60% 55%", icon: "hash", label: "Notes", tagline: "Markdown notes synced with files." },
-  { color: "248 60% 56%", icon: "database", label: "Budgets", tagline: "Track shared household spending." },
-  { color: "190 70% 42%", icon: "globe", label: "Bookmarks", tagline: "Save links the whole family can read." },
-  { color: "20 85% 52%", icon: "archive", label: "Receipts", tagline: "Scan & file receipts with OCR." },
-];
+  const segments = path.split("/").filter(Boolean);
 
-export function PluginsScreen() {
+  function open(f: FileItem) {
+    if (f.kind === "folder" && f.path != null) setPath(f.path);
+    else onOpenFile(f);
+  }
+
+  // Back steps out of a subfolder first, then leaves the space.
+  const goBack = () => (segments.length ? setPath(segments.slice(0, -1).join("/")) : onBack());
+
+  return (
+    <div>
+      <div className="px-[18px] pb-3.5 pt-2">
+        <button onClick={goBack} className="mb-2 flex items-center gap-1 text-[13px] font-medium text-primary">
+          <Icon name="chevron-left" size={15} /> {segments.length ? space.name : "Spaces"}
+        </button>
+        <h1 className="text-[30px] font-semibold tracking-tight">{segments[segments.length - 1] ?? space.name}</h1>
+        <div className="mt-1 font-mono text-[13px] text-muted-foreground">{files.length} items</div>
+      </div>
+      {error ? (
+        <div className="mx-[18px] rounded-xl border border-dashed p-6 text-center text-[13px] text-muted-foreground">
+          Couldn't load this space.
+        </div>
+      ) : (
+        <div className="border-y bg-card">
+          {files.map((f) => (
+            <MFileRow key={f.id} file={f} onClick={() => open(f)} />
+          ))}
+          {files.length === 0 && <div className="px-[18px] py-8 text-center text-[13px] text-muted-foreground">This space is empty.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Apps ────────────────────────────────────────────────────────────────
+
+export function AppsScreen({ installed }: { installed: string[] }) {
+  // Resolve installed ids and the rest of the store from the shared catalog, so
+  // this stays in sync with what the user actually has (no hardcoded list).
+  const installedApps = PLUGIN_CATALOG.filter((c) => installed.includes(c.id));
+  const storeApps = PLUGIN_CATALOG.filter((c) => !installed.includes(c.id));
+
   return (
     <div>
       <div className="px-[18px] pb-4 pt-2">
-        <h1 className="text-[30px] font-semibold tracking-tight">Plugins</h1>
-        <div className="mt-1 text-[13px] text-muted-foreground">Plug in only what your family will actually use.</div>
+        <h1 className="text-[30px] font-semibold tracking-tight">Apps</h1>
+        <div className="mt-1 text-[13px] text-muted-foreground">Add only what your family will actually use.</div>
       </div>
 
-      <div className="px-[18px] pb-1.5 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Installed</div>
-      <div className="mb-6 flex flex-col gap-2.5 px-[18px]">
-        <div className="rounded-2xl border bg-card p-3.5">
-          <PluginCardHead color="212 92% 50%" icon="calendar" label="Calendar" tagline="Family events synced with notes & files." />
-          <div className="mt-3 flex gap-2">
-            {[
-              { t: "9 AM", s: "Lily violin" },
-              { t: "1 PM", s: "Standup" },
-              { t: "6 PM", s: "Family dinner" },
-            ].map((p) => (
-              <div key={p.t} className="min-w-0 flex-1 rounded-[10px] bg-muted px-2.5 py-2">
-                <div className="font-mono text-[10.5px] font-semibold" style={{ color: "hsl(212 92% 40%)" }}>{p.t}</div>
-                <div className="mt-0.5 truncate text-[12px] font-medium">{p.s}</div>
+      {installedApps.length > 0 && (
+        <>
+          <div className="px-[18px] pb-1.5 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Installed</div>
+          <div className="mb-6 flex flex-col gap-2.5 px-[18px]">
+            {installedApps.map((a) => (
+              <div key={a.id} className="rounded-2xl border bg-card p-3.5">
+                <AppCardHead color={a.color} icon={a.icon} label={a.label} tagline={a.tagline} />
               </div>
             ))}
           </div>
-        </div>
+        </>
+      )}
 
-        <div className="rounded-2xl border bg-card p-3.5">
-          <PluginCardHead color="38 92% 50%" icon="check-square" label="Tasks" tagline="Shared to-do list — who's doing what." />
-          <div className="mt-3 flex flex-col gap-1.5">
-            {[
-              { label: "Renew home insurance", who: "Maya", due: "Today", high: true },
-              { label: "Schedule Lily's checkup", who: "Daniel", due: "Tomorrow" },
-              { label: "Buy gift for Nora", who: "Maya", due: "May 18" },
-            ].map((t, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <span className="size-4 shrink-0 rounded-[5px] border-[1.5px]" />
-                <span className="flex-1 text-[13px] font-medium">{t.label}</span>
-                <span className={cn("font-mono text-[11.5px]", t.high ? "font-semibold text-destructive" : "text-muted-foreground")}>{t.due}</span>
-                <PersonAvatar name={t.who} size="xs" />
+      {storeApps.length > 0 && (
+        <>
+          <div className="px-[18px] pb-1.5 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">From the store</div>
+          <div className="flex flex-col gap-2.5 px-[18px]">
+            {storeApps.map((s) => (
+              <div key={s.id} className="flex items-center gap-3 rounded-2xl border bg-card p-3">
+                <span className="grid size-[38px] shrink-0 place-items-center rounded-[11px]" style={{ background: `hsl(${s.color} / 0.14)`, color: `hsl(${s.color})` }}>
+                  <Icon name={s.icon} size={18} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[14px] font-semibold">{s.label}</div>
+                  <div className="text-[12px] text-muted-foreground">{s.tagline}</div>
+                </div>
+                <button className="h-7 rounded-full bg-primary px-3 text-[12.5px] font-semibold text-primary-foreground">Install</button>
               </div>
             ))}
           </div>
-        </div>
-      </div>
-
-      <div className="px-[18px] pb-1.5 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">From the store</div>
-      <div className="flex flex-col gap-2.5 px-[18px]">
-        {STORE.map((s) => (
-          <div key={s.label} className="flex items-center gap-3 rounded-2xl border bg-card p-3">
-            <span className="grid size-[38px] shrink-0 place-items-center rounded-[11px]" style={{ background: `hsl(${s.color} / 0.14)`, color: `hsl(${s.color})` }}>
-              <Icon name={s.icon} size={18} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-[14px] font-semibold">{s.label}</div>
-              <div className="text-[12px] text-muted-foreground">{s.tagline}</div>
-            </div>
-            <button className="h-7 rounded-full bg-primary px-3 text-[12.5px] font-semibold text-primary-foreground">Install</button>
-          </div>
-        ))}
-      </div>
+        </>
+      )}
     </div>
   );
 }
 
-function PluginCardHead({ color, icon, label, tagline }: { color: string; icon: string; label: string; tagline: string }) {
+function AppCardHead({ color, icon, label, tagline }: { color: string; icon: string; label: string; tagline: string }) {
   return (
     <div className="flex items-center gap-3">
       <span className="grid size-[42px] shrink-0 place-items-center rounded-xl" style={{ background: `hsl(${color} / 0.14)`, color: `hsl(${color})` }}>

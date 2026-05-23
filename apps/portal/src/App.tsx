@@ -19,6 +19,7 @@ import { CommandPalette } from "@/components/command-palette";
 import { PluginStore } from "@/components/plugin-store";
 import { FilePreview } from "@/components/file-preview";
 import { HomeView } from "@/components/home-view";
+import { BuildPluginView } from "@/components/build-plugin-view";
 import { TweaksPanel } from "@/components/tweaks-panel";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
@@ -612,7 +613,9 @@ function DesktopApp() {
         ? ["Starred"]
         : active === "trash"
           ? ["Trash"]
-          : active.startsWith("plugin:")
+          : active === "build-plugin"
+            ? ["Build a plugin"]
+            : active.startsWith("plugin:")
             ? [installed.find((p) => `plugin:${p.id}` === active)?.name ?? "Plugin"]
             : driveCrumb;
 
@@ -714,6 +717,8 @@ function DesktopApp() {
                 </div>
                 <TrashView files={trashFiles} onRestore={restoreFromTrash} onPurge={purgeFromTrash} onPreview={setPreviewFile} />
               </>
+            ) : active === "build-plugin" ? (
+              <BuildPluginView />
             ) : active.startsWith("plugin:") ? (
               <PluginDetail id={active.replace("plugin:", "")} installed={installed} />
             ) : isFilesView ? (
@@ -845,6 +850,10 @@ function DesktopApp() {
         installedIds={installedIds}
         onInstall={installPlugin}
         onUninstall={uninstallPlugin}
+        onBuildWithAI={() => {
+          setStoreOpen(false);
+          navigate("build-plugin");
+        }}
       />
 
       <FilePreview

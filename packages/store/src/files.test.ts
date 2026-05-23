@@ -3,7 +3,7 @@ import { createLibsqlDb } from "./db-libsql";
 import { createSqlBlobRepo } from "./repo";
 import { runMigrations } from "./schema";
 import { FileService, PermissionError } from "./files";
-import { ensurePersonalSpace } from "./spaces";
+import { addMember, ensurePersonalSpace } from "./spaces";
 import { upsertUser } from "./users";
 import { sha256hex } from "./hash";
 import type { BlobStore } from "./blob-store";
@@ -60,6 +60,20 @@ async function upload(name: string, content: string, opts: { path?: string; meta
   return svc.createFile(space, USER, { name, hash, mime: "text/plain", path: opts.path, metadata: opts.metadata });
 }
 
+/**
+ * Save new text as a content version of an existing file (upload → addVersion), as USER.
+ * Pass `window` to use a service with a custom coalesce window (0 = always append).
+ */
+async function save(fileId: string, content: string, window?: number) {
+  const bytes = enc(content);
+  const hash = await sha256hex(bytes);
+  const prep = await svc.prepareUpload(space, USER, hash);
+  if (!prep.exists) await svc.commitUpload(space, USER, hash, bytes);
+  const service =
+    window != null ? new FileService(db, store.store, createSqlBlobRepo(db), { versionCoalesceWindowMs: window }) : svc;
+  return service.addVersion({ sub: USER }, fileId, { hash, mime: "text/plain" });
+}
+
 describe("FileService over libsql", () => {
   it("upload → dedup-hit → download roundtrip; identical content stored once", async () => {
     const a = await upload("a.txt", "same bytes");
@@ -89,20 +103,83 @@ describe("FileService over libsql", () => {
     expect(versions[0]!.n).toBe(1);
   });
 
-  it("content replacement does NOT alter metadata", async () => {
+  it("rapid same-author edits coalesce into one version, keep metadata, and release the old blob", async () => {
     const f = await upload("notes.md", "v1", { path: "Docs", metadata: { tag: "keep" } });
+    const v1Key = f.version!.blobKey!;
 
-    const bytes = enc("v2 contents");
-    const hash = await sha256hex(bytes);
-    await svc.prepareUpload(space, USER, hash);
-    await svc.commitUpload(space, USER, hash, bytes);
-    const updated = await svc.addVersion({ sub: USER }, f.id, { hash, mime: "text/plain" });
+    const updated = await save(f.id, "v2 contents"); // within the default window → coalesces
 
-    expect(updated.currentVersionId).not.toBe(f.currentVersionId);
+    // Same version row, replaced content; metadata untouched.
+    expect(updated.currentVersionId).toBe(f.currentVersionId);
     expect(updated.metadata.tag).toBe("keep");
     expect(updated.metadata.path).toBe("Docs");
-    const versions = await db.all<{ n: number }>("SELECT COUNT(*) AS n FROM file_versions WHERE file_id = ?", [f.id]);
-    expect(versions[0]!.n).toBe(2);
+    expect((await db.first<{ n: number }>("SELECT COUNT(*) AS n FROM file_versions WHERE file_id = ?", [f.id]))?.n).toBe(1);
+
+    // The superseded blob is released (gone — nothing else references it); the new one holds one ref.
+    expect(store.map.has(v1Key)).toBe(false);
+    expect(await db.first("SELECT 1 FROM blobs WHERE hash = ?", [v1Key])).toBeNull();
+    const newKey = updated.version!.blobKey!;
+    expect((await db.first<{ ref_count: number }>("SELECT ref_count FROM blobs WHERE hash = ?", [newKey]))?.ref_count).toBe(1);
+    expect(await new Response(await store.store.get(newKey)).text()).toBe("v2 contents");
+  });
+
+  it("re-saving identical content coalesces without leaking a blob ref", async () => {
+    const f = await upload("doc.md", "same bytes");
+    const key = f.version!.blobKey!;
+    await save(f.id, "same bytes"); // identical → dedup hit + coalesce
+
+    expect((await db.first<{ n: number }>("SELECT COUNT(*) AS n FROM file_versions WHERE file_id = ?", [f.id]))?.n).toBe(1);
+    expect((await db.first<{ ref_count: number }>("SELECT ref_count FROM blobs WHERE hash = ?", [key]))?.ref_count).toBe(1);
+  });
+
+  it("a save past the coalesce window appends a new version; history lists newest-first with author labels", async () => {
+    await upsertUser(db, { sub: USER, email: "me@x.com", name: "Me" });
+    const f = await upload("log.md", "first");
+    await save(f.id, "second", 0); // window 0 → always append
+
+    const versions = await svc.listVersions({ sub: USER }, f.id);
+    expect(versions).toHaveLength(2);
+    expect(versions[0]!.createdByLabel).toBe("Me");
+    const head = await svc.getFile({ sub: USER }, f.id);
+    expect(versions[0]!.id).toBe(head.currentVersionId); // newest first → current on top
+  });
+
+  it("restoreVersion makes an old version current as a new, non-destructive entry", async () => {
+    const f = await upload("essay.md", "draft one");
+    const v1 = f.currentVersionId!;
+    const v1Key = f.version!.blobKey!;
+    const updated = await save(f.id, "draft two", 0); // append → 2 versions
+    const v2 = updated.currentVersionId!;
+
+    const restored = await svc.restoreVersion({ sub: USER }, f.id, v1);
+    // A brand-new current version (not v1 or v2 reused) holding v1's content.
+    expect(restored.currentVersionId).not.toBe(v1);
+    expect(restored.currentVersionId).not.toBe(v2);
+    expect(restored.version!.blobKey).toBe(v1Key);
+    expect(await new Response(await store.store.get(restored.version!.blobKey!)).text()).toBe("draft one");
+    // History grew to three; the two originals are intact.
+    expect(await svc.listVersions({ sub: USER }, f.id)).toHaveLength(3);
+    // v1's blob is now referenced twice (the original v1 + the restore).
+    expect((await db.first<{ ref_count: number }>("SELECT ref_count FROM blobs WHERE hash = ?", [v1Key]))?.ref_count).toBe(2);
+  });
+
+  it("a different author's save appends rather than coalescing (authorship boundary)", async () => {
+    const fam = await svc.createSpace({ sub: USER }, "Family");
+    await addMember(db, fam.id, "bob", "editor");
+
+    const v1 = enc("v1");
+    const h1 = await sha256hex(v1);
+    await svc.prepareUpload(fam.id, USER, h1);
+    await svc.commitUpload(fam.id, USER, h1, v1);
+    const f = await svc.createFile(fam.id, USER, { name: "shared.md", hash: h1, mime: "text/plain" });
+
+    const v2 = enc("v2 by bob");
+    const h2 = await sha256hex(v2);
+    await svc.prepareUpload(fam.id, "bob", h2);
+    await svc.commitUpload(fam.id, "bob", h2, v2);
+    await svc.addVersion({ sub: "bob" }, f.id, { hash: h2, mime: "text/plain" }); // within window, different author
+
+    expect(await svc.listVersions({ sub: USER }, f.id)).toHaveLength(2);
   });
 
   it("purge releases a ref; the blob is removed only at ref_count 0", async () => {

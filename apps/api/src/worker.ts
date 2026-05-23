@@ -14,6 +14,7 @@ import {
 } from "@canopy/store";
 import { createApp, type DataSourceDeps } from "./app";
 import { DATA_SOURCES } from "./data-sources";
+import { PROCESSORS } from "./processors";
 import { createCacheApiCacheStore } from "./cache-api";
 import { createAuthApp } from "./auth/routes";
 import { readAuthConfig, type EnvVars } from "./auth/config";
@@ -47,7 +48,7 @@ let schemaReady: Promise<void> | undefined;
  * documentation/demo are read-only GitHub mounts.
  */
 export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
     const db = createD1Db(env.DB);
     await (schemaReady ??= runMigrations(db));
 
@@ -92,6 +93,8 @@ export default {
       readonlyMounts,
       drive: { service, blobs },
       dataSources,
+      processors: PROCESSORS,
+      waitUntil: (p) => ctx.waitUntil(p), // keep AI labeling alive after the response
     });
     return app.fetch(request, env);
   },

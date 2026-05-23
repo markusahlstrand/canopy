@@ -121,6 +121,13 @@ docker run -p 8787:8787 \
   canopy
 ```
 
+> **Single instance only for live collaboration.** Real-time co-editing keeps each
+> document's authoritative state in memory in one process, so the Node target must run as a
+> **single replica** — scale it out behind a load balancer and editors of the same document
+> can land on different replicas and diverge. See
+> [Real-time editing](architecture) for why and what scaling it would take. Cloudflare
+> (Durable Objects) is not affected.
+
 The drive's data root — the SQLite DB plus the content-addressed blobs — is the `/data` volume
 (`CANOPY_LOCAL_ROOT`). Auth env vars (see
 `apps/api/.dev.vars.example`) are passed at runtime — secrets are never baked into the image

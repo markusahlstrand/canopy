@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check } from "lucide-react";
+import { Check, Sparkles } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -16,9 +16,11 @@ interface PluginStoreProps {
   installedIds: string[];
   onInstall: (id: string) => void;
   onUninstall: (id: string) => void;
+  /** Open the "Build your own plugin with AI" page. */
+  onBuildWithAI?: () => void;
 }
 
-export function PluginStore({ open, onOpenChange, installedIds, onInstall, onUninstall }: PluginStoreProps) {
+export function PluginStore({ open, onOpenChange, installedIds, onInstall, onUninstall, onBuildWithAI }: PluginStoreProps) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
 
@@ -56,6 +58,27 @@ export function PluginStore({ open, onOpenChange, installedIds, onInstall, onUni
             ))}
           </div>
         </div>
+
+        {onBuildWithAI && (
+          <button
+            onClick={onBuildWithAI}
+            className="mx-6 mb-1 flex items-center gap-3 rounded-lg border border-dashed p-3.5 text-left transition-colors hover:bg-accent"
+          >
+            <div
+              className="grid size-11 shrink-0 place-items-center rounded-md"
+              style={{ background: "hsl(262 60% 55% / 0.14)", color: "hsl(262 60% 55%)" }}
+            >
+              <Sparkles size={20} />
+            </div>
+            <div className="min-w-0">
+              <div className="font-medium">Build your own with AI</div>
+              <div className="text-[12.5px] text-muted-foreground">
+                Can't find it? Describe your idea and let an AI agent write the plugin.
+              </div>
+            </div>
+            <Icon name="chevron-right" size={18} className="ml-auto shrink-0 text-muted-foreground" />
+          </button>
+        )}
 
         <div className="grid grid-cols-2 gap-3 overflow-y-auto px-6 pb-6">
           {items.map((p) => {

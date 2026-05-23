@@ -17,6 +17,7 @@ import {
 import { createFsBlobStore, createLibsqlDb } from "@canopy/store/node";
 import { createApp, type DataSourceDeps } from "./app";
 import { DATA_SOURCES } from "./data-sources";
+import { PROCESSORS } from "./processors";
 import { readAuthConfig } from "./auth/config";
 import { createAuthApp } from "./auth/routes";
 
@@ -99,6 +100,7 @@ const app = createApp({
   readonlyMounts: { documentation, demo },
   drive: { service, blobs },
   dataSources,
+  processors: PROCESSORS,
 });
 
 // Single-process mode: if the built SPA exists, serve it from this same server.

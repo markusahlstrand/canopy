@@ -3,21 +3,30 @@ import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
-import { fetchMe, uploadFiles, loginUrl, type Me } from "@/lib/api";
+import {
+  fetchMe,
+  fetchInstalledPlugins,
+  listSpaces,
+  uploadFiles,
+  loginUrl,
+  type Me,
+  type SpaceView,
+} from "@/lib/api";
+import { ANON_DEFAULT_INSTALLED, DEFAULT_INSTALLED } from "@/plugins/manifests";
 import { CURRENT_USER, type FileItem } from "@/lib/mock-data";
 import { DemoBanner } from "@/components/demo-banner";
 import { InviteBanner } from "@/components/invite-banner";
 import { OfflineBanner } from "@/components/offline-banner";
-import { HomeScreen, DriveScreen, FamilyScreen, PluginsScreen } from "./screens";
+import { HomeScreen, DriveScreen, SpacesScreen, AppsScreen } from "./screens";
 import { NewActionSheet, FileDetailSheet } from "./sheets";
 
-type View = "home" | "drive" | "family" | "plugins";
+type View = "home" | "drive" | "spaces" | "apps";
 
 const TABS = [
   { id: "home", icon: "home", label: "Home" },
   { id: "drive", icon: "folder", label: "Files" },
-  { id: "family", icon: "users", label: "Family" },
-  { id: "plugins", icon: "package", label: "Plugins" },
+  { id: "spaces", icon: "users", label: "Spaces" },
+  { id: "apps", icon: "grid", label: "Apps" },
 ] as const;
 
 export function MobileApp() {
@@ -25,11 +34,22 @@ export function MobileApp() {
   const [sheet, setSheet] = useState<null | "new" | "file">(null);
   const [selFile, setSelFile] = useState<FileItem | null>(null);
   const [auth, setAuth] = useState<Me>({ user: null, authConfigured: false });
+  const [spaces, setSpaces] = useState<SpaceView[]>([]);
+  const [installed, setInstalled] = useState<string[]>(ANON_DEFAULT_INSTALLED);
   const uploadRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchMe().then(setAuth);
+    listSpaces().then(setSpaces).catch(() => setSpaces([]));
   }, []);
+
+  // Installed-app set mirrors the desktop: the caller's saved set, falling back
+  // to the signed-in / anonymous default when nothing is persisted yet.
+  useEffect(() => {
+    fetchInstalledPlugins().then((ids) =>
+      setInstalled(ids ?? (auth.user ? DEFAULT_INSTALLED : ANON_DEFAULT_INSTALLED)),
+    );
+  }, [auth.user]);
 
   const userName =
     auth.user?.name ?? auth.user?.email?.split("@")[0] ?? CURRENT_USER.name.split(" ")[0]!;
@@ -61,10 +81,18 @@ export function MobileApp() {
       <DemoBanner auth={auth} onSignIn={signIn} />
       <InviteBanner auth={auth} onAccepted={() => window.location.reload()} />
       <main className="min-h-0 flex-1 overflow-y-auto">
-        {view === "home" && <HomeScreen userName={userName} onOpenFile={openFile} onNav={(v) => setView(v as View)} />}
+        {view === "home" && (
+          <HomeScreen
+            userName={userName}
+            spaceCount={spaces.filter((s) => s.kind === "group").length}
+            installed={installed}
+            onOpenFile={openFile}
+            onNav={(v) => setView(v as View)}
+          />
+        )}
         {view === "drive" && <DriveScreen onOpenFile={openFile} />}
-        {view === "family" && <FamilyScreen onOpenFile={openFile} />}
-        {view === "plugins" && <PluginsScreen />}
+        {view === "spaces" && <SpacesScreen spaces={spaces} onOpenFile={openFile} />}
+        {view === "apps" && <AppsScreen installed={installed} />}
         <div className="h-24" />
       </main>
 
