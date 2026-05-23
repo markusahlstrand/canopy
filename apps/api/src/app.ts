@@ -295,6 +295,25 @@ export function createApp(deps: AppDeps) {
     return c.json({ ok: true });
   }));
 
+  // Plugins applied to a space (the per-place layer). Any member may see what runs;
+  // only an owner ("admin" of the place) may apply or remove a plugin — applying
+  // turns it on for everyone in the space.
+  app.get("/api/spaces/:id/plugins", driveRoute(async (c, caller) =>
+    c.json({ ids: await drive!.service.spacePlugins(caller, c.req.param("id")!) }),
+  ));
+
+  app.post("/api/spaces/:id/plugins", driveRoute(async (c, caller) => {
+    const { pluginId } = await c.req.json<{ pluginId?: string }>();
+    if (!pluginId) return c.json({ error: "pluginId required" }, 400);
+    await drive!.service.applySpacePlugin(caller, c.req.param("id")!, pluginId);
+    return c.json({ ok: true }, 201);
+  }));
+
+  app.delete("/api/spaces/:id/plugins/:pluginId", driveRoute(async (c, caller) => {
+    await drive!.service.removeSpacePlugin(caller, c.req.param("id")!, c.req.param("pluginId")!);
+    return c.json({ ok: true });
+  }));
+
   // Invite links — single-use, role baked in. Owner mints / lists / revokes.
   app.post("/api/spaces/:id/invites", driveRoute(async (c, caller) => {
     const { role } = await c.req.json<{ role: "owner" | "editor" | "viewer" }>();
@@ -428,6 +447,27 @@ export function createApp(deps: AppDeps) {
   app.post("/api/files/:id/versions/:versionId/restore", driveRoute(async (c, caller) =>
     c.json(await drive!.service.restoreVersion(caller, c.req.param("id")!, c.req.param("versionId")!)),
   ));
+
+  // ── comments (a discussion thread on a file) ──────────────────────────────────
+  // Tags + descriptions aren't here — they're metadata edits via the PATCH route above.
+
+  // A file's comments, oldest first.
+  app.get("/api/files/:id/comments", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.listComments(caller, c.req.param("id")!)),
+  ));
+
+  // Post a comment. Anyone who can see the file (viewer+) can comment.
+  app.post("/api/files/:id/comments", driveRoute(async (c, caller) => {
+    const { body } = await c.req.json<{ body?: string }>();
+    if (!body || !body.trim()) return c.json({ error: "body required" }, 400);
+    return c.json(await drive!.service.addComment(caller, c.req.param("id")!, body), 201);
+  }));
+
+  // Soft-delete a comment (author or file owner only).
+  app.delete("/api/files/:id/comments/:commentId", driveRoute(async (c, caller) => {
+    await drive!.service.deleteComment(caller, c.req.param("id")!, c.req.param("commentId")!);
+    return c.json({ ok: true });
+  }));
 
   // Soft-delete (→ Trash) by default; `?permanent=1` purges the file + its content.
   app.delete("/api/files/:id", driveRoute(async (c, caller) => {
@@ -618,6 +658,12 @@ export function createApp(deps: AppDeps) {
     return c.json({ ok: true });
   }));
 
+  // The places (group spaces the caller owns) a plugin can be applied to, each
+  // flagged with whether it's applied there — for the "Applies to places" picker.
+  app.get("/api/plugins/:id/places", driveRoute(async (c, caller) =>
+    c.json({ places: await drive!.service.pluginPlaces(caller, c.req.param("id")!) }),
+  ));
+
   // ── per-user installed plugin set ───────────────────────────────────────────
   // Which plugins the caller has installed. With nothing persisted yet, fall back
   // to the auth-dependent defaults (Documentation is a default only when auth is
@@ -634,6 +680,16 @@ export function createApp(deps: AppDeps) {
     const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : [];
     await drive!.service.setInstalledPlugins(caller.sub, ids);
     return c.json({ ok: true });
+  }));
+
+  // The caller's *effective* active set: their own installs (or the auth-dependent
+  // default when nothing is saved) unioned with every plugin an owner has applied
+  // to a space they belong to. This is what the portal renders the registry from.
+  app.get("/api/plugins/active", driveRoute(async (c, caller) => {
+    const stored = await drive!.service.getInstalledPlugins(caller.sub);
+    const own = stored ?? (authConfig ? DEFAULT_PLUGINS : ANON_DEFAULT_PLUGINS);
+    const applied = await drive!.service.spaceAppliedPlugins(caller.sub);
+    return c.json({ ids: [...new Set([...own, ...applied])] });
   }));
 
   // WebDAV mount (read-only) — Basic auth via an app password, outside /api.

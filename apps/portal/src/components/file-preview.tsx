@@ -8,13 +8,22 @@ import { FileIcon } from "@/components/file-icon";
 import { AvatarGroup, PersonAvatar } from "@/components/person-avatar";
 import { PluginViewer } from "@/components/plugin-viewer";
 import { findViewer } from "@/plugins/viewers";
-import { contentUrl, humanSize, listVersions, restoreVersion, saveFileVersion, type FileVersion } from "@/lib/api";
+import {
+  addComment,
+  contentUrl,
+  deleteComment,
+  fetchMe,
+  humanSize,
+  listComments,
+  listVersions,
+  restoreVersion,
+  saveFileVersion,
+  setDescription as apiSetDescription,
+  setTags as apiSetTags,
+  type Comment,
+  type FileVersion,
+} from "@/lib/api";
 import { FILE_KIND_COLOR, STORAGE, CURRENT_USER, type FileItem } from "@/lib/mock-data";
-
-const COMMENTS = [
-  { who: "Daniel", time: "2 days ago", body: "Signed and uploaded the final version." },
-  { who: "Maya", time: "yesterday", body: "Thanks — adding it to the house folder." },
-];
 
 function Detail({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -95,6 +104,230 @@ function VersionHistory({ fileId, onRestored }: { fileId: string; onRestored: ()
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{children}</div>;
+}
+
+/** Inline-editable description, persisted to metadata.description. Save appears when changed. */
+function DescriptionEditor({ fileId, initial, onSaved }: { fileId: string; initial: string; onSaved?: () => void }) {
+  const [value, setValue] = useState(initial);
+  const [saved, setSaved] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dirty = value !== saved;
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiSetDescription(fileId, value);
+      setSaved(value);
+      onSaved?.();
+    } catch {
+      setError("Couldn't save the description.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <textarea
+        className="min-h-[68px] w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-[13.5px] outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
+        placeholder="Add a description…"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+      />
+      {error && <div className="mt-1 text-[11.5px] text-destructive">{error}</div>}
+      {dirty && (
+        <div className="mt-1.5 flex gap-2">
+          <Button size="sm" onClick={save} disabled={busy}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setValue(saved)} disabled={busy}>
+            Cancel
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Editable tag chips, persisted to metadata.tags. Each change writes the full set. */
+function TagEditor({ fileId, initial, onSaved }: { fileId: string; initial: string[]; onSaved?: () => void }) {
+  const [tags, setTags] = useState<string[]>(initial);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  async function commit(next: string[]) {
+    const prev = tags;
+    setTags(next);
+    setError(null);
+    try {
+      await apiSetTags(fileId, next);
+      onSaved?.();
+    } catch {
+      setTags(prev); // roll back the optimistic change
+      setError("Couldn't save tags.");
+    }
+  }
+
+  function add() {
+    const t = draft.trim();
+    setDraft("");
+    if (!t || tags.includes(t)) return;
+    void commit([...tags, t]);
+  }
+
+  return (
+    <div>
+      {tags.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap gap-1.5">
+          {tags.map((t) => (
+            <span
+              key={t}
+              className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[11.5px] font-medium text-secondary-foreground"
+            >
+              <Icon name="hash" size={11} />
+              {t}
+              <button
+                type="button"
+                onClick={() => void commit(tags.filter((x) => x !== t))}
+                aria-label={`Remove tag ${t}`}
+                className="text-muted-foreground transition hover:text-destructive"
+              >
+                <Icon name="x" size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <Input
+        className="h-8 text-[12.5px]"
+        placeholder="Add a tag…"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            add();
+          }
+        }}
+      />
+      {error && <div className="mt-1 text-[11.5px] text-destructive">{error}</div>}
+    </div>
+  );
+}
+
+/** A file's comment thread, fetched live. Anyone who can see the file can post. */
+function Comments({ fileId }: { fileId: string }) {
+  const [comments, setComments] = useState<Comment[] | null>(null);
+  const [me, setMe] = useState<string | null>(null);
+  const [demo, setDemo] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([listComments(fileId), fetchMe()])
+      .then(([list, meRes]) => {
+        if (!active) return;
+        setComments(list);
+        setMe(meRes.user?.sub ?? null);
+        setDemo(!meRes.authConfigured);
+      })
+      .catch(() => active && setComments([]));
+    return () => {
+      active = false;
+    };
+  }, [fileId]);
+
+  async function submit() {
+    const body = draft.trim();
+    if (!body || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await addComment(fileId, body);
+      setComments((cur) => [...(cur ?? []), created]);
+      setDraft("");
+    } catch {
+      setError("Couldn't post your comment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    setError(null);
+    try {
+      await deleteComment(fileId, id);
+      setComments((cur) => (cur ?? []).filter((c) => c.id !== id));
+    } catch {
+      setError("Couldn't delete that comment.");
+    }
+  }
+
+  // In demo mode there's one shared user, so allow deleting any; otherwise only your own.
+  const canDelete = (c: Comment) => demo || (me != null && me === c.authorId);
+
+  return (
+    <div>
+      <SectionLabel>Comments</SectionLabel>
+      {error && <div className="mb-2 text-[12px] text-destructive">{error}</div>}
+      <div className="flex flex-col gap-4">
+        {comments == null ? (
+          <div className="text-[12.5px] text-muted-foreground">Loading…</div>
+        ) : comments.length === 0 ? (
+          <div className="text-[12.5px] text-muted-foreground">No comments yet.</div>
+        ) : (
+          comments.map((c) => (
+            <div key={c.id} className="group flex gap-2.5">
+              <PersonAvatar name={c.authorLabel} size="md" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[13px] font-medium">{c.authorLabel}</span>
+                  <span className="text-[11.5px] text-muted-foreground">{fmtWhen(c.createdAt)}</span>
+                  {canDelete(c) && (
+                    <button
+                      type="button"
+                      onClick={() => void remove(c.id)}
+                      aria-label="Delete comment"
+                      className="ml-auto text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+                    >
+                      <Icon name="trash" size={13} />
+                    </button>
+                  )}
+                </div>
+                <p className="whitespace-pre-wrap text-[13.5px]">{c.body}</p>
+              </div>
+            </div>
+          ))
+        )}
+        <div className="flex items-center gap-2.5">
+          <PersonAvatar name={CURRENT_USER.name} size="md" />
+          <Input
+            placeholder="Add a comment…"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void submit();
+              }
+            }}
+            disabled={busy}
+          />
+          <Button size="sm" onClick={() => void submit()} disabled={busy || !draft.trim()}>
+            Post
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -198,6 +431,20 @@ export function FilePreview({
               </div>
 
               {file.kind !== "folder" && (
+                <div>
+                  <SectionLabel>Description</SectionLabel>
+                  <DescriptionEditor key={file.id} fileId={file.id} initial={file.description ?? ""} onSaved={onSaved} />
+                </div>
+              )}
+
+              {file.kind !== "folder" && (
+                <div>
+                  <SectionLabel>Tags</SectionLabel>
+                  <TagEditor key={file.id} fileId={file.id} initial={file.tags ?? []} onSaved={onSaved} />
+                </div>
+              )}
+
+              {file.kind !== "folder" && (
                 <VersionHistory
                   fileId={file.id}
                   onRestored={() => {
@@ -207,29 +454,7 @@ export function FilePreview({
                 />
               )}
 
-              <div>
-                <div className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Comments
-                </div>
-                <div className="flex flex-col gap-4">
-                  {COMMENTS.map((c, i) => (
-                    <div key={i} className="flex gap-2.5">
-                      <PersonAvatar name={c.who} size="md" />
-                      <div className="min-w-0">
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-[13px] font-medium">{c.who}</span>
-                          <span className="text-[11.5px] text-muted-foreground">{c.time}</span>
-                        </div>
-                        <p className="text-[13.5px]">{c.body}</p>
-                      </div>
-                    </div>
-                  ))}
-                  <div className="flex items-center gap-2.5">
-                    <PersonAvatar name={CURRENT_USER.name} size="md" />
-                    <Input placeholder="Add a comment…" />
-                  </div>
-                </div>
-              </div>
+              {file.kind !== "folder" && <Comments key={file.id} fileId={file.id} />}
             </div>
           </>
         )}

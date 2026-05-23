@@ -23,7 +23,7 @@ import { BuildPluginView } from "@/components/build-plugin-view";
 import { TweaksPanel } from "@/components/tweaks-panel";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
-import { type FileItem, type FileKind } from "@/lib/mock-data";
+import { type FileItem, type FileKind, PLUGIN_CATALOG } from "@/lib/mock-data";
 import {
   listFiles,
   listShared,
@@ -42,14 +42,17 @@ import {
   setSpaceMounted,
   fetchMe,
   fetchInstalledPlugins,
+  fetchActivePlugins,
   saveInstalledPlugins,
   loginUrl,
   logout,
   type Me,
+  type Role,
   type SpaceView,
   type Overview,
 } from "@/lib/api";
 import { SpaceMembersDialog } from "@/components/space-members-dialog";
+import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
 import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
@@ -138,9 +141,20 @@ function DesktopApp() {
 
   // Start with the anonymous default (includes Documentation). Once auth resolves
   // to a signed-in user, Documentation drops to an optional store plugin (below).
+  // Two sets: `installedIds` is the caller's personal installs (what the store
+  // toggles); `activeServerIds` is the server's *effective* set — installs unioned
+  // with every plugin an owner applied to a space the caller belongs to. The
+  // registry renders the union, so a space-applied plugin lights up even though it
+  // isn't personally installed, and a local install/uninstall reflects instantly.
   const [installedIds, setInstalledIds] = useState<string[]>(ANON_DEFAULT_INSTALLED);
-  const registry = useMemo(() => createRegistry(installedIds), [installedIds]);
+  const [activeServerIds, setActiveServerIds] = useState<string[]>(ANON_DEFAULT_INSTALLED);
+  const activeIds = useMemo(
+    () => [...new Set([...installedIds, ...activeServerIds])],
+    [installedIds, activeServerIds],
+  );
+  const registry = useMemo(() => createRegistry(activeIds), [activeIds]);
   const installed = useMemo(() => registry.list().map((r) => r.manifest), [registry]);
+  const refreshActive = () => fetchActivePlugins().then((ids) => ids && setActiveServerIds(ids));
 
   const [active, setActive] = useState(() => readUrlState().active);
   const [activePlugin, setActivePlugin] = useState(() => {
@@ -179,6 +193,7 @@ function DesktopApp() {
     fetchInstalledPlugins().then((ids) => {
       if (ids) setInstalledIds(ids);
     });
+    void refreshActive();
   }, []);
 
   // Whether installs can be saved: signed-in, or demo mode (auth off → shared
@@ -206,7 +221,8 @@ function DesktopApp() {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [storeOpen, setStoreOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
-  const [membersSpace, setMembersSpace] = useState<{ id: string; name: string } | null>(null);
+  const [membersSpace, setMembersSpace] = useState<{ id: string; name: string; role: Role } | null>(null);
+  const [settingsPlugin, setSettingsPlugin] = useState<{ id: string; name: string } | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [overview, setOverview] = useState<Overview>({ files: 0, bytes: 0 });
   const [sharedCount, setSharedCount] = useState(0);
@@ -623,7 +639,7 @@ function DesktopApp() {
   const showRail = tweaks.showRail && railAvailable;
 
   return (
-    <PluginDataProvider githubInstalled={installedIds.includes("github")}>
+    <PluginDataProvider githubInstalled={activeIds.includes("github")}>
     <div className="flex h-screen flex-col">
       <OfflineBanner />
       <DemoBanner auth={auth} onSignIn={signIn} />
@@ -755,7 +771,13 @@ function DesktopApp() {
                             variant="outline"
                             size="sm"
                             className="gap-1.5"
-                            onClick={() => setMembersSpace({ id: space, name: spaceName })}
+                            onClick={() =>
+                              setMembersSpace({
+                                id: space,
+                                name: spaceName,
+                                role: spaces.find((s) => s.id === space)?.role ?? "viewer",
+                              })
+                            }
                           >
                             <Icon name="users" size={14} /> Members
                           </Button>
@@ -850,11 +872,24 @@ function DesktopApp() {
         installedIds={installedIds}
         onInstall={installPlugin}
         onUninstall={uninstallPlugin}
+        onConfigure={(id) =>
+          setSettingsPlugin({ id, name: PLUGIN_CATALOG.find((p) => p.id === id)?.label ?? id })
+        }
         onBuildWithAI={() => {
           setStoreOpen(false);
           navigate("build-plugin");
         }}
       />
+
+      {settingsPlugin && (
+        <PluginSettingsDialog
+          pluginId={settingsPlugin.id}
+          pluginName={settingsPlugin.name}
+          open={!!settingsPlugin}
+          onOpenChange={(o) => !o && setSettingsPlugin(null)}
+          onPlacesChanged={refreshActive}
+        />
+      )}
 
       <FilePreview
         file={previewFile}
@@ -867,8 +902,10 @@ function DesktopApp() {
         <SpaceMembersDialog
           spaceId={membersSpace.id}
           spaceName={membersSpace.name}
+          role={membersSpace.role}
           open={!!membersSpace}
           onOpenChange={(o) => !o && setMembersSpace(null)}
+          onPluginsChanged={refreshActive}
         />
       )}
 

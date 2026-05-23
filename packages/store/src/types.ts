@@ -101,3 +101,14 @@ export interface Permission {
 export interface FileWithVersion extends FileRecord {
   version: FileVersion | null;
 }
+
+/** A comment on a file's discussion thread. Soft-deleted; `deletedAt` hides it. */
+export interface FileComment {
+  id: string;
+  fileId: string;
+  authorId: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}

@@ -16,6 +16,10 @@ export interface FileItem {
   location?: string;
   /** Type labels (e.g. from the Document AI plugin), stored in metadata.labels. */
   labels?: string[];
+  /** User-defined tags (distinct from the AI `labels`), stored in metadata.tags. */
+  tags?: string[];
+  /** Freeform description, stored in metadata.description. */
+  description?: string;
 }
 
 export const DEFAULT_FILES: FileItem[] = [

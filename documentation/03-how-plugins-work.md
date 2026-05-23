@@ -275,4 +275,22 @@ mode) also get Documentation, which doubles as the landing page (`ANON_DEFAULT_I
 stored empty list (`[]` — everything uninstalled) stays distinct from "no row yet" (apply the
 default).
 
+## Applying plugins to a place (per-space)
+
+Installs are personal; a **place** (a space — see [Sharing & spaces](07-sharing-and-spaces.md))
+can also have plugins **applied** to it. A plugin applied to a group space is active for **every
+member** of that space — it isn't opt-in — so the write is gated to a space **owner** (the place's
+"admin"); any member may read what's applied. The mapping is the `space_plugins` table
+(`(space_id, plugin_id)`), exposed as:
+
+- `GET /api/spaces/:id/plugins` — what runs here (viewer+);
+- `POST /api/spaces/:id/plugins` `{ pluginId }` / `DELETE /api/spaces/:id/plugins/:pluginId` — apply / remove (owner);
+- `GET /api/plugins/:id/places` — the group spaces the caller owns, each flagged applied — powers the
+  "Applies to places" picker in a plugin's settings.
+
+A user's **effective** set — what the registry actually renders — is their own installs unioned
+with every plugin applied to a space they belong to, served by `GET /api/plugins/active`. (Plugin
+*config* stays per-user, encrypted; applying a plugin to a shared place turns it on, and each
+member supplies their own config where a plugin needs one.)
+
 See [Writing a plugin](writing-a-plugin) for the worked example.

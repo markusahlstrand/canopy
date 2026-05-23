@@ -98,6 +98,8 @@ function toFileItems(data: DriveListing, dir: string): FileItem[] {
     location: data.spaceName,
     starred: !!f.metadata?.starred,
     labels: Array.isArray(f.metadata?.labels) ? (f.metadata.labels as string[]) : undefined,
+    tags: Array.isArray(f.metadata?.tags) ? (f.metadata.tags as string[]) : undefined,
+    description: typeof f.metadata?.description === "string" ? (f.metadata.description as string) : undefined,
   }));
   return [...folders, ...files];
 }
@@ -236,6 +238,61 @@ export async function setStarred(id: string, starred: boolean): Promise<void> {
     body: JSON.stringify({ starred }),
   });
   if (!res.ok) throw new Error(`star failed: ${res.status}`);
+}
+
+/** Set a file's user tags — persisted as `metadata.tags` (distinct from AI `labels`; no new version). */
+export async function setTags(id: string, tags: string[]): Promise<void> {
+  const res = await fetch(`/api/files/${id}/metadata`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tags }),
+  });
+  if (!res.ok) throw new Error(`set tags failed: ${res.status}`);
+}
+
+/** Set a file's description — persisted as `metadata.description` (a metadata edit, no new version). */
+export async function setDescription(id: string, description: string): Promise<void> {
+  const res = await fetch(`/api/files/${id}/metadata`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ description }),
+  });
+  if (!res.ok) throw new Error(`set description failed: ${res.status}`);
+}
+
+// ── comments (a discussion thread on a file) ──────────────────────────────────
+
+export interface Comment {
+  id: string;
+  authorId: string;
+  authorLabel: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A file's comments, oldest first. Empty when the caller can't see the file. */
+export async function listComments(fileId: string): Promise<Comment[]> {
+  const res = await fetch(`/api/files/${fileId}/comments`);
+  if (!res.ok) return [];
+  return (await res.json()) as Comment[];
+}
+
+/** Post a comment on a file. */
+export async function addComment(fileId: string, body: string): Promise<Comment> {
+  const res = await fetch(`/api/files/${fileId}/comments`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) throw new Error(`add comment failed: ${res.status}`);
+  return (await res.json()) as Comment;
+}
+
+/** Delete a comment (author or file owner only). */
+export async function deleteComment(fileId: string, commentId: string): Promise<void> {
+  const res = await fetch(`/api/files/${fileId}/comments/${commentId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete comment failed: ${res.status}`);
 }
 
 /** Move a file into a virtual folder — persisted as `metadata.path` (a metadata edit, no new version). */
@@ -582,6 +639,65 @@ export async function saveInstalledPlugins(ids: string[]): Promise<void> {
     body: JSON.stringify({ ids }),
   });
   if (!res.ok) throw new Error(`save installed plugins failed: ${res.status}`);
+}
+
+/**
+ * The caller's *effective* active set: their own installs unioned with every
+ * plugin an owner applied to a space they belong to. This is what the sidebar /
+ * rail / context menus render from. `null` when it can't be resolved (anonymous).
+ */
+export async function fetchActivePlugins(): Promise<string[] | null> {
+  try {
+    const res = await fetch("/api/plugins/active");
+    if (!res.ok) return null;
+    const data = (await res.json()) as { ids?: unknown };
+    return Array.isArray(data.ids) ? data.ids.filter((x): x is string => typeof x === "string") : null;
+  } catch {
+    return null;
+  }
+}
+
+// ── per-space applied plugins (owner-managed; active for every member) ────────
+
+/** Plugin ids applied to a space (any member can read). */
+export async function getSpacePlugins(spaceId: string): Promise<string[]> {
+  const res = await fetch(`/api/spaces/${encodeURIComponent(spaceId)}/plugins`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { ids?: unknown };
+  return Array.isArray(data.ids) ? data.ids.filter((x): x is string => typeof x === "string") : [];
+}
+
+/** Apply a plugin to a space (owner only). Throws on failure (e.g. 403). */
+export async function applySpacePlugin(spaceId: string, pluginId: string): Promise<void> {
+  const res = await fetch(`/api/spaces/${encodeURIComponent(spaceId)}/plugins`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pluginId }),
+  });
+  if (!res.ok) throw new Error(`apply plugin failed: ${res.status}`);
+}
+
+/** Remove a plugin from a space (owner only). Throws on failure. */
+export async function removeSpacePlugin(spaceId: string, pluginId: string): Promise<void> {
+  const res = await fetch(
+    `/api/spaces/${encodeURIComponent(spaceId)}/plugins/${encodeURIComponent(pluginId)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error(`remove plugin failed: ${res.status}`);
+}
+
+export interface PluginPlace {
+  spaceId: string;
+  name: string;
+  applied: boolean;
+}
+
+/** The group spaces the caller owns, each flagged with whether `pluginId` is applied there. */
+export async function getPluginPlaces(pluginId: string): Promise<PluginPlace[]> {
+  const res = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/places`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { places?: PluginPlace[] };
+  return Array.isArray(data.places) ? data.places : [];
 }
 
 // ── plugin data sources (tasks / calendar) ───────────────────────────────────

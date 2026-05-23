@@ -236,6 +236,44 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    // A discussion thread on a file. Soft-deleted (deleted_at) so a removed comment
+    // leaves the rest of the thread intact; ordered by created_at. `author_id` is a
+    // user sub, resolved to a friendly label via the users table at read time (the
+    // same pattern as version history). Tags + descriptions, by contrast, are not
+    // here — they live in files.metadata JSON alongside `starred`/`labels`.
+    version: 11,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS file_comments (
+         id         TEXT PRIMARY KEY,
+         file_id    TEXT NOT NULL REFERENCES files(id),
+         author_id  TEXT NOT NULL,
+         body       TEXT NOT NULL,
+         created_at TEXT NOT NULL,
+         updated_at TEXT NOT NULL,
+         deleted_at TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_comments_file ON file_comments (file_id, created_at)`,
+    ],
+  },
+  {
+    // Plugins applied to a space — the per-place layer over the per-user
+    // `plugin_installs`. A plugin applied here is active for *every* member of the
+    // space (not opt-in), so writes are gated to space owners (the "admin"); reads
+    // are open to any member. A user's effective set is their own installs ∪ the
+    // plugins applied to any space they belong to.
+    version: 12,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS space_plugins (
+         space_id   TEXT NOT NULL,
+         plugin_id  TEXT NOT NULL,
+         applied_by TEXT NOT NULL,
+         applied_at TEXT NOT NULL,
+         PRIMARY KEY (space_id, plugin_id)
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_space_plugins_plugin ON space_plugins (plugin_id)`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

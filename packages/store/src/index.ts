@@ -15,6 +15,7 @@ export * from "./invites";
 export * from "./app-passwords";
 export * from "./plugin-settings";
 export * from "./plugin-installs";
+export * from "./space-plugins";
 export * from "./files";
 export * from "./db-d1";
 export * from "./blob-r2";

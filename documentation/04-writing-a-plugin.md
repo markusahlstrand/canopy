@@ -52,7 +52,9 @@ Documentation ships in the store catalog (under **Help**). It's installed by def
 signed-out / anonymous visitors — `ANON_DEFAULT_INSTALLED`, where it doubles as the landing
 page; signed-in users add it from the store like any other plugin. Either way, once it's in a
 user's install set it's registered through `buildManifest` (above) and shows up in the sidebar
-under "Plugins". Which plugins a user has installed is [persisted per user](how-plugins-work).
+under "Plugins". Which plugins a user has installed is [persisted per user](how-plugins-work) — and
+a space **owner** can additionally [apply a plugin to a place](how-plugins-work), turning it on for
+every member; the registry renders the union of the two.
 
 ## 3. Build the view, using only granted access
 

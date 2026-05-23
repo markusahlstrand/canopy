@@ -42,6 +42,13 @@ import {
 } from "./app-passwords";
 import { deletePluginSettings, getPluginSettings, setPluginSettings } from "./plugin-settings";
 import { getInstalledPlugins, setInstalledPlugins } from "./plugin-installs";
+import {
+  applySpacePlugin as applySpacePluginRow,
+  getSpacePlugins,
+  pluginIdsForSpaces,
+  removeSpacePlugin as removeSpacePluginRow,
+  spacesWithPlugin,
+} from "./space-plugins";
 
 export class NotFoundError extends Error {
   constructor(message = "not found") {
@@ -107,6 +114,15 @@ interface VersionRow {
   size: number;
   created_at: string;
   created_by: string;
+}
+interface CommentRow {
+  id: string;
+  file_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 }
 
 function toFile(r: FileRow): FileRecord {
@@ -182,6 +198,16 @@ export interface ListedFile extends FileWithVersion {
 /** A version in a file's history, with a friendly label for who created it. */
 export interface VersionEntry extends FileVersion {
   createdByLabel: string;
+}
+
+/** A comment with a friendly label for its author (resolved from the user directory). */
+export interface CommentEntry {
+  id: string;
+  authorId: string;
+  authorLabel: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /**
@@ -465,6 +491,42 @@ export class FileService {
     return setInstalledPlugins(this.db, userSub, pluginIds);
   }
 
+  // ── per-space applied plugins (owner-managed; active for every member) ──────
+  /** Plugins applied to a space. Requires viewer+ (any member can see what runs). */
+  async spacePlugins(caller: Caller, spaceId: string): Promise<string[]> {
+    await this.requireSpace(caller.sub, spaceId, "viewer");
+    return getSpacePlugins(this.db, spaceId);
+  }
+
+  /** Apply a plugin to a space — turns it on for everyone in the space. Requires owner. */
+  async applySpacePlugin(caller: Caller, spaceId: string, pluginId: string): Promise<void> {
+    await this.requireSpace(caller.sub, spaceId, "owner");
+    await applySpacePluginRow(this.db, spaceId, pluginId, caller.sub);
+  }
+
+  /** Remove a plugin from a space. Requires owner. */
+  async removeSpacePlugin(caller: Caller, spaceId: string, pluginId: string): Promise<void> {
+    await this.requireSpace(caller.sub, spaceId, "owner");
+    await removeSpacePluginRow(this.db, spaceId, pluginId);
+  }
+
+  /** Plugin ids applied to any space the caller belongs to (union with installs is done by the API). */
+  async spaceAppliedPlugins(userSub: string): Promise<string[]> {
+    const spaceIds = await memberSpaceIds(this.db, userSub);
+    return pluginIdsForSpaces(this.db, spaceIds);
+  }
+
+  /**
+   * The places the caller can apply a plugin to — the group spaces they own —
+   * each flagged with whether the plugin is currently applied there. Powers the
+   * "Applies to places" picker in a plugin's settings.
+   */
+  async pluginPlaces(caller: Caller, pluginId: string): Promise<{ spaceId: string; name: string; applied: boolean }[]> {
+    const owned = (await listSpacesForUser(this.db, caller.sub)).filter((s) => s.kind === "group" && s.role === "owner");
+    const applied = await spacesWithPlugin(this.db, pluginId, owned.map((s) => s.id));
+    return owned.map((s) => ({ spaceId: s.id, name: s.name, applied: applied.has(s.id) }));
+  }
+
   /** The current version's blob key for streaming a managed download. Requires viewer+. */
   async getContentKey(caller: Caller, id: string): Promise<{ key: string; version: FileVersion }> {
     const { version } = await this.getFile(caller, id);
@@ -699,6 +761,75 @@ export class FileService {
       { sql: "UPDATE files SET current_version_id = ?, updated_at = ? WHERE id = ?", params: [newId, now, id] },
     ]);
     return this.getFile(caller, id);
+  }
+
+  // ── comments (a discussion thread on a file) ─────────────────────────────────
+
+  /** A file's comments, oldest first, each labelled with who wrote it. Requires viewer+. */
+  async listComments(caller: Caller, id: string): Promise<CommentEntry[]> {
+    await this.requirePerm(caller, id, "viewer");
+    const rows = await this.db.all<CommentRow>(
+      "SELECT * FROM file_comments WHERE file_id = ? AND deleted_at IS NULL ORDER BY created_at, rowid",
+      [id],
+    );
+    return this.labelComments(rows);
+  }
+
+  /** Post a comment. Anyone who can see the file can comment, so requires viewer+. */
+  async addComment(caller: Caller, id: string, body: string): Promise<CommentEntry> {
+    await this.requirePerm(caller, id, "viewer");
+    const text = body.trim();
+    if (!text) throw new Error("comment body required");
+    const now = new Date().toISOString();
+    const commentId = crypto.randomUUID();
+    await this.db.run(
+      "INSERT INTO file_comments (id, file_id, author_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [commentId, id, caller.sub, text, now, now],
+    );
+    const [entry] = await this.labelComments([
+      { id: commentId, file_id: id, author_id: caller.sub, body: text, created_at: now, updated_at: now, deleted_at: null },
+    ]);
+    return entry!;
+  }
+
+  /**
+   * Soft-delete a comment. Allowed for its author or the file's owner (so an owner
+   * can moderate the thread). Requires viewer+ on the file to even resolve it.
+   */
+  async deleteComment(caller: Caller, id: string, commentId: string): Promise<void> {
+    await this.requirePerm(caller, id, "viewer");
+    const row = await this.db.first<CommentRow>(
+      "SELECT * FROM file_comments WHERE id = ? AND file_id = ? AND deleted_at IS NULL",
+      [commentId, id],
+    );
+    if (!row) throw new NotFoundError("comment not found");
+    if (row.author_id !== caller.sub) {
+      const role = await fileRole(this.db, id, caller.sub, caller.email ?? "");
+      if (role !== "owner") throw new PermissionError("only the author or file owner can delete a comment");
+    }
+    await this.db.run("UPDATE file_comments SET deleted_at = ? WHERE id = ?", [new Date().toISOString(), commentId]);
+  }
+
+  /** Resolve author subs → friendly labels for a batch of comment rows. */
+  private async labelComments(rows: CommentRow[]): Promise<CommentEntry[]> {
+    if (rows.length === 0) return [];
+    const subs = [...new Set(rows.map((r) => r.author_id))];
+    const users = await this.db.all<{ sub: string; email: string | null; name: string | null }>(
+      `SELECT sub, email, name FROM users WHERE sub IN (${subs.map(() => "?").join(",")})`,
+      subs,
+    );
+    const label = (sub: string) => {
+      const u = users.find((x) => x.sub === sub);
+      return u?.name || u?.email || sub;
+    };
+    return rows.map((r) => ({
+      id: r.id,
+      authorId: r.author_id,
+      authorLabel: label(r.author_id),
+      body: r.body,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
   }
 
   /**

@@ -16,11 +16,13 @@ interface PluginStoreProps {
   installedIds: string[];
   onInstall: (id: string) => void;
   onUninstall: (id: string) => void;
+  /** Open a plugin's settings (config + which places it applies to). */
+  onConfigure?: (id: string) => void;
   /** Open the "Build your own plugin with AI" page. */
   onBuildWithAI?: () => void;
 }
 
-export function PluginStore({ open, onOpenChange, installedIds, onInstall, onUninstall, onBuildWithAI }: PluginStoreProps) {
+export function PluginStore({ open, onOpenChange, installedIds, onInstall, onUninstall, onConfigure, onBuildWithAI }: PluginStoreProps) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
 
@@ -103,23 +105,37 @@ export function PluginStore({ open, onOpenChange, installedIds, onInstall, onUni
                   <div className="text-[11.5px] text-muted-foreground">{p.category}</div>
                 </div>
                 <p className="flex-1 text-[13px] leading-[1.45] text-muted-foreground">{p.tagline}</p>
-                {installed ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => onUninstall(p.id)}
-                    className="group/btn gap-1.5"
-                    title="Click to uninstall"
-                  >
-                    <Check size={14} className="group-hover/btn:hidden" />
-                    <span className="group-hover/btn:hidden">Installed</span>
-                    <span className="hidden group-hover/btn:inline">Uninstall</span>
-                  </Button>
-                ) : (
-                  <Button variant="outline" size="sm" onClick={() => onInstall(p.id)}>
-                    Install
-                  </Button>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {installed ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => onUninstall(p.id)}
+                      className="group/btn flex-1 gap-1.5"
+                      title="Click to uninstall"
+                    >
+                      <Check size={14} className="group-hover/btn:hidden" />
+                      <span className="group-hover/btn:hidden">Installed</span>
+                      <span className="hidden group-hover/btn:inline">Uninstall</span>
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" className="flex-1" onClick={() => onInstall(p.id)}>
+                      Install
+                    </Button>
+                  )}
+                  {onConfigure && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 shrink-0 text-muted-foreground"
+                      title="Settings & places"
+                      aria-label={`${p.label} settings`}
+                      onClick={() => onConfigure(p.id)}
+                    >
+                      <Icon name="settings" size={16} />
+                    </Button>
+                  )}
+                </div>
               </div>
             );
           })}
