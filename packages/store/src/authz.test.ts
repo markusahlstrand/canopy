@@ -3,7 +3,7 @@ import { createLibsqlDb } from "./db-libsql";
 import { runMigrations } from "./schema";
 import { check, fileRole, memberSpaceIds, spaceRole, writeTuple } from "./authz";
 import { addMember, createSpace, ensurePersonalSpace, listMembers, listSpaces, listSpacesForUser, removeMember, setMounted } from "./spaces";
-import { resolveInvites, upsertUser } from "./users";
+import { pendingSpaceInvites, resolveInvites, upsertUser } from "./users";
 import type { Db } from "./db";
 
 /** Integration: the recursive Zanzibar-lite check against a real libsql engine. */
@@ -134,5 +134,25 @@ describe("spaces helpers", () => {
     await resolveInvites(db, "nora-sub", "nora@x.com");
     expect(await fileRole(db, "F9", "nora-sub")).toBe("viewer"); // now a user grant
     expect(await fileRole(db, "F9", "x", "nora@x.com")).toBeNull(); // email tuple gone
+  });
+
+  it("email matching is case-insensitive (login email casing needn't match the invite)", async () => {
+    // Invite stored against a normalized address; the IdP returns mixed case.
+    await writeTuple(db, { objectType: "file", objectId: "F10", relation: "viewer", subjectType: "email", subjectId: "casey@x.com" });
+    expect(await fileRole(db, "F10", "x", "Casey@X.com")).toBe("viewer"); // matched despite case
+    await resolveInvites(db, "casey-sub", "  Casey@X.com  ");
+    expect(await fileRole(db, "F10", "casey-sub")).toBe("viewer"); // resolved on (messy) login
+  });
+
+  it("pendingSpaceInvites lists unclaimed space invites for an email, then clears once resolved", async () => {
+    const fam = await createSpace(db, { name: "Family", createdBy: "maya" });
+    await writeTuple(db, { objectType: "space", objectId: fam.id, relation: "editor", subjectType: "email", subjectId: "ola@x.com" });
+
+    const pending = await pendingSpaceInvites(db, "Ola@x.com"); // case-insensitive lookup
+    expect(pending).toEqual([{ spaceId: fam.id, spaceName: "Family", role: "editor" }]);
+
+    await resolveInvites(db, "ola-sub", "ola@x.com");
+    expect(await pendingSpaceInvites(db, "ola@x.com")).toEqual([]); // gone once claimed
+    expect(await spaceRole(db, fam.id, "ola-sub")).toBe("editor");
   });
 });

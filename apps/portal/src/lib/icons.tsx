@@ -29,6 +29,8 @@ import {
   Filter,
   List,
   LayoutGrid,
+  Columns3,
+  PanelRight,
   Share2,
   Download,
   Settings,
@@ -46,6 +48,7 @@ import {
   NotebookText,
   CloudOff,
   Link2,
+  RotateCcw,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -85,6 +88,8 @@ const MAP: Record<string, LucideIcon> = {
   filter: Filter,
   list: List,
   grid: LayoutGrid,
+  board: Columns3,
+  "panel-right": PanelRight,
   share: Share2,
   download: Download,
   settings: Settings,
@@ -102,6 +107,7 @@ const MAP: Record<string, LucideIcon> = {
   note: NotebookText,
   "cloud-off": CloudOff,
   link: Link2,
+  restore: RotateCcw,
 };
 
 export function Icon({

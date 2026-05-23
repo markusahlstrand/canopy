@@ -165,8 +165,8 @@ export function createAuthApp(cfg: AuthConfig | null, onLogin?: OnLogin) {
       setCookie(c, SID, await seal(cfg.sessionSecret, session), cookieOpts(isHttps(c), cfg.sessionTtlSeconds));
       // Best-effort: record the user in the directory + resolve pending invites.
       try {
-        const u = session.user as { sub: string; email?: string; name?: string; picture?: string; email_verified?: boolean };
-        await onLogin?.({ sub: u.sub, email: u.email, name: u.name, picture: u.picture, emailVerified: u.email_verified });
+        const u = session.user;
+        await onLogin?.({ sub: u.sub, email: u.email, name: u.name, picture: u.picture, emailVerified: u.emailVerified });
       } catch {
         /* directory upkeep must never block login */
       }

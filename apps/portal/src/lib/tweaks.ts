@@ -15,7 +15,7 @@ export const DEFAULT_TWEAKS: Tweaks = {
   density: "default",
   font: "geist",
   sidebarCollapsed: false,
-  showRail: true,
+  showRail: false,
 };
 
 export const ACCENT_HSL: Record<string, string> = {

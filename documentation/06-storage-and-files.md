@@ -53,9 +53,24 @@ merged into the derived tree.
 ```
 
 Replacing content is `POST /files/:id/versions` (a new version, metadata untouched); editing
-properties is `PATCH /files/:id/metadata` (no new version). Deleting a file soft-deletes the
-record and releases a blob reference per version; the bytes are removed only when a blob's
-`ref_count` reaches **0**.
+properties is `PATCH /files/:id/metadata` (no new version). Moving a file between virtual
+folders is also a metadata edit — it just rewrites `metadata.path`. Deleting a file moves it to
+**Trash** (recoverable) rather than destroying it — see below.
+
+## Trash (delete, restore, purge)
+
+Deletion is two-stage and recoverable:
+
+- **Delete** (`DELETE /files/:id`) **moves the file to Trash**: it sets `deleted_at` but leaves
+  the versions and blobs intact. Trashed files are hidden from every listing (queries filter
+  `deleted_at IS NULL`) and surface only under **Trash** (`GET /files?trash=1`).
+- **Restore** (`POST /files/:id/restore`) clears `deleted_at`; the file reappears with the same
+  content, where it was.
+- **Purge** (`DELETE /files/:id?permanent=1`, or *Empty Trash*) is irreversible: it drops the
+  file's version rows and access grants, deletes the record, and releases a blob reference per
+  version. The bytes are removed only when a blob's `ref_count` reaches **0** — so the
+  refcount/dedup mechanics below apply at purge, not at the soft delete. Restore and purge both
+  require **owner**.
 
 ## Dedup is per-tenant
 

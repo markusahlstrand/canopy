@@ -3,6 +3,9 @@ import { PLUGIN_CATALOG } from "@/lib/mock-data";
 
 /** Rich contributions for first-party plugins that ship real UI. */
 const RICH_CONTRIBUTIONS: Record<string, Contributions> = {
+  documentation: {
+    detailView: { id: "documentation-detail", title: "Documentation" },
+  },
   calendar: {
     railPanel: { id: "calendar-rail", title: "Calendar", icon: "calendar" },
     detailView: { id: "calendar-detail", title: "Calendar" },
@@ -11,7 +14,6 @@ const RICH_CONTRIBUTIONS: Record<string, Contributions> = {
     ],
   },
   tasks: {
-    railPanel: { id: "tasks-rail", title: "Tasks", icon: "check-square" },
     detailView: { id: "tasks-detail", title: "Tasks" },
     contextMenu: [{ id: "tasks.create", label: "Create task from file", icon: "circle-check" }],
   },
@@ -21,33 +23,15 @@ const RICH_CONTRIBUTIONS: Record<string, Contributions> = {
   },
 };
 
-/** Plugin ids whose contribution is a data source (no item access). */
-const DATA_SOURCE_CAPS: Record<string, PluginManifest["capabilities"]> = {
+/** Capability overrides for plugins that don't use the default item:read grant. */
+const CAPABILITY_OVERRIDES: Record<string, PluginManifest["capabilities"]> = {
   github: [{ kind: "net:fetch", hosts: ["api.github.com"] }],
+  // Documentation reads markdown from the read-only `documentation` storage mount.
+  documentation: [{ kind: "storage:read", connectors: ["documentation"] }],
 };
 
-/**
- * Built-in plugins that ship with the host and aren't published in the store
- * catalog. Documentation reads markdown from the `documentation` storage mount — a plugin that
- * combines a storage-read capability with a UI contribution.
- */
-const BUILTIN_MANIFESTS: Record<string, PluginManifest> = {
-  documentation: {
-    id: "documentation",
-    name: "Documentation",
-    version: "0.1.0",
-    icon: "book",
-    color: "212 70% 48%",
-    capabilities: [{ kind: "storage:read", connectors: ["documentation"] }],
-    contributes: {
-      detailView: { id: "documentation-detail", title: "Documentation" },
-    },
-  },
-};
-
-/** Build a manifest for an installed plugin id (built-in or from the catalog). */
+/** Build a manifest for an installed plugin id from the store catalog. */
 export function buildManifest(id: string): PluginManifest | undefined {
-  if (BUILTIN_MANIFESTS[id]) return BUILTIN_MANIFESTS[id];
   const cat = PLUGIN_CATALOG.find((c) => c.id === id);
   if (!cat) return undefined;
   return {
@@ -56,7 +40,7 @@ export function buildManifest(id: string): PluginManifest | undefined {
     version: "0.1.0",
     icon: cat.icon,
     color: cat.color,
-    capabilities: DATA_SOURCE_CAPS[id] ?? [{ kind: "item:read" }],
+    capabilities: CAPABILITY_OVERRIDES[id] ?? [{ kind: "item:read" }],
     contributes: {
       store: { category: cat.category, tagline: cat.tagline, popular: cat.popular },
       ...RICH_CONTRIBUTIONS[id],
@@ -64,4 +48,13 @@ export function buildManifest(id: string): PluginManifest | undefined {
   };
 }
 
-export const DEFAULT_INSTALLED = ["documentation", "calendar", "tasks"];
+export const DOCS_PLUGIN_ID = "documentation";
+
+/** Plugins installed by default for signed-in users. */
+export const DEFAULT_INSTALLED = ["calendar", "tasks"];
+
+/**
+ * Signed-out / anonymous visitors also get Documentation, which doubles as the
+ * landing experience. Signed-in users install it from the store if they want it.
+ */
+export const ANON_DEFAULT_INSTALLED = [DOCS_PLUGIN_ID, ...DEFAULT_INSTALLED];

@@ -54,6 +54,11 @@ Open a group space → **Members** and add anyone **by email**:
 
 Assign each person a role, and remove members or pending invites anytime.
 
+A login resolves any invites waiting on that email automatically. For an invite that arrives
+*while* you're already signed in, Canopy surfaces an **invites banner** — *Accept* claims every
+space pending for your address in one step, without a re-login. Accepting is gated on a verified
+email, the same as login-time resolution.
+
 This is **Canopy-native**: authentication stays with your OIDC provider (AuthHero/Auth0/…),
 but membership and invites live in Canopy — so it works with any provider and isn't tied to a
 vendor-specific "organizations" feature. Invites only resolve against a **verified** email, so

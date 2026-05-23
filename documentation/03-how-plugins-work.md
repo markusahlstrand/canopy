@@ -56,8 +56,8 @@ interface Contributions {
 }
 ```
 
-Calendar contributes a `railPanel` and a `detailView`; Tasks does the same; Documentation contributes
-only a `detailView`. The sidebar, rail, context menus, and store are all built by querying
+Calendar contributes a `railPanel` and a `detailView`; Tasks and Documentation contribute only a
+`detailView`. The sidebar, rail, context menus, and store are all built by querying
 the registry — so a first-party plugin and a third-party one light up the same surfaces the
 same way.
 
@@ -117,13 +117,27 @@ plugins. The split is:
 // apps/portal/src/plugins/index.tsx
 export const PLUGIN_UI: Record<string, PluginUI> = {
   documentation: { DetailView: DocumentationView },
-  calendar:      { RailPanel: CalendarPanel, DetailView: CalendarWeekView },
-  tasks:         { RailPanel: TasksPanel, DetailView: TasksKanban },
+  calendar:      { RailPanel: CalendarPanel, DetailView: CalendarView },
+  tasks:         { DetailView: TasksView },
 };
 ```
 
 When the runtime lands, the manifest/registry/contribution half stays exactly the same — only
 the render-and-execute half moves from this map into the sandbox. Getting that boundary right
 now is the point.
+
+## Installing plugins (per user)
+
+A plugin only renders for a user who has it **installed**. The install set is a list of plugin
+ids, persisted server-side per user (the `plugin_installs` table — one JSON array per `user_sub`)
+and read/written via `GET`/`PUT /api/plugins/installed`. `createRegistry(installedIds)` registers
+just those manifests, so the sidebar, rail, context menus, and store reflect each user's own set;
+installing or removing a plugin in the store writes the new set back.
+
+With nothing saved yet the server applies an **auth-dependent default**: signed-in users start
+with Calendar and Tasks (`DEFAULT_INSTALLED`), while signed-out / anonymous visitors (incl. demo
+mode) also get Documentation, which doubles as the landing page (`ANON_DEFAULT_INSTALLED`). A
+stored empty list (`[]` — everything uninstalled) stays distinct from "no row yet" (apply the
+default).
 
 See [Writing a plugin](writing-a-plugin) for the worked example.

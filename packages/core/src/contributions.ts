@@ -55,7 +55,7 @@ export interface ViewerContribution {
 
 /** How the plugin appears in the plugin store. */
 export interface StoreListing {
-  category: "Productivity" | "Finance" | "Lifestyle" | "Security" | "Media" | "Wellness";
+  category: "Productivity" | "Finance" | "Lifestyle" | "Security" | "Media" | "Wellness" | "Help";
   tagline: string;
   popular?: boolean;
 }

@@ -208,6 +208,34 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    // Normalize emails to lowercase so an invite bound to an address matches the
+    // address the IdP returns regardless of case. Writes/lookups now normalize
+    // (see users.ts); this brings pre-existing rows in line so historic invites
+    // resolve. `OR IGNORE` on the tuples skips the rare case where a normalized
+    // row already exists (would collide on the PK).
+    version: 9,
+    statements: [
+      `UPDATE OR IGNORE relation_tuples SET subject_id = lower(subject_id)
+         WHERE subject_type = 'email' AND subject_id <> lower(subject_id)`,
+      `UPDATE users SET email = lower(email) WHERE email IS NOT NULL AND email <> lower(email)`,
+    ],
+  },
+  {
+    // The set of plugins a user has installed, stored as one JSON array per user
+    // so "no row" (apply server defaults) stays distinct from "[]" (everything
+    // uninstalled). The default set is server-side and auth-dependent — the
+    // Documentation plugin ships installed only for signed-out / anonymous
+    // visitors (incl. demo mode); signed-in users add it from the store.
+    version: 10,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS plugin_installs (
+         user_sub   TEXT PRIMARY KEY,
+         plugin_ids TEXT NOT NULL DEFAULT '[]',
+         updated_at TEXT NOT NULL
+       )`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

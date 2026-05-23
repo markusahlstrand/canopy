@@ -65,6 +65,7 @@ interface ApiFile {
   name: string;
   metadata: Record<string, unknown>;
   updatedAt: string;
+  deletedAt?: string | null;
   ownerLabel?: string;
   sharedWith?: string[];
   version: { size: number; mime: string | null } | null;
@@ -167,9 +168,38 @@ export async function saveFileVersion(id: string, text: string, mime = "text/mar
   if (!res.ok) throw new Error(`save failed: ${res.status}`);
 }
 
-/** Soft-delete a drive file by id. */
+/** Move a drive file to Trash (recoverable). */
 export async function deleteFile(id: string): Promise<void> {
   const res = await fetch(`/api/files/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+}
+
+/** Files in the caller's Trash, newest deletion first. */
+export async function listTrash(): Promise<FileItem[]> {
+  const res = await fetch("/api/files?trash=1");
+  if (res.status === 401) return [];
+  if (!res.ok) throw new Error(`trash failed: ${res.status}`);
+  const data = (await res.json()) as DriveListing;
+  return data.files.map((f) => ({
+    id: f.id,
+    name: f.name,
+    kind: kindForName(f.name),
+    modified: fmtDate(f.deletedAt ?? f.updatedAt),
+    size: humanSize(f.version?.size),
+    path: "",
+    owner: f.ownerLabel,
+  }));
+}
+
+/** Restore a file from Trash. */
+export async function restoreFile(id: string): Promise<void> {
+  const res = await fetch(`/api/files/${id}/restore`, { method: "POST" });
+  if (!res.ok) throw new Error(`restore failed: ${res.status}`);
+}
+
+/** Permanently delete a file and its content (irreversible). */
+export async function purgeFile(id: string): Promise<void> {
+  const res = await fetch(`/api/files/${id}?permanent=1`, { method: "DELETE" });
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
 }
 
@@ -181,6 +211,16 @@ export async function setStarred(id: string, starred: boolean): Promise<void> {
     body: JSON.stringify({ starred }),
   });
   if (!res.ok) throw new Error(`star failed: ${res.status}`);
+}
+
+/** Move a file into a virtual folder — persisted as `metadata.path` (a metadata edit, no new version). */
+export async function moveFile(id: string, path: string): Promise<void> {
+  const res = await fetch(`/api/files/${id}/metadata`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) throw new Error(`move failed: ${res.status}`);
 }
 
 /** Create an empty folder at a virtual path within a space. */
@@ -372,6 +412,31 @@ export async function acceptInvite(token: string): Promise<{ spaceId: string; al
   return (await res.json()) as { spaceId: string; alreadyMember: boolean };
 }
 
+/** A space the signed-in user has been invited to by email but hasn't joined yet. */
+export interface PendingInvite {
+  spaceId: string;
+  spaceName: string;
+  role: Role;
+}
+
+/** Spaces the caller was invited to by email that haven't resolved yet (for the banner). */
+export async function listPendingInvites(): Promise<PendingInvite[]> {
+  const res = await fetch("/api/invites/pending");
+  if (!res.ok) return [];
+  // Only trust an array shape: a stale/misrouted server can answer 200 with a
+  // non-array body (e.g. the `:token` route's `{status}` object), and the banner
+  // treats `.length` as the count — a non-array would slip past its empty-guard.
+  const data = await res.json().catch(() => null);
+  return Array.isArray(data) ? (data as PendingInvite[]) : [];
+}
+
+/** Claim all pending email invites for the signed-in (verified) account. */
+export async function acceptPendingInvites(): Promise<{ accepted: number }> {
+  const res = await fetch("/api/invites/pending/accept", { method: "POST" });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `accept failed: ${res.status}`);
+  return (await res.json()) as { accepted: number };
+}
+
 export interface Grant {
   relation: Role;
   subjectType: "user" | "space" | "email";
@@ -464,6 +529,34 @@ export async function fetchMe(): Promise<Me> {
   } catch {
     return { user: null, authConfigured: false };
   }
+}
+
+// ── installed plugins (persisted per user) ────────────────────────────────────
+
+/**
+ * The caller's persisted installed-plugin set, or `null` when it can't be
+ * resolved (anonymous → 401, or the API is down) so the caller can fall back to
+ * its own default. The server applies the per-user default when nothing is saved.
+ */
+export async function fetchInstalledPlugins(): Promise<string[] | null> {
+  try {
+    const res = await fetch("/api/plugins/installed");
+    if (!res.ok) return null;
+    const data = (await res.json()) as { ids?: unknown };
+    return Array.isArray(data.ids) ? data.ids.filter((x): x is string => typeof x === "string") : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the full installed-plugin set. Throws on failure (e.g. anonymous). */
+export async function saveInstalledPlugins(ids: string[]): Promise<void> {
+  const res = await fetch("/api/plugins/installed", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) throw new Error(`save installed plugins failed: ${res.status}`);
 }
 
 // ── plugin data sources (tasks / calendar) ───────────────────────────────────

@@ -51,6 +51,9 @@ an in-process runner on Node — are in progress.)*
 - **`?embed=true`** on `GET /files/:id/content` is intended to project a subset of metadata into
   the file on the way out (XMP for images/PDF, core properties for docx) where the format supports
   it. The flag is wired; per-format projection currently passes the bytes through unchanged.
+- **Delete is recoverable.** Deleting a file moves it to **Trash** (its versions and blobs are
+  kept); restore it, or *permanently* delete to drop the records and release the bytes. A blob
+  reference is released only on the permanent delete, not the move to Trash.
 
 Storage adapters are swappable: **D1 + R2** on Cloudflare, **libsql (SQLite) + filesystem** on
 Node/Docker. Schema is applied by a numbered migration runner on boot.

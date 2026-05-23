@@ -1,17 +1,21 @@
+import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { PersonAvatar } from "@/components/person-avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import { Icon } from "@/lib/icons";
+import { cn } from "@/lib/utils";
 import { TONE_COLOR } from "@/lib/mock-data";
 import type { CalendarEvent, Task, TaskStatus } from "@/lib/api";
 import { useCalendar, useTasks } from "./data";
 
-const STATUS_COLUMNS: { status: TaskStatus; title: string; color: string }[] = [
-  { status: "todo", title: "To do", color: "212 70% 48%" },
-  { status: "in_progress", title: "In progress", color: "145 33% 36%" },
-  { status: "blocked", title: "Blocked", color: "0 72% 51%" },
-  { status: "done", title: "Done", color: "220 9% 46%" },
-];
+const STATUS_META: Record<TaskStatus, { title: string; color: string }> = {
+  todo: { title: "To do", color: "212 70% 48%" },
+  in_progress: { title: "In progress", color: "145 33% 36%" },
+  blocked: { title: "Blocked", color: "0 72% 51%" },
+  done: { title: "Done", color: "220 9% 46%" },
+};
+const STATUS_ORDER: TaskStatus[] = ["todo", "in_progress", "blocked", "done"];
 
 /** A small pill telling the user whether they're seeing live or sample data. */
 function SourcePill({ source }: { source: "github" | "sample" }) {
@@ -67,33 +71,135 @@ function TaskCard({ t }: { t: Task }) {
   );
 }
 
-export function TasksKanban() {
-  const { tasks, source, loading } = useTasks();
+/** Compact status chip used in the flat list view. */
+function StatusPill({ status }: { status: TaskStatus }) {
+  const m = STATUS_META[status];
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11.5px] text-muted-foreground">
+      <span className="size-1.5 rounded-full" style={{ background: `hsl(${m.color})` }} />
+      {m.title}
+    </span>
+  );
+}
+
+/** One row in the list view — closer to how GitHub renders an issue list. */
+function TaskRow({ t }: { t: Task }) {
+  const done = t.status === "done";
+  const Title = t.url ? "a" : "span";
+  return (
+    <div className="flex items-center gap-3 rounded-md border bg-card px-3 py-2.5 hover:bg-accent/40">
+      <Checkbox defaultChecked={done} />
+      <Title
+        {...(t.url ? { href: t.url, target: "_blank", rel: "noreferrer" } : {})}
+        className={cn(
+          "min-w-0 flex-1 truncate text-[13.5px] font-medium",
+          done && "text-muted-foreground line-through",
+          t.url && "hover:underline",
+        )}
+      >
+        {t.title}
+      </Title>
+      <div className="hidden items-center gap-1.5 sm:flex">
+        {t.priority === "high" && (
+          <Badge variant="outline" className="border-destructive/40 px-1 py-0 text-[10px] text-destructive">
+            High
+          </Badge>
+        )}
+        {t.labels?.slice(0, 3).map((l) => (
+          <Badge key={l} variant="outline" className="px-1 py-0 text-[10px] text-muted-foreground">
+            {l}
+          </Badge>
+        ))}
+        {t.due && (
+          <span className="font-mono text-[11.5px] text-muted-foreground">
+            {new Date(t.due).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </span>
+        )}
+      </div>
+      <StatusPill status={t.status} />
+      {t.assignee && <PersonAvatar name={t.assignee} size="xs" />}
+    </div>
+  );
+}
+
+/** Flat list view — open tasks first, then done. Matches GitHub's issue list. */
+function TasksList({ tasks }: { tasks: Task[] }) {
+  const ordered = [...tasks].sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
+  if (ordered.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed p-8 text-center text-[13px] text-muted-foreground">No tasks.</div>
+    );
+  }
+  return (
+    <div className="flex max-w-3xl flex-col gap-1.5">
+      {ordered.map((t) => (
+        <TaskRow key={t.id} t={t} />
+      ))}
+    </div>
+  );
+}
+
+/** Kanban board — most useful when issues carry status labels. */
+function TasksBoard({ tasks }: { tasks: Task[] }) {
   const byStatus = (s: TaskStatus) => tasks.filter((t) => t.status === s);
+  return (
+    <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+      {STATUS_ORDER.map((status) => {
+        const { title, color } = STATUS_META[status];
+        const items = byStatus(status);
+        return (
+          <div key={status} className="flex flex-col gap-2 rounded-lg border bg-card p-3.5">
+            <div className="mb-1.5 flex items-center gap-2">
+              <span className="size-2 rounded-full" style={{ background: `hsl(${color})` }} />
+              <span className="text-[13.5px] font-semibold">{title}</span>
+              <span className="font-mono text-xs text-muted-foreground">{items.length}</span>
+            </div>
+            {items.map((t) => (
+              <TaskCard key={t.id} t={t} />
+            ))}
+            {items.length === 0 && <div className="rounded-md border border-dashed p-3 text-center text-[12px] text-muted-foreground">Nothing here</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Toggle between the flat list and the Kanban board. */
+function ViewToggle({ value, onChange }: { value: "list" | "board"; onChange: (v: "list" | "board") => void }) {
+  return (
+    <div className="flex items-center rounded-md border p-0.5">
+      {(["list", "board"] as const).map((v) => (
+        <button
+          key={v}
+          onClick={() => onChange(v)}
+          title={v === "list" ? "List" : "Board"}
+          className={cn(
+            "grid size-7 place-items-center rounded-[5px] transition-colors",
+            value === v ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <Icon name={v === "list" ? "list" : "board"} size={15} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function TasksView() {
+  const { tasks, source, loading } = useTasks();
+  // List by default: GitHub issues are a flat open/closed list, so the board's
+  // status columns are only meaningful when issues carry status labels.
+  const [mode, setMode] = useState<"list" | "board">("list");
   return (
     <div className="flex flex-col gap-3.5">
       <div className="flex items-center gap-2">
         <SourcePill source={source} />
         {loading && <span className="text-[12px] text-muted-foreground">Loading…</span>}
+        <div className="flex-1" />
+        <ViewToggle value={mode} onChange={setMode} />
       </div>
-      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
-        {STATUS_COLUMNS.map((col) => {
-          const items = byStatus(col.status);
-          return (
-            <div key={col.status} className="flex flex-col gap-2 rounded-lg border bg-card p-3.5">
-              <div className="mb-1.5 flex items-center gap-2">
-                <span className="size-2 rounded-full" style={{ background: `hsl(${col.color})` }} />
-                <span className="text-[13.5px] font-semibold">{col.title}</span>
-                <span className="font-mono text-xs text-muted-foreground">{items.length}</span>
-              </div>
-              {items.map((t) => (
-                <TaskCard key={t.id} t={t} />
-              ))}
-              {items.length === 0 && <div className="rounded-md border border-dashed p-3 text-center text-[12px] text-muted-foreground">Nothing here</div>}
-            </div>
-          );
-        })}
-      </div>
+      {mode === "board" ? <TasksBoard tasks={tasks} /> : <TasksList tasks={tasks} />}
     </div>
   );
 }

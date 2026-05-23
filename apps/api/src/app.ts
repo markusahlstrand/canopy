@@ -8,6 +8,7 @@ import {
   PermissionError,
   type BlobStore,
   type Cache,
+  type Caller,
   type FileService,
 } from "@canopy/store";
 import type { AuthConfig } from "./auth/config";
@@ -67,6 +68,14 @@ export interface AppDeps {
 }
 
 /**
+ * Plugins a user starts with before they customize anything. Documentation is a
+ * default only for signed-out / anonymous visitors (incl. demo mode, where auth
+ * is off and it doubles as the landing page); signed-in users add it from the store.
+ */
+const DEFAULT_PLUGINS = ["calendar", "tasks"];
+const ANON_DEFAULT_PLUGINS = ["documentation", ...DEFAULT_PLUGINS];
+
+/**
  * Portable Canopy API. The **drive** is the DB-backed file service from
  * @canopy/store (files as records, content-addressed blobs, versions); the
  * read-only `documentation`/`demo` mounts are still plain StorageConnectors over GitHub.
@@ -86,8 +95,8 @@ export function createApp(deps: AppDeps) {
   // The caller: sub + email (email feeds pending-invite resolution). When auth
   // isn't configured (dev / anonymous demo) the drive runs as a shared "demo"
   // user; when auth IS configured, a session is required.
-  async function callerOf(c: Context): Promise<{ sub: string; email: string } | null> {
-    if (!authConfig) return { sub: "demo", email: "" };
+  async function callerOf(c: Context): Promise<Caller | null> {
+    if (!authConfig) return { sub: "demo", email: "", emailVerified: false };
     const user = await getSessionUser(c, authConfig);
     if (!user) return null;
     // Backfill the directory from the session's id_token claims. The login
@@ -95,7 +104,7 @@ export function createApp(deps: AppDeps) {
     // can outlive the row — without this the member/sharing UI falls back to the
     // raw sub. INSERT-OR-IGNORE makes it a no-op once the row exists.
     if (drive) await drive.service.ensureUser(user);
-    return { sub: user.sub, email: user.email ?? "" };
+    return { sub: user.sub, email: user.email ?? "", emailVerified: !!user.emailVerified };
   }
 
   // The target space for an upload/list/create: `?space=` or the caller's personal space.
@@ -135,7 +144,7 @@ export function createApp(deps: AppDeps) {
   // ── the drive ───────────────────────────────────────────────────────────────
 
   // Drive routes need a configured drive + a caller; this wraps both.
-  const driveRoute = (fn: (c: Context, caller: { sub: string; email: string }) => Promise<Response>) => (c: Context) =>
+  const driveRoute = (fn: (c: Context, caller: Caller) => Promise<Response>) => (c: Context) =>
     handle(c, async () => {
       if (!drive) return c.json({ error: "no drive configured" }, 404);
       const caller = await callerOf(c);
@@ -158,6 +167,9 @@ export function createApp(deps: AppDeps) {
       if (!caller) return c.json({ error: "unauthorized" }, 401);
       if (c.req.query("shared") != null) {
         return c.json({ path: "", files: await drive.service.listSharedWithMe(caller.sub), folders: [] });
+      }
+      if (c.req.query("trash") != null) {
+        return c.json({ path: "", files: await drive.service.listTrash(caller.sub), folders: [] });
       }
       const space = await resolveSpace(c, caller.sub);
       return c.json(await drive.service.list(caller.sub, space, c.req.query("path") ?? ""));
@@ -207,6 +219,18 @@ export function createApp(deps: AppDeps) {
     await drive!.service.revokeSpaceInvite(caller, c.req.param("id")!, c.req.param("token")!);
     return c.json({ ok: true });
   }));
+
+  // Pending email invites awaiting the caller (invites bound to their address that
+  // haven't resolved yet) — powers the in-app invites banner. Registered before the
+  // `:token` routes so "pending" isn't matched as a token.
+  app.get("/api/invites/pending", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.pendingInvites(caller)),
+  ));
+
+  // Claim all pending email invites for the caller's (verified) address.
+  app.post("/api/invites/pending/accept", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.acceptPendingInvites(caller)),
+  ));
 
   // Opening an invite link: preview needs no sign-in (so recipients see what
   // they're joining); accepting does (the signed-in account becomes the member).
@@ -301,8 +325,17 @@ export function createApp(deps: AppDeps) {
     return c.json(await drive!.service.addVersion(caller, c.req.param("id")!, body));
   }));
 
+  // Soft-delete (→ Trash) by default; `?permanent=1` purges the file + its content.
   app.delete("/api/files/:id", driveRoute(async (c, caller) => {
-    await drive!.service.deleteFile(caller, c.req.param("id")!);
+    const id = c.req.param("id")!;
+    if (c.req.query("permanent") != null) await drive!.service.purgeFile(caller, id);
+    else await drive!.service.deleteFile(caller, id);
+    return c.json({ ok: true });
+  }));
+
+  // Restore a file from Trash.
+  app.post("/api/files/:id/restore", driveRoute(async (c, caller) => {
+    await drive!.service.restoreFile(caller, c.req.param("id")!);
     return c.json({ ok: true });
   }));
 
@@ -468,6 +501,24 @@ export function createApp(deps: AppDeps) {
       }
     }
     await drive!.service.setPluginSettings(caller.sub, src.id, JSON.stringify(stored));
+    return c.json({ ok: true });
+  }));
+
+  // ── per-user installed plugin set ───────────────────────────────────────────
+  // Which plugins the caller has installed. With nothing persisted yet, fall back
+  // to the auth-dependent defaults (Documentation is a default only when auth is
+  // off — the anonymous/demo experience). Anonymous callers get 401 here and the
+  // client uses its own anonymous default.
+  app.get("/api/plugins/installed", driveRoute(async (c, caller) => {
+    const stored = await drive!.service.getInstalledPlugins(caller.sub);
+    const ids = stored ?? (authConfig ? DEFAULT_PLUGINS : ANON_DEFAULT_PLUGINS);
+    return c.json({ ids });
+  }));
+
+  app.put("/api/plugins/installed", driveRoute(async (c, caller) => {
+    const body = await c.req.json<{ ids?: unknown }>();
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : [];
+    await drive!.service.setInstalledPlugins(caller.sub, ids);
     return c.json({ ok: true });
   }));
 

@@ -1,5 +1,6 @@
 import type { Db } from "./db";
 import type { Role } from "./types";
+import { normalizeEmail } from "./users";
 
 /**
  * Relation-tuple (Zanzibar-lite) access control, evaluated with recursive SQL.
@@ -112,6 +113,7 @@ export async function memberSpaceIds(db: Db, userSub: string): Promise<string[]>
 
 /** The user's effective role on a file — direct, via a space grant, via the file's space, or by email. */
 export async function fileRole(db: Db, fileId: string, userSub: string, email = ""): Promise<Role | null> {
+  const addr = normalizeEmail(email);
   const row = await db.first<{ rank: number | null }>(
     `${USER_SPACES}
      SELECT MAX(rank) AS rank FROM (
@@ -127,7 +129,7 @@ export async function fileRole(db: Db, fileId: string, userSub: string, email = 
        SELECT us.rank FROM relation_tuples t JOIN user_spaces us ON us.space_id = t.subject_id
          WHERE t.object_type = 'file' AND t.object_id = ? AND t.relation = 'space' AND t.subject_type = 'space'
      )`,
-    [userSub, fileId, userSub, fileId, email, fileId, fileId],
+    [userSub, fileId, userSub, fileId, addr, fileId, fileId],
   );
   return rankToRole(row?.rank ?? 0);
 }

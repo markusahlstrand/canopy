@@ -3,9 +3,14 @@ import type { AuthConfig } from "./config";
 export interface UserProfile {
   sub: string;
   email?: string;
+  /** Whether the IdP asserts the email is verified — gates claiming email-bound invites. */
+  emailVerified?: boolean;
   name?: string;
   picture?: string;
 }
+
+/** OIDC `email_verified` may arrive as a boolean or (some IdPs) the string "true". */
+const emailVerified = (v: unknown): boolean => v === true || v === "true";
 
 interface Discovery {
   /** The issuer identifier — what id_token `iss` claims must match. May differ
@@ -149,6 +154,7 @@ export function validateIdToken(
   return {
     sub: String(c.sub),
     email: typeof c.email === "string" ? c.email : undefined,
+    emailVerified: emailVerified(c.email_verified),
     name: typeof c.name === "string" ? c.name : undefined,
     picture: typeof c.picture === "string" ? c.picture : undefined,
   };
@@ -162,6 +168,9 @@ export async function fetchUserInfo(cfg: AuthConfig, accessToken: string): Promi
   const u = (await res.json()) as Record<string, unknown>;
   return {
     email: typeof u.email === "string" ? u.email : undefined,
+    // Only assert verified when userinfo actually carries the claim — otherwise we'd
+    // clobber a `true` from the id_token when this gets merged over the claims.
+    ...("email_verified" in u ? { emailVerified: emailVerified(u.email_verified) } : {}),
     name: typeof u.name === "string" ? u.name : undefined,
     picture: typeof u.picture === "string" ? u.picture : undefined,
   };

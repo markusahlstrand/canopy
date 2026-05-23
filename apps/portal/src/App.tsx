@@ -13,6 +13,7 @@ import {
 import { Sidebar } from "@/components/sidebar";
 import { Topbar } from "@/components/topbar";
 import { FileTable, type SortKey, type SortState, type PluginMenuItem } from "@/components/file-table";
+import { FileIcon } from "@/components/file-icon";
 import { PluginRail } from "@/components/plugin-rail";
 import { CommandPalette } from "@/components/command-palette";
 import { PluginStore } from "@/components/plugin-store";
@@ -32,9 +33,15 @@ import {
   contentUrl,
   uploadFiles,
   deleteFile,
+  listTrash,
+  restoreFile,
+  purgeFile,
   setStarred,
+  moveFile,
   setSpaceMounted,
   fetchMe,
+  fetchInstalledPlugins,
+  saveInstalledPlugins,
   loginUrl,
   logout,
   type Me,
@@ -44,12 +51,14 @@ import {
 import { SpaceMembersDialog } from "@/components/space-members-dialog";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
-import { createRegistry, DEFAULT_INSTALLED, PLUGIN_UI } from "@/plugins";
+import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
 import { PluginDataProvider } from "@/plugins/data";
 import { ACCENT_HSL, ACCENT_HSL_DARK, DEFAULT_TWEAKS, FONT_STACK, type Tweaks } from "@/lib/tweaks";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { DemoBanner } from "@/components/demo-banner";
+import { InviteBanner } from "@/components/invite-banner";
 import { OfflineBanner } from "@/components/offline-banner";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 function readUrlState(): { active: string; path: string; space: string } {
   const p = new URLSearchParams(window.location.search);
@@ -96,19 +105,39 @@ const MobileApp = lazy(() => import("@/mobile/mobile-app").then((m) => ({ defaul
 export default function App() {
   const isMobile = useIsMobile();
   return (
-    <Suspense fallback={<div className="grid h-screen place-items-center text-sm text-muted-foreground">Loading…</div>}>
-      {isMobile ? <MobileApp /> : <DesktopApp />}
-      <InviteGate />
-    </Suspense>
+    // Keyed by layout so a crash in one tree resets when the viewport flips to the other.
+    <ErrorBoundary key={isMobile ? "mobile" : "desktop"}>
+      <Suspense fallback={<div className="grid h-screen place-items-center text-sm text-muted-foreground">Loading…</div>}>
+        {isMobile ? <MobileApp /> : <DesktopApp />}
+        <InviteGate />
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 
 function DesktopApp() {
-  const [tweaks, setTweaks] = useState<Tweaks>(DEFAULT_TWEAKS);
+  const [tweaks, setTweaks] = useState<Tweaks>(() => {
+    try {
+      const saved = localStorage.getItem("canopy.tweaks");
+      return saved ? { ...DEFAULT_TWEAKS, ...(JSON.parse(saved) as Partial<Tweaks>) } : DEFAULT_TWEAKS;
+    } catch {
+      return DEFAULT_TWEAKS;
+    }
+  });
   const setTweak = <K extends keyof Tweaks>(key: K, value: Tweaks[K]) =>
     setTweaks((t) => ({ ...t, [key]: value }));
+  // Persist UI preferences (theme, rail open/closed, density…) across reloads.
+  useEffect(() => {
+    try {
+      localStorage.setItem("canopy.tweaks", JSON.stringify(tweaks));
+    } catch {
+      /* storage unavailable — preferences just won't persist */
+    }
+  }, [tweaks]);
 
-  const [installedIds, setInstalledIds] = useState<string[]>(DEFAULT_INSTALLED);
+  // Start with the anonymous default (includes Documentation). Once auth resolves
+  // to a signed-in user, Documentation drops to an optional store plugin (below).
+  const [installedIds, setInstalledIds] = useState<string[]>(ANON_DEFAULT_INSTALLED);
   const registry = useMemo(() => createRegistry(installedIds), [installedIds]);
   const installed = useMemo(() => registry.list().map((r) => r.manifest), [registry]);
 
@@ -121,6 +150,7 @@ function DesktopApp() {
   const [view, setView] = useState<"list" | "grid">("list");
   const [sort, setSort] = useState<SortState>({ key: "modified", dir: "desc" });
   const [files, setFiles] = useState<FileItem[]>([]);
+  const [trashFiles, setTrashFiles] = useState<FileItem[]>([]);
   const [path, setPath] = useState(() => readUrlState().path);
   // "" = personal space, "shared" = files shared with me, else a group space id.
   const [space, setSpace] = useState(() => readUrlState().space);
@@ -142,16 +172,33 @@ function DesktopApp() {
     setAuth((a) => ({ ...a, user: null }));
   };
 
-  // Default landing page: Documentation when arriving not-signed-in (no explicit ?view=).
-  // Applied once when auth first resolves; doesn't lock navigation afterwards.
-  const initialHadView = useMemo(() => new URLSearchParams(window.location.search).has("view"), []);
-  const docsDefaultApplied = useRef(false);
+  // Load the persisted install set. Anonymous visitors get null (can't persist) and
+  // keep the optimistic anonymous default seeded above (Documentation included).
   useEffect(() => {
-    if (docsDefaultApplied.current || !auth.authConfigured) return;
-    docsDefaultApplied.current = true;
+    fetchInstalledPlugins().then((ids) => {
+      if (ids) setInstalledIds(ids);
+    });
+  }, []);
+
+  // Whether installs can be saved: signed-in, or demo mode (auth off → shared
+  // "demo" user). Anonymous-with-auth callers can't, so we skip the round-trip.
+  const canPersist = !auth.authConfigured || !!auth.user;
+  function persistInstalled(next: string[]) {
+    setInstalledIds(next);
+    if (canPersist) saveInstalledPlugins(next).catch(() => {});
+  }
+
+  // Documentation is the signed-out landing page. Applied once when auth first
+  // resolves; doesn't lock navigation afterwards. (Whether it's *installed* is
+  // server-driven — it ships only for anonymous/demo visitors.)
+  const initialHadView = useMemo(() => new URLSearchParams(window.location.search).has("view"), []);
+  const docsLandingApplied = useRef(false);
+  useEffect(() => {
+    if (docsLandingApplied.current || !auth.authConfigured) return;
+    docsLandingApplied.current = true;
     if (!auth.user && !initialHadView) {
-      setActive("plugin:documentation");
-      setActivePlugin("documentation");
+      setActive(`plugin:${DOCS_PLUGIN_ID}`);
+      setActivePlugin(DOCS_PLUGIN_ID);
     }
   }, [auth, initialHadView]);
 
@@ -229,6 +276,46 @@ function DesktopApp() {
       .catch(() => setSpaces([]));
   }, [refreshKey, auth.user, auth.authConfigured]);
 
+  // Re-fetch spaces + shared count when the tab regains focus, so a space shared
+  // with you while you're away shows up without a manual reload.
+  useEffect(() => {
+    if (!auth.user) return;
+    const refreshShares = () => {
+      listSpaces().then(setSpaces).catch(() => {});
+      listShared().then((s) => setSharedCount(s.length)).catch(() => {});
+    };
+    const onVisible = () => document.visibilityState === "visible" && refreshShares();
+    window.addEventListener("focus", refreshShares);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", refreshShares);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [auth.user]);
+
+  // Notify once (per device) when a group space has been newly shared with you —
+  // a space you don't own that you haven't seen before. Diffed against a
+  // localStorage baseline so it fires for genuinely new shares, not every load.
+  useEffect(() => {
+    if (!auth.user) return;
+    const key = `canopy:seen-shares:${auth.user.sub}`;
+    const sharedToMe = spaces.filter((s) => s.kind === "group" && s.role !== "owner");
+    if (sharedToMe.length === 0) return;
+    let seen: Set<string>;
+    try {
+      seen = new Set(JSON.parse(localStorage.getItem(key) ?? "[]") as string[]);
+    } catch {
+      seen = new Set();
+    }
+    const fresh = sharedToMe.filter((s) => !seen.has(s.id));
+    if (fresh.length === 0) return;
+    for (const s of fresh) {
+      toast("Shared with you", { description: `You were added to "${s.name}".` });
+      seen.add(s.id);
+    }
+    localStorage.setItem(key, JSON.stringify([...seen]));
+  }, [spaces, auth.user]);
+
   // Load the current location. At the personal root, mounted group spaces appear
   // as folders (the merged "family" feel) alongside a "Shared with me" entry.
   useEffect(() => {
@@ -261,6 +348,18 @@ function DesktopApp() {
       cancelled = true;
     };
   }, [space, path, refreshKey, spaces]);
+
+  // Load Trash when the Trash view is open (and on refresh after restore/purge).
+  useEffect(() => {
+    if (active !== "trash") return;
+    let cancelled = false;
+    listTrash()
+      .then((items) => !cancelled && setTrashFiles(items))
+      .catch(() => !cancelled && setTrashFiles([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [active, refreshKey]);
 
   function openSpace(id: string) {
     setActive("drive");
@@ -366,10 +465,18 @@ function DesktopApp() {
 
   function installPlugin(id: string) {
     if (installedIds.includes(id)) return;
-    setInstalledIds((ids) => [...ids, id]);
+    persistInstalled([...installedIds, id]);
     setActivePlugin(id);
     const name = registry.get(id)?.manifest.name ?? id;
     toast(`${name} installed`, { description: "Open it from the right rail or sidebar." });
+  }
+
+  function uninstallPlugin(id: string) {
+    if (!installedIds.includes(id)) return;
+    const name = registry.get(id)?.manifest.name ?? id;
+    persistInstalled(installedIds.filter((x) => x !== id));
+    if (active === `plugin:${id}`) navigate("drive"); // don't strand the user on a removed view
+    toast(`${name} removed`);
   }
 
   async function deleteSelected() {
@@ -379,9 +486,49 @@ function DesktopApp() {
     try {
       await Promise.all(targets.map((f) => deleteFile(f.id)));
       reload();
-      toast(`${n} item${n === 1 ? "" : "s"} deleted`);
+      toast(`${n} item${n === 1 ? "" : "s"} moved to Trash`);
     } catch (err) {
       toast("Delete failed", { description: (err as Error).message });
+      reload();
+    }
+  }
+
+  async function restoreFromTrash(f: FileItem) {
+    setTrashFiles((fs) => fs.filter((x) => x.id !== f.id)); // optimistic
+    try {
+      await restoreFile(f.id);
+      reload();
+      toast("Restored", { description: f.name });
+    } catch (err) {
+      toast("Restore failed", { description: (err as Error).message });
+      reload();
+    }
+  }
+
+  async function purgeFromTrash(f: FileItem) {
+    if (!window.confirm(`Permanently delete “${f.name}”? This can't be undone.`)) return;
+    setTrashFiles((fs) => fs.filter((x) => x.id !== f.id)); // optimistic
+    try {
+      await purgeFile(f.id);
+      reload();
+      toast("Deleted forever", { description: f.name });
+    } catch (err) {
+      toast("Delete failed", { description: (err as Error).message });
+      reload();
+    }
+  }
+
+  async function emptyTrash() {
+    const targets = [...trashFiles];
+    if (targets.length === 0) return;
+    if (!window.confirm(`Permanently delete all ${targets.length} item(s) in Trash? This can't be undone.`)) return;
+    setTrashFiles([]); // optimistic
+    try {
+      await Promise.all(targets.map((f) => purgeFile(f.id)));
+      reload();
+      toast("Trash emptied");
+    } catch (err) {
+      toast("Couldn't empty Trash", { description: (err as Error).message });
       reload();
     }
   }
@@ -392,7 +539,7 @@ function DesktopApp() {
       try {
         await deleteFile(f.id);
         reload();
-        toast("1 item deleted", { description: f.name });
+        toast("Moved to Trash", { description: f.name });
       } catch (err) {
         toast("Delete failed", { description: (err as Error).message });
       }
@@ -410,6 +557,21 @@ function DesktopApp() {
       window.open(contentUrl(f.id), "_blank");
     } else {
       toast(action, { description: f.name });
+    }
+  }
+
+  async function moveItem(file: FileItem, folder: FileItem) {
+    const dest = folder.path ?? "";
+    if (file.kind === "folder" || file.path === dest) return;
+    setFiles((fs) => fs.filter((x) => x.id !== file.id)); // optimistic: it leaves this folder
+    setSelection(new Set());
+    try {
+      await moveFile(file.id, dest);
+      reload();
+      toast("Moved", { description: `${file.name} → ${folder.name}` });
+    } catch (err) {
+      toast("Move failed", { description: (err as Error).message });
+      reload();
     }
   }
 
@@ -454,13 +616,15 @@ function DesktopApp() {
             ? [installed.find((p) => `plugin:${p.id}` === active)?.name ?? "Plugin"]
             : driveCrumb;
 
-  const showRail = tweaks.showRail && installed.length > 0 && active !== "home";
+  const railAvailable = active !== "home" && installed.some((p) => p.contributes?.railPanel);
+  const showRail = tweaks.showRail && railAvailable;
 
   return (
     <PluginDataProvider githubInstalled={installedIds.includes("github")}>
     <div className="flex h-screen flex-col">
       <OfflineBanner />
       <DemoBanner auth={auth} onSignIn={signIn} />
+      <InviteBanner auth={auth} onAccepted={reload} />
       <div
       className={cn(
         "app-grid min-h-0 flex-1",
@@ -470,6 +634,8 @@ function DesktopApp() {
         tweaks.radius !== "default" && `radius-${tweaks.radius}`,
       )}
       onDragOver={(e) => {
+        // Only react to external file drags; internal file→folder moves carry a custom type.
+        if (!e.dataTransfer.types.includes("Files")) return;
         e.preventDefault();
         setDragOver(true);
       }}
@@ -508,6 +674,9 @@ function DesktopApp() {
           theme={tweaks.theme}
           onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
           onUpload={() => uploadInputRef.current?.click()}
+          railAvailable={railAvailable}
+          railOpen={tweaks.showRail}
+          onToggleRail={() => setTweak("showRail", !tweaks.showRail)}
           auth={auth}
           onSignIn={signIn}
           onSignOut={signOut}
@@ -528,7 +697,23 @@ function DesktopApp() {
                 onOpenSpace={openSpace}
               />
             ) : active === "trash" ? (
-              <EmptyState />
+              <>
+                <div className="mb-4 flex flex-wrap items-center gap-3">
+                  <div className="min-w-0">
+                    <h1 className="text-[22px] font-semibold tracking-tight">Trash</h1>
+                    <div className="mt-0.5 whitespace-nowrap font-mono text-[13px] text-muted-foreground">
+                      {trashFiles.length} item{trashFiles.length === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                  <div className="flex-1" />
+                  {trashFiles.length > 0 && (
+                    <Button variant="outline" size="sm" className="gap-1.5" onClick={emptyTrash}>
+                      <Icon name="trash" size={14} /> Empty Trash
+                    </Button>
+                  )}
+                </div>
+                <TrashView files={trashFiles} onRestore={restoreFromTrash} onPurge={purgeFromTrash} onPreview={setPreviewFile} />
+              </>
             ) : active.startsWith("plugin:") ? (
               <PluginDetail id={active.replace("plugin:", "")} installed={installed} />
             ) : isFilesView ? (
@@ -618,6 +803,7 @@ function DesktopApp() {
                     onSelectionChange={setSelection}
                     onOpen={openItem}
                     onAction={onFileAction}
+                    onMove={moveItem}
                     pluginMenuItems={pluginMenuItems}
                     sort={sort}
                     onSort={onSort}
@@ -653,7 +839,13 @@ function DesktopApp() {
         onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
       />
 
-      <PluginStore open={storeOpen} onOpenChange={setStoreOpen} installedIds={installedIds} onInstall={installPlugin} />
+      <PluginStore
+        open={storeOpen}
+        onOpenChange={setStoreOpen}
+        installedIds={installedIds}
+        onInstall={installPlugin}
+        onUninstall={uninstallPlugin}
+      />
 
       <FilePreview
         file={previewFile}
@@ -699,10 +891,72 @@ function EmptyState() {
       <div className="grid size-16 place-items-center rounded-2xl bg-muted text-muted-foreground">
         <Icon name="trash" size={28} strokeWidth={1.25} />
       </div>
-      <div className="mt-4 text-[16px] font-semibold">Nothing here</div>
+      <div className="mt-4 text-[16px] font-semibold">Trash is empty</div>
       <div className="mt-1 max-w-sm text-sm text-muted-foreground">
-        Files in Trash are removed after 30 days. Anything you delete will show up here first.
+        Anything you delete shows up here first, so you can restore it before it's gone for good.
       </div>
+    </div>
+  );
+}
+
+function TrashView({
+  files,
+  onRestore,
+  onPurge,
+  onPreview,
+}: {
+  files: FileItem[];
+  onRestore: (f: FileItem) => void;
+  onPurge: (f: FileItem) => void;
+  onPreview: (f: FileItem) => void;
+}) {
+  if (files.length === 0) return <EmptyState />;
+  return (
+    <div className="overflow-hidden rounded-lg border">
+      <table className="w-full border-collapse text-[14px]">
+        <thead>
+          <tr className="border-b bg-muted/40 text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
+            <th className="px-3 py-2.5 text-left">Name</th>
+            <th className="w-[124px] px-3 py-2.5 text-left">Deleted</th>
+            <th className="w-[96px] px-3 py-2.5 text-right">Size</th>
+            <th className="w-[230px]" />
+          </tr>
+        </thead>
+        <tbody>
+          {files.map((f) => (
+            <tr
+              key={f.id}
+              onDoubleClick={() => onPreview(f)}
+              className="group cursor-default border-t transition-colors hover:bg-muted/50"
+              style={{ height: "var(--row-h)" }}
+            >
+              <td className="px-3">
+                <div className="flex items-center gap-3">
+                  <FileIcon kind={f.kind} />
+                  <span className="truncate font-medium">{f.name}</span>
+                </div>
+              </td>
+              <td className="px-3 font-mono text-[12.5px] text-muted-foreground">{f.modified}</td>
+              <td className="px-3 text-right font-mono text-[12.5px] text-muted-foreground">{f.size}</td>
+              <td className="px-3">
+                <div className="flex items-center justify-end gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                  <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => onRestore(f)}>
+                    <Icon name="restore" size={13} /> Restore
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 gap-1.5 text-destructive hover:text-destructive"
+                    onClick={() => onPurge(f)}
+                  >
+                    <Icon name="trash" size={13} /> Delete forever
+                  </Button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

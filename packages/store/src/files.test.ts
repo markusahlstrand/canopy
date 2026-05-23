@@ -105,18 +105,65 @@ describe("FileService over libsql", () => {
     expect(versions[0]!.n).toBe(2);
   });
 
-  it("delete releases a ref; the blob is removed only at ref_count 0", async () => {
+  it("purge releases a ref; the blob is removed only at ref_count 0", async () => {
     const a = await upload("a.txt", "shared");
     const b = await upload("b.txt", "shared");
     const key = a.version!.blobKey!;
 
-    await svc.deleteFile({ sub: USER }, a.id); // ref 2 → 1, blob kept
+    await svc.purgeFile({ sub: USER }, a.id); // ref 2 → 1, blob kept
     expect(store.map.has(key)).toBe(true);
     expect((await db.first<{ ref_count: number }>("SELECT ref_count FROM blobs WHERE hash = ?", [key]))?.ref_count).toBe(1);
 
-    await svc.deleteFile({ sub: USER }, b.id); // ref 1 → 0, blob gone
+    await svc.purgeFile({ sub: USER }, b.id); // ref 1 → 0, blob gone
     expect(store.map.has(key)).toBe(false);
     expect(await db.first("SELECT 1 FROM blobs WHERE hash = ?", [key])).toBeNull();
+  });
+
+  it("delete moves a file to Trash without destroying content; restore brings it back", async () => {
+    const f = await upload("draft.txt", "keep me", { path: "Docs" });
+    const key = f.version!.blobKey!;
+    const versionId = f.currentVersionId;
+
+    await svc.deleteFile({ sub: USER }, f.id);
+    // Hidden from listings, but content (version + blob) is untouched.
+    expect((await svc.list(USER, space, "Docs")).files).toHaveLength(0);
+    expect(store.map.has(key)).toBe(true);
+    expect((await db.first<{ n: number }>("SELECT COUNT(*) AS n FROM file_versions WHERE file_id = ?", [f.id]))?.n).toBe(1);
+    // It surfaces in Trash.
+    expect((await svc.listTrash(USER)).map((x) => x.name)).toEqual(["draft.txt"]);
+
+    await svc.restoreFile({ sub: USER }, f.id);
+    expect((await svc.listTrash(USER))).toHaveLength(0);
+    const restored = await svc.getFile({ sub: USER }, f.id);
+    expect(restored.name).toBe("draft.txt");
+    expect(restored.currentVersionId).toBe(versionId); // same content, intact
+    expect((await svc.list(USER, space, "Docs")).files.map((x) => x.name)).toEqual(["draft.txt"]);
+  });
+
+  it("purge permanently removes a trashed file, its versions, grants, and releases the blob", async () => {
+    const f = await upload("gone.txt", "bye for good");
+    const key = f.version!.blobKey!;
+    await svc.shareGrant({ sub: USER }, f.id, { subjectType: "user", subjectId: "bob", role: "viewer" });
+
+    await svc.deleteFile({ sub: USER }, f.id);
+    await svc.purgeFile({ sub: USER }, f.id);
+
+    expect(await svc.listTrash(USER)).toHaveLength(0);
+    expect(store.map.has(key)).toBe(false);
+    expect(await db.first("SELECT 1 FROM files WHERE id = ?", [f.id])).toBeNull();
+    expect(await db.first("SELECT 1 FROM file_versions WHERE file_id = ?", [f.id])).toBeNull();
+    expect(await db.first("SELECT 1 FROM relation_tuples WHERE object_type = 'file' AND object_id = ?", [f.id])).toBeNull();
+  });
+
+  it("restore and purge require owner", async () => {
+    const f = await upload("mine.txt", "x");
+    await svc.shareGrant({ sub: USER }, f.id, { subjectType: "user", subjectId: "bob", role: "viewer" });
+    await svc.deleteFile({ sub: USER }, f.id);
+
+    await expect(svc.restoreFile({ sub: "bob" }, f.id)).rejects.toBeInstanceOf(PermissionError);
+    await expect(svc.purgeFile({ sub: "bob" }, f.id)).rejects.toBeInstanceOf(PermissionError);
+    // still recoverable by the owner
+    expect((await svc.listTrash(USER)).map((x) => x.name)).toEqual(["mine.txt"]);
   });
 
   it("lists a virtual folder: files at the path plus child folders", async () => {

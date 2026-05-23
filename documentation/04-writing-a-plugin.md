@@ -48,8 +48,11 @@ export function createRegistry(installedIds: string[]): PluginRegistry {
 }
 ```
 
-Documentation is in `DEFAULT_INSTALLED`, so it's registered at startup and shows up in the sidebar
-under "Plugins".
+Documentation ships in the store catalog (under **Help**). It's installed by default only for
+signed-out / anonymous visitors — `ANON_DEFAULT_INSTALLED`, where it doubles as the landing
+page; signed-in users add it from the store like any other plugin. Either way, once it's in a
+user's install set it's registered through `buildManifest` (above) and shows up in the sidebar
+under "Plugins". Which plugins a user has installed is [persisted per user](how-plugins-work).
 
 ## 3. Build the view, using only granted access
 

@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { fetchMe, uploadFiles, loginUrl, type Me } from "@/lib/api";
 import { CURRENT_USER, type FileItem } from "@/lib/mock-data";
 import { DemoBanner } from "@/components/demo-banner";
+import { InviteBanner } from "@/components/invite-banner";
 import { OfflineBanner } from "@/components/offline-banner";
 import { HomeScreen, DriveScreen, FamilyScreen, PluginsScreen } from "./screens";
 import { NewActionSheet, FileDetailSheet } from "./sheets";
@@ -58,6 +59,7 @@ export function MobileApp() {
     <div className="flex h-dvh flex-col overflow-hidden bg-background pt-[env(safe-area-inset-top)] text-foreground">
       <OfflineBanner />
       <DemoBanner auth={auth} onSignIn={signIn} />
+      <InviteBanner auth={auth} onAccepted={() => window.location.reload()} />
       <main className="min-h-0 flex-1 overflow-y-auto">
         {view === "home" && <HomeScreen userName={userName} onOpenFile={openFile} onNav={(v) => setView(v as View)} />}
         {view === "drive" && <DriveScreen onOpenFile={openFile} />}

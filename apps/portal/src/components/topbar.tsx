@@ -1,4 +1,5 @@
 import { Icon } from "@/lib/icons";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -25,6 +26,9 @@ interface TopbarProps {
   theme: "light" | "dark";
   onToggleTheme: () => void;
   onUpload: () => void;
+  railAvailable: boolean;
+  railOpen: boolean;
+  onToggleRail: () => void;
   auth: Me;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -38,6 +42,9 @@ export function Topbar({
   theme,
   onToggleTheme,
   onUpload,
+  railAvailable,
+  railOpen,
+  onToggleRail,
   auth,
   onSignIn,
   onSignOut,
@@ -97,6 +104,21 @@ export function Topbar({
       <button onClick={onToggleTheme} className="grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-accent">
         <Icon name={theme === "dark" ? "sun" : "moon"} size={18} />
       </button>
+
+      {/* Right panel toggle */}
+      {railAvailable && (
+        <button
+          onClick={onToggleRail}
+          title={railOpen ? "Hide panel" : "Show panel"}
+          aria-pressed={railOpen}
+          className={cn(
+            "grid size-9 place-items-center rounded-md hover:bg-accent",
+            railOpen ? "bg-accent text-foreground" : "text-muted-foreground",
+          )}
+        >
+          <Icon name="panel-right" size={18} />
+        </button>
+      )}
 
       {/* Upload */}
       <Button onClick={onUpload} className="gap-1.5">

@@ -61,7 +61,7 @@ export interface CatalogItem {
   id: string;
   icon: string;
   label: string;
-  category: "Productivity" | "Finance" | "Lifestyle" | "Security" | "Media" | "Wellness";
+  category: "Productivity" | "Finance" | "Lifestyle" | "Security" | "Media" | "Wellness" | "Help";
   tagline: string;
   popular?: boolean;
   color: string;
@@ -71,6 +71,7 @@ export const PLUGIN_CATALOG: CatalogItem[] = [
   { id: "calendar", icon: "calendar", label: "Calendar", category: "Productivity", tagline: "Shared family calendar with smart conflicts", popular: true, color: "145 33% 36%" },
   { id: "tasks", icon: "check-square", label: "Tasks", category: "Productivity", tagline: "A real to-do list for the household", popular: true, color: "212 70% 48%" },
   { id: "github", icon: "github", label: "GitHub", category: "Productivity", tagline: "Sync issues to Tasks, releases & milestones to Calendar", popular: true, color: "240 6% 20%" },
+  { id: "documentation", icon: "book", label: "Documentation", category: "Help", tagline: "How Canopy works — guides for using it and building plugins", color: "212 70% 48%" },
 ];
 
 export const STORAGE = { label: "Cloudflare R2", used: "12.4 GB", total: "50 GB", percent: 25 };

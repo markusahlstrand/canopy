@@ -25,7 +25,14 @@ import {
   type InviteStatus,
   type SpaceInvite,
 } from "./invites";
-import { ensureUser, findUserByEmail } from "./users";
+import {
+  ensureUser,
+  findUserByEmail,
+  normalizeEmail,
+  pendingSpaceInvites,
+  resolveInvites,
+  type PendingSpaceInvite,
+} from "./users";
 import {
   createAppPassword as createAppPwd,
   deleteAppPassword as deleteAppPwd,
@@ -34,6 +41,7 @@ import {
   type AppPassword,
 } from "./app-passwords";
 import { deletePluginSettings, getPluginSettings, setPluginSettings } from "./plugin-settings";
+import { getInstalledPlugins, setInstalledPlugins } from "./plugin-installs";
 
 export class NotFoundError extends Error {
   constructor(message = "not found") {
@@ -182,6 +190,8 @@ export interface CreateFileInput {
 export interface Caller {
   sub: string;
   email?: string;
+  /** Whether the IdP verified the caller's email — required to claim email-bound invites. */
+  emailVerified?: boolean;
 }
 
 /**
@@ -241,13 +251,14 @@ export class FileService {
    */
   async addSpaceMember(caller: Caller, spaceId: string, email: string, role: Role): Promise<SpaceMember> {
     await this.requireSpace(caller.sub, spaceId, "owner");
-    const user = await findUserByEmail(this.db, email);
+    const addr = normalizeEmail(email);
+    const user = await findUserByEmail(this.db, addr);
     if (user) {
       await addMember(this.db, spaceId, user.sub, role);
       return { sub: user.sub, role, email: user.email, name: user.name, pending: false };
     }
-    await writeTuple(this.db, { objectType: "space", objectId: spaceId, relation: role, subjectType: "email", subjectId: email });
-    return { sub: "", role, email, name: null, pending: true };
+    await writeTuple(this.db, { objectType: "space", objectId: spaceId, relation: role, subjectType: "email", subjectId: addr });
+    return { sub: "", role, email: addr, name: null, pending: true };
   }
 
   async removeSpaceMember(caller: Caller, spaceId: string, sub: string): Promise<void> {
@@ -258,6 +269,31 @@ export class FileService {
   /** Resolve an email to a known user (for turning share-by-email into a user grant). */
   resolveEmail(email: string) {
     return findUserByEmail(this.db, email);
+  }
+
+  // ── pending invites (email-bound, resolved on login or on demand) ────────────
+
+  /**
+   * Spaces the caller has been invited to by email but not yet joined — i.e.
+   * `email:` grants awaiting them. Powers the in-app invites banner so an
+   * already-signed-in user sees invites created after their last login (login
+   * resolves them automatically; this catches the in-session gap).
+   */
+  async pendingInvites(caller: Caller): Promise<PendingSpaceInvite[]> {
+    return pendingSpaceInvites(this.db, caller.email);
+  }
+
+  /**
+   * Claim every email-bound invite for the caller's address, converting the
+   * `email:` grants into `user:` grants (same effect as a verified login). Gated
+   * on a verified email so nobody can claim another person's invite by signing
+   * up with their address. Returns how many spaces were pending.
+   */
+  async acceptPendingInvites(caller: Caller): Promise<{ accepted: number }> {
+    if (!caller.email || !caller.emailVerified) return { accepted: 0 };
+    const pending = await pendingSpaceInvites(this.db, caller.email);
+    await resolveInvites(this.db, caller.sub, caller.email);
+    return { accepted: pending.length };
   }
 
   // ── invite links (single-use space invites) ─────────────────────────────────
@@ -405,6 +441,14 @@ export class FileService {
   }
   deletePluginSettings(userSub: string, pluginId: string): Promise<void> {
     return deletePluginSettings(this.db, userSub, pluginId);
+  }
+
+  // ── per-user installed plugin set (JSON list; null = apply server defaults) ──
+  getInstalledPlugins(userSub: string): Promise<string[] | null> {
+    return getInstalledPlugins(this.db, userSub);
+  }
+  setInstalledPlugins(userSub: string, pluginIds: string[]): Promise<void> {
+    return setInstalledPlugins(this.db, userSub, pluginIds);
   }
 
   /** The current version's blob key for streaming a managed download. Requires viewer+. */
@@ -561,17 +605,55 @@ export class FileService {
     return this.getFile(caller, id);
   }
 
-  /** Soft-delete the file (record kept), removing version rows then releasing each blob ref. Requires owner. */
+  /**
+   * Move the file to Trash: mark it `deleted_at` but keep its versions + blobs so
+   * it can be {@link restoreFile restored}. Hidden from listings (which filter
+   * `deleted_at IS NULL`). Use {@link purgeFile} to free the content. Requires owner.
+   */
   async deleteFile(caller: Caller, id: string): Promise<void> {
     await this.requirePerm(caller, id, "owner");
     const now = new Date().toISOString();
+    await this.db.run("UPDATE files SET deleted_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+  }
+
+  /** Files in the caller's Trash (deleted but recoverable), across their spaces. Most recently deleted first. */
+  async listTrash(userSub: string): Promise<ListedFile[]> {
+    const mine = await memberSpaceIds(this.db, userSub);
+    if (!mine.length) return [];
+    const rows = await this.db.all<JoinedRow>(
+      `SELECT f.*, ${VERSION_COLS}
+       FROM files f LEFT JOIN file_versions v ON v.id = f.current_version_id
+       WHERE f.deleted_at IS NOT NULL AND f.tenant_id IN (${mine.map(() => "?").join(",")})
+       ORDER BY f.deleted_at DESC`,
+      mine,
+    );
+    return this.enrichForDisplay(rows.map(joinedToFileWithVersion));
+  }
+
+  /** Restore a file from Trash (clears `deleted_at`), making it visible again. Requires owner. */
+  async restoreFile(caller: Caller, id: string): Promise<void> {
+    await this.requirePerm(caller, id, "owner", true);
+    await this.db.run("UPDATE files SET deleted_at = NULL, updated_at = ? WHERE id = ?", [
+      new Date().toISOString(),
+      id,
+    ]);
+  }
+
+  /**
+   * Permanently delete a file: drop its version rows + access grants, then release
+   * each blob ref (the blob is removed once no file references it). Irreversible.
+   * Requires owner.
+   */
+  async purgeFile(caller: Caller, id: string): Promise<void> {
+    await this.requirePerm(caller, id, "owner", true);
     const versions = await this.db.all<{ blob_hash: string | null }>(
       "SELECT blob_hash FROM file_versions WHERE file_id = ? AND blob_hash IS NOT NULL",
       [id],
     );
     await this.db.batch([
       { sql: "DELETE FROM file_versions WHERE file_id = ?", params: [id] },
-      { sql: "UPDATE files SET deleted_at = ?, current_version_id = NULL WHERE id = ?", params: [now, id] },
+      { sql: "DELETE FROM relation_tuples WHERE object_type = 'file' AND object_id = ?", params: [id] },
+      { sql: "DELETE FROM files WHERE id = ?", params: [id] },
     ]);
     for (const v of versions) if (v.blob_hash) await releaseBlob(this.repo, this.store, v.blob_hash);
   }
@@ -590,7 +672,7 @@ export class FileService {
       objectId: fileId,
       relation: grant.role,
       subjectType: grant.subjectType,
-      subjectId: grant.subjectId,
+      subjectId: grant.subjectType === "email" ? normalizeEmail(grant.subjectId) : grant.subjectId,
       subjectRelation: grant.subjectType === "space" ? (grant.subjectRelation ?? "member") : "",
     });
   }
@@ -607,7 +689,7 @@ export class FileService {
       objectId: fileId,
       relation: grant.role,
       subjectType: grant.subjectType,
-      subjectId: grant.subjectId,
+      subjectId: grant.subjectType === "email" ? normalizeEmail(grant.subjectId) : grant.subjectId,
       subjectRelation: grant.subjectType === "space" ? (grant.subjectRelation ?? "member") : "",
     });
   }
@@ -620,8 +702,8 @@ export class FileService {
 
   // ── authorization ──────────────────────────────────────────────────────────
 
-  private async requirePerm(caller: Caller, id: string, required: Role): Promise<FileRecord> {
-    const file = await this.loadFile(id);
+  private async requirePerm(caller: Caller, id: string, required: Role, includeDeleted = false): Promise<FileRecord> {
+    const file = await this.loadFile(id, includeDeleted);
     if (!file) throw new NotFoundError();
     const role = await fileRole(this.db, id, caller.sub, caller.email ?? "");
     if (!role || ROLE_RANK[role] < ROLE_RANK[required]) throw new PermissionError();
@@ -633,8 +715,11 @@ export class FileService {
     if (!role || ROLE_RANK[role] < ROLE_RANK[required]) throw new PermissionError();
   }
 
-  private async loadFile(id: string): Promise<FileRecord | null> {
-    const row = await this.db.first<FileRow>("SELECT * FROM files WHERE id = ? AND deleted_at IS NULL", [id]);
+  private async loadFile(id: string, includeDeleted = false): Promise<FileRecord | null> {
+    const row = await this.db.first<FileRow>(
+      `SELECT * FROM files WHERE id = ?${includeDeleted ? "" : " AND deleted_at IS NULL"}`,
+      [id],
+    );
     return row ? toFile(row) : null;
   }
 

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown, Star } from "lucide-react";
 import type { FileItem } from "@/lib/mock-data";
 import { FileIcon } from "@/components/file-icon";
@@ -43,8 +43,17 @@ interface FileTableProps {
   onSort: (key: SortKey) => void;
   view: "list" | "grid";
   onAction: (action: string, f: FileItem) => void;
+  /** Drop a dragged file into a folder. Both items come from this table. */
+  onMove?: (file: FileItem, folder: FileItem) => void;
   pluginMenuItems: (kind: FileKind) => PluginMenuItem[];
 }
+
+/** A real file the user can pick up (folders and synthetic rows aren't draggable). */
+const isDraggableFile = (f: FileItem) => f.kind !== "folder";
+
+/** A plain folder within the current space — a valid move destination.
+ *  Excludes space mounts (`space:`) and "Shared with me" (`__shared`), which are cross-space. */
+const isFolderDropTarget = (f: FileItem) => f.kind === "folder" && f.id.startsWith("folder:");
 
 const COLUMNS: { key: SortKey; label: string; className: string }[] = [
   { key: "name", label: "Name", className: "" },
@@ -94,9 +103,60 @@ export function FileTable({
   onSort,
   view,
   onAction,
+  onMove,
   pluginMenuItems,
 }: FileTableProps) {
   const lastIndex = useRef<number | null>(null);
+  // Internal file→folder drag-and-drop. The dragged file is held in a ref;
+  // the folder currently under the cursor is tracked in state for the highlight.
+  const dragged = useRef<FileItem | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  function canDrop(folder: FileItem): boolean {
+    const f = dragged.current;
+    return !!onMove && !!f && isFolderDropTarget(folder) && f.path !== folder.path;
+  }
+
+  function dragHandlers(f: FileItem) {
+    if (!onMove || !isDraggableFile(f)) return {};
+    return {
+      draggable: true,
+      onDragStart: (e: React.DragEvent) => {
+        dragged.current = f;
+        // A custom type marks this as an internal move so the app-level
+        // "drop files to upload" overlay (which keys off "Files") stays hidden.
+        e.dataTransfer.setData("application/x-canopy-file", f.id);
+        e.dataTransfer.effectAllowed = "move";
+      },
+      onDragEnd: () => {
+        dragged.current = null;
+        setDragOverId(null);
+      },
+    };
+  }
+
+  function dropHandlers(folder: FileItem) {
+    if (!onMove || !isFolderDropTarget(folder)) return {};
+    return {
+      onDragOver: (e: React.DragEvent) => {
+        if (!canDrop(folder)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "move";
+        setDragOverId(folder.id);
+      },
+      onDragLeave: () => setDragOverId((id) => (id === folder.id ? null : id)),
+      onDrop: (e: React.DragEvent) => {
+        const file = dragged.current;
+        setDragOverId(null);
+        if (!file || !canDrop(folder)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onMove!(file, folder);
+        dragged.current = null;
+      },
+    };
+  }
 
   function handleRowClick(e: React.MouseEvent, index: number, id: string) {
     const next = new Set(selection);
@@ -123,11 +183,17 @@ export function FileTable({
         {files.map((f) => (
           <div
             key={f.id}
+            {...dragHandlers(f)}
+            {...dropHandlers(f)}
             onClick={(e) => handleRowClick(e, files.indexOf(f), f.id)}
             onDoubleClick={() => onOpen(f)}
             className={cn(
               "group flex cursor-default flex-col gap-2.5 rounded-lg border p-3.5 transition-colors",
-              selection.has(f.id) ? "border-primary/40 bg-primary/[0.06]" : "hover:bg-muted/50",
+              dragOverId === f.id
+                ? "border-primary bg-primary/10 ring-2 ring-primary"
+                : selection.has(f.id)
+                  ? "border-primary/40 bg-primary/[0.06]"
+                  : "hover:bg-muted/50",
             )}
           >
             <div className="flex items-start justify-between">
@@ -186,11 +252,17 @@ export function FileTable({
               <ContextMenu key={f.id}>
                 <ContextMenuTrigger asChild>
                   <tr
+                    {...dragHandlers(f)}
+                    {...dropHandlers(f)}
                     onClick={(e) => handleRowClick(e, i, f.id)}
                     onDoubleClick={() => onOpen(f)}
                     className={cn(
                       "group cursor-default border-t transition-colors",
-                      selected ? "bg-primary/[0.06]" : "hover:bg-muted/50",
+                      dragOverId === f.id
+                        ? "bg-primary/10 ring-2 ring-inset ring-primary"
+                        : selected
+                          ? "bg-primary/[0.06]"
+                          : "hover:bg-muted/50",
                     )}
                     style={{ height: "var(--row-h)" }}
                   >
