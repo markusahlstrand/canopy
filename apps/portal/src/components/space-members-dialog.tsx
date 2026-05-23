@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/lib/icons";
 import { PersonAvatar } from "@/components/person-avatar";
+import { PeoplePicker } from "@/components/people-picker";
 import { PLUGIN_CATALOG } from "@/lib/mock-data";
 import {
   addMember,
@@ -157,16 +157,23 @@ export function SpaceMembersDialog({
                   });
                 }}
               >
-                <Input
-                  type="email"
-                  placeholder="Add by email…"
+                <PeoplePicker
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="flex-1"
-                  autoComplete="off"
-                  data-bwignore
-                  data-1p-ignore
-                  data-lpignore="true"
+                  onChange={setEmail}
+                  placeholder="Add by name or email…"
+                  disabled={busy}
+                  exclude={(p) =>
+                    members.some((m) => (m.sub && m.sub === p.sub) || (!!m.email && m.email === p.email))
+                  }
+                  onPick={(p) => {
+                    // Membership is keyed by email (resolved to a user on the server);
+                    // a connected contact always has one, but guard just in case.
+                    if (!p.email) return;
+                    void run(async () => {
+                      await addMember(spaceId, p.email!, memberRole);
+                      setEmail("");
+                    });
+                  }}
                 />
                 <Select value={memberRole} onValueChange={(v) => setMemberRole(v as Role)}>
                   <SelectTrigger className="w-[104px]" size="sm">

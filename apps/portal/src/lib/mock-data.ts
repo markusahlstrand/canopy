@@ -1,5 +1,16 @@
 export type FileKind = "folder" | "pdf" | "image" | "note" | "doc" | "audio" | "video";
 
+/** One run of a server-side processor over a file, from metadata.processing. */
+export interface ProcessingEntry {
+  at: string;
+  plugin: string;
+  status: "ok" | "error";
+  model?: string;
+  labels?: string[];
+  described?: boolean;
+  note?: string;
+}
+
 export interface FileItem {
   /** File-record id (uuid) for real files; a synthetic `folder:<path>` for folders. */
   id: string;
@@ -18,8 +29,10 @@ export interface FileItem {
   labels?: string[];
   /** User-defined tags (distinct from the AI `labels`), stored in metadata.tags. */
   tags?: string[];
-  /** Freeform description, stored in metadata.description. */
+  /** Freeform description, stored in metadata.description (may be AI-generated). */
   description?: string;
+  /** Per-document processing log (e.g. Document AI runs), stored in metadata.processing. */
+  processing?: ProcessingEntry[];
 }
 
 export const DEFAULT_FILES: FileItem[] = [

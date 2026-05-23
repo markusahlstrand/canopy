@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Icon } from "@/lib/icons";
 import { PersonAvatar } from "@/components/person-avatar";
+import { PeoplePicker } from "@/components/people-picker";
 import { listGrants, listSpaces, shareFile, unshareFile, type Grant, type Role, type SpaceView } from "@/lib/api";
 
 const ROLES: Role[] = ["viewer", "editor", "owner"];
@@ -71,9 +71,9 @@ export function ShareDialog({
   }
 
   function label(g: Grant): string {
-    if (g.subjectType === "email") return g.subjectId;
     if (g.subjectType === "space") return spaceName(g.subjectId);
-    return g.subjectId; // a user sub
+    // A resolved user grant carries a name/email; fall back to the raw id.
+    return g.name ?? g.email ?? g.subjectId;
   }
 
   return (
@@ -83,7 +83,7 @@ export function ShareDialog({
           <DialogTitle className="truncate">Share “{fileName}”</DialogTitle>
         </DialogHeader>
 
-        {/* add a person by email */}
+        {/* add a person — search connected people, or type any email to invite */}
         <form
           className="flex items-center gap-2"
           onSubmit={(e) => {
@@ -95,12 +95,24 @@ export function ShareDialog({
             });
           }}
         >
-          <Input
-            type="email"
-            placeholder="Add by email…"
+          <PeoplePicker
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="flex-1"
+            onChange={setEmail}
+            placeholder="Add people by name or email…"
+            disabled={busy}
+            exclude={(p) =>
+              grants.some(
+                (g) =>
+                  (g.subjectType === "user" && g.subjectId === p.sub) ||
+                  (g.subjectType === "email" && g.email === p.email),
+              )
+            }
+            onPick={(p) =>
+              void run(async () => {
+                await shareFile(fileId, { subjectType: "user", subjectId: p.sub }, role);
+                setEmail("");
+              })
+            }
           />
           <RoleSelect value={role} onChange={setRole} />
           <Button type="submit" size="sm" disabled={busy || !email.trim()}>

@@ -93,6 +93,51 @@ export async function fileGrants(db: Db, fileId: string): Promise<Tuple[]> {
   }));
 }
 
+/** A file grant enriched with directory info for its subject (for the Share dialog). */
+export interface GrantDetail extends Tuple {
+  /** Display name for a `user` subject, else null. */
+  name: string | null;
+  /** Email for a `user` (from the directory) or `email` (the address itself) subject, else null. */
+  email: string | null;
+  picture: string | null;
+}
+
+/**
+ * Grants on `file:<id>` with the subject's directory info joined in, so a
+ * `user:` grant (e.g. an email share that resolved to a known account) shows a
+ * name/email instead of the raw OIDC sub. `space:` subjects are labelled by the
+ * caller from their space list.
+ */
+export async function fileGrantsDetailed(db: Db, fileId: string): Promise<GrantDetail[]> {
+  const rows = await db.all<{
+    relation: string;
+    subject_type: SubjectType;
+    subject_id: string;
+    subject_relation: string;
+    name: string | null;
+    email: string | null;
+    picture: string | null;
+  }>(
+    `SELECT t.relation, t.subject_type, t.subject_id, t.subject_relation,
+            u.name AS name, u.email AS email, u.picture AS picture
+       FROM relation_tuples t
+       LEFT JOIN users u ON t.subject_type = 'user' AND u.sub = t.subject_id
+       WHERE t.object_type = 'file' AND t.object_id = ? AND t.relation IN ('owner','editor','viewer')`,
+    [fileId],
+  );
+  return rows.map((r) => ({
+    objectType: "file" as const,
+    objectId: fileId,
+    relation: r.relation,
+    subjectType: r.subject_type,
+    subjectId: r.subject_id,
+    subjectRelation: r.subject_relation,
+    name: r.name,
+    email: r.subject_type === "email" ? r.subject_id : r.email,
+    picture: r.picture,
+  }));
+}
+
 /** The user's effective role on a space (via membership + nested groups), or null. */
 export async function spaceRole(db: Db, spaceId: string, userSub: string): Promise<Role | null> {
   const row = await db.first<{ rank: number | null }>(

@@ -23,7 +23,7 @@ import {
   type Comment,
   type FileVersion,
 } from "@/lib/api";
-import { FILE_KIND_COLOR, STORAGE, CURRENT_USER, type FileItem } from "@/lib/mock-data";
+import { FILE_KIND_COLOR, STORAGE, CURRENT_USER, type FileItem, type ProcessingEntry } from "@/lib/mock-data";
 
 function Detail({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -332,6 +332,54 @@ function Comments({ fileId }: { fileId: string }) {
   );
 }
 
+/** Turn a processor id ("document-ai") into a friendly name ("Document AI"). */
+function pluginLabel(id: string): string {
+  return id.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Per-document processing log — what server-side processors (e.g. Document AI) did
+ * to this file and when, newest first. Lets a user confirm a file was processed
+ * correctly, and see any failures.
+ */
+function ProcessingLog({ entries }: { entries: ProcessingEntry[] }) {
+  if (entries.length === 0) return null;
+  const newestFirst = [...entries].reverse();
+  return (
+    <div>
+      <SectionLabel>Processing</SectionLabel>
+      <div className="flex flex-col">
+        {newestFirst.map((e, i) => {
+          const summary =
+            e.status === "error"
+              ? (e.note ?? "Failed")
+              : [e.labels?.length ? e.labels.join(", ") : null, e.described ? "description" : null]
+                  .filter(Boolean)
+                  .join(" · ") || "No changes";
+          return (
+            <div key={`${e.at}:${i}`} className="flex items-start gap-2.5 border-b py-2 last:border-0">
+              <span
+                className={`mt-1.5 size-2 shrink-0 rounded-full ${e.status === "error" ? "bg-destructive" : "bg-primary"}`}
+                aria-hidden
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[13px] font-medium">{pluginLabel(e.plugin)}</span>
+                  {e.model && <span className="font-mono text-[11px] text-muted-foreground">{e.model}</span>}
+                  <span className="ml-auto font-mono text-[11.5px] text-muted-foreground">{fmtWhen(e.at)}</span>
+                </div>
+                <div className={`text-[12.5px] ${e.status === "error" ? "text-destructive" : "text-muted-foreground"}`}>
+                  {summary}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function FilePreview({
   file,
   onClose,
@@ -442,6 +490,10 @@ export function FilePreview({
                   <SectionLabel>Tags</SectionLabel>
                   <TagEditor key={file.id} fileId={file.id} initial={file.tags ?? []} onSaved={onSaved} />
                 </div>
+              )}
+
+              {file.kind !== "folder" && file.processing && file.processing.length > 0 && (
+                <ProcessingLog entries={file.processing} />
               )}
 
               {file.kind !== "folder" && (

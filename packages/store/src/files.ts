@@ -1,8 +1,8 @@
 import type { Db } from "./db";
 import type { BlobRepo, BlobStore } from "./blob-store";
-import type { FileRecord, FileVersion, FileWithVersion, Role, Space } from "./types";
+import type { FileRecord, FileVersion, FileWithVersion, Role, Space, User } from "./types";
 import { blobKey, commitUpload, prepareBlob, releaseBlob, type PrepareResult } from "./blobs";
-import { ROLE_RANK, deleteTuple, fileGrants, fileRole, memberSpaceIds, spaceRole, writeTuple, type SubjectType, type Tuple } from "./authz";
+import { ROLE_RANK, deleteTuple, fileGrantsDetailed, fileRole, memberSpaceIds, spaceRole, writeTuple, type GrantDetail, type SubjectType } from "./authz";
 import {
   addMember,
   createSpace as createGroupSpace,
@@ -26,6 +26,7 @@ import {
   type SpaceInvite,
 } from "./invites";
 import {
+  connectedUsers,
   ensureUser,
   findUserByEmail,
   normalizeEmail,
@@ -921,10 +922,20 @@ export class FileService {
     });
   }
 
-  /** All grants on a file (for a Share dialog). Requires viewer+. */
-  async listGrants(caller: Caller, fileId: string): Promise<Tuple[]> {
+  /** All grants on a file, with subject names/emails resolved (for a Share dialog). Requires viewer+. */
+  async listGrants(caller: Caller, fileId: string): Promise<GrantDetail[]> {
     await this.requirePerm(caller, fileId, "viewer");
-    return fileGrants(this.db, fileId);
+    return fileGrantsDetailed(this.db, fileId);
+  }
+
+  /**
+   * People the caller is connected to (space co-members + file-share peers),
+   * optionally filtered by `q` — for the share-with picker. Viewer-level: it
+   * only surfaces the caller's own contact graph.
+   */
+  async connectedPeople(caller: Caller, q?: string): Promise<User[]> {
+    const spaceIds = await memberSpaceIds(this.db, caller.sub);
+    return connectedUsers(this.db, caller.sub, spaceIds, q);
   }
 
   // ── authorization ──────────────────────────────────────────────────────────

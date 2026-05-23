@@ -14,7 +14,7 @@ import type { AuthConfig } from "./auth/config";
 import { getSessionUser } from "./auth/routes";
 import { registerWebdav } from "./webdav";
 import type { ServerDataSource } from "./data-sources";
-import type { DocumentProcessor } from "./processors";
+import type { DocumentProcessor, ProcessingEntry } from "./processors";
 import { decryptString, encryptString } from "./crypto";
 
 const MIME: Record<string, string> = {
@@ -59,6 +59,8 @@ async function readCapped(stream: ReadableStream<Uint8Array>, cap: number): Prom
 }
 
 const PROCESSOR_MAX_BYTES = 8 * 1024 * 1024;
+// Keep a file's processing log bounded — newest entries win.
+const PROCESSING_LOG_MAX = 20;
 
 /** The DB-backed drive: a file service plus the blob store for streaming downloads. */
 export interface DriveDeps {
@@ -197,9 +199,11 @@ export function createApp(deps: AppDeps) {
   }
 
   // Best-effort: run configured document processors over a freshly-added file and
-  // merge any labels into its metadata. Runs in the background (does not block the
-  // upload response). On a Worker, pass this to ctx.waitUntil; a future migration
-  // moves it onto the task runner (the `enrichItem` hook) — see the plugin docs.
+  // merge what they produce (type labels, a description) into its metadata, and
+  // append a per-run entry to the file's processing log so the user can see whether
+  // — and how — it was processed. Runs in the background (does not block the upload
+  // response). On a Worker, pass this to ctx.waitUntil; a future migration moves it
+  // onto the task runner (the `enrichItem` hook) — see the plugin docs.
   async function labelFileInBackground(sub: string, file: Awaited<ReturnType<FileService["createFile"]>>): Promise<void> {
     if (processors.length === 0 || !drive) return;
     const blobKey = file.version?.blobKey;
@@ -210,22 +214,60 @@ export function createApp(deps: AppDeps) {
       const bytes = await readCapped(stream, PROCESSOR_MAX_BYTES);
       const mime = file.version?.mime ?? mimeFor(file.name);
       const labels = new Set<string>();
+      let description: string | undefined;
+      const entries: ProcessingEntry[] = [];
+
       for (const p of processors) {
         const config = await decryptedSettings(sub, p);
         const required = p.configFields.filter((f) => f.required);
         if (!required.every((f) => config[f.key])) {
+          // Unconfigured for this user — not a processing event, so don't log it.
           console.log(`[processor:${p.id}] skip "${file.name}" — not configured for this user`);
           continue;
         }
         console.log(`[processor:${p.id}] processing "${file.name}" (${mime}, ${bytes.byteLength} bytes)`);
-        const out = await p.label({ name: file.name, mime, bytes }, config);
-        console.log(`[processor:${p.id}] "${file.name}" → ${out.length ? out.join(", ") : "(no label)"}`);
-        for (const l of out) labels.add(l);
+        const at = new Date().toISOString();
+        try {
+          const out = await p.process({ name: file.name, mime, bytes }, config);
+          for (const l of out.labels) labels.add(l);
+          // First non-empty description wins; never clobber one the user already set.
+          if (out.description && description === undefined) description = out.description;
+          const status = out.error ? "error" : "ok";
+          entries.push({
+            at,
+            plugin: p.id,
+            status,
+            model: out.model,
+            labels: out.labels.length ? out.labels : undefined,
+            described: !!out.description,
+            note: out.error,
+          });
+          console.log(
+            `[processor:${p.id}] "${file.name}" → ${status}` +
+              (out.labels.length ? ` labels=[${out.labels.join(", ")}]` : "") +
+              (out.description ? " +description" : "") +
+              (out.error ? ` (${out.error})` : ""),
+          );
+        } catch (err) {
+          const note = (err as Error).message;
+          entries.push({ at, plugin: p.id, status: "error", model: undefined, note });
+          console.warn(`[processor:${p.id}] failed for "${file.name}": ${note}`);
+        }
       }
-      if (labels.size === 0) return;
-      const existing = Array.isArray(file.metadata?.labels) ? (file.metadata.labels as string[]) : [];
-      await drive.service.patchMetadata({ sub }, file.id, { labels: [...new Set([...existing, ...labels])] });
-      console.log(`[processor] saved labels for "${file.name}": ${[...labels].join(", ")}`);
+
+      if (entries.length === 0) return; // nothing configured ran
+      const patch: Record<string, unknown> = {};
+      if (labels.size > 0) {
+        const existing = Array.isArray(file.metadata?.labels) ? (file.metadata.labels as string[]) : [];
+        patch.labels = [...new Set([...existing, ...labels])];
+      }
+      const existingDescription = typeof file.metadata?.description === "string" ? file.metadata.description : "";
+      if (description && !existingDescription.trim()) patch.description = description;
+      const priorLog = Array.isArray(file.metadata?.processing) ? (file.metadata.processing as ProcessingEntry[]) : [];
+      patch.processing = [...priorLog, ...entries].slice(-PROCESSING_LOG_MAX);
+
+      await drive.service.patchMetadata({ sub }, file.id, patch);
+      console.log(`[processor] saved for "${file.name}": ${entries.length} run(s), labels=[${[...labels].join(", ")}]`);
     } catch (err) {
       // Best-effort: never surface to the upload, but do log so failures are visible.
       console.warn(`[processor] failed for "${file.name}": ${(err as Error).message}`);
@@ -484,6 +526,13 @@ export function createApp(deps: AppDeps) {
   }));
 
   // ── per-file sharing (grants) ───────────────────────────────────────────────
+
+  // People the caller is connected to (space co-members + file-share peers),
+  // filtered by `?q=`. Powers the share-with picker so they pick a known
+  // contact instead of retyping an address.
+  app.get("/api/people", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.connectedPeople(caller, c.req.query("q") ?? undefined)),
+  ));
 
   app.get("/api/files/:id/grants", driveRoute(async (c, caller) =>
     c.json(await drive!.service.listGrants(caller, c.req.param("id")!)),

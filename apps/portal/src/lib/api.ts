@@ -1,5 +1,5 @@
 import type { Page, StorageEntry } from "@canopy/core";
-import type { FileItem, FileKind } from "@/lib/mock-data";
+import type { FileItem, FileKind, ProcessingEntry } from "@/lib/mock-data";
 
 const EXT_KIND: Record<string, FileKind> = {
   pdf: "pdf",
@@ -100,6 +100,7 @@ function toFileItems(data: DriveListing, dir: string): FileItem[] {
     labels: Array.isArray(f.metadata?.labels) ? (f.metadata.labels as string[]) : undefined,
     tags: Array.isArray(f.metadata?.tags) ? (f.metadata.tags as string[]) : undefined,
     description: typeof f.metadata?.description === "string" ? (f.metadata.description as string) : undefined,
+    processing: Array.isArray(f.metadata?.processing) ? (f.metadata.processing as ProcessingEntry[]) : undefined,
   }));
   return [...folders, ...files];
 }
@@ -524,6 +525,27 @@ export interface Grant {
   subjectType: "user" | "space" | "email";
   subjectId: string;
   subjectRelation?: string;
+  /** Directory info for a resolved `user` subject (so we don't show the raw sub). */
+  name?: string | null;
+  /** Address for a `user` (from the directory) or `email` (the address itself) subject. */
+  email?: string | null;
+  picture?: string | null;
+}
+
+/** A person the caller is connected to (space co-member or file-share peer). */
+export interface Person {
+  sub: string;
+  email: string | null;
+  name: string | null;
+  picture: string | null;
+}
+
+/** Connected people matching `q` (space co-members + file-share peers) — for the share picker. */
+export async function searchPeople(q: string): Promise<Person[]> {
+  const res = await fetch(`/api/people?q=${encodeURIComponent(q)}`);
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => null);
+  return Array.isArray(data) ? (data as Person[]) : [];
 }
 
 /** Current grants on a file (for the Share dialog). */

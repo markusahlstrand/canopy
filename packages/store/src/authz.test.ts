@@ -1,10 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createLibsqlDb } from "./db-libsql";
 import { runMigrations } from "./schema";
-import { check, fileRole, memberSpaceIds, spaceRole, writeTuple } from "./authz";
+import { check, fileGrantsDetailed, fileRole, memberSpaceIds, spaceRole, writeTuple } from "./authz";
 import { addMember, createSpace, ensurePersonalSpace, listMembers, listSpaces, listSpacesForUser, removeMember, setMounted } from "./spaces";
-import { pendingSpaceInvites, resolveInvites, upsertUser } from "./users";
+import { connectedUsers, pendingSpaceInvites, resolveInvites, upsertUser } from "./users";
 import type { Db } from "./db";
+
+/** Minimal file row so the "shared docs" connection graph has something to join on. */
+async function insertFile(db: Db, id: string, ownerId: string, spaceId = `personal:${ownerId}`): Promise<void> {
+  const now = new Date().toISOString();
+  await db.run(
+    `INSERT INTO files (id, tenant_id, owner_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)`,
+    [id, spaceId, ownerId, id, now, now],
+  );
+}
 
 /** Integration: the recursive Zanzibar-lite check against a real libsql engine. */
 
@@ -154,5 +163,59 @@ describe("spaces helpers", () => {
     await resolveInvites(db, "ola-sub", "ola@x.com");
     expect(await pendingSpaceInvites(db, "ola@x.com")).toEqual([]); // gone once claimed
     expect(await spaceRole(db, fam.id, "ola-sub")).toBe("editor");
+  });
+});
+
+describe("fileGrantsDetailed", () => {
+  it("resolves a user grant to its directory name/email; an email grant to the address", async () => {
+    await upsertUser(db, { sub: "daniel", email: "daniel@x.com", name: "Daniel" });
+    await writeTuple(db, { objectType: "file", objectId: "F1", relation: "editor", subjectType: "user", subjectId: "daniel" });
+    await writeTuple(db, { objectType: "file", objectId: "F1", relation: "viewer", subjectType: "email", subjectId: "nora@x.com" });
+    await writeTuple(db, { objectType: "file", objectId: "F1", relation: "viewer", subjectType: "space", subjectId: "fam", subjectRelation: "member" });
+
+    const grants = await fileGrantsDetailed(db, "F1");
+    expect(grants.find((g) => g.subjectId === "daniel")).toMatchObject({ name: "Daniel", email: "daniel@x.com" });
+    expect(grants.find((g) => g.subjectType === "email")).toMatchObject({ email: "nora@x.com", name: null });
+    // a space subject carries no directory info (labelled by the caller from its space list)
+    expect(grants.find((g) => g.subjectType === "space")).toMatchObject({ subjectId: "fam", name: null, email: null });
+  });
+});
+
+describe("connectedUsers", () => {
+  const connections = async (sub: string, q?: string) =>
+    (await connectedUsers(db, sub, await memberSpaceIds(db, sub), q)).map((u) => u.sub).sort();
+
+  it("surfaces co-members of the caller's spaces, excluding the caller", async () => {
+    await upsertUser(db, { sub: "maya", email: "maya@x.com", name: "Maya" });
+    await upsertUser(db, { sub: "daniel", email: "daniel@x.com", name: "Daniel" });
+    const fam = await createSpace(db, { name: "Family", createdBy: "maya" });
+    await addMember(db, fam.id, "daniel", "editor");
+
+    expect(await connections("maya")).toEqual(["daniel"]);
+    expect(await connections("daniel")).toEqual(["maya"]);
+    expect(await connections("stranger")).toEqual([]);
+  });
+
+  it("surfaces file-share peers both ways (owner ↔ grantee)", async () => {
+    await upsertUser(db, { sub: "maya", email: "maya@x.com", name: "Maya" });
+    await upsertUser(db, { sub: "nora", email: "nora@x.com", name: "Nora" });
+    await insertFile(db, "F1", "maya");
+    await writeTuple(db, { objectType: "file", objectId: "F1", relation: "viewer", subjectType: "user", subjectId: "nora" });
+
+    expect(await connections("maya")).toEqual(["nora"]); // I shared with Nora
+    expect(await connections("nora")).toEqual(["maya"]); // Maya (the owner) shared with me
+  });
+
+  it("filters by name/email substring (case-insensitive)", async () => {
+    await upsertUser(db, { sub: "maya", email: "maya@x.com", name: "Maya" });
+    await upsertUser(db, { sub: "daniel", email: "daniel@x.com", name: "Daniel" });
+    await upsertUser(db, { sub: "nora", email: "nora@x.com", name: "Nora" });
+    const fam = await createSpace(db, { name: "Family", createdBy: "maya" });
+    await addMember(db, fam.id, "daniel", "editor");
+    await addMember(db, fam.id, "nora", "viewer");
+
+    expect(await connections("maya", "DAN")).toEqual(["daniel"]); // matches name
+    expect(await connections("maya", "nora@x")).toEqual(["nora"]); // matches email
+    expect(await connections("maya", "zzz")).toEqual([]);
   });
 });
