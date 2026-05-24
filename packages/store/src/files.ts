@@ -2,6 +2,7 @@ import type { Db } from "./db";
 import type { BlobRepo, BlobStore } from "./blob-store";
 import type { FileRecord, FileVersion, FileWithVersion, Role, Space, User } from "./types";
 import { blobKey, commitUpload, prepareBlob, releaseBlob, type PrepareResult } from "./blobs";
+import { versionsToPrune } from "./retention";
 import { sha256hex } from "./hash";
 import {
   ROLE_RANK,
@@ -16,6 +17,7 @@ import {
   memberSpaceIds,
   pathRole,
   sharedFolders,
+  spaceFolderRole,
   spaceRole,
   writeTuple,
   type GrantDetail,
@@ -72,6 +74,13 @@ import {
 } from "./shares";
 import { deletePluginSettings, getPluginSettings, setPluginSettings } from "./plugin-settings";
 import { getInstalledPlugins, setInstalledPlugins } from "./plugin-installs";
+import {
+  type CustomPlugin,
+  deleteCustomPlugin,
+  getCustomPlugin,
+  listCustomPlugins,
+  upsertCustomPlugin,
+} from "./custom-plugins";
 import {
   applySpacePlugin as applySpacePluginRow,
   getSpacePlugins,
@@ -144,6 +153,7 @@ interface VersionRow {
   size: number;
   created_at: string;
   created_by: string;
+  keep: number;
 }
 interface CommentRow {
   id: string;
@@ -181,6 +191,7 @@ function toVersion(r: VersionRow): FileVersion {
     size: r.size,
     createdAt: r.created_at,
     createdBy: r.created_by,
+    keep: r.keep === 1,
   };
 }
 function parseMeta(json: string): Record<string, unknown> {
@@ -193,7 +204,7 @@ function parseMeta(json: string): Record<string, unknown> {
 }
 
 const VERSION_COLS =
-  "v.id AS v_id, v.source, v.blob_hash, v.connector_id, v.external_key, v.etag, v.mime, v.size, v.created_by, v.created_at AS v_created_at";
+  "v.id AS v_id, v.source, v.blob_hash, v.connector_id, v.external_key, v.etag, v.mime, v.size, v.created_by, v.created_at AS v_created_at, v.keep";
 
 type JoinedRow = FileRow & Partial<VersionRow> & { v_id: string | null; v_created_at: string | null };
 
@@ -213,6 +224,7 @@ function joinedToFileWithVersion(r: JoinedRow): FileWithVersion {
           size: r.size ?? 0,
           created_at: r.v_created_at ?? r.created_at,
           created_by: r.created_by ?? r.owner_id,
+          keep: r.keep ?? 0,
         })
       : null,
   };
@@ -439,14 +451,19 @@ export class FileService {
   }
 
   // ── uploads (into a space the caller can write to) ──────────────────────────
+  // Staging a blob is gated on holding editor *somewhere* in the space (space
+  // membership or any folder grant), not on space-level editor — a folder-grant
+  // editor must be able to upload too. The blob is inert and refcounted until a
+  // file references it, and the actual destination is gated by createFile's
+  // requirePath; an unreferenced blob is GC'd, so this can't leak storage.
 
   async prepareUpload(spaceId: string, userSub: string, hash: string): Promise<PrepareResult> {
-    await this.requireSpace(userSub, spaceId, "editor");
+    await this.requireUpload(userSub, spaceId);
     return prepareBlob(this.repo, this.keyFor(spaceId, hash));
   }
 
   async commitUpload(spaceId: string, userSub: string, hash: string, bytes: Uint8Array) {
-    await this.requireSpace(userSub, spaceId, "editor");
+    await this.requireUpload(userSub, spaceId);
     return commitUpload(this.repo, this.store, { key: this.keyFor(spaceId, hash), expectedHash: hash, bytes });
   }
 
@@ -835,6 +852,32 @@ export class FileService {
     return setInstalledPlugins(this.db, userSub, pluginIds);
   }
 
+  // ── per-user AI-generated plugins (Plugin Studio: manifest + ESM source) ─────
+  listCustomPlugins(userSub: string): Promise<CustomPlugin[]> {
+    return listCustomPlugins(this.db, userSub);
+  }
+  getCustomPlugin(userSub: string, pluginId: string): Promise<CustomPlugin | null> {
+    return getCustomPlugin(this.db, userSub, pluginId);
+  }
+  /** Save a generated plugin and add its id to the user's installed set (so it goes active). */
+  async addCustomPlugin(userSub: string, input: { id: string; manifest: string; source: string }): Promise<void> {
+    await upsertCustomPlugin(this.db, userSub, input);
+    const installed = (await getInstalledPlugins(this.db, userSub)) ?? [];
+    if (!installed.includes(input.id)) await setInstalledPlugins(this.db, userSub, [...installed, input.id]);
+  }
+  /** Remove a generated plugin and drop its id from the user's installed set. */
+  async removeCustomPlugin(userSub: string, pluginId: string): Promise<void> {
+    await deleteCustomPlugin(this.db, userSub, pluginId);
+    const installed = await getInstalledPlugins(this.db, userSub);
+    if (installed?.includes(pluginId)) {
+      await setInstalledPlugins(
+        this.db,
+        userSub,
+        installed.filter((id) => id !== pluginId),
+      );
+    }
+  }
+
   // ── per-space applied plugins (owner-managed; active for every member) ──────
   /** Plugins applied to a space. Requires viewer+ (any member can see what runs). */
   async spacePlugins(caller: Caller, spaceId: string): Promise<string[]> {
@@ -875,6 +918,23 @@ export class FileService {
   async getContentKey(caller: Caller, id: string): Promise<{ key: string; version: FileVersion }> {
     const { version } = await this.getFile(caller, id);
     if (!version) throw new NotFoundError("file has no content");
+    if (version.source !== "blob" || !version.blobKey) throw new NotFoundError("not a managed blob");
+    return { key: version.blobKey, version };
+  }
+
+  /**
+   * Blob key for a *specific* version's content, for downloading an old version
+   * from the history. Requires viewer+. Only managed-blob versions are streamable
+   * today (external-source versions read through their connector — not yet wired).
+   */
+  async getVersionContentKey(caller: Caller, id: string, versionId: string): Promise<{ key: string; version: FileVersion }> {
+    await this.requirePerm(caller, id, "viewer");
+    const row = await this.db.first<VersionRow>(
+      "SELECT * FROM file_versions WHERE id = ? AND file_id = ?",
+      [versionId, id],
+    );
+    if (!row) throw new NotFoundError("version not found");
+    const version = toVersion(row);
     if (version.source !== "blob" || !version.blobKey) throw new NotFoundError("not a managed blob");
     return { key: version.blobKey, version };
   }
@@ -1059,7 +1119,11 @@ export class FileService {
    * {@link DEFAULT_COALESCE_WINDOW_MS}. The blob the version pointed at is released
    * (removed if nothing else references it), so coalescing never grows storage.
    */
-  async addVersion(caller: Caller, id: string, input: { hash: string; mime?: string }): Promise<FileWithVersion> {
+  async addVersion(
+    caller: Caller,
+    id: string,
+    input: { hash: string; mime?: string; coalesce?: boolean },
+  ): Promise<FileWithVersion> {
     const file = await this.requirePerm(caller, id, "editor");
     const key = this.keyFor(file.tenantId, input.hash); // blob lives in the file's space
     const blob = await this.repo.find(key);
@@ -1070,7 +1134,10 @@ export class FileService {
       ? await this.db.first<VersionRow>("SELECT * FROM file_versions WHERE id = ?", [file.currentVersionId])
       : null;
     const windowMs = this.opts.versionCoalesceWindowMs ?? DEFAULT_COALESCE_WINDOW_MS;
+    // An explicit Save (`coalesce: false`) always appends a discrete version;
+    // programmatic re-writes (WebDAV, autosave) still collapse within the window.
     const coalesce =
+      input.coalesce !== false &&
       !!head &&
       head.source === "blob" &&
       head.created_by === caller.sub &&
@@ -1150,6 +1217,63 @@ export class FileService {
       { sql: "UPDATE files SET current_version_id = ?, updated_at = ? WHERE id = ?", params: [newId, now, id] },
     ]);
     return this.getFile(caller, id);
+  }
+
+  /**
+   * Pin (or unpin) a version so retention/pruning never removes it (#11). Requires
+   * editor+. The current version is always retained regardless of this flag.
+   */
+  async keepVersion(caller: Caller, id: string, versionId: string, keep: boolean): Promise<void> {
+    await this.requirePerm(caller, id, "editor");
+    const res = await this.db.run("UPDATE file_versions SET keep = ? WHERE id = ? AND file_id = ?", [
+      keep ? 1 : 0,
+      versionId,
+      id,
+    ]);
+    if (res.rowsAffected === 0) throw new NotFoundError("version not found");
+  }
+
+  /**
+   * Thin one file's version history down to the tiered retention curve (see
+   * {@link versionsToPrune}), deleting the dropped `file_versions` rows and releasing
+   * their blob refs (shared blobs survive via refcount). The current and pinned
+   * versions are always kept. A maintenance op — runs from the scheduler, not a user
+   * request — so it takes no caller and does no permission check. Returns the count pruned.
+   */
+  async pruneFileVersions(fileId: string, nowMs = Date.now()): Promise<number> {
+    const file = await this.loadFile(fileId, true);
+    if (!file) return 0;
+    const rows = await this.db.all<VersionRow>("SELECT * FROM file_versions WHERE file_id = ?", [fileId]);
+    if (rows.length <= 1) return 0;
+    const ids = versionsToPrune(
+      rows.map((r) => ({
+        id: r.id,
+        createdAtMs: new Date(r.created_at).getTime(),
+        keep: r.keep === 1,
+        isCurrent: r.id === file.currentVersionId,
+      })),
+      nowMs,
+    );
+    if (!ids.length) return 0;
+    const idSet = new Set(ids);
+    const toRelease = rows.filter((r) => idSet.has(r.id) && r.blob_hash).map((r) => r.blob_hash!);
+    await this.db.batch(ids.map((vid) => ({ sql: "DELETE FROM file_versions WHERE id = ?", params: [vid] })));
+    for (const h of toRelease) await releaseBlob(this.repo, this.store, h);
+    return ids.length;
+  }
+
+  /**
+   * Sweep every file that has more than one version and apply {@link pruneFileVersions}.
+   * The scheduler's entry point (Cloudflare Cron / Node interval). Returns how many
+   * files were examined and how many versions were pruned in total.
+   */
+  async pruneAllVersions(nowMs = Date.now()): Promise<{ files: number; pruned: number }> {
+    const rows = await this.db.all<{ file_id: string }>(
+      "SELECT file_id FROM file_versions GROUP BY file_id HAVING COUNT(*) > 1",
+    );
+    let pruned = 0;
+    for (const { file_id } of rows) pruned += await this.pruneFileVersions(file_id, nowMs);
+    return { files: rows.length, pruned };
   }
 
   // ── comments (a discussion thread on a file) ─────────────────────────────────
@@ -1462,6 +1586,14 @@ export class FileService {
   private async requireSpace(userSub: string, spaceId: string, required: Role): Promise<void> {
     const role = await spaceRole(this.db, spaceId, userSub);
     if (!role || ROLE_RANK[role] < ROLE_RANK[required]) throw new PermissionError();
+  }
+
+  // Gate staging a blob: editor anywhere in the space — space membership ∪ any
+  // folder grant. The destination is still gated separately by createFile.
+  private async requireUpload(userSub: string, spaceId: string): Promise<void> {
+    const [sr, fr] = await Promise.all([spaceRole(this.db, spaceId, userSub), spaceFolderRole(this.db, spaceId, userSub)]);
+    const role = maxRole(sr, fr);
+    if (!role || ROLE_RANK[role] < ROLE_RANK["editor"]) throw new PermissionError();
   }
 
   private async loadFile(id: string, includeDeleted = false): Promise<FileRecord | null> {

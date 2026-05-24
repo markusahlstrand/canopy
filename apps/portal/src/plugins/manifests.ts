@@ -33,6 +33,8 @@ const CAPABILITY_OVERRIDES: Record<string, PluginManifest["capabilities"]> = {
   "document-ai": [{ kind: "net:fetch", hosts: ["generativelanguage.googleapis.com"] }, { kind: "item:read" }, { kind: "item:write" }],
   // Documentation reads markdown from the read-only `documentation` storage mount.
   documentation: [{ kind: "storage:read", connectors: ["documentation"] }],
+  // Code Editor reads a file's source and writes edits back to that same file.
+  "code-editor": [{ kind: "item:read" }, { kind: "item:write" }],
 };
 
 /** Build a manifest for an installed plugin id from the store catalog. */

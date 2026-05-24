@@ -16,6 +16,7 @@ import {
 } from "@canopy/store";
 import { createApp, type DataSourceDeps } from "./app";
 import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
+import { parseRepo } from "./data-sources";
 import { createCacheApiCacheStore } from "./cache-api";
 import { createAuthApp } from "./auth/routes";
 import { readAuthConfig, type EnvVars } from "./auth/config";
@@ -89,6 +90,19 @@ export default {
       demoDefaults,
       cache: createCacheApiCacheStore(),
       secret: authConfig?.sessionSecret,
+      // Browse a configured GitHub repo's files live as a read-only space.
+      connectorFor: (pluginId, config) => {
+        if (pluginId !== "github") return null;
+        const p = parseRepo(config.repo ?? "");
+        return p
+          ? createGithubConnector("connector:github", {
+              owner: p.owner,
+              repo: p.repo,
+              branch: config.branch || undefined,
+              token: config.token || undefined,
+            })
+          : null;
+      },
     };
     // Workers AI (env.AI) is the host AI gateway on Cloudflare — Gemma & co. with no
     // per-user key. Absent (e.g. the binding isn't configured), no host models exist.
@@ -107,5 +121,17 @@ export default {
       waitUntil: (p) => ctx.waitUntil(p), // keep AI labeling alive after the response
     });
     return app.fetch(request, env);
+  },
+
+  /**
+   * Cron Trigger (see wrangler.jsonc `triggers.crons`): a periodic sweep that thins
+   * each file's version history down to the tiered retention curve (#11), releasing
+   * the blobs of pruned snapshots. Pinned and current versions are always kept.
+   */
+  async scheduled(_event: { cron: string }, env: WorkerEnv, _ctx: { waitUntil(p: Promise<unknown>): void }): Promise<void> {
+    const db = createD1Db(env.DB);
+    await (schemaReady ??= runMigrations(db));
+    const service = new FileService(db, createR2BlobStore(env.BUCKET), createSqlBlobRepo(db));
+    await service.pruneAllVersions();
   },
 };

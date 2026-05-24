@@ -305,6 +305,36 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
       `CREATE INDEX IF NOT EXISTS idx_shares_creator ON shares (created_by)`,
     ],
   },
+  {
+    // A "keep" flag pins a version so retention/pruning never removes it (#11). The
+    // current version and pinned versions are always retained; everything else is
+    // subject to the tiered retention curve. Run-once via the migration guard, so a
+    // plain ADD COLUMN is safe.
+    version: 14,
+    statements: [`ALTER TABLE file_versions ADD COLUMN keep INTEGER NOT NULL DEFAULT 0`],
+  },
+  {
+    // AI-generated plugins a user built in the Plugin Studio. Unlike catalog
+    // plugins (whose manifest + code ship with the host), these are authored at
+    // runtime by the core LLM, so the store owns both their manifest and their
+    // ESM entry source. A row exists per (owner, plugin) and the plugin id is
+    // also added to `plugin_installs` so the user's effective set picks it up;
+    // the source is small (a single sandboxed viewer module) so it's stored
+    // inline rather than as a refcounted blob. The client merges these into the
+    // viewer/registry lists the same way it would a resolved zip/github plugin.
+    version: 15,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS custom_plugins (
+         user_sub      TEXT NOT NULL,
+         plugin_id     TEXT NOT NULL,
+         manifest_json TEXT NOT NULL,
+         source_text   TEXT NOT NULL,
+         created_at    TEXT NOT NULL,
+         updated_at    TEXT NOT NULL,
+         PRIMARY KEY (user_sub, plugin_id)
+       )`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

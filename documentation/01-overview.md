@@ -48,6 +48,9 @@ planned.
 - **Sharing & spaces** — relation-tuple (Zanzibar-lite) access control: per-file grants + shared
   **spaces** (a family is a group space that appears as a folder inside My Drive), share-by-email
   with pending invites, and roles (owner/editor/viewer).
+- **Version history & retention** — every content change keeps a version; the preview lists them
+  and lets you download, restore (copy-forward), or pin one. Rapid saves coalesce, and a scheduled
+  sweep thins old snapshots on a tiered curve (current + pinned versions always survive).
 - `@canopy/portal` — the Vite + React SPA (desktop + mobile), with first-party Calendar, Tasks,
   and Documentation plugins, **sandboxed file viewers** (image, PDF, a Markdown editor), and `@canopy/plugin-sources`
   for resolving plugins from GitHub/npm/zip.

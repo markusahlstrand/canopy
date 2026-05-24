@@ -21,6 +21,7 @@ import { FilePreview } from "@/components/file-preview";
 import { ShareDialog } from "@/components/share-dialog";
 import { HomeView } from "@/components/home-view";
 import { BuildPluginView } from "@/components/build-plugin-view";
+import { PluginStudioView } from "@/components/plugin-studio-view";
 import { SettingsView } from "@/components/settings-view";
 import { TweaksPanel } from "@/components/tweaks-panel";
 import { Icon } from "@/lib/icons";
@@ -48,6 +49,9 @@ import {
   fetchMe,
   fetchInstalledPlugins,
   fetchActivePlugins,
+  fetchCustomPlugins,
+  deleteCustomPlugin,
+  type CustomPlugin,
   saveInstalledPlugins,
   loginUrl,
   logout,
@@ -62,6 +66,7 @@ import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
 import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
+import { setCustomViewers, type InstalledViewer } from "@/plugins/viewers";
 import { sandboxedSlot } from "@/plugins/ui";
 import { PluginSlot } from "@/components/plugin-slot";
 import { PluginDataProvider, usePluginCapabilities } from "@/plugins/data";
@@ -167,9 +172,27 @@ function DesktopApp() {
     () => [...new Set([...installedIds, ...activeServerIds])],
     [installedIds, activeServerIds],
   );
-  const registry = useMemo(() => createRegistry(activeIds), [activeIds]);
+  // AI-generated plugins (Plugin Studio): manifest + ESM source, authored at
+  // runtime and merged into the registry (sidebar/store) and the viewer resolver
+  // the same way a resolved zip/github plugin would be.
+  const [customPlugins, setCustomPlugins] = useState<CustomPlugin[]>([]);
+  const refreshCustom = () => fetchCustomPlugins().then(setCustomPlugins);
+  const customManifests = useMemo(() => customPlugins.map((p) => p.manifest), [customPlugins]);
+  const registry = useMemo(() => createRegistry(activeIds, customManifests), [activeIds, customManifests]);
   const installed = useMemo(() => registry.list().map((r) => r.manifest), [registry]);
   const refreshActive = () => fetchActivePlugins().then((ids) => ids && setActiveServerIds(ids));
+
+  // Feed generated viewers into the (module-level) resolver whenever they change.
+  useEffect(() => {
+    const viewers: InstalledViewer[] = customPlugins.flatMap((p) =>
+      (p.manifest.contributes?.viewers ?? []).map((v) => ({
+        ...v,
+        plugin: p.manifest.id,
+        source: p.source,
+      })),
+    );
+    setCustomViewers(viewers);
+  }, [customPlugins]);
 
   const [active, setActive] = useState(() => readUrlState().active);
   const [activePlugin, setActivePlugin] = useState(() => {
@@ -209,6 +232,7 @@ function DesktopApp() {
       if (ids) setInstalledIds(ids);
     });
     void refreshActive();
+    void refreshCustom();
   }, []);
 
   // Whether installs can be saved: signed-in, or demo mode (auth off → shared
@@ -469,6 +493,10 @@ function DesktopApp() {
       toast("Open a drive or space to create a folder");
       return;
     }
+    if (readonly) {
+      toast("This space is read-only");
+      return;
+    }
     const name = window.prompt("Folder name");
     if (!name?.trim()) return;
     try {
@@ -483,6 +511,10 @@ function DesktopApp() {
   async function createFileFlow(creator: InstalledCreator) {
     if (space === "shared") {
       toast("Open a drive or space to create a file");
+      return;
+    }
+    if (readonly) {
+      toast("This space is read-only");
       return;
     }
     const input = window.prompt(`${creator.label} name`, creator.defaultName);
@@ -503,6 +535,10 @@ function DesktopApp() {
     if (files.length === 0) return;
     if (space === "shared") {
       toast("Open a drive or space to upload");
+      return;
+    }
+    if (readonly) {
+      toast("This space is read-only");
       return;
     }
     toast("Upload started", { description: `${files.length} file(s) → ${path || "drive"}` });
@@ -698,10 +734,13 @@ function DesktopApp() {
           : "Recent";
 
   const spaceName = space && space !== "shared" ? (spaces.find((s) => s.id === space)?.name ?? "Space") : null;
+  // A connected (read-only) space — e.g. a GitHub repo browsed live: no uploads,
+  // edits, sharing, or WebDAV mount.
+  const readonly = !!spaces.find((s) => s.id === space)?.readonly;
   // Where the "Connect a device" dialog offers to mount: the current place/folder
   // (so it can be mounted on its own), or null when we're not in a files view.
   const mountHere = (() => {
-    if (active !== "drive" || space === "shared") return null; // real folder browsing only (not the starred/family filters)
+    if (active !== "drive" || space === "shared" || readonly) return null; // real folder browsing only (not the starred/family filters)
     const segs = [spaceName, ...path.split("/").filter(Boolean)].filter((s): s is string => !!s);
     const url = `${window.location.origin}/dav${segs.length ? "/" + segs.map(encodeURIComponent).join("/") : ""}`;
     return { url, label: [spaceName ?? "My Drive", ...path.split("/").filter(Boolean)].join(" / ") };
@@ -722,8 +761,10 @@ function DesktopApp() {
         ? ["Starred"]
         : active === "trash"
           ? ["Trash"]
-          : active === "build-plugin"
-            ? ["Build a plugin"]
+          : active === "plugin-studio"
+            ? ["Plugin Studio"]
+            : active === "build-plugin"
+              ? ["Build a plugin"]
             : active === "settings"
               ? ["Settings"]
               : active.startsWith("plugin:")
@@ -773,6 +814,7 @@ function DesktopApp() {
         onToggle={() => setTweak("sidebarCollapsed", !tweaks.sidebarCollapsed)}
         spaces={spaces}
         currentSpace={active === "drive" ? space : ""}
+        readonly={active === "drive" && readonly}
         onOpenSpace={openSpace}
         onCreateSpace={createSpaceFlow}
         onRenameSpace={renameSpaceFlow}
@@ -795,6 +837,7 @@ function DesktopApp() {
           theme={tweaks.theme}
           onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
           onUpload={() => uploadInputRef.current?.click()}
+          readonly={active === "drive" && readonly}
           railAvailable={railAvailable}
           railOpen={tweaks.showRail}
           onToggleRail={() => setTweak("showRail", !tweaks.showRail)}
@@ -835,6 +878,19 @@ function DesktopApp() {
                 </div>
                 <TrashView files={trashFiles} onRestore={restoreFromTrash} onPurge={purgeFromTrash} onPreview={setPreviewFile} />
               </>
+            ) : active === "plugin-studio" ? (
+              <PluginStudioView
+                existing={customPlugins}
+                onInstalled={() => {
+                  void refreshCustom();
+                  void refreshActive();
+                }}
+                onDelete={async (id) => {
+                  await deleteCustomPlugin(id).catch(() => {});
+                  void refreshCustom();
+                  void refreshActive();
+                }}
+              />
             ) : active === "build-plugin" ? (
               <BuildPluginView />
             ) : active === "settings" ? (
@@ -869,7 +925,7 @@ function DesktopApp() {
                     </>
                   ) : (
                     <>
-                      {spaceName && (
+                      {spaceName && !readonly && (
                         <>
                           <Button
                             variant="outline"
@@ -981,7 +1037,7 @@ function DesktopApp() {
         }
         onBuildWithAI={() => {
           setStoreOpen(false);
-          navigate("build-plugin");
+          navigate("plugin-studio");
         }}
       />
 
@@ -1002,6 +1058,7 @@ function DesktopApp() {
         onClose={() => setPreviewFile(null)}
         onSaved={reload}
         space={space === "shared" ? undefined : space || undefined}
+        installedPluginIds={activeIds}
       />
 
       {shareTarget && (

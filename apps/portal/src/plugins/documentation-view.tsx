@@ -54,6 +54,31 @@ const COMPARE_GROUPS: { label: string; slugs: string[] }[] = [
 // The overview page under which the comparison pages nest (expandable in the nav).
 const OVERVIEW_SLUG = "how-it-compares";
 
+// Built-in plugin pages are named `plugin-<id>.md` and nest under the
+// "built-in-plugins" overview, the same way the comparison pages do above.
+const isPlugin = (name: string) => /^plugin-/i.test(slug(name));
+// Proper display names a generic title-caser can't produce (GitHub, PDF…).
+const PLUGIN_NAMES: Record<string, string> = {
+  "plugin-github": "GitHub",
+  "plugin-document-ai": "Document AI",
+  "plugin-pdf-viewer": "PDF Viewer",
+  "plugin-univer-office": "Univer Office",
+  "plugin-code-editor": "Code Editor",
+};
+function pluginLabel(name: string): string {
+  const s = slug(name);
+  return PLUGIN_NAMES[s] ?? s.replace(/^plugin-/, "").replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+// Plugin pages, grouped and ordered to match the "Built-in plugins" overview.
+const PLUGIN_GROUPS: { label: string; slugs: string[] }[] = [
+  { label: "Apps", slugs: ["plugin-calendar", "plugin-tasks", "plugin-github", "plugin-document-ai", "plugin-documentation"] },
+  {
+    label: "File viewers & editors",
+    slugs: ["plugin-image-viewer", "plugin-pdf-viewer", "plugin-markdown-editor", "plugin-univer-office", "plugin-code-editor"],
+  },
+];
+const PLUGINS_OVERVIEW_SLUG = "built-in-plugins";
+
 // ── URL: the selected page lives in `?doc=<slug>` so it's deep-linkable and
 //    survives refresh. The host's App preserves this param while the docs view
 //    is open (see urlForState in App.tsx). ────────────────────────────────────
@@ -171,6 +196,8 @@ export function DocumentationView() {
   // null = follow the page (open on the overview / a comparison page); true/false
   // = an explicit user toggle, reset to "follow" on the next navigation.
   const [compareOverride, setCompareOverride] = useState<boolean | null>(null);
+  // Same "follow the page, until the user toggles" model for the plugins group.
+  const [pluginsOverride, setPluginsOverride] = useState<boolean | null>(null);
   // Mirror the loaded list into a ref for event-time readers (popstate, link
   // clicks) that are captured once and would otherwise see a stale closure.
   const docsRef = useRef<FileItem[]>([]);
@@ -209,6 +236,7 @@ export function DocumentationView() {
       const d = (want && docsRef.current.find((x) => slug(x.name) === want)) || docsRef.current[0];
       if (d?.path) setSelected(d.path);
       setCompareOverride(null); // let the new page drive the tree again
+      setPluginsOverride(null);
     }
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -219,6 +247,7 @@ export function DocumentationView() {
     const name = docsRef.current.find((d) => d.path === path)?.name;
     if (name) writeDocParam(slug(name));
     setCompareOverride(null); // expansion follows the destination page
+    setPluginsOverride(null);
     window.scrollTo({ top: 0 });
   }
 
@@ -288,23 +317,38 @@ export function DocumentationView() {
     );
   }
 
-  const mainDocs = docs.filter((d) => !isCompare(d.name));
-  const compareDocs = docs.filter((d) => isCompare(d.name));
-  const compareBySlug = new Map(compareDocs.map((d) => [slug(d.name), d]));
-  const groupedSlugs = new Set(COMPARE_GROUPS.flatMap((g) => g.slugs));
-  const ungrouped = compareDocs.filter((d) => !groupedSlugs.has(slug(d.name)));
-  const navGroups = [
-    ...COMPARE_GROUPS.map((g) => ({
-      label: g.label,
-      items: g.slugs.map((s) => compareBySlug.get(s)).filter((d): d is FileItem => !!d),
-    })),
-    ...(ungrouped.length ? [{ label: "More", items: ungrouped }] : []),
-  ].filter((g) => g.items.length > 0);
+  // "Section" pages (compare-* / plugin-*) nest under an overview instead of
+  // showing flat in the Pages list.
+  const mainDocs = docs.filter((d) => !isCompare(d.name) && !isPlugin(d.name));
 
-  const hasOverview = mainDocs.some((d) => slug(d.name) === OVERVIEW_SLUG);
+  // Ordered nav groups for a section: each configured group in order, plus a
+  // trailing "More" for any matching page not explicitly placed.
+  const sectionNav = (match: (n: string) => boolean, groups: { label: string; slugs: string[] }[]) => {
+    const sectionDocs = docs.filter((d) => match(d.name));
+    const bySlug = new Map(sectionDocs.map((d) => [slug(d.name), d]));
+    const placed = new Set(groups.flatMap((g) => g.slugs));
+    const ungrouped = sectionDocs.filter((d) => !placed.has(slug(d.name)));
+    return {
+      docs: sectionDocs,
+      groups: [
+        ...groups.map((g) => ({
+          label: g.label,
+          items: g.slugs.map((s) => bySlug.get(s)).filter((d): d is FileItem => !!d),
+        })),
+        ...(ungrouped.length ? [{ label: "More", items: ungrouped }] : []),
+      ].filter((g) => g.items.length > 0),
+    };
+  };
+
+  const compare = sectionNav(isCompare, COMPARE_GROUPS);
+  const plugins = sectionNav(isPlugin, PLUGIN_GROUPS);
+
   const currentDoc = selected ? docs.find((d) => d.path === selected) : undefined;
-  const onComparePage = !!currentDoc && (isCompare(currentDoc.name) || slug(currentDoc.name) === OVERVIEW_SLUG);
-  const compareOpen = compareOverride ?? onComparePage;
+  const curSlug = currentDoc ? slug(currentDoc.name) : "";
+  const hasOverview = mainDocs.some((d) => slug(d.name) === OVERVIEW_SLUG);
+  const hasPluginsOverview = mainDocs.some((d) => slug(d.name) === PLUGINS_OVERVIEW_SLUG);
+  const compareOpen = compareOverride ?? (!!currentDoc && (isCompare(currentDoc.name) || curSlug === OVERVIEW_SLUG));
+  const pluginsOpen = pluginsOverride ?? (!!currentDoc && (isPlugin(currentDoc.name) || curSlug === PLUGINS_OVERVIEW_SLUG));
 
   const navButton = (d: FileItem, label: string) => (
     <button
@@ -319,9 +363,16 @@ export function DocumentationView() {
     </button>
   );
 
-  // The "How it compares" overview is expandable: it reveals the per-service
-  // comparison pages (grouped) nested beneath it, instead of separate nav sections.
-  const renderOverview = (d: FileItem) => (
+  // An overview page rendered expandable: it reveals its section's pages (grouped)
+  // nested beneath it. Shared by "How it compares" and "Built-in plugins".
+  const renderExpandable = (
+    d: FileItem,
+    section: { docs: FileItem[]; groups: { label: string; items: FileItem[] }[] },
+    labelFn: (n: string) => string,
+    isOpen: boolean,
+    setOpen: (b: boolean) => void,
+    noun: string,
+  ) => (
     <Fragment key={d.path}>
       <div
         className={cn(
@@ -338,11 +389,11 @@ export function DocumentationView() {
         >
           {title(d.name)}
         </button>
-        {compareDocs.length > 0 && (
+        {section.docs.length > 0 && (
           <button
-            onClick={() => setCompareOverride(!compareOpen)}
-            aria-label={compareOpen ? "Collapse comparisons" : "Expand comparisons"}
-            aria-expanded={compareOpen}
+            onClick={() => setOpen(!isOpen)}
+            aria-label={isOpen ? `Collapse ${noun}` : `Expand ${noun}`}
+            aria-expanded={isOpen}
             className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
           >
             <svg
@@ -354,21 +405,21 @@ export function DocumentationView() {
               strokeWidth="2.5"
               strokeLinecap="round"
               strokeLinejoin="round"
-              className={cn("transition-transform", compareOpen && "rotate-90")}
+              className={cn("transition-transform", isOpen && "rotate-90")}
             >
               <path d="m9 18 6-6-6-6" />
             </svg>
           </button>
         )}
       </div>
-      {compareOpen && compareDocs.length > 0 && (
+      {isOpen && section.docs.length > 0 && (
         <div className="ml-3 mt-0.5 flex flex-col gap-0.5 border-l border-border/60 pl-2">
-          {navGroups.map((g) => (
+          {section.groups.map((g) => (
             <Fragment key={g.label}>
               <div className="px-2 pt-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground/80">
                 {g.label}
               </div>
-              {g.items.map((d2) => navButton(d2, compareLabel(d2.name)))}
+              {g.items.map((d2) => navButton(d2, labelFn(d2.name)))}
             </Fragment>
           ))}
         </div>
@@ -380,17 +431,31 @@ export function DocumentationView() {
     <div className="grid grid-cols-[220px_1fr] gap-6">
       <nav className="flex flex-col gap-0.5">
         <div className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Pages</div>
-        {mainDocs.map((d) => (slug(d.name) === OVERVIEW_SLUG ? renderOverview(d) : navButton(d, title(d.name))))}
+        {mainDocs.map((d) => {
+          const s = slug(d.name);
+          if (s === OVERVIEW_SLUG) return renderExpandable(d, compare, compareLabel, compareOpen, setCompareOverride, "comparisons");
+          if (s === PLUGINS_OVERVIEW_SLUG) return renderExpandable(d, plugins, pluginLabel, pluginsOpen, setPluginsOverride, "plugins");
+          return navButton(d, title(d.name));
+        })}
         {docs.length === 0 && <div className="px-2 text-[13px] text-muted-foreground">No documentation yet.</div>}
 
-        {/* Fallback: if the overview page is missing, don't orphan the comparison pages. */}
+        {/* Fallback: if an overview page is missing, don't orphan its section's pages. */}
         {!hasOverview &&
-          navGroups.map((g) => (
+          compare.groups.map((g) => (
             <Fragment key={g.label}>
               <div className="mb-1 mt-4 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {g.label}
               </div>
               {g.items.map((d) => navButton(d, compareLabel(d.name)))}
+            </Fragment>
+          ))}
+        {!hasPluginsOverview &&
+          plugins.groups.map((g) => (
+            <Fragment key={`p-${g.label}`}>
+              <div className="mb-1 mt-4 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {g.label}
+              </div>
+              {g.items.map((d) => navButton(d, pluginLabel(d.name)))}
             </Fragment>
           ))}
       </nav>

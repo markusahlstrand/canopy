@@ -26,6 +26,8 @@ interface TopbarProps {
   theme: "light" | "dark";
   onToggleTheme: () => void;
   onUpload: () => void;
+  /** Hide the Upload button in a read-only (connected) space. */
+  readonly?: boolean;
   railAvailable: boolean;
   railOpen: boolean;
   onToggleRail: () => void;
@@ -42,6 +44,7 @@ export function Topbar({
   theme,
   onToggleTheme,
   onUpload,
+  readonly,
   railAvailable,
   railOpen,
   onToggleRail,
@@ -120,11 +123,13 @@ export function Topbar({
         </button>
       )}
 
-      {/* Upload */}
-      <Button onClick={onUpload} className="gap-1.5">
-        <Icon name="upload" size={16} />
-        Upload
-      </Button>
+      {/* Upload — hidden in a read-only (connected) space */}
+      {!readonly && (
+        <Button onClick={onUpload} className="gap-1.5">
+          <Icon name="upload" size={16} />
+          Upload
+        </Button>
+      )}
 
       {/* Account: square login button when logged out, avatar menu otherwise */}
       {loggedOut ? (

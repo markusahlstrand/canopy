@@ -233,6 +233,33 @@ export async function pathRole(db: Db, spaceId: string, path: string, userSub: s
   return maxRole(sr, fr);
 }
 
+/**
+ * The user's best role from a folder grant *anywhere* in a space (not tied to a
+ * path) — direct, by email, or via a place they belong to. Unlike {@link folderRole}
+ * this doesn't walk a path's ancestors; it answers "does this user hold a folder
+ * grant *somewhere* in the space?", used to gate space-wide staging (a blob upload)
+ * for folder-grant-only users when the destination path is checked separately.
+ */
+export async function spaceFolderRole(db: Db, spaceId: string, userSub: string, email = ""): Promise<Role | null> {
+  const prefix = `${folderObjectId(spaceId, "")}%`; // every folder object_id under this space
+  const addr = normalizeEmail(email);
+  const row = await db.first<{ rank: number | null }>(
+    `${USER_SPACES}
+     SELECT MAX(rank) AS rank FROM (
+       SELECT ${RANK} AS rank FROM relation_tuples
+         WHERE object_type = 'folder' AND object_id LIKE ? AND subject_type = 'user' AND subject_id = ? AND subject_relation = ''
+       UNION ALL
+       SELECT ${RANK} FROM relation_tuples
+         WHERE object_type = 'folder' AND object_id LIKE ? AND subject_type = 'email' AND subject_id = ? AND subject_relation = ''
+       UNION ALL
+       SELECT ${RANK} FROM relation_tuples t JOIN user_spaces us ON us.space_id = t.subject_id
+         WHERE t.object_type = 'folder' AND t.object_id LIKE ? AND t.subject_type = 'space' AND t.subject_relation = 'member'
+     )`,
+    [userSub, prefix, userSub, prefix, addr, prefix],
+  );
+  return rankToRole(row?.rank ?? 0);
+}
+
 /** Grants on a folder (space + path), subject directory info joined in — for the Share dialog. */
 export async function folderGrantsDetailed(db: Db, spaceId: string, path: string): Promise<GrantDetail[]> {
   const objectId = folderObjectId(spaceId, path);

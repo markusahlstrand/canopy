@@ -92,6 +92,7 @@ export const PLUGIN_CATALOG: CatalogItem[] = [
   { id: "github", icon: "github", label: "GitHub", category: "Productivity", tagline: "Sync issues to Tasks, releases & milestones to Calendar", popular: true, color: "240 6% 20%" },
   { id: "document-ai", icon: "sparkles", label: "Document AI", category: "Productivity", tagline: "Auto-label each document by type with Gemini Flash", popular: true, color: "262 60% 55%" },
   { id: "documentation", icon: "book", label: "Documentation", category: "Help", tagline: "How Canopy works — guides for using it and building plugins", color: "212 70% 48%" },
+  { id: "code-editor", icon: "file-code", label: "Code Editor", category: "Productivity", tagline: "Edit code inline with the VS Code editor.", color: "207 90% 54%" },
 ];
 
 export const STORAGE = { label: "Cloudflare R2", used: "12.4 GB", total: "50 GB", percent: 25 };

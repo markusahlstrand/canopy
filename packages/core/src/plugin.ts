@@ -10,7 +10,8 @@ export type Capability =
   | { kind: "index:query" }
   | { kind: "storage:read"; connectors?: string[] }
   | { kind: "net:fetch"; hosts: string[] }
-  | { kind: "kv" };
+  | { kind: "kv" }
+  | { kind: "ai:generate"; models?: string[] };
 
 /** Server-side hooks a plugin can implement; these run inside the sandbox. */
 export type ServerHook = "enrichItem" | "transformUpload";

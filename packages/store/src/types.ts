@@ -46,6 +46,8 @@ export interface FileVersion {
   size: number;
   createdAt: string;
   createdBy: string;
+  /** Pinned: retention/pruning never removes a kept version (#11). */
+  keep: boolean;
 }
 
 /** A connected backend (filesystem / S3 / R2) whose objects are indexed into the file table. */

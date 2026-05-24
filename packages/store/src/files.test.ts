@@ -123,6 +123,22 @@ describe("FileService over libsql", () => {
     expect(await new Response(await store.store.get(newKey)).text()).toBe("v2 contents");
   });
 
+  it("an explicit save (coalesce:false) appends a new version even within the window", async () => {
+    const f = await upload("notes.md", "draft one");
+    const v1 = f.currentVersionId!;
+    // Same author, well within the default 10-min window — but an explicit Save must
+    // never merge into the current version's editing session.
+    const bytes = enc("draft two");
+    const hash = await sha256hex(bytes);
+    const prep = await svc.prepareUpload(space, USER, hash);
+    if (!prep.exists) await svc.commitUpload(space, USER, hash, bytes);
+    const updated = await svc.addVersion({ sub: USER }, f.id, { hash, mime: "text/plain", coalesce: false });
+
+    expect(updated.currentVersionId).not.toBe(v1); // a brand-new version row
+    expect((await db.first<{ n: number }>("SELECT COUNT(*) AS n FROM file_versions WHERE file_id = ?", [f.id]))?.n).toBe(2);
+    expect(await new Response(await store.store.get(updated.version!.blobKey!)).text()).toBe("draft two");
+  });
+
   it("re-saving identical content coalesces without leaking a blob ref", async () => {
     const f = await upload("doc.md", "same bytes");
     const key = f.version!.blobKey!;
@@ -163,6 +179,55 @@ describe("FileService over libsql", () => {
     expect((await db.first<{ ref_count: number }>("SELECT ref_count FROM blobs WHERE hash = ?", [v1Key]))?.ref_count).toBe(2);
   });
 
+  it("getVersionContentKey streams the bytes of a specific past version", async () => {
+    const f = await upload("essay.md", "draft one");
+    const v1 = f.currentVersionId!;
+    const updated = await save(f.id, "draft two", 0); // append → current is draft two
+    const v2 = updated.currentVersionId!;
+
+    const old = await svc.getVersionContentKey({ sub: USER }, f.id, v1);
+    expect(await new Response(await store.store.get(old.key)).text()).toBe("draft one");
+    const cur = await svc.getVersionContentKey({ sub: USER }, f.id, v2);
+    expect(await new Response(await store.store.get(cur.key)).text()).toBe("draft two");
+
+    await expect(svc.getVersionContentKey({ sub: USER }, f.id, "nope")).rejects.toThrow();
+  });
+
+  it("pruneFileVersions thins old snapshots but keeps current + pinned, releasing dropped blobs", async () => {
+    const f = await upload("log.md", "v1");
+    const v1 = f.currentVersionId!;
+    const v1Key = f.version!.blobKey!;
+    await save(f.id, "v2", 0); // append
+    await save(f.id, "v3", 0); // append
+    const updated = await save(f.id, "v4", 0); // append → current
+    const v4 = updated.currentVersionId!;
+    expect(await db.first<{ n: number }>("SELECT COUNT(*) AS n FROM blobs").then((r) => r!.n)).toBe(4);
+
+    // Pin the oldest so retention must keep it despite its age.
+    await svc.keepVersion({ sub: USER }, f.id, v1, true);
+
+    // Far in the future, all four sit in one ~monthly bucket. Current (v4) and pinned
+    // (v1) are always kept; of the two remaining (v2, v3) the curve keeps the newest
+    // in the bucket → exactly one snapshot is pruned and its blob released.
+    const future = Date.now() + 40 * 24 * 3_600_000;
+    const pruned = await svc.pruneFileVersions(f.id, future);
+    expect(pruned).toBe(1);
+
+    const remaining = await svc.listVersions({ sub: USER }, f.id);
+    expect(remaining).toHaveLength(3);
+    const ids = remaining.map((v) => v.id);
+    expect(ids).toContain(v1); // pinned survives
+    expect(ids).toContain(v4); // current survives
+    // One blob was released (the pruned snapshot); the pinned version's blob remains.
+    expect(await db.first<{ n: number }>("SELECT COUNT(*) AS n FROM blobs").then((r) => r!.n)).toBe(3);
+    expect(await db.first("SELECT 1 FROM blobs WHERE hash = ?", [v1Key])).not.toBeNull();
+  });
+
+  it("keepVersion rejects an unknown version id", async () => {
+    const f = await upload("log.md", "v1");
+    await expect(svc.keepVersion({ sub: USER }, f.id, "nope", true)).rejects.toThrow();
+  });
+
   it("a different author's save appends rather than coalescing (authorship boundary)", async () => {
     const fam = await svc.createSpace({ sub: USER }, "Family");
     await addMember(db, fam.id, "bob", "editor");
@@ -180,6 +245,31 @@ describe("FileService over libsql", () => {
     await svc.addVersion({ sub: "bob" }, f.id, { hash: h2, mime: "text/plain" }); // within window, different author
 
     expect(await svc.listVersions({ sub: USER }, f.id)).toHaveLength(2);
+  });
+
+  it("a folder-grant editor (no space membership) can upload via the blob flow", async () => {
+    const fam = await svc.createSpace({ sub: USER }, "Family");
+    await svc.createFolder(fam.id, USER, "Shared");
+    // bob gets editor on the Shared folder only — he is NOT a member of the space.
+    await svc.shareFolderGrant({ sub: USER }, fam.id, "Shared", { subjectType: "user", subjectId: "bob", role: "editor" });
+
+    const bytes = enc("bob's upload");
+    const hash = await sha256hex(bytes);
+    // The blob-staging step (issue #15): used to require space editor, now allows
+    // anyone holding editor on some path in the space. createFile then gates the
+    // destination, so bob can write into the folder he was granted.
+    const prep = await svc.prepareUpload(fam.id, "bob", hash);
+    if (!prep.exists) await svc.commitUpload(fam.id, "bob", hash, bytes);
+    const f = await svc.createFile(fam.id, "bob", { name: "note.txt", hash, mime: "text/plain", path: "Shared" });
+    expect(f.name).toBe("note.txt");
+
+    // …but the destination is still gated: bob can't create outside the shared folder.
+    await expect(
+      svc.createFile(fam.id, "bob", { name: "rogue.txt", hash, mime: "text/plain", path: "" }),
+    ).rejects.toBeInstanceOf(PermissionError);
+
+    // …and a user with no grant at all can't even stage a blob.
+    await expect(svc.prepareUpload(fam.id, "carol", hash)).rejects.toBeInstanceOf(PermissionError);
   });
 
   it("purge releases a ref; the blob is removed only at ref_count 0", async () => {

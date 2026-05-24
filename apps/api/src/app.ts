@@ -4,8 +4,10 @@ import {
   createAiGateway,
   scopedCache,
   type AiGateway,
+  type AiMessage,
   type AiModel,
   type AiProvider,
+  type Capability,
   type CacheStore,
   type ConnectorConfigField,
   type DocumentProcessor,
@@ -44,6 +46,41 @@ const MIME: Record<string, string> = {
 function mimeFor(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   return MIME[ext] ?? "application/octet-stream";
+}
+
+/** Output token ceiling for /api/ai/generate, so a runaway generation can't rack up cost. */
+const AI_MAX_TOKENS = 8192;
+/** Max ESM source we'll persist for a generated plugin (a single sandboxed viewer module). */
+const MAX_PLUGIN_SOURCE = 256 * 1024;
+/** Capabilities a Studio-generated (sandboxed viewer) plugin may declare — nothing host-trusted. */
+const SANDBOX_VIEWER_CAPS = new Set(["item:read", "item:write", "net:fetch"]);
+
+/**
+ * Structural check for a manifest submitted to `/api/plugins/custom`. The studio
+ * builds sandboxed viewers only, so we reject anything that asks for a capability
+ * the sandbox can't safely back, or that isn't a viewer. Returns an error string,
+ * or null when the manifest is acceptable. (The browser validates against the full
+ * JSON schema before submitting; this is the server's defense-in-depth copy.)
+ */
+function validateCustomManifest(m: unknown): string | null {
+  if (!m || typeof m !== "object") return "manifest must be an object";
+  const man = m as { id?: unknown; name?: unknown; capabilities?: unknown; contributes?: unknown };
+  if (typeof man.id !== "string" || !/^[a-z0-9][a-z0-9-]{1,48}$/.test(man.id))
+    return "manifest.id must be kebab-case (2–49 chars)";
+  if (typeof man.name !== "string" || !man.name.trim()) return "manifest.name is required";
+  if (!Array.isArray(man.capabilities)) return "manifest.capabilities must be an array";
+  for (const cap of man.capabilities as Capability[]) {
+    if (!cap || typeof cap !== "object" || !SANDBOX_VIEWER_CAPS.has((cap as { kind?: string }).kind ?? ""))
+      return `capability "${(cap as { kind?: string })?.kind}" is not allowed for a generated viewer`;
+    if (cap.kind === "net:fetch" && (!Array.isArray(cap.hosts) || cap.hosts.length === 0))
+      return "net:fetch requires a non-empty hosts list";
+  }
+  const viewers = (man.contributes as { viewers?: unknown } | undefined)?.viewers;
+  if (!Array.isArray(viewers) || viewers.length === 0) return "manifest must contribute at least one viewer";
+  for (const v of viewers as { match?: unknown }[]) {
+    if (!Array.isArray(v.match) || v.match.length === 0) return "each viewer needs a non-empty match list";
+  }
+  return null;
 }
 
 /** Read up to `cap` bytes from a stream (so processors never load a huge file). */
@@ -92,6 +129,14 @@ export interface DataSourceDeps {
   demoDefaults?: Record<string, Record<string, string>>;
   cache?: CacheStore;
   secret?: string;
+  /**
+   * Builds a read-only {@link StorageConnector} from a source plugin's resolved
+   * config, so a connected backend (e.g. a GitHub repo) can be browsed live as a
+   * space. Returns null when the plugin has no connector or the config is
+   * incomplete. The repo files are streamed straight from the connector — there are
+   * no drive rows — so a connector-backed space is inherently read-only.
+   */
+  connectorFor?: (pluginId: string, config: Record<string, string>) => StorageConnector | null;
 }
 
 export interface AppDeps {
@@ -170,8 +215,27 @@ export function createApp(deps: AppDeps) {
   }
 
   // The target space for an upload/list/create: `?space=` or the caller's personal space.
+  // A "connected" space is read-only and backed by a source plugin's connector
+  // (e.g. a GitHub repo), addressed as "connector:<pluginId>". It has no rows in the
+  // drive — its listing and content come live from the connector — so writes are
+  // refused: `resolveSpace` (used by every write route) never returns one.
+  const CONNECTOR_SPACE = "connector:";
+  const isConnectorSpace = (id?: string | null): id is string => !!id && id.startsWith(CONNECTOR_SPACE);
+
   async function resolveSpace(c: Context, sub: string): Promise<string> {
-    return c.req.query("space") ?? (await drive!.service.personalSpace(sub));
+    const space = c.req.query("space");
+    if (isConnectorSpace(space)) throw new PermissionError("connected spaces are read-only");
+    return space ?? (await drive!.service.personalSpace(sub));
+  }
+
+  // The live connector + display name for a connected space, or null when the caller
+  // has nothing configured for that plugin (so it isn't connected). Anonymous callers
+  // fall back to the demo default, mirroring the read-only mounts.
+  async function connectorSpace(c: Context, spaceId: string): Promise<{ connector: StorageConnector; name: string } | null> {
+    const pluginId = spaceId.slice(CONNECTOR_SPACE.length);
+    const resolved = await resolveConfig(c, pluginId);
+    const connector = resolved && dataSources?.connectorFor ? dataSources.connectorFor(pluginId, resolved.config) : null;
+    return connector ? { connector, name: resolved!.config.repo ?? pluginId } : null;
   }
 
   // Map domain errors to HTTP. Anything else bubbles as a 500.
@@ -192,7 +256,12 @@ export function createApp(deps: AppDeps) {
 
   app.get("/api/file", async (c) => {
     const mount = c.req.query("mount");
-    const connector = mount ? readonlyMounts[mount] : undefined;
+    const space = c.req.query("space");
+    const connector = mount
+      ? readonlyMounts[mount]
+      : isConnectorSpace(space)
+        ? (await connectorSpace(c, space))?.connector
+        : undefined;
     if (!connector) return c.json({ error: "unknown mount" }, 404);
     const path = c.req.query("path");
     if (!path) return c.json({ error: "path required" }, 400);
@@ -327,6 +396,28 @@ export function createApp(deps: AppDeps) {
         if (!connector) return c.json({ error: "unknown mount" }, 404);
         return c.json(await connector.list(c.req.query("path") ?? ""));
       }
+      // A connected space (e.g. a GitHub repo): list the folder live from its
+      // connector, mapped into the same listing shape the drive returns so the UI
+      // renders it like any space. No drive rows — the file ids encode the path.
+      const connectorTarget = c.req.query("space");
+      if (isConnectorSpace(connectorTarget)) {
+        const cs = await connectorSpace(c, connectorTarget);
+        if (!cs) return c.json({ error: "not connected" }, 404);
+        const dir = c.req.query("path") ?? "";
+        const page = await cs.connector.list(dir);
+        const folders = page.items.filter((e) => e.kind === "folder").map((e) => e.name);
+        const files = page.items
+          .filter((e) => e.kind !== "folder")
+          .map((e) => ({
+            id: `${connectorTarget}:${e.path}`,
+            name: e.name,
+            metadata: { path: dir },
+            updatedAt: e.modifiedAt ?? "",
+            ownerLabel: cs.name,
+            version: { size: e.size ?? 0, mime: e.contentType ?? null },
+          }));
+        return c.json({ path: dir, spaceName: cs.name, files, folders });
+      }
       if (!drive) return c.json({ error: "no drive configured" }, 404);
       const caller = await callerOf(c);
       if (!caller) return c.json({ error: "unauthorized" }, 401);
@@ -341,8 +432,29 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  // Spaces the caller can see (for the space switcher).
-  app.get("/api/spaces", driveRoute(async (_c, caller) => _c.json(await drive!.service.spaces(caller.sub))));
+  // Spaces the caller can see (for the space switcher). Real drive spaces, plus a
+  // read-only "connected" space for each source plugin the caller has a connector
+  // configured for (e.g. their GitHub repo) — derived from the plugin's settings,
+  // not stored, so reconfiguring the repo moves the space with it.
+  app.get("/api/spaces", driveRoute(async (c, caller) => {
+    const spaces: unknown[] = await drive!.service.spaces(caller.sub);
+    if (dataSources?.connectorFor) {
+      for (const p of sourcePlugins) {
+        const resolved = await resolveConfig(c, p.id);
+        const connector = resolved ? dataSources.connectorFor(p.id, resolved.config) : null;
+        if (!connector) continue;
+        spaces.push({
+          id: `${CONNECTOR_SPACE}${p.id}`,
+          name: resolved!.config.repo ?? p.id,
+          kind: "connected",
+          role: "viewer",
+          mounted: false,
+          readonly: true,
+        });
+      }
+    }
+    return c.json(spaces);
+  }));
 
   // Create a shared (group) space — e.g. a family.
   app.post("/api/spaces", driveRoute(async (c, caller) => {
@@ -481,6 +593,7 @@ export function createApp(deps: AppDeps) {
 
   // Lightweight stats for the dashboard (file count + bytes used in a space).
   app.get("/api/overview", driveRoute(async (c, caller) => {
+    if (isConnectorSpace(c.req.query("space"))) return c.json({ files: 0, bytes: 0 });
     const space = await resolveSpace(c, caller.sub);
     return c.json(await drive!.service.overview(caller.sub, space));
   }));
@@ -515,7 +628,7 @@ export function createApp(deps: AppDeps) {
   // New content version — never alters metadata. Dedup applies to its blob.
   // Rapid successive saves by the same author coalesce into the current version.
   app.post("/api/files/:id/versions", driveRoute(async (c, caller) => {
-    const body = await c.req.json<{ hash: string; mime?: string }>();
+    const body = await c.req.json<{ hash: string; mime?: string; coalesce?: boolean }>();
     if (!body.hash) return c.json({ error: "hash required" }, 400);
     return c.json(await drive!.service.addVersion(caller, c.req.param("id")!, body));
   }));
@@ -525,10 +638,32 @@ export function createApp(deps: AppDeps) {
     c.json(await drive!.service.listVersions(caller, c.req.param("id")!)),
   ));
 
+  // Download a specific past version's bytes (history → download an old one).
+  app.get("/api/files/:id/versions/:versionId/content", driveRoute(async (c, caller) => {
+    const file = await drive!.service.getFile(caller, c.req.param("id")!);
+    const { key, version } = await drive!.service.getVersionContentKey(
+      caller,
+      c.req.param("id")!,
+      c.req.param("versionId")!,
+    );
+    const stream = await drive!.blobs.get(key);
+    if (!stream) return c.json({ error: "blob missing" }, 404);
+    c.header("Content-Type", version.mime ?? mimeFor(file.name));
+    c.header("Content-Disposition", `attachment; filename="${encodeURIComponent(file.name)}"`);
+    return c.body(stream);
+  }));
+
   // Restore an older version: appends its content as the new current version.
   app.post("/api/files/:id/versions/:versionId/restore", driveRoute(async (c, caller) =>
     c.json(await drive!.service.restoreVersion(caller, c.req.param("id")!, c.req.param("versionId")!)),
   ));
+
+  // Pin/unpin a version so retention/pruning never removes it.
+  app.post("/api/files/:id/versions/:versionId/keep", driveRoute(async (c, caller) => {
+    const { keep } = await c.req.json<{ keep: boolean }>();
+    await drive!.service.keepVersion(caller, c.req.param("id")!, c.req.param("versionId")!, !!keep);
+    return c.json({ ok: true });
+  }));
 
   // Recent processor runs across the caller's spaces (a plugin's activity view).
   // `?plugin=` filters to one processor (e.g. document-ai); `?limit=` caps the count.
@@ -800,6 +935,40 @@ export function createApp(deps: AppDeps) {
     return c.json({ models: g ? g.models() : [] });
   }));
 
+  // Run inference through the caller's effective gateway — the same surface the
+  // Document AI processor uses, now reachable by trusted host UI (the Plugin
+  // Studio). The caller never holds a provider key; the host routes by model id.
+  // (This is the `ai:generate` grant the core anticipates; today only first-party
+  // host UI calls it — sandboxed plugins don't reach it yet.)
+  app.post("/api/ai/generate", driveRoute(async (c, caller) => {
+    const g = await gatewayFor(caller.sub);
+    const models = g?.models() ?? [];
+    if (!g || models.length === 0) return c.json({ error: "no AI model is configured for this account" }, 503);
+    const body = await c.req.json<{
+      model?: string;
+      messages?: AiMessage[];
+      temperature?: number;
+      maxTokens?: number;
+      json?: boolean;
+    }>();
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    if (messages.length === 0) return c.json({ error: "messages required" }, 400);
+    const model = body.model ?? models[0]!.id;
+    if (!models.some((m) => m.id === model)) return c.json({ error: `unknown model "${model}"` }, 400);
+    try {
+      const result = await g.generate({
+        model,
+        messages,
+        temperature: body.temperature,
+        maxTokens: Math.min(body.maxTokens ?? 4096, AI_MAX_TOKENS),
+        json: body.json,
+      });
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 502);
+    }
+  }));
+
   // What's connected for the caller, so the client can show live vs. configure.
   app.get("/api/integrations", (c) =>
     handle(c, async () => {
@@ -914,6 +1083,40 @@ export function createApp(deps: AppDeps) {
     const body = await c.req.json<{ ids?: unknown }>();
     const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : [];
     await drive!.service.setInstalledPlugins(caller.sub, ids);
+    return c.json({ ok: true });
+  }));
+
+  // ── AI-generated plugins (Plugin Studio) ────────────────────────────────────
+  // Plugins the caller authored at runtime via the core LLM. The host owns their
+  // manifest + ESM source (they don't ship with the build); the client merges
+  // them into its viewer/registry lists the way it would a resolved zip plugin.
+  app.get("/api/plugins/custom", driveRoute(async (c, caller) => {
+    const plugins = await drive!.service.listCustomPlugins(caller.sub);
+    return c.json({
+      plugins: plugins.map((p) => ({
+        id: p.id,
+        manifest: JSON.parse(p.manifest) as unknown,
+        source: p.source,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      })),
+    });
+  }));
+
+  app.post("/api/plugins/custom", driveRoute(async (c, caller) => {
+    const body = await c.req.json<{ manifest?: unknown; source?: unknown }>();
+    const source = typeof body.source === "string" ? body.source : "";
+    if (!source.trim()) return c.json({ error: "source required" }, 400);
+    if (source.length > MAX_PLUGIN_SOURCE) return c.json({ error: "plugin source too large" }, 413);
+    const err = validateCustomManifest(body.manifest);
+    if (err) return c.json({ error: err }, 400);
+    const manifest = body.manifest as { id: string };
+    await drive!.service.addCustomPlugin(caller.sub, { id: manifest.id, manifest: JSON.stringify(manifest), source });
+    return c.json({ ok: true, id: manifest.id }, 201);
+  }));
+
+  app.delete("/api/plugins/custom/:id", driveRoute(async (c, caller) => {
+    await drive!.service.removeCustomPlugin(caller.sub, c.req.param("id")!);
     return c.json({ ok: true });
   }));
 

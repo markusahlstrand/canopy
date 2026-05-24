@@ -1,5 +1,5 @@
 import { lazy, type ComponentType } from "react";
-import { PluginRegistry } from "@canopy/core";
+import { PluginRegistry, type PluginManifest } from "@canopy/core";
 import { buildManifest } from "./manifests";
 import { TasksView } from "./detail-views";
 import { GithubView } from "./github-view";
@@ -28,12 +28,20 @@ export const PLUGIN_UI: Record<string, PluginUI> = {
   "document-ai": { DetailView: DocumentAiView },
 };
 
-/** Build a registry holding the manifests for the given installed plugin ids. */
-export function createRegistry(installedIds: string[]): PluginRegistry {
+/**
+ * Build a registry holding the manifests for the given installed plugin ids.
+ * `customManifests` are AI-generated (Plugin Studio) plugins, whose manifests are
+ * authored at runtime rather than derived from the catalog; they're registered
+ * when their id is in the active set, the same gate as catalog plugins.
+ */
+export function createRegistry(installedIds: string[], customManifests: PluginManifest[] = []): PluginRegistry {
   const registry = new PluginRegistry();
   for (const id of installedIds) {
     const manifest = buildManifest(id);
     if (manifest) registry.register(manifest);
+  }
+  for (const manifest of customManifests) {
+    if (installedIds.includes(manifest.id)) registry.register(manifest);
   }
   return registry;
 }

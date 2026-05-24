@@ -20,6 +20,7 @@ import {
 import { createFsBlobStore, createLibsqlDb } from "@canopy/store/node";
 import { createApp, type DataSourceDeps } from "./app";
 import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
+import { parseRepo } from "./data-sources";
 import { readAuthConfig } from "./auth/config";
 import { createAuthApp } from "./auth/routes";
 
@@ -96,6 +97,19 @@ const dataSources: DataSourceDeps = {
   // Encrypts stored secrets (provider keys, tokens) at rest. Falls back to a bare
   // SESSION_SECRET so the UI can save keys in dev even with auth/OIDC switched off.
   secret: authConfig?.sessionSecret ?? process.env.SESSION_SECRET,
+  // Browse a configured GitHub repo's files live as a read-only space.
+  connectorFor: (pluginId, config) => {
+    if (pluginId !== "github") return null;
+    const p = parseRepo(config.repo ?? "");
+    return p
+      ? createGithubConnector("connector:github", {
+          owner: p.owner,
+          repo: p.repo,
+          branch: config.branch || undefined,
+          token: config.token || undefined,
+        })
+      : null;
+  },
 };
 
 // AI providers off Node env (no Workers AI binding here): a Gemini key, and/or any
@@ -150,3 +164,12 @@ serve({ fetch: app.fetch, port }, (info) => {
   console.log(`  ai          → ${ai ? ai.models().map((m) => m.id).join(", ") : "no providers (set GOOGLE_AI_API_KEY or OPENAI_BASE_URL)"}`);
   console.log(`  ui          → ${serveSpa ? distDir : "served by Vite (dev)"}`);
 });
+
+// Periodic version-retention sweep (#11): thin old snapshots down to the retention
+// curve, releasing pruned blobs. Cloudflare runs this from a Cron Trigger (see
+// worker.ts `scheduled`); the single Node process runs it on an in-process interval.
+// `.unref()` so the timer never keeps the process alive on its own.
+const PRUNE_INTERVAL_MS = 6 * 60 * 60_000; // every 6 hours
+setInterval(() => {
+  void service.pruneAllVersions().catch((err) => console.warn("  ⚠ version prune failed:", err));
+}, PRUNE_INTERVAL_MS).unref();

@@ -162,7 +162,7 @@ export function MobileApp() {
         onUpload={() => uploadRef.current?.click()}
         onNewNote={createNote}
       />
-      <FileDetailSheet file={selFile} open={sheet === "file"} onOpenChange={(o) => setSheet(o ? "file" : null)} />
+      <FileDetailSheet file={selFile} open={sheet === "file"} onOpenChange={(o) => setSheet(o ? "file" : null)} installedPluginIds={installed} />
 
       <input
         ref={uploadRef}

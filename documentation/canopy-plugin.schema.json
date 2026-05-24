@@ -113,6 +113,21 @@
           "required": ["kind"],
           "properties": { "kind": { "const": "kv" } },
           "description": "A small per-plugin, per-user key/value store (backed by the shared cache)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "ai:generate" },
+            "models": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "description": "Restrict to specific model ids (from the host's AI models). Omit = any model the caller can reach."
+            }
+          },
+          "description": "Run text/vision inference through the host's AI gateway — the plugin never holds a provider key; the host routes to whichever provider owns the model."
         }
       ]
     },

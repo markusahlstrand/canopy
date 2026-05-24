@@ -5,6 +5,7 @@ import { Icon } from "@/lib/icons";
 import { FileIcon } from "@/components/file-icon";
 import { PersonAvatar } from "@/components/person-avatar";
 import { PluginViewer } from "@/components/plugin-viewer";
+import { VersionHistory } from "@/components/file-preview";
 import { findViewer } from "@/plugins/viewers";
 import { cn } from "@/lib/utils";
 import { FILE_KIND_COLOR, STORAGE, type FileItem } from "@/lib/mock-data";
@@ -106,12 +107,18 @@ export function FileDetailSheet({
   file,
   open,
   onOpenChange,
+  installedPluginIds,
 }: {
   file: FileItem | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Plugins active for this user — gates store-listed viewers (e.g. code-editor). */
+  installedPluginIds?: string[];
 }) {
   const [shareOpen, setShareOpen] = useState(false);
+  // Bumped after a restore to remount the viewer so it refetches the now-current
+  // content (parity with the desktop preview's contentNonce).
+  const [contentNonce, setContentNonce] = useState(0);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="bottom" className="h-[92dvh] gap-0 rounded-t-[20px] p-0">
@@ -123,11 +130,14 @@ export function FileDetailSheet({
             )}
             {/* preview */}
             {(() => {
-              const viewer = file.kind !== "folder" ? findViewer(file.name) : undefined;
-              const editable = viewer?.plugin === "markdown-editor";
+              const viewer = file.kind !== "folder" ? findViewer(file.name, undefined, installedPluginIds) : undefined;
+              const editable =
+                viewer?.plugin === "markdown-editor" ||
+                viewer?.plugin === "code-editor" ||
+                viewer?.plugin === "univer-office";
               return viewer ? (
                 <PluginViewer
-                  key={file.id}
+                  key={`${file.id}:${contentNonce}`}
                   file={{ source: viewer.source, name: file.name, url: contentUrl(file.id) }}
                   className="mt-1"
                   onSaveContent={editable ? (text) => saveFileVersion(file.id, text) : undefined}
@@ -207,6 +217,11 @@ export function FileDetailSheet({
               </div>
             ) : (
               <div className="text-[13px] text-muted-foreground">Only you can see this file.</div>
+            )}
+
+            {/* version history (hidden when there's none, e.g. folders / read-only mounts) */}
+            {file.kind !== "folder" && (
+              <VersionHistory fileId={file.id} onRestored={() => setContentNonce((n) => n + 1)} className="mt-4" />
             )}
 
             {/* comments */}

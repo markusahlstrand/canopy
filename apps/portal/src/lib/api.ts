@@ -1,4 +1,4 @@
-import type { Page, StorageEntry } from "@canopy/core";
+import type { AiMessage, Page, PluginManifest, StorageEntry } from "@canopy/core";
 import type { FileItem, FileKind, ProcessingEntry } from "@/lib/mock-data";
 
 const EXT_KIND: Record<string, FileKind> = {
@@ -121,8 +121,17 @@ export async function listShared(): Promise<FileItem[]> {
   return toFileItems(await res.json(), "");
 }
 
-/** URL to stream a drive file's current version. */
+/** URL to stream a file's current version. */
 export function contentUrl(id: string): string {
+  // A connected space's file id is "connector:<plugin>:<repo-path>"; its bytes are
+  // streamed live through the connector via the path-keyed /api/file route.
+  if (id.startsWith("connector:")) {
+    const rest = id.slice("connector:".length);
+    const sep = rest.indexOf(":");
+    const pluginId = rest.slice(0, sep);
+    const path = rest.slice(sep + 1);
+    return `/api/file?space=connector:${encodeURIComponent(pluginId)}&path=${encodeURIComponent(path)}`;
+  }
   return `/api/files/${id}/content`;
 }
 
@@ -191,14 +200,18 @@ export async function createFile(
   };
 }
 
-/** Save new text content as a NEW version of a file (metadata untouched). Blob goes in the file's space. */
+/**
+ * Save new text content as a NEW version of a file (metadata untouched). Blob goes
+ * in the file's space. This is an explicit user Save, so `coalesce: false` forces a
+ * discrete version rather than merging into the current one's editing-session window.
+ */
 export async function saveFileVersion(id: string, text: string, mime = "text/markdown", spaceId?: string): Promise<void> {
   const bytes = new TextEncoder().encode(text);
   const hash = await uploadBlob(bytes, spaceId);
   const res = await fetch(`/api/files/${id}/versions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ hash, mime }),
+    body: JSON.stringify({ hash, mime, coalesce: false }),
   });
   if (!res.ok) throw new Error(`save failed: ${res.status}`);
 }
@@ -212,6 +225,8 @@ export interface FileVersion {
   createdAt: string;
   createdBy: string;
   createdByLabel: string;
+  /** Pinned: retention never prunes a kept version. */
+  keep: boolean;
 }
 
 /** A file's version history, newest first (the first entry is the current version). */
@@ -219,6 +234,21 @@ export async function listVersions(id: string): Promise<FileVersion[]> {
   const res = await fetch(`/api/files/${id}/versions`);
   if (!res.ok) return [];
   return (await res.json()) as FileVersion[];
+}
+
+/** URL to download a specific past version's bytes (served as an attachment). */
+export function versionContentUrl(id: string, versionId: string): string {
+  return `/api/files/${id}/versions/${versionId}/content`;
+}
+
+/** Pin or unpin a version so retention/pruning never removes it. */
+export async function setVersionKeep(id: string, versionId: string, keep: boolean): Promise<void> {
+  const res = await fetch(`/api/files/${id}/versions/${versionId}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ keep }),
+  });
+  if (!res.ok) throw new Error(`keep version failed: ${res.status}`);
 }
 
 /** Restore an older version — appends its content as the new current version. */
@@ -368,9 +398,11 @@ export type Role = "owner" | "editor" | "viewer";
 export interface SpaceView {
   id: string;
   name: string;
-  kind: "personal" | "group";
+  kind: "personal" | "group" | "connected";
   role: Role;
   mounted: boolean;
+  /** A read-only space (e.g. a connected GitHub repo): no uploads, edits, or sharing. */
+  readonly?: boolean;
 }
 
 /** Spaces the caller can see, with their role + mount preference. */
@@ -936,6 +968,68 @@ export async function listAiModels(): Promise<AiModel[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Run inference through the host's AI gateway (the same gateway server-side
+ * processors use). The caller never holds a provider key. Throws with the
+ * server's message on failure so the UI can show it.
+ */
+export async function aiGenerate(req: {
+  messages: AiMessage[];
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  json?: boolean;
+}): Promise<string> {
+  const res = await fetch("/api/ai/generate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+  if (!res.ok) throw new Error(data.error ?? `generate failed: ${res.status}`);
+  return data.text ?? "";
+}
+
+// ── AI-generated plugins (Plugin Studio) ──────────────────────────────────────
+
+/** A plugin the caller authored at runtime: its manifest plus the ESM viewer source. */
+export interface CustomPlugin {
+  id: string;
+  manifest: PluginManifest;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The caller's generated plugins (empty when none or unavailable). */
+export async function fetchCustomPlugins(): Promise<CustomPlugin[]> {
+  try {
+    const res = await fetch("/api/plugins/custom");
+    if (!res.ok) return [];
+    const data = (await res.json()) as { plugins?: CustomPlugin[] };
+    return Array.isArray(data.plugins) ? data.plugins : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist + install a generated plugin. Throws with the server's message on rejection. */
+export async function saveCustomPlugin(manifest: PluginManifest, source: string): Promise<void> {
+  const res = await fetch("/api/plugins/custom", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ manifest, source }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) throw new Error(data.error ?? `save plugin failed: ${res.status}`);
+}
+
+/** Uninstall + delete a generated plugin. */
+export async function deleteCustomPlugin(id: string): Promise<void> {
+  const res = await fetch(`/api/plugins/custom/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete plugin failed: ${res.status}`);
 }
 
 export interface PluginSettings {

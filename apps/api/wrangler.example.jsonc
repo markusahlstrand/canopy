@@ -53,6 +53,12 @@
 		"GITHUB_REPO": "markusahlstrand/canopy",
 		"GITHUB_BRANCH": "main"
 	},
+	// Daily version-retention sweep: thins old snapshots to the retention curve (#11).
+	"triggers": {
+		"crons": [
+			"0 2 * * *"
+		]
+	},
 	"observability": {
 		"enabled": true
 	}

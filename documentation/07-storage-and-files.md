@@ -62,6 +62,36 @@ properties is `PATCH /files/:id/metadata` (no new version). Moving a file betwee
 folders is also a metadata edit — it just rewrites `metadata.path`. Deleting a file moves it to
 **Trash** (recoverable) rather than destroying it — see below.
 
+## Version history & retention
+
+Every content change accumulates a version, and the history is **user-visible**: the file
+preview's *Version history* panel lists each version with who saved it, when, and its size, and
+lets you **download** any past version, **restore** one, or **pin** it. Restore is
+**copy-forward** — it appends the chosen version's content as a new current version rather than
+rewinding — so history stays linear and the restore is itself an entry.
+
+**Coalescing.** Successive blob saves by the *same author* within a window (default 10 min) fold
+into the current version instead of appending a row, so an editing session is one history entry
+rather than one per save. An **explicit Save** opts out (`coalesce: false`) and always seals a
+discrete version; programmatic re-writes (a WebDAV mount, a future autosave) still coalesce.
+
+**Tiered retention.** Left alone the history would grow one sealed snapshot per editing bucket
+forever, so a scheduled sweep thins the older tail on a coarsening curve:
+
+```
+< 24h    keep everything
+24h–7d   keep one per hour
+7d–30d   keep one per day
+> 30d    keep one per month
+```
+
+The **current** version and any version you **pinned** (the *keep* flag) are always retained,
+regardless of age. Pruning a version drops its row and releases its blob reference; because blobs
+are reference-counted, content shared with another version (or another file) survives. Audit and
+compliance are explicitly *not* goals here, so intermediate auto-snapshots are thinned
+aggressively. The sweep runs from a **Cloudflare Cron Trigger** on the edge and an **in-process
+interval** on Node — both calling the same prune routine.
+
 ## Trash (delete, restore, purge)
 
 Deletion is two-stage and recoverable:

@@ -44,6 +44,8 @@ interface SidebarProps {
   onToggle: () => void;
   spaces: SpaceView[];
   currentSpace: string;
+  /** The current space is read-only (a connected repo): hide create/upload actions. */
+  readonly: boolean;
   onOpenSpace: (id: string) => void;
   onCreateSpace: () => void;
   onRenameSpace: (id: string) => void;
@@ -115,6 +117,7 @@ export function Sidebar({
   onToggle,
   spaces,
   currentSpace,
+  readonly,
   onOpenSpace,
   onCreateSpace,
   onRenameSpace,
@@ -128,6 +131,7 @@ export function Sidebar({
   onSignOut,
 }: SidebarProps) {
   const groupSpaces = spaces.filter((s) => s.kind === "group");
+  const connectedSpaces = spaces.filter((s) => s.kind === "connected");
   const realUser = auth.user;
   const displayUser = realUser
     ? {
@@ -155,7 +159,8 @@ export function Sidebar({
         )}
       </div>
 
-      {/* New button */}
+      {/* New button — hidden in a read-only (connected) space */}
+      {!readonly && (
       <div className={cn("px-3 pb-2", collapsed && "px-2")}>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -184,6 +189,7 @@ export function Sidebar({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      )}
 
       {/* Main nav */}
       <nav className={cn("flex flex-col gap-0.5 px-3", collapsed && "px-2")}>
@@ -250,7 +256,27 @@ export function Sidebar({
                 </ContextMenu>
               );
             })}
-            {groupSpaces.length === 0 && (
+            {/* Connected repos (read-only, derived from a source plugin's config). */}
+            {connectedSpaces.map((s) => {
+              const isActive = active === "drive" && currentSpace === s.id;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => onOpenSpace(s.id)}
+                  title={`${s.name} (read-only)`}
+                  className={cn(
+                    "flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] transition-colors",
+                    isActive ? "bg-accent font-medium text-foreground" : "text-foreground/80 hover:bg-accent/60",
+                  )}
+                >
+                  <span className={cn("shrink-0", isActive && "text-primary")}>
+                    <Icon name="github" size={17} />
+                  </span>
+                  <span className="flex-1 truncate text-left">{s.name}</span>
+                </button>
+              );
+            })}
+            {groupSpaces.length === 0 && connectedSpaces.length === 0 && (
               <button
                 onClick={onCreateSpace}
                 className="flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13.5px] text-muted-foreground hover:bg-accent/60"

@@ -18,6 +18,8 @@ import {
   listVersions,
   restoreVersion,
   saveFileVersion,
+  setVersionKeep,
+  versionContentUrl,
   setDescription as apiSetDescription,
   setTags as apiSetTags,
   type Comment,
@@ -38,11 +40,20 @@ function fmtWhen(iso: string): string {
   return new Date(iso).toLocaleString("en-US", { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-/** A file's saved versions, newest first. Older entries can be restored. */
-function VersionHistory({ fileId, onRestored }: { fileId: string; onRestored: () => void }) {
+/** A file's saved versions, newest first. Older entries can be restored or downloaded. */
+export function VersionHistory({
+  fileId,
+  onRestored,
+  className,
+}: {
+  fileId: string;
+  onRestored: () => void;
+  className?: string;
+}) {
   const [versions, setVersions] = useState<FileVersion[] | null>(null);
   const [reload, setReload] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
+  const [keeping, setKeeping] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -71,8 +82,21 @@ function VersionHistory({ fileId, onRestored }: { fileId: string; onRestored: ()
     }
   }
 
+  async function toggleKeep(versionId: string, next: boolean) {
+    setKeeping(versionId);
+    setError(null);
+    try {
+      await setVersionKeep(fileId, versionId, next);
+      setReload((n) => n + 1);
+    } catch {
+      setError("Couldn't update that version.");
+    } finally {
+      setKeeping(null);
+    }
+  }
+
   return (
-    <div>
+    <div className={className}>
       <div className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Version history</div>
       {error && <div className="mb-2 text-[12px] text-destructive">{error}</div>}
       {versions == null ? (
@@ -95,11 +119,32 @@ function VersionHistory({ fileId, onRestored }: { fileId: string; onRestored: ()
                   {fmtWhen(v.createdAt)} · {humanSize(v.size)}
                 </div>
               </div>
-              {i !== 0 && (
-                <Button variant="ghost" size="sm" disabled={busy != null} onClick={() => restore(v.id)}>
-                  {busy === v.id ? "Restoring…" : "Restore"}
+              <div className="flex items-center gap-0.5">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={keeping != null}
+                  title={v.keep ? "Pinned — kept from pruning. Click to unpin." : "Keep this version (never prune it)"}
+                  onClick={() => toggleKeep(v.id, !v.keep)}
+                >
+                  <Icon name="bookmark" size={14} className={cn(v.keep ? "text-primary" : "text-muted-foreground")} />
                 </Button>
-              )}
+                {v.source === "blob" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    title="Download this version"
+                    onClick={() => window.open(versionContentUrl(fileId, v.id), "_blank")}
+                  >
+                    <Icon name="download" size={14} />
+                  </Button>
+                )}
+                {i !== 0 && (
+                  <Button variant="ghost" size="sm" disabled={busy != null} onClick={() => restore(v.id)}>
+                    {busy === v.id ? "Restoring…" : "Restore"}
+                  </Button>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -389,6 +434,7 @@ export function FilePreview({
   onClose,
   onSaved,
   space,
+  installedPluginIds,
 }: {
   file: FileItem | null;
   /** "split" docks beside the (still-interactive) file list; "full" covers the viewport. */
@@ -398,6 +444,8 @@ export function FilePreview({
   onSaved?: () => void;
   /** The space the file lives in (so a saved version's blob lands there). */
   space?: string;
+  /** Plugins active for this user — gates store-listed viewers (e.g. code-editor). */
+  installedPluginIds?: string[];
 }) {
   const [shareOpen, setShareOpen] = useState(false);
   // Bumped after a restore to remount the viewer so it refetches the current content.
@@ -418,8 +466,11 @@ export function FilePreview({
 
   const isFolder = file.kind === "folder";
   const full = mode === "full";
-  const viewer = !isFolder ? findViewer(file.name) : undefined;
-  const editable = viewer?.plugin === "markdown-editor";
+  const viewer = !isFolder ? findViewer(file.name, undefined, installedPluginIds) : undefined;
+  const editable =
+    viewer?.plugin === "markdown-editor" ||
+    viewer?.plugin === "code-editor" ||
+    viewer?.plugin === "univer-office";
 
   const viewerNode = viewer ? (
     <PluginViewer

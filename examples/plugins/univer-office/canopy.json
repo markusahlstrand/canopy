@@ -1,0 +1,52 @@
+{
+  "$schema": "../../../documentation/canopy-plugin.schema.json",
+  "id": "univer-office",
+  "name": "Univer Office",
+  "version": "0.1.0",
+  "description": "View and edit spreadsheets and documents with Univer (loaded from a CDN): opens CSV/TSV and Univer .usheet/.udoc/.univer JSON snapshots, saving changes back to the drive. Univer slide snapshots (.uslide) render read-only — slide editing is experimental upstream.",
+  "icon": "table-2",
+  "color": "199 89% 48%",
+  "entry": "index.js",
+  "capabilities": [{ "kind": "item:read" }, { "kind": "item:write" }],
+  "contributes": {
+    "viewers": [
+      {
+        "id": "univer",
+        "title": "Univer Office",
+        "match": [
+          "text/csv",
+          ".csv",
+          ".tsv",
+          ".usheet",
+          ".udoc",
+          ".uslide",
+          ".univer"
+        ]
+      }
+    ],
+    "creators": [
+      {
+        "id": "sheet",
+        "label": "Spreadsheet",
+        "icon": "table-2",
+        "defaultName": "Untitled",
+        "extension": ".csv",
+        "mime": "text/csv",
+        "template": ""
+      },
+      {
+        "id": "doc",
+        "label": "Document",
+        "icon": "file-text",
+        "defaultName": "Untitled",
+        "extension": ".udoc",
+        "mime": "application/json",
+        "template": "{\n  \"id\": \"doc\",\n  \"body\": { \"dataStream\": \"\\r\\n\", \"textRuns\": [], \"paragraphs\": [{ \"startIndex\": 0 }], \"sectionBreaks\": [{ \"startIndex\": 1 }] },\n  \"documentStyle\": { \"pageSize\": { \"width\": 595, \"height\": 842 }, \"marginTop\": 50, \"marginBottom\": 50, \"marginLeft\": 50, \"marginRight\": 50 }\n}"
+      }
+    ],
+    "store": {
+      "category": "Productivity",
+      "tagline": "Edit spreadsheets and documents inline with Univer."
+    }
+  }
+}
