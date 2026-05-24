@@ -91,6 +91,10 @@ cd apps/api && wrangler deploy --dry-run
   the **anonymous demo drive** are read live from the repo via `@canopy/connector-github` — no
   files bundled, no R2 bucket for them. Unset (dev), they fall back to the in-repo `documentation/` and
   `demo/` folders. Signed-in users' drives are the real connector (local FS / R2).
+- **AI is optional but on by default.** `wrangler.example.jsonc` binds **Workers AI**
+  (`ai.binding = "AI"`), so the **Document AI** plugin labels uploads out of the box with no key.
+  Remove that binding to turn it off; either way, signed-in users can add their own Gemini or
+  OpenAI-compatible provider under **Settings → AI**.
 - **`wrangler dev`** (the local Cloudflare runtime) needs `workerd`, whose native build pnpm
   blocks by default — run `pnpm approve-builds` once if you want it. `wrangler deploy` does
   not need it. For day-to-day work, prefer `pnpm dev`.
@@ -109,6 +113,11 @@ live there) at any folder:
 ```bash
 CANOPY_LOCAL_ROOT=/srv/canopy pnpm start
 ```
+
+> **AI (optional).** On Node, enable a base AI provider with `GOOGLE_AI_API_KEY` (Gemini) or
+> `OPENAI_BASE_URL` (a local / OpenAI-compatible model) so the **Document AI** plugin can label
+> uploads. With neither set, AI is simply off until a signed-in user adds their own provider
+> under **Settings → AI**.
 
 A `Dockerfile` at the repo root does this in a multi-stage build (install + `vite build`,
 then run the API serving `dist` + `/api`):

@@ -1,23 +1,10 @@
-import type { CacheStore, CalendarProvider, ConnectorConfigField, TaskProvider } from "@canopy/core";
+import type { ServerDataSource } from "@canopy/core";
 import { createGithubCalendarProvider, createGithubTaskProvider } from "@canopy/connector-github";
 
-/**
- * Server-side registry of installable **data-source plugins**. Each declares its
- * config schema (rendered as a generic settings form in the portal) and knows how
- * to build typed providers from a saved config. This is the authoritative schema
- * — secrets never need to round-trip to the client to render the form.
- *
- * The adapter owns its own **caching policy**: `build` receives an (already
- * scoped) CacheStore and decides what/how long to cache. The host just hands it a
- * namespace-isolated cache; it works the same on SQLite locally and the Cache API
- * on Cloudflare.
- */
-export interface ServerDataSource {
-  id: string;
-  configFields: ConnectorConfigField[];
-  /** Build providers from a resolved (decrypted) config; returns what it can. */
-  build(config: Record<string, string>, ctx?: { cache?: CacheStore }): { tasks?: TaskProvider; calendar?: CalendarProvider };
-}
+// The GitHub data source — the `data-source` role (typed records into Tasks /
+// Calendar) of the first-party GitHub plugin. Its contract (`ServerDataSource`)
+// lives in @canopy/core alongside the other role contracts; see plugins.ts for
+// how the role is bundled into one plugin.
 
 /** Parse "owner/repo" or a github.com URL into { owner, repo }. */
 export function parseRepo(input: string): { owner: string; repo: string } | null {
@@ -63,5 +50,3 @@ export const githubDataSource: ServerDataSource = {
     };
   },
 };
-
-export const DATA_SOURCES: ServerDataSource[] = [githubDataSource];

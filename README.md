@@ -67,8 +67,8 @@ fans out across databases.
 - **Spaces.** Every user has a **personal** space; **group** spaces (a family, a team) are
   co-accessed by their members. A group space surfaces as a **folder inside My Drive** (the
   merged, "family" feel) and can be **unpinned** to a sidebar switcher per user.
-- **Per-file sharing.** Grant a person (by email) or a whole space a role — **owner ⊇ editor ⊇
-  viewer**.
+- **Per-file & per-folder sharing.** Grant a person (by email) or a whole space a role — **owner
+  ⊇ editor ⊇ viewer** — on a single file or on one virtual folder and its subtree.
 - **Canopy-native invites.** Invite anyone to a file or space **by email**. If they don't have
   an account yet it's a **pending invite** — share the **copyable invite link**, and it resolves
   the moment they sign in with that (**verified**) email. Authentication stays with your OIDC
@@ -77,7 +77,7 @@ fans out across databases.
   (planned) the calendar would surface the same space as a shared calendar.
 
 See [`documentation/08-sharing-and-spaces.md`](documentation/08-sharing-and-spaces.md). Link sharing
-("anyone with the link") and folder-level sharing are planned.
+("anyone with the link") is planned.
 
 ## Develop
 

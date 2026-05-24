@@ -86,9 +86,11 @@ Routes: `POST /api/uploads/prepare`, `PUT /api/uploads/:token`, `POST/GET /api/f
 The same server also hosts the **plugin API**: `GET/PUT /api/plugins/installed` (a user's install
 set), `GET/PUT /api/plugins/:id/settings` (per-user config; secrets encrypted), the per-place layer
 `GET/POST/DELETE /api/spaces/:id/plugins` + `GET /api/plugins/:id/places` (owner-gated; what a space
-runs) with `GET /api/plugins/active` (the effective set = installs ∪ space-applied), and the
-data-source endpoints `GET /api/tasks`, `GET /api/calendar`, `GET /api/integrations`. See
-[How plugins work](how-plugins-work) for the contract behind these.
+runs) with `GET /api/plugins/active` (the effective set = installs ∪ space-applied), the
+data-source endpoints `GET /api/tasks`, `GET /api/calendar`, `GET /api/integrations`, and
+`GET /api/ai/models` (the caller's available AI models, fed to AI-powered plugins like Document
+AI through the host **AI gateway** — a swappable provider abstraction over Workers AI, Gemini, or
+a local model). See [How plugins work](how-plugins-work) for the contract behind these.
 
 ## Deployment
 

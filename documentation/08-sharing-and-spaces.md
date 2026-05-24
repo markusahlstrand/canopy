@@ -42,6 +42,14 @@ Open a file → **Share**. Add someone **by email** with a role, or share with a
 Server-side, every grant is a **relation tuple** — `file#role@subject`, where the subject is a
 user, an email, or a space's members. Membership and per-file grants are the same primitive.
 
+## Sharing a folder
+
+Sharing isn't limited to a single file or a whole space — you can grant a role on one **virtual
+folder** (and everything beneath it). It mirrors file sharing exactly: grant a person (by email)
+or another space a role of **owner / editor / viewer**, with the same pending-invite resolution
+— the same relation-tuple primitive, keyed by the space id plus the folder's virtual `path`.
+Folders shared with you surface under **"Shared with me"** (`GET /api/shared-folders`).
+
 ## Inviting & managing members
 
 Open a group space → **Members** and add anyone **by email**:
@@ -83,5 +91,3 @@ cross-cutting, so it stays a single query rather than fanning out across databas
 
 - **Link sharing** ("anyone with the link") — planned (a tokenized grant with an optional
   expiry).
-- **Folder-level sharing** — today you share a file or a whole space; sharing an individual
-  virtual folder comes later.

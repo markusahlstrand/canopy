@@ -15,8 +15,7 @@ import {
   type R2BucketLike,
 } from "@canopy/store";
 import { createApp, type DataSourceDeps } from "./app";
-import { DATA_SOURCES } from "./data-sources";
-import { PROCESSORS } from "./processors";
+import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
 import { createCacheApiCacheStore } from "./cache-api";
 import { createAuthApp } from "./auth/routes";
 import { readAuthConfig, type EnvVars } from "./auth/config";
@@ -86,7 +85,7 @@ export default {
 
     const authConfig = readAuthConfig(env as unknown as EnvVars);
     const dataSources: DataSourceDeps = {
-      plugins: DATA_SOURCES,
+      plugins: dataSourcesOf(SERVER_PLUGINS),
       demoDefaults,
       cache: createCacheApiCacheStore(),
       secret: authConfig?.sessionSecret,
@@ -101,7 +100,7 @@ export default {
       readonlyMounts,
       drive: { service, blobs },
       dataSources,
-      processors: PROCESSORS,
+      processors: processorsOf(SERVER_PLUGINS),
       ai,
       // Let users add their own Gemini / OpenAI-compatible keys in Settings → AI models.
       aiUserConfig: { fields: AI_PROVIDER_FIELDS, build: providersFromUserConfig },

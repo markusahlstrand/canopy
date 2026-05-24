@@ -87,30 +87,61 @@ Cloudflare.
 ## 3. The processor role — trusted, runs on change
 
 A **processor** acts on a file when it changes and derives something from it. The built-in
-**Document AI** plugin is the example: it classifies each added document with Google Gemini
-Flash and writes a type label into the file's `metadata.labels`. Like a connector or data
-source it's trusted code in the API, and it declares its config (an API key) the same way —
-stored encrypted per-user:
+**Document AI** plugin is the example: when a file is added it asks the host's AI model for a
+short **type label** (e.g. *Invoice*, *Receipt*, *Contract*) and a one-line **description**, and
+merges both into the file's metadata. Like a connector or data source it's trusted code in the
+API:
 
 ```ts
 interface DocumentProcessor {
   id: string;
-  configFields: ConnectorConfigField[];                                   // apiKey (secret), model
-  label(file: { name; mime; bytes }, config): Promise<string[]>;          // labels to merge
+  configFields: ConnectorConfigField[];
+  /** Should this run for the given config + host context? Default: required config present. */
+  eligible?(config, ctx: ProcessorContext): boolean;
+  /** Returns labels + an optional description to merge into the file's metadata. */
+  process(file, config, ctx: ProcessorContext): Promise<ProcessorResult>;
+}
+// ProcessorResult = { labels: string[]; description?: string; model?: string; error?: string }
+```
+
+The host runs it on `POST /api/files` **off the response path** — `ctx.waitUntil` on a Worker, a
+background promise on Node — so it never slows an upload. It reads the new file's bytes once,
+calls each **eligible** processor, and merges the result back with a metadata patch (a metadata
+edit, so **no new version**), recording each run in `metadata.processing`. Failures are swallowed
+— labeling must never break an upload. It currently fires on **new uploads only**.
+
+This is the **trusted, first-party form** of the planned `enrichItem` / `transformUpload`
+sandbox hooks (below): the same shape and the same `metadata` write — only _where the code runs_
+changes when the sandbox lands.
+
+### The host AI gateway
+
+Inference isn't the processor's concern. It asks the host's **AI gateway** (handed in as
+`ctx.ai`) for a model and a completion, so the same processor runs unchanged on Cloudflare
+Workers AI, Google Gemini, or a local / OpenAI-compatible model:
+
+```ts
+interface AiGateway {
+  models(): AiModel[];                                  // the union of every configured provider
+  generate(req: AiGenerateRequest): Promise<AiGenerateResult>;
 }
 ```
 
-The host runs it on `POST /api/files` **off the response path**, so it never slows an upload —
-`ctx.waitUntil` on a Worker, a background promise on Node. It reads the new file's bytes once,
-calls each configured processor, and merges the labels back with a normal metadata patch (a
-metadata edit, so **no new version**). Failures are swallowed — labeling must never break an
-upload. It currently fires on **new uploads only**.
+- **Per deployment**, the host composes providers: Workers AI (the `AI` binding) on Cloudflare —
+  so Document AI labels uploads **with no key, out of the box** — or `GOOGLE_AI_API_KEY` /
+  `OPENAI_BASE_URL` on Node.
+- **Per user**, a signed-in user can add their own Gemini or OpenAI-compatible provider under
+  **Settings → AI** (keys encrypted at rest); those layer on top of the deployment's for that
+  caller only.
+- The portal lists the caller's available models at `GET /api/ai/models`. That's how Document
+  AI's `model` field gets its choices — it's a `select` with `optionsFrom: "ai-models"`, which
+  the host fills in when it serves the settings form. So the user just picks a model and an
+  output **language**; there's no per-plugin API key.
 
-This is the **trusted, first-party form** of the planned `enrichItem` / `transformUpload`
-sandbox hooks (below): the same shape and the same `metadata` write — only _where the code
-runs_ changes when the sandbox lands.
+Because the gateway is an interface, "which model" is a deployment / user choice, not a code
+change — the same swap-the-adapter pattern as storage and the cache.
 
-## 4. The manifest — every plugin's declaration _(UI + sandboxed roles)_
+## 4. The manifest — every plugin's declaration
 
 The roles above are trusted, in-process code. The remaining roles — **UI surfaces**, **file
 viewers**, and **server hooks** — are declared, not handed privileged factories, and the
@@ -123,8 +154,10 @@ interface PluginManifest {
   id: string;
   name: string;
   version: string;
+  description?: string;           // catalog / store copy
   icon?: string;
   color?: string;
+  entry?: string;                 // entry module, for plugins that ship sandboxed code
   capabilities: Capability[];     // what the host will grant — nothing is ambient
   serverHooks?: ServerHook[];     // "enrichItem" | "transformUpload"  (planned)
   contributes?: Contributions;    // declarative UI surface
@@ -143,15 +176,16 @@ interface Contributions {
   detailView?: DetailViewContribution;      // a full-page view, opened from the sidebar
   detailFields?: DetailFieldContribution[]; // extra rows in the file preview
   viewers?: ViewerContribution[];           // sandboxed file-type viewers (see writing-a-plugin)
+  creators?: FileCreatorContribution[];     // "New …" entries — file types this plugin creates
   dataSource?: DataSourceContribution;      // declares typed providers (tasks / calendar)
   store?: StoreListing;                     // how it appears in the plugin store
 }
 ```
 
-Calendar contributes a `railPanel` and a `detailView`; Tasks and Documentation contribute only a
-`detailView`; GitHub contributes a `dataSource`. The sidebar, rail, context menus, and store are
-all built by querying the registry — so a first-party plugin and a third-party one light up the
-same surfaces the same way.
+Calendar contributes a `railPanel` and a `detailView`; Tasks and Documentation each contribute a
+`detailView` (Tasks adds a context-menu item too); GitHub contributes a `detailView` and a
+`dataSource`. The sidebar, rail, context menus, and store are all built by querying the registry
+— so a first-party plugin and a third-party one light up the same surfaces the same way.
 
 ### The capability model
 
@@ -196,7 +230,7 @@ whole object differently per adapter: as Worker `env` bindings + `globalOutbound
 > inject them isn't built yet. Enforcement arrives with the runtime below. (The trusted GitHub
 > data source already uses the same scoped cache directly.)
 
-### A shared, swappable cache (`CacheStore`)
+## A shared, swappable cache (`CacheStore`)
 
 External calls are memoized through a small interface so every backend looks the same to the
 code (and to plugins via `kv`):
@@ -215,7 +249,7 @@ Worker). `scopedCache(base, prefix)` wraps any store to prefix every key — the
 the per-plugin / per-user isolation above. Because the interface is the boundary, the GitHub
 source caches for 5 minutes identically on Node and the edge.
 
-### The runtime — a switchable sandbox _(planned)_
+## The runtime — a switchable sandbox _(planned)_
 
 Untrusted plugin code is meant to run inside a `PluginRuntime`, which is itself an adapter so
 the sandbox can differ per deployment:
@@ -254,7 +288,7 @@ Each role keeps its own contract — they're distinct on purpose, not duplicated
 |---|---|---|
 | Storage connector | `StorageConnectorPlugin` — `create()` → `StorageConnector` | trusted, in-process |
 | Data source | `ServerDataSource` — `build()` → providers | trusted, in-process |
-| Processor | `DocumentProcessor` — `process()` → labels | trusted, in-process |
+| Processor | `DocumentProcessor` — `process()` → labels + description | trusted, in-process |
 | File viewer | `contributes.viewers` (an entry module) | sandboxed (client iframe) |
 | Server hook | `serverHooks` (`enrichItem` / `transformUpload`) | sandboxed (planned) |
 | UI slot (rail · detail) | `contributes.railPanel` / `detailView` (an entry module) | sandboxed (client iframe), or trusted first-party React (`PLUGIN_UI`) |
@@ -277,15 +311,16 @@ interface ServerPlugin {
 installPlugin(host, plugin);             // one front door — registers the manifest + every role
 ```
 
-**Where this stands today.** The model is real, but the wiring is only partway there. The
-manifest (the UI-facing declaration) currently lives client-side in the portal, while the
-trusted role factories live server-side and are registered through separate per-role lists
-(`DATA_SOURCES`, `PROCESSORS`). Two of the role contracts (`StorageConnectorPlugin` and the
-task/calendar providers) already live in `@canopy/core`; the data-source and processor contracts
-still live in the API. Converging them — all role contracts in `@canopy/core`, a single
-`ServerPlugin` registered once, one source of truth per plugin for manifest + roles — is the
-remaining step. It changes only _how roles are wired_, never the per-role contracts above or
-their trust boundaries.
+**Where this stands today.** The role **contracts** all live in `@canopy/core` now —
+`StorageConnectorPlugin`, `ServerDataSource`, `DocumentProcessor`, and the task/calendar
+providers — next to a `ServerPlugin` type that bundles them. The API registers its first-party
+plugins through **one list** (`SERVER_PLUGINS` in `apps/api/src/plugins.ts`), where each entry
+declares the roles it fills, and fans them into the subsystems that run them. What's left: the
+**manifest** (the UI-facing declaration) still lives client-side in the portal, so a server
+plugin is keyed by `id` rather than carrying its own manifest. Converging those into one source
+of truth per plugin — plus adding the `connector` role to the bundle and a single
+`installPlugin()` front door — is the remaining step. None of it changes the per-role contracts
+above or their trust boundaries.
 
 ## Configuration & settings
 

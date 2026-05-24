@@ -8,6 +8,8 @@ import {
   type AiProvider,
   type CacheStore,
   type ConnectorConfigField,
+  type DocumentProcessor,
+  type ServerDataSource,
   type StorageConnector,
 } from "@canopy/core";
 import {
@@ -22,8 +24,7 @@ import {
 import type { AuthConfig } from "./auth/config";
 import { getSessionUser } from "./auth/routes";
 import { registerWebdav } from "./webdav";
-import type { ServerDataSource } from "./data-sources";
-import type { DocumentProcessor, ProcessingEntry } from "./processors";
+import type { ProcessingEntry } from "./processors";
 import { AI_CONFIG_ID } from "./ai/user-config";
 import { decryptString, encryptString } from "./crypto";
 

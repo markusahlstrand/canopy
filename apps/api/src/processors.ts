@@ -1,37 +1,21 @@
-import type { AiContentPart, AiGateway, AiMessage, ConnectorConfigField } from "@canopy/core";
+import type {
+  AiContentPart,
+  AiMessage,
+  ConnectorConfigField,
+  DocumentProcessor,
+  ProcessorContext,
+  ProcessorFile,
+  ProcessorResult,
+} from "@canopy/core";
 
 /**
- * Server-side **document processors** — trusted code that runs when a file is
- * added and returns metadata to merge into it (type labels, a description). This
- * is the "server-side processor" shape (a future `enrichItem` / `transformUpload`
- * plugin hook); until the sandbox runtime exists it runs first-party in the API,
- * exactly like a data source. Inference is not the processor's concern: it asks the
- * host's AI gateway (handed in via `ctx`) for a model and a completion, so the same
- * processor runs on Cloudflare Workers AI, Gemini, or a local model unchanged.
+ * The first-party **Document AI** processor. The `DocumentProcessor` contract (a
+ * future `enrichItem` / `transformUpload` sandbox hook) lives in `@canopy/core`;
+ * until the sandbox runtime exists it runs first-party in the API, exactly like a
+ * data source. Inference is not the processor's concern: it asks the host's AI
+ * gateway (handed in via `ctx`) for a model and a completion, so the same processor
+ * runs on Cloudflare Workers AI, Gemini, or a local model unchanged.
  */
-export interface ProcessorFile {
-  name: string;
-  mime: string;
-  bytes: Uint8Array;
-}
-
-/** Host capabilities handed to a processor when it runs. */
-export interface ProcessorContext {
-  /** The deployment's AI gateway, if any provider is configured. */
-  ai?: AiGateway;
-}
-
-/** What a processor produces for one file. */
-export interface ProcessorResult {
-  /** Type labels to merge into metadata.labels. */
-  labels: string[];
-  /** A generated description for metadata.description (only set if absent). */
-  description?: string;
-  /** Identifier of the model/engine used, for the processing log. */
-  model?: string;
-  /** Set when the run failed; recorded in the processing log, never thrown. */
-  error?: string;
-}
 
 /**
  * One entry in a file's processing log (`metadata.processing`), written each time
@@ -54,21 +38,9 @@ export interface ProcessingEntry {
   note?: string;
 }
 
-export interface DocumentProcessor {
-  id: string;
-  configFields: ConnectorConfigField[];
-  /**
-   * Whether this processor should run for the given user config + host context.
-   * Defaults (when omitted) to "all required config fields are present". Document
-   * AI overrides it to "an AI provider exists", so it works with zero per-user
-   * config wherever the host exposes a model (e.g. Workers AI on Cloudflare).
-   */
-  eligible?(config: Record<string, string>, ctx: ProcessorContext): boolean;
-  /** Analyze a freshly-added file and return labels / description to merge. */
-  process(file: ProcessorFile, config: Record<string, string>, ctx: ProcessorContext): Promise<ProcessorResult>;
-}
-
 // ── Document AI: classify + describe each added document via the host AI gateway ──
+// The `processor` role of the first-party Document AI plugin. Its contract
+// (`DocumentProcessor`) lives in @canopy/core; see plugins.ts for the bundle.
 
 const DEFAULT_LANGUAGE = "English";
 const MAX_TEXT_CHARS = 12_000;
@@ -160,5 +132,3 @@ export const documentAiProcessor: DocumentProcessor = {
     }
   },
 };
-
-export const PROCESSORS: DocumentProcessor[] = [documentAiProcessor];

@@ -19,8 +19,7 @@ import {
 } from "@canopy/store";
 import { createFsBlobStore, createLibsqlDb } from "@canopy/store/node";
 import { createApp, type DataSourceDeps } from "./app";
-import { DATA_SOURCES } from "./data-sources";
-import { PROCESSORS } from "./processors";
+import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
 import { readAuthConfig } from "./auth/config";
 import { createAuthApp } from "./auth/routes";
 
@@ -81,7 +80,7 @@ const onLogin = async (u: { sub: string; email?: string; name?: string; picture?
 };
 
 const dataSources: DataSourceDeps = {
-  plugins: DATA_SOURCES,
+  plugins: dataSourcesOf(SERVER_PLUGINS),
   // Env GITHUB_REPO/TOKEN = the public demo default (shown to everyone until a
   // user connects their own repo in the GitHub plugin's settings).
   demoDefaults: githubCfg
@@ -127,7 +126,7 @@ const app = createApp({
   readonlyMounts: { documentation, demo },
   drive: { service, blobs },
   dataSources,
-  processors: PROCESSORS,
+  processors: processorsOf(SERVER_PLUGINS),
   ai,
   // Let users add their own Gemini / OpenAI-compatible keys in Settings → AI models.
   aiUserConfig: { fields: AI_PROVIDER_FIELDS, build: providersFromUserConfig },

@@ -5,6 +5,7 @@ export * from "./providers";
 export * from "./cache";
 export * from "./capabilities";
 export * from "./plugin";
+export * from "./plugin-roles";
 export * from "./plugin-source";
 export * from "./runtime";
 export * from "./registry";

@@ -82,6 +82,13 @@ function urlForState(active: string, path: string, space: string): string {
   if (active !== "drive") params.set("view", active);
   if (space) params.set("space", space);
   if (path) params.set("path", path);
+  // The Documentation view owns a `?doc=` page param. Preserve it while that view
+  // is open so deep links survive the app's own URL writes (it's naturally dropped
+  // when you navigate elsewhere, since active is no longer the docs plugin).
+  if (active === `plugin:${DOCS_PLUGIN_ID}`) {
+    const doc = new URLSearchParams(window.location.search).get("doc");
+    if (doc) params.set("doc", doc);
+  }
   const qs = params.toString();
   return window.location.pathname + (qs ? `?${qs}` : "");
 }

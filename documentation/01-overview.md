@@ -73,3 +73,4 @@ Anything marked _planned_ is design intent, not running code.
 - [How plugins work](how-plugins-work) — the plugin model, contributions, capabilities.
 - [What belongs in the core](what-belongs-in-the-core) — the core/adapter/plugin decision rule, and where search and content types fit.
 - [Writing a plugin](writing-a-plugin) — a hands-on walk-through using this very Documentation plugin.
+- [How it compares](how-it-compares) — an honest read on Canopy next to Drive, Dropbox, Nextcloud, NAS OSes, and more.

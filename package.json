@@ -15,7 +15,8 @@
     "dev:api": "pnpm --filter @canopy/api dev",
     "build": "pnpm -r build",
     "start": "pnpm --filter @canopy/portal build && pnpm --filter @canopy/api start",
-    "deploy": "pnpm --filter @canopy/portal build && pnpm --filter @canopy/api deploy",
+    "deploy": "pnpm --filter @canopy/portal build && pnpm --filter @canopy/api run deploy",
+    "deploy:cf": "pnpm run deploy",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint"
   },

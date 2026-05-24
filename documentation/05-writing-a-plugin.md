@@ -166,40 +166,47 @@ provider, and **cache** through the store you're given. Everything else is the h
 ## A server-side processor (Document AI)
 
 A **processor** acts on a file when it changes instead of contributing UI. The **Document AI**
-plugin classifies each added document with Google Gemini Flash and tags it. It declares its
-config (an API key) and a `label` function — that's the whole plugin:
+plugin labels and describes each added document. It declares its config and a `process`
+function — that's the whole plugin:
 
 ```ts
 // apps/api/src/processors.ts (trimmed)
 export const documentAiProcessor: DocumentProcessor = {
   id: "document-ai",
   configFields: [
-    { key: "apiKey", label: "Google AI API key", type: "secret", required: true },
-    { key: "model",  label: "Model (default: gemini-3.5-flash)", type: "string" },
+    { key: "model",    label: "Model",                              type: "select", optionsFrom: "ai-models" },
+    { key: "language", label: "Output language (default: English)", type: "string" },
   ],
-  async label(file, config) {
-    const type = await classifyDocument({ ...config, name: file.name, mime: file.mime, bytes: file.bytes });
-    return type ? [type] : [];   // merged into metadata.labels
+  // Eligible wherever the host has a model — no per-user key needed.
+  eligible: (_config, ctx) => !!ctx.ai && ctx.ai.models().length > 0,
+  async process(file, config, ctx) {
+    const model = config.model || ctx.ai!.models()[0]?.id;             // the user's pick, else the first
+    const out = await ctx.ai!.generate({ model, messages: analyze(file), json: true });
+    const { label, description } = parse(out.text);
+    return { labels: label ? [label] : [], description, model: out.model };  // merged into metadata
   },
 };
 ```
 
+The processor never holds a key: it asks the host's **AI gateway** (`ctx.ai`) for a model and a
+completion, so it runs unchanged on Cloudflare Workers AI, Gemini, or a local model. The user
+picks *which* model — the `model` field is a `select` the host fills from `GET /api/ai/models` —
+and an output language; provider keys live under **Settings → AI**, not in this plugin. See
+[the processor role](how-plugins-work) for the gateway.
+
 The host owns everything around it: on `POST /api/files` it reads the new file's bytes once,
-runs each configured processor **off the response path** (`ctx.waitUntil` on Cloudflare, a
-background promise on Node), and writes the merged labels back with a metadata patch — a
-metadata edit, so **no new version**. The classifier is just a `fetch` to Gemini (the text for
-text files, the PDF/image sent inline otherwise), and the API key reuses the same encrypted
-`/api/plugins/:id/settings` flow as a data source — so it's stored server-side and never
-returned to the browser.
+runs each eligible processor **off the response path** (`ctx.waitUntil` on Cloudflare, a
+background promise on Node), and writes the merged `labels` + `description` back with a metadata
+patch — a metadata edit, so **no new version**.
 
 ```
 upload ─► POST /api/files ─► createFile ─┐                       (response returns immediately)
-                                          └─ waitUntil: read bytes ─► Gemini Flash ─► metadata.labels
+                                          └─ waitUntil: read bytes ─► ctx.ai.generate ─► metadata
 ```
 
 Like data sources, this runs trusted and first-party today; it's the exact shape the sandboxed
-`enrichItem` / `transformUpload` hook will take once the runtime lands. The label then shows in
-the file's preview details.
+`enrichItem` / `transformUpload` hook will take once the runtime lands. The label and description
+then show in the file's preview details.
 
 ## File viewers (sandboxed)
 
@@ -351,13 +358,17 @@ export const localConnectorPlugin: StorageConnectorPlugin = {
 };
 ```
 
-Mounting it is one line where the API is assembled:
+Mounting it is a few lines where the API is assembled — read-only mounts (like the
+Documentation plugin's) go in `readonlyMounts`, keyed by name:
 
 ```ts
 // apps/api/src/node.ts
 const app = createApp({
-  local: createLocalConnector("local", driveRoot),
-  documentation: createLocalConnector("documentation", documentationRoot),   // the mount this Documentation plugin reads
+  drive: { service, blobs },                                  // the managed drive (@canopy/store)
+  readonlyMounts: {
+    documentation: createLocalConnector("documentation", documentationRoot),  // the mount the Documentation plugin reads
+    demo:          createLocalConnector("demo", demoRoot),
+  },
 });
 ```
 
