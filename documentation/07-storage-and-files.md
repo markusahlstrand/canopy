@@ -33,6 +33,11 @@ the blob/version rows as real columns; everything else is schemaless. For keys t
 filtered often there are **expression indexes** on `json_extract(metadata, '$.key')` — JSON
 plus indexes, never an EAV table.
 
+This freeform-but-indexable bag is the foundation for **content types** (an *Invoice* with
+durable, filterable fields): a content type is a plugin that stores its fields here and declares
+them through the contribution model, not a core subsystem. See
+[What belongs in the core → content types](what-belongs-in-the-core).
+
 Folders are **virtual**: a file's folder is just its `metadata.path` (e.g. `Documents/2026`).
 Listing a folder returns the files at that path plus the child folder names derived from the
 set of paths. Storage stays flat; the tree is computed. You can also create an **empty folder**
@@ -95,13 +100,20 @@ forward-only migration runner on boot.
 ## Connecting a device (WebDAV)
 
 The drive is also reachable over **WebDAV** at `/dav`, so you can mount it in Finder
-(*Go → Connect to Server…*), Windows Explorer, or any WebDAV client. This phase is
-**read-only** (`OPTIONS`, `PROPFIND`, `GET`/`HEAD`); write verbs come later.
+(*Go → Connect to Server…*), Windows Explorer, or any WebDAV client. It is **read-write**:
+`OPTIONS`, `PROPFIND`/`PROPPATCH`, `GET`/`HEAD`, `PUT`, `DELETE`, `MKCOL`, `MOVE`, `COPY`, and
+`LOCK`/`UNLOCK`. We advertise DAV class **2** and answer `LOCK` because macOS Finder only mounts
+a share read-write when it sees lock support — the locks aren't enforced (single owner), we just
+hand back a token. Finder's stray `.DS_Store` / `._*` files are accepted and discarded so they
+never land in the drive.
 
 The mount root mirrors the app: your personal files and folders at the top level, with each
 **group space** you belong to appearing as a sub-collection. Virtual folders (`metadata.path`)
 become real directory levels over the protocol, and a file's bytes stream from its current
-version.
+version. A `PUT` runs through the same content-addressed blob + versioning path as the web app
+(re-saving a file appends a version; an identical copy reuses the blob). Writes are scoped to one
+space, so moving or copying a file *across* the top-level group-space boundary isn't supported —
+do that in the web UI.
 
 Clients can't carry an OIDC session, so WebDAV authenticates with **app passwords** instead
 — per-device Basic-auth tokens you mint in *Connect a device…* (the account menu). The token

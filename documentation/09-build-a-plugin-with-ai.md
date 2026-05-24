@@ -18,7 +18,7 @@ fast path.
 | You want to… | Kind | Runs today? | Where the code goes |
 |---|---|---|---|
 | Render/edit a file type in the preview (PDF, image, CSV, 3D, …) | **Viewer** | ✅ Yes | `examples/plugins/<id>/index.js` + one line in `viewers.ts` |
-| Add a full-page tool opened from the sidebar | **Detail view** | ⚠️ First-party only | A React component + `PLUGIN_UI` map |
+| Add a full-page tool or rail panel opened from the sidebar | **UI slot** | ✅ Yes (sandboxed) | `examples/plugins/<id>/index.js` (a `render(ctx)` per slot) + one line in `ui.ts`; or first-party React in `PLUGIN_UI` |
 | Feed external data into Tasks / Calendar | **Data source** | ⚠️ Server-side wiring | `apps/api/src/data-sources.ts` |
 | Add a new storage backend | **Connector** | ✅ Yes | A `packages/connectors/*` package |
 
@@ -235,7 +235,7 @@ If you're driving an AI yourself (instead of the `/new-plugin` skill), paste thi
 ```
 Build a Canopy file-viewer plugin: <DESCRIBE IT, e.g. "render .gpx GPS tracks on a small map">.
 
-Follow documentation/08-build-a-plugin-with-ai.md exactly. Specifically:
+Follow documentation/09-build-a-plugin-with-ai.md exactly. Specifically:
 - Create examples/plugins/<id>/canopy.json (valid against documentation/canopy-plugin.schema.json)
   and examples/plugins/<id>/index.js (export default render(ctx)).
 - The entry runs in an opaque-origin sandboxed iframe: only ctx.file (name, mime, bytes, writable),

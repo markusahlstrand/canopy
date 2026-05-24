@@ -1,0 +1,14 @@
+{
+  "id": "calendar",
+  "name": "Calendar",
+  "version": "0.1.0",
+  "description": "Upcoming milestones and releases as a detail view and a right-rail 'Up next' panel. Owns no data — reads events through the host calendar capability.",
+  "icon": "calendar",
+  "color": "145 33% 36%",
+  "entry": "index.js",
+  "capabilities": [],
+  "contributes": {
+    "railPanel": { "id": "calendar-rail", "title": "Calendar", "icon": "calendar" },
+    "detailView": { "id": "calendar-detail", "title": "Calendar" }
+  }
+}

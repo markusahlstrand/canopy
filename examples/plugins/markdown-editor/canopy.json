@@ -14,6 +14,17 @@
         "title": "Markdown",
         "match": ["text/markdown", ".md", ".markdown", ".mdx"]
       }
+    ],
+    "creators": [
+      {
+        "id": "markdown",
+        "label": "Markdown document",
+        "icon": "file-text",
+        "defaultName": "Untitled",
+        "extension": ".md",
+        "mime": "text/markdown",
+        "template": "# Untitled\n\n"
+      }
     ]
   }
 }

@@ -58,6 +58,13 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': 'http://localhost:8787',
+      // WebDAV lives on the API too; proxy it so the mount URL the UI builds
+      // from window.location.origin (port 5768) works in dev.
+      '/dav': 'http://localhost:8787',
+      // Public share landing (/s/<secret>) is served by the API as well.
+      // Regex (not bare '/s') so it only matches the share path and doesn't
+      // swallow '/src/*', '/sw.js', etc. — those must stay served by Vite.
+      '^/s/': 'http://localhost:8787',
     },
   },
 })

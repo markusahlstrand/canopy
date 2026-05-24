@@ -1,6 +1,15 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
-import { scopedCache, type CacheStore, type ConnectorConfigField, type StorageConnector } from "@canopy/core";
+import {
+  createAiGateway,
+  scopedCache,
+  type AiGateway,
+  type AiModel,
+  type AiProvider,
+  type CacheStore,
+  type ConnectorConfigField,
+  type StorageConnector,
+} from "@canopy/core";
 import {
   BlobHashMismatchError,
   BlobMissingError,
@@ -15,6 +24,7 @@ import { getSessionUser } from "./auth/routes";
 import { registerWebdav } from "./webdav";
 import type { ServerDataSource } from "./data-sources";
 import type { DocumentProcessor, ProcessingEntry } from "./processors";
+import { AI_CONFIG_ID } from "./ai/user-config";
 import { decryptString, encryptString } from "./crypto";
 
 const MIME: Record<string, string> = {
@@ -94,6 +104,23 @@ export interface AppDeps {
   dataSources?: DataSourceDeps;
   /** Server-side document processors run when a file is added (e.g. AI labeling). */
   processors?: DocumentProcessor[];
+  /**
+   * The deployment's **base** AI gateway: providers configured at the host level —
+   * Cloudflare Workers AI (the env.AI binding) or env-keyed providers. Shared by
+   * everyone. A caller's own UI-configured providers (see `aiUserConfig`) are
+   * layered on top per request.
+   */
+  ai?: AiGateway;
+  /**
+   * Lets users add their own AI providers (a Gemini key, an OpenAI-compatible
+   * endpoint) in Settings → AI models. `fields` is the config schema (persisted via
+   * the generic per-user settings store, secrets encrypted); `build` turns a
+   * caller's decrypted config into providers layered over the base gateway.
+   */
+  aiUserConfig?: {
+    fields: ConnectorConfigField[];
+    build: (config: Record<string, string>) => AiProvider[];
+  };
   /** Keep background work (e.g. labeling) alive after the response — `ctx.waitUntil` on a Worker. */
   waitUntil?: (p: Promise<unknown>) => void;
 }
@@ -114,7 +141,7 @@ const ANON_DEFAULT_PLUGINS = ["documentation", ...DEFAULT_PLUGINS];
  */
 export function createApp(deps: AppDeps) {
   const app = new Hono();
-  const { authConfig = null, readonlyMounts = {}, drive, dataSources, processors = [] } = deps;
+  const { authConfig = null, readonlyMounts = {}, drive, dataSources, processors = [], ai } = deps;
   // Run background work via the host's keep-alive (Worker ctx.waitUntil) if given;
   // on Node a bare promise survives because the process stays up.
   const runBackground = (p: Promise<unknown>) => (deps.waitUntil ? deps.waitUntil(p) : void p);
@@ -213,22 +240,26 @@ export function createApp(deps: AppDeps) {
       if (!stream) return;
       const bytes = await readCapped(stream, PROCESSOR_MAX_BYTES);
       const mime = file.version?.mime ?? mimeFor(file.name);
+      // The uploader's effective gateway (their UI-configured providers + the base).
+      const gateway = await gatewayFor(sub);
       const labels = new Set<string>();
       let description: string | undefined;
       const entries: ProcessingEntry[] = [];
 
       for (const p of processors) {
         const config = await decryptedSettings(sub, p);
-        const required = p.configFields.filter((f) => f.required);
-        if (!required.every((f) => config[f.key])) {
-          // Unconfigured for this user — not a processing event, so don't log it.
-          console.log(`[processor:${p.id}] skip "${file.name}" — not configured for this user`);
+        const isEligible = p.eligible
+          ? p.eligible(config, { ai: gateway })
+          : p.configFields.filter((f) => f.required).every((f) => config[f.key]);
+        if (!isEligible) {
+          // Nothing to run (no provider / not configured) — not a processing event, so don't log it.
+          console.log(`[processor:${p.id}] skip "${file.name}" — not configured`);
           continue;
         }
         console.log(`[processor:${p.id}] processing "${file.name}" (${mime}, ${bytes.byteLength} bytes)`);
         const at = new Date().toISOString();
         try {
-          const out = await p.process({ name: file.name, mime, bytes }, config);
+          const out = await p.process({ name: file.name, mime, bytes }, config, { ai: gateway });
           for (const l of out.labels) labels.add(l);
           // First non-empty description wins; never clobber one the user already set.
           if (out.description && description === undefined) description = out.description;
@@ -317,6 +348,14 @@ export function createApp(deps: AppDeps) {
     const { name } = await c.req.json<{ name: string }>();
     if (!name) return c.json({ error: "name required" }, 400);
     return c.json(await drive!.service.createSpace(caller, name), 201);
+  }));
+
+  // Rename a space. Owner only.
+  app.patch("/api/spaces/:id", driveRoute(async (c, caller) => {
+    const { name } = await c.req.json<{ name?: string }>();
+    const trimmed = name?.trim();
+    if (!trimmed) return c.json({ error: "name required" }, 400);
+    return c.json(await drive!.service.renameSpace(caller, c.req.param("id")!, trimmed));
   }));
 
   app.get("/api/spaces/:id/members", driveRoute(async (c, caller) =>
@@ -490,6 +529,14 @@ export function createApp(deps: AppDeps) {
     c.json(await drive!.service.restoreVersion(caller, c.req.param("id")!, c.req.param("versionId")!)),
   ));
 
+  // Recent processor runs across the caller's spaces (a plugin's activity view).
+  // `?plugin=` filters to one processor (e.g. document-ai); `?limit=` caps the count.
+  app.get("/api/processing", driveRoute(async (c, caller) => {
+    const plugin = c.req.query("plugin") || undefined;
+    const limit = Number(c.req.query("limit")) || undefined;
+    return c.json(await drive!.service.recentProcessing(caller.sub, { plugin, limit }));
+  }));
+
   // ── comments (a discussion thread on a file) ──────────────────────────────────
   // Tags + descriptions aren't here — they're metadata edits via the PATCH route above.
 
@@ -557,6 +604,40 @@ export function createApp(deps: AppDeps) {
     return c.json({ ok: true });
   }));
 
+  // ── per-folder sharing (grants on a folder + its subtree) ────────────────────
+  // Keyed by space id + ?path= (the folder's virtual path). Mirrors file grants,
+  // including share-by-email resolution.
+
+  app.get("/api/spaces/:id/folder-grants", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.listFolderGrants(caller, c.req.param("id")!, c.req.query("path") ?? "")),
+  ));
+
+  app.post("/api/spaces/:id/folder-grants", driveRoute(async (c, caller) => {
+    const body = await c.req.json<{ path: string; subjectType: "user" | "space" | "email"; subjectId: string; role: "owner" | "editor" | "viewer" }>();
+    if (!body.path || !body.subjectType || !body.subjectId || !body.role) return c.json({ error: "path, subjectType, subjectId, role required" }, 400);
+    let grant: { subjectType: "user" | "space" | "email"; subjectId: string; role: "owner" | "editor" | "viewer" } = body;
+    if (body.subjectType === "email") {
+      const user = await drive!.service.resolveEmail(body.subjectId);
+      if (user) grant = { ...grant, subjectType: "user", subjectId: user.sub };
+    }
+    await drive!.service.shareFolderGrant(caller, c.req.param("id")!, body.path, grant);
+    return c.json({ ok: true }, 201);
+  }));
+
+  app.delete("/api/spaces/:id/folder-grants", driveRoute(async (c, caller) => {
+    const body = await c.req.json<{ path: string; subjectType: "user" | "space" | "email"; subjectId: string; role: "owner" | "editor" | "viewer" }>();
+    await drive!.service.unshareFolderGrant(caller, c.req.param("id")!, body.path, body);
+    return c.json({ ok: true });
+  }));
+
+  // Folders shared with the caller (direct or via a place), enriched with space name.
+  app.get("/api/shared-folders", driveRoute(async (_c, caller) => {
+    const folders = await drive!.service.listSharedFolders(caller.sub);
+    const spaces = await drive!.service.spaces(caller.sub);
+    const nameOf = new Map(spaces.map((s) => [s.id, s.name]));
+    return _c.json(folders.map((f) => ({ ...f, spaceName: nameOf.get(f.spaceId) ?? "Shared" })));
+  }));
+
   // ── app passwords (for WebDAV / Basic-auth clients) ─────────────────────────
 
   app.get("/api/app-passwords", driveRoute(async (_c, caller) => _c.json(await drive!.service.listAppPasswords(caller.sub))));
@@ -573,15 +654,99 @@ export function createApp(deps: AppDeps) {
     return c.json({ ok: true });
   }));
 
+  // ── share links (unguessable secret → scoped capability; WebDAV + /s) ────────
+  // A link's role is capped by the caller's own role on the target (see store).
+  // The secret is returned ONCE on create. Files are keyed by file id; folders &
+  // whole spaces by space id + optional ?path= (path present = folder).
+
+  app.get("/api/files/:id/shares", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.listShares(caller, { objectType: "file", fileId: c.req.param("id")! })),
+  ));
+  app.post("/api/files/:id/shares", driveRoute(async (c, caller) => {
+    const body = await c.req.json<{ role?: "viewer" | "editor"; label?: string; expiresAt?: string | null }>();
+    const out = await drive!.service.createShare(
+      caller,
+      { objectType: "file", fileId: c.req.param("id")! },
+      { role: body.role ?? "viewer", label: body.label, expiresAt: body.expiresAt ?? null },
+    );
+    return c.json(out, 201);
+  }));
+
+  app.get("/api/spaces/:id/shares", driveRoute(async (c, caller) => {
+    const spaceId = c.req.param("id")!;
+    const path = c.req.query("path") ?? "";
+    const target = path ? { objectType: "folder" as const, spaceId, path } : { objectType: "space" as const, spaceId };
+    return c.json(await drive!.service.listShares(caller, target));
+  }));
+  app.post("/api/spaces/:id/shares", driveRoute(async (c, caller) => {
+    const spaceId = c.req.param("id")!;
+    const body = await c.req.json<{ role?: "viewer" | "editor"; path?: string; label?: string; expiresAt?: string | null }>();
+    const target = body.path ? { objectType: "folder" as const, spaceId, path: body.path } : { objectType: "space" as const, spaceId };
+    const out = await drive!.service.createShare(caller, target, {
+      role: body.role ?? "viewer",
+      label: body.label,
+      expiresAt: body.expiresAt ?? null,
+    });
+    return c.json(out, 201);
+  }));
+
+  app.delete("/api/shares/:id", driveRoute(async (c, caller) => {
+    await drive!.service.revokeShare(caller, c.req.param("id")!);
+    return c.json({ ok: true });
+  }));
+
+  // Public share landing: the secret in the path IS the credential (token-in-URL,
+  // the convenient-but-logged path; WebDAV instead carries it in the Authorization
+  // header). A file share streams the bytes; a folder/space share returns a
+  // read-only JSON listing. Access runs as the share's creator.
+  app.get("/s/:secret", (c) =>
+    handle(c, async () => {
+      if (!drive) return c.json({ error: "no drive configured" }, 404);
+      const share = await drive.service.verifyShare(c.req.param("secret")!);
+      if (!share) return c.json({ error: "invalid or expired link" }, 404);
+      const asCreator = { sub: share.createdBy };
+      if (share.objectType === "file" && share.fileId) {
+        const [{ key, version }, file] = await Promise.all([
+          drive.service.getContentKey(asCreator, share.fileId),
+          drive.service.getFile(asCreator, share.fileId),
+        ]);
+        const stream = await drive.blobs.get(key);
+        if (!stream) return c.json({ error: "not found" }, 404);
+        c.header("Content-Type", version.mime ?? "application/octet-stream");
+        c.header("Content-Length", String(version.size));
+        c.header("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+        return c.body(stream);
+      }
+      const path = share.objectType === "folder" ? share.path : "";
+      const listing = await drive.service.list(share.createdBy, share.spaceId, path);
+      return c.json({ objectType: share.objectType, role: share.role, ...listing });
+    }),
+  );
+
   // ── plugin data sources (tasks / calendar) ──────────────────────────────────
   // A source's config is per-user (stored encrypted); `demoDefaults` is the
   // public fallback shown to everyone so the logged-out demo still has data.
   // The adapter owns its own caching (TTL) via the scoped cache it's handed.
   const sourcePlugins = dataSources?.plugins ?? [];
   const findSource = (id: string) => sourcePlugins.find((p) => p.id === id);
-  // Any plugin that has user-configurable settings (data sources + processors).
+  // Any surface that has user-configurable settings: data sources, processors, and
+  // the core "ai" provider config (Settings → AI models).
   const findConfigurable = (id: string): { id: string; configFields: ConnectorConfigField[] } | undefined =>
-    findSource(id) ?? processors.find((p) => p.id === id);
+    findSource(id) ??
+    processors.find((p) => p.id === id) ??
+    (deps.aiUserConfig && id === AI_CONFIG_ID ? { id: AI_CONFIG_ID, configFields: deps.aiUserConfig.fields } : undefined);
+
+  // The caller's **effective** AI gateway: their own UI-configured providers
+  // (decrypted from per-user settings) layered over the deployment's base gateway,
+  // so a personal key unlocks models for that caller only. User models list first.
+  async function gatewayFor(sub?: string): Promise<AiGateway | undefined> {
+    if (!deps.aiUserConfig || !sub) return ai;
+    const config = await decryptedSettings(sub, { id: AI_CONFIG_ID, configFields: deps.aiUserConfig.fields });
+    const userProviders = deps.aiUserConfig.build(config);
+    if (userProviders.length === 0) return ai;
+    // An AiGateway is structurally an AiProvider, so the base gateway composes in.
+    return createAiGateway(ai ? [...userProviders, ai] : userProviders);
+  }
 
   /**
    * The caller's saved config for a plugin (secrets decrypted), or the demo
@@ -627,6 +792,13 @@ export function createApp(deps: AppDeps) {
     return src.build(resolved.config, { cache });
   }
 
+  // Models available to the caller (base providers + their own UI-configured ones) —
+  // powers plugin model pickers and the Settings → AI models panel.
+  app.get("/api/ai/models", driveRoute(async (c, caller) => {
+    const g = await gatewayFor(caller.sub);
+    return c.json({ models: g ? g.models() : [] });
+  }));
+
   // What's connected for the caller, so the client can show live vs. configure.
   app.get("/api/integrations", (c) =>
     handle(c, async () => {
@@ -664,9 +836,22 @@ export function createApp(deps: AppDeps) {
   // ── per-user plugin settings (generic, schema-driven) ───────────────────────
   // The field schema is server-authoritative; secret values are encrypted at rest
   // and NEVER returned to the client (only whether each secret is set).
+
+  // Fill a field's choices from a dynamic, host-owned source when serving the schema
+  // (today: `optionsFrom: "ai-models"` → the caller's available AI models).
+  const withDynamicOptions = (fields: ConnectorConfigField[], models: AiModel[]): ConnectorConfigField[] =>
+    fields.map((f) =>
+      f.optionsFrom === "ai-models"
+        ? { ...f, options: models.map((m) => ({ value: m.id, label: `${m.label} · ${m.provider}` })) }
+        : f,
+    );
+
   app.get("/api/plugins/:id/settings", driveRoute(async (c, caller) => {
     const src = findConfigurable(c.req.param("id")!);
     if (!src) return c.json({ error: "unknown plugin" }, 404);
+    const aiModels = src.configFields.some((f) => f.optionsFrom === "ai-models")
+      ? ((await gatewayFor(caller.sub))?.models() ?? [])
+      : [];
     const raw = await drive!.service.getPluginSettings(caller.sub, src.id);
     const stored = raw ? (JSON.parse(raw) as Record<string, string>) : {};
     const values: Record<string, string> = {};
@@ -678,7 +863,7 @@ export function createApp(deps: AppDeps) {
         values[f.key] = stored[f.key]!;
       }
     }
-    return c.json({ fields: src.configFields, values, secretsSet });
+    return c.json({ fields: withDynamicOptions(src.configFields, aiModels), values, secretsSet });
   }));
 
   app.put("/api/plugins/:id/settings", driveRoute(async (c, caller) => {

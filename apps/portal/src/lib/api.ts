@@ -160,6 +160,37 @@ export async function uploadFiles(dir: string, files: File[], spaceId?: string):
   return files.length;
 }
 
+/**
+ * Create a new text file in a folder, seeded with `content` (a plugin creator's
+ * template, possibly empty). Uploads the blob, creates the record, and returns
+ * the new file as a FileItem so the caller can open it straight in its editor.
+ */
+export async function createFile(
+  dir: string,
+  name: string,
+  content: string,
+  mime = "text/markdown",
+  spaceId?: string,
+): Promise<FileItem> {
+  const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
+  const hash = await uploadBlob(new TextEncoder().encode(content), spaceId);
+  const res = await fetch(`/api/files${sp}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, hash, mime, path: dir }),
+  });
+  if (!res.ok) throw new Error(`create failed: ${res.status}`);
+  const f = (await res.json()) as ApiFile;
+  return {
+    id: f.id,
+    name: f.name,
+    kind: kindForName(f.name),
+    modified: fmtDate(f.updatedAt),
+    size: humanSize(f.version?.size),
+    path: dir,
+  };
+}
+
 /** Save new text content as a NEW version of a file (metadata untouched). Blob goes in the file's space. */
 export async function saveFileVersion(id: string, text: string, mime = "text/markdown", spaceId?: string): Promise<void> {
   const bytes = new TextEncoder().encode(text);
@@ -360,6 +391,16 @@ export async function createSpace(name: string): Promise<{ id: string; name: str
   return (await res.json()) as { id: string; name: string };
 }
 
+/** Rename a space (owner only). */
+export async function renameSpace(spaceId: string, name: string): Promise<void> {
+  const res = await fetch(`/api/spaces/${spaceId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`rename space failed: ${res.status}`);
+}
+
 /** Pin/unpin a space into My Drive. */
 export async function setSpaceMounted(spaceId: string, mounted: boolean): Promise<void> {
   await fetch(`/api/spaces/${spaceId}/prefs`, {
@@ -395,6 +436,59 @@ export async function createAppPassword(name: string): Promise<{ id: string; tok
 
 export async function deleteAppPassword(id: string): Promise<void> {
   await fetch(`/api/app-passwords/${id}`, { method: "DELETE" });
+}
+
+/** A share link (the unguessable secret is never returned after creation). */
+export interface ShareLink {
+  id: string;
+  objectType: "file" | "folder" | "space";
+  spaceId: string;
+  fileId: string | null;
+  path: string;
+  role: "viewer" | "editor";
+  label: string | null;
+  createdBy: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+}
+
+/** What a share targets: a file, a folder (space + path), or a whole space. */
+export type ShareTarget =
+  | { kind: "file"; fileId: string }
+  | { kind: "folder"; spaceId: string; path: string }
+  | { kind: "space"; spaceId: string };
+
+const sharesUrl = (t: ShareTarget, query = false): string => {
+  if (t.kind === "file") return `/api/files/${t.fileId}/shares`;
+  const q = t.kind === "folder" && query ? `?path=${encodeURIComponent(t.path)}` : "";
+  return `/api/spaces/${t.spaceId}/shares${q}`;
+};
+
+export async function listShares(t: ShareTarget): Promise<ShareLink[]> {
+  const res = await fetch(sharesUrl(t, true));
+  if (!res.ok) return [];
+  return (await res.json()) as ShareLink[];
+}
+
+/** Create a share link; returns the plaintext secret ONCE. */
+export async function createShare(
+  t: ShareTarget,
+  opts: { role: "viewer" | "editor"; label?: string; expiresAt?: string | null },
+): Promise<{ id: string; secret: string }> {
+  const body: Record<string, unknown> = { ...opts };
+  if (t.kind === "folder") body.path = t.path;
+  const res = await fetch(sharesUrl(t), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `create failed: ${res.status}`);
+  return (await res.json()) as { id: string; secret: string };
+}
+
+export async function revokeShare(id: string): Promise<void> {
+  await fetch(`/api/shares/${id}`, { method: "DELETE" });
 }
 
 export interface Member {
@@ -574,7 +668,49 @@ export async function unshareFile(fileId: string, grant: Grant): Promise<void> {
   const res = await fetch(`/api/files/${fileId}/grants`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(grant),
+    // The backend expects `role` (matching the POST shape); a Grant names it `relation`.
+    body: JSON.stringify({
+      subjectType: grant.subjectType,
+      subjectId: grant.subjectId,
+      role: grant.relation,
+      subjectRelation: grant.subjectRelation,
+    }),
+  });
+  if (!res.ok) throw new Error(`unshare failed: ${res.status}`);
+}
+
+/** Grants on a folder (space + path) and its subtree — the folder-level mirror of file grants. */
+export async function listFolderGrants(spaceId: string, path: string): Promise<Grant[]> {
+  const res = await fetch(`/api/spaces/${spaceId}/folder-grants?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`grants failed: ${res.status}`);
+  return (await res.json()) as Grant[];
+}
+
+export async function shareFolder(
+  spaceId: string,
+  path: string,
+  subject: { subjectType: "user" | "space" | "email"; subjectId: string },
+  role: Role,
+): Promise<void> {
+  const res = await fetch(`/api/spaces/${spaceId}/folder-grants`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...subject, role, path }),
+  });
+  if (!res.ok) throw new Error(`share failed: ${res.status}`);
+}
+
+export async function unshareFolder(spaceId: string, path: string, grant: Grant): Promise<void> {
+  const res = await fetch(`/api/spaces/${spaceId}/folder-grants`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      path,
+      subjectType: grant.subjectType,
+      subjectId: grant.subjectId,
+      role: grant.relation,
+      subjectRelation: grant.subjectRelation,
+    }),
   });
   if (!res.ok) throw new Error(`unshare failed: ${res.status}`);
 }
@@ -776,8 +912,30 @@ export async function getIntegrations(): Promise<Integrations> {
 export interface PluginConfigField {
   key: string;
   label: string;
-  type: "string" | "secret" | "url" | "boolean";
+  type: "string" | "secret" | "url" | "boolean" | "select";
   required?: boolean;
+  /** Choices for a "select" field (for AI-model fields, filled by the server). */
+  options?: { value: string; label: string }[];
+}
+
+/** A model the deployment's AI gateway exposes (Cloudflare Workers AI, Gemini, local). */
+export interface AiModel {
+  id: string;
+  label: string;
+  provider: string;
+  vision?: boolean;
+}
+
+/** Models available for plugins to use, or [] when the server has no AI provider. */
+export async function listAiModels(): Promise<AiModel[]> {
+  try {
+    const res = await fetch("/api/ai/models");
+    if (!res.ok) return [];
+    const data = (await res.json()) as { models?: AiModel[] };
+    return Array.isArray(data.models) ? data.models : [];
+  } catch {
+    return [];
+  }
 }
 
 export interface PluginSettings {
@@ -786,6 +944,31 @@ export interface PluginSettings {
   values: Record<string, string>;
   /** Keys of secret fields that have a stored value (the value itself is never sent). */
   secretsSet: string[];
+}
+
+/** One processor run over a file, from the aggregate processing feed. */
+export interface ProcessingRun {
+  fileId: string;
+  fileName: string;
+  spaceName: string;
+  at: string;
+  plugin: string;
+  status: "ok" | "error";
+  model?: string;
+  labels?: string[];
+  described?: boolean;
+  note?: string;
+}
+
+/** Recent processor runs across the caller's spaces, newest first (a plugin's activity view). */
+export async function listProcessing(plugin?: string, limit?: number): Promise<ProcessingRun[]> {
+  const params = new URLSearchParams();
+  if (plugin) params.set("plugin", plugin);
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  const res = await fetch(`/api/processing${qs ? `?${qs}` : ""}`);
+  if (!res.ok) return [];
+  return (await res.json()) as ProcessingRun[];
 }
 
 /** Fetch a source plugin's settings schema + current values (secrets redacted). */

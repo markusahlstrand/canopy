@@ -35,6 +35,28 @@ export interface DetailFieldContribution {
 }
 
 /**
+ * Declares a file type the plugin can create from the host's "New" menu. The
+ * host renders one menu entry per creator; choosing it creates a new file in the
+ * current folder (seeded with `template`, if any) and opens it — typically in the
+ * same plugin's viewer/editor, since the plugin that authors a `.md` also views it.
+ */
+export interface FileCreatorContribution {
+  id: string;
+  /** Menu label, e.g. "Markdown document". */
+  label: string;
+  /** lucide icon name for the menu entry. */
+  icon?: string;
+  /** Default base name (without extension) for the new file, e.g. "Untitled". */
+  defaultName: string;
+  /** Extension appended to the name, including the dot, e.g. ".md". */
+  extension: string;
+  /** MIME type stored on the file's first version. */
+  mime?: string;
+  /** Optional starter content for the new file (UTF-8 text). */
+  template?: string;
+}
+
+/**
  * A sandboxed viewer the plugin renders for matching file types. The host loads
  * the plugin's viewer code into an isolated, opaque-origin iframe and hands it
  * only the previewed file's bytes — never host DOM, cookies, or storage. See
@@ -80,6 +102,7 @@ export interface Contributions {
   detailView?: DetailViewContribution;
   detailFields?: DetailFieldContribution[];
   viewers?: ViewerContribution[];
+  creators?: FileCreatorContribution[];
   store?: StoreListing;
   dataSource?: DataSourceContribution;
 }

@@ -52,7 +52,12 @@ import {
   CloudOff,
   Link2,
   RotateCcw,
+  Pencil,
+  Eye,
+  EyeOff,
   X,
+  Maximize2,
+  Minimize2,
   type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties } from "react";
@@ -114,6 +119,11 @@ const MAP: Record<string, LucideIcon> = {
   "cloud-off": CloudOff,
   link: Link2,
   restore: RotateCcw,
+  edit: Pencil,
+  eye: Eye,
+  "eye-off": EyeOff,
+  maximize: Maximize2,
+  minimize: Minimize2,
 };
 
 export function Icon({

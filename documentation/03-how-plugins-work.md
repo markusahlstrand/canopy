@@ -1,22 +1,37 @@
 # How plugins work
 
-Canopy has **several kinds of plugin**, separated by **trust level** and execution model.
-They share the word "plugin" but almost nothing else; keeping them apart is a deliberate
-design choice:
+A **plugin** is one thing: a package with an identity, a manifest, and a set of declared
+capabilities. What varies is the **roles** a plugin fills — and a single plugin can fill
+several at once. Each role runs in the **execution context its trust level demands**:
 
-- **Trusted, in-process adapters** run inside the API and _are_ the I/O boundary, so they
-  aren't sandboxed — **storage connectors** (raw bytes), **data sources** (typed records like
-  tasks or calendar events), and **processors** (derive something when a file changes, e.g. an
-  AI label).
-- **Sandboxed extensions** run untrusted code in isolation and only ever touch what the host
-  explicitly grants — **file viewers** (client-side iframe sandbox, shipping today) and
-  server-hook **extension plugins** (the `PluginRuntime` sandbox, planned).
+- **Trusted, in-process roles** run inside the API and _are_ the I/O boundary, so they aren't
+  sandboxed — **storage connectors** (raw bytes), **data sources** (typed records like tasks
+  or calendar events), and **processors** (derive something when a file changes, e.g. an AI
+  label).
+- **Sandboxed roles** run untrusted code in isolation and only ever touch what the host
+  explicitly grants — **file viewers** and **UI slots** (rail panels / detail views), both in
+  the client-side iframe sandbox shipping today, and server-hook **extensions** (the
+  `PluginRuntime` sandbox, planned).
+- **Declarative UI roles** contribute surfaces the host renders — rail panels, detail views,
+  context-menu items, and file-type creators. A *first-party, trusted* plugin renders these as
+  React compiled into the host; an *untrusted* one renders the same slots sandboxed (see below).
 
-Whichever kind, the rule is the same: a plugin **declares** what it is and what it needs, and
-the host hands back a **narrow, scoped API** — never ambient access. The rest of this page is
-that contract.
+So "connector", "data source", and "viewer" aren't separate _kinds of plugin_ that happen to
+share a word — they're **roles one plugin can combine**. They share everything that makes a
+plugin a plugin (identity, manifest, declared capabilities, configuration and secrets,
+lifecycle); what differs is only _where each role runs_. The GitHub integration is already a
+single install playing two roles — a manifest declaring a `dataSource` contribution plus the
+server-side source that feeds it — and could add a connector, a processor, or a viewer to the
+same package without becoming a different "kind" of thing. (A "Google Drive" plugin would
+plausibly be all of these at once: one install, one credential.)
 
-## 1. Storage connectors — trusted, typed I/O (bytes)
+The rule holds for every role: a plugin **declares** what it is and what it needs, the host
+grants only that as a **narrow, scoped API** — never ambient access — and runs each role in the
+context its trust level requires. Trust attaches to the **role**, not the package: an operator
+vets the in-process roles (they run with real privilege), while the sandboxed roles light up
+freely. The rest of this page is that contract, role by role.
+
+## 1. The storage-connector role — trusted, typed I/O (bytes)
 
 A connector is a thin, well-defined adapter over a storage backend. It implements
 `StorageConnector` and is packaged with a factory:
@@ -35,7 +50,7 @@ They are not sandboxed, because they _are_ the I/O boundary. `@canopy/connector-
 `@canopy/connector-r2`, and the read-only `@canopy/connector-github` all implement this exact
 same interface.
 
-## 2. Data sources — trusted, typed records
+## 2. The data-source role — trusted, typed records
 
 Where a connector serves _bytes_, a **data source** serves _typed records_ into a host plugin:
 GitHub issues into **Tasks**, milestones and releases into **Calendar**. Like a connector it's
@@ -69,7 +84,7 @@ GitHub caches for 5 minutes to stay under the API rate limit. That cache is a sw
 `CacheStore` (see _A shared, swappable cache_ below), so a source caches identically on Node and
 Cloudflare.
 
-## 3. Server-side processors — trusted, run on change
+## 3. The processor role — trusted, runs on change
 
 A **processor** acts on a file when it changes and derives something from it. The built-in
 **Document AI** plugin is the example: it classifies each added document with Google Gemini
@@ -95,10 +110,13 @@ This is the **trusted, first-party form** of the planned `enrichItem` / `transfo
 sandbox hooks (below): the same shape and the same `metadata` write — only _where the code
 runs_ changes when the sandbox lands.
 
-## 4. Extension plugins — declarative, sandboxed _(server-hook sandbox planned)_
+## 4. The manifest — every plugin's declaration _(UI + sandboxed roles)_
 
-Extension plugins add UI and behaviour. A plugin is described by a **manifest** — what it
-is, what it's allowed to do, and what it contributes to the host:
+The roles above are trusted, in-process code. The remaining roles — **UI surfaces**, **file
+viewers**, and **server hooks** — are declared, not handed privileged factories, and the
+viewer/hook roles run sandboxed. But the **manifest** that carries all of this isn't special to
+them: _every_ plugin has one, whatever roles it fills. It declares what the plugin is, what
+it's allowed to do, and what it contributes to the host:
 
 ```ts
 interface PluginManifest {
@@ -212,10 +230,62 @@ The capability **broker** (deciding what a plugin gets) is runtime-agnostic; onl
 _injection_ differs per adapter. The `PluginRuntime` interface lives in core today; the
 adapters are not built yet.
 
-> The **client-UI** sandbox already exists, though: file **viewers** run untrusted plugin
-> code in an opaque-origin `<iframe sandbox="allow-scripts">` and receive only the previewed
-> file. That's the client-side counterpart to the server-hook runtime above — see
-> [Writing a plugin → File viewers](04-writing-a-plugin.md).
+> The **client-UI** sandbox already exists, though, and now covers **UI slots** too, not just
+> file viewers. Untrusted plugin code — a file viewer, a rail panel, or a detail view — runs in
+> an opaque-origin `<iframe sandbox="allow-scripts">` and exports a vanilla `render(ctx)`. A
+> viewer receives only the previewed file; a UI slot receives nothing ambient and reaches host
+> data through a narrow **capability bridge** (`ctx.call(method, params)`) the host fulfils with
+> its own credentials — the client-side counterpart to the server-hook `CapabilityGrants` above.
+> That map of methods *is* the grant. See
+> [Writing a plugin → Sandboxed UI slots](05-writing-a-plugin.md) and
+> [→ File viewers](05-writing-a-plugin.md).
+
+## Combining roles: one package, one registration
+
+Because trust attaches to the **role**, a single plugin can fill several at once — and that's
+often the natural unit. A "Google Drive" plugin would plausibly be a **connector** (browse
+Drive as storage), a **data source** (recent and shared activity into the feed), a **processor**
+(OCR on upload), and a **viewer** — one install, one OAuth credential. Splitting that into four
+separate "plugins" would fracture the shared auth and config for no benefit.
+
+Each role keeps its own contract — they're distinct on purpose, not duplicated:
+
+| Role | Contract | Trust / where it runs |
+|---|---|---|
+| Storage connector | `StorageConnectorPlugin` — `create()` → `StorageConnector` | trusted, in-process |
+| Data source | `ServerDataSource` — `build()` → providers | trusted, in-process |
+| Processor | `DocumentProcessor` — `process()` → labels | trusted, in-process |
+| File viewer | `contributes.viewers` (an entry module) | sandboxed (client iframe) |
+| Server hook | `serverHooks` (`enrichItem` / `transformUpload`) | sandboxed (planned) |
+| UI slot (rail · detail) | `contributes.railPanel` / `detailView` (an entry module) | sandboxed (client iframe), or trusted first-party React (`PLUGIN_UI`) |
+| UI surface | `contributes.*` (context menu · creators) | declarative |
+
+**The target shape.** A plugin is one package whose manifest declares every role it fills, and a
+single host call registers all of them — fanning each role into the subsystem that runs it at
+its trust level:
+
+```ts
+// the role contracts all live in @canopy/core; a server plugin bundles a
+// manifest with the trusted, in-process roles it provides
+interface ServerPlugin {
+  manifest: PluginManifest;              // identity + capabilities + contributions
+  connectors?: StorageConnectorPlugin[];
+  dataSource?: ServerDataSource;
+  processors?: DocumentProcessor[];
+}
+
+installPlugin(host, plugin);             // one front door — registers the manifest + every role
+```
+
+**Where this stands today.** The model is real, but the wiring is only partway there. The
+manifest (the UI-facing declaration) currently lives client-side in the portal, while the
+trusted role factories live server-side and are registered through separate per-role lists
+(`DATA_SOURCES`, `PROCESSORS`). Two of the role contracts (`StorageConnectorPlugin` and the
+task/calendar providers) already live in `@canopy/core`; the data-source and processor contracts
+still live in the API. Converging them — all role contracts in `@canopy/core`, a single
+`ServerPlugin` registered once, one source of truth per plugin for manifest + roles — is the
+remaining step. It changes only _how roles are wired_, never the per-role contracts above or
+their trust boundaries.
 
 ## Configuration & settings
 
@@ -237,29 +307,38 @@ That's why a public repo needs no token at all, while a private one takes a toke
 server-side. The same `(plugin, user)` scoping flows into the cache, so one user's private data
 is never served to another.
 
-## How first-party plugins run *right now*
+## How UI plugins run: two tiers
 
-Until the sandbox lands, Calendar, Tasks, and Documentation ship as **first-party, in-process**
-plugins. The split is:
+Every plugin registers its `PluginManifest` in the `PluginRegistry`, and the host reads the
+registry to build the sidebar, rail tabs, context menus, and store. That **declarative half** is
+identical for everyone. What differs is the **render half** — and there are now two tiers:
 
-- **Declarative half** — each plugin's `PluginManifest` is registered in the
-  `PluginRegistry`. The host reads the registry to build the sidebar, rail tabs, context
-  menus, and store. This is exactly what a sandboxed plugin will do too.
-- **Render half** — because there's no sandbox to ship React into yet, the portal keeps a
-  `PLUGIN_UI` map from plugin id to its React components (`RailPanel`, `DetailView`).
+- **Trusted, first-party (compiled-in React).** Tasks, Documentation, GitHub, and Document AI
+  ship as React components the host compiles into its own bundle, mapped by plugin id in
+  `PLUGIN_UI`. They get full React + host APIs because they run *as* host code — a privileged
+  tier, not the third-party contract.
 
-```ts
-// apps/portal/src/plugins/index.tsx
-export const PLUGIN_UI: Record<string, PluginUI> = {
-  documentation: { DetailView: DocumentationView },
-  calendar:      { RailPanel: CalendarPanel, DetailView: CalendarView },
-  tasks:         { DetailView: TasksView },
-};
-```
+  ```ts
+  // apps/portal/src/plugins/index.tsx — the trusted first-party tier
+  export const PLUGIN_UI: Record<string, PluginUI> = {
+    documentation: { DetailView: DocumentationView },
+    tasks:         { DetailView: TasksView },
+    github:        { DetailView: GithubView },
+    "document-ai": { DetailView: DocumentAiView },
+  };
+  ```
 
-When the runtime lands, the manifest/registry/contribution half stays exactly the same — only
-the render-and-execute half moves from this map into the sandbox. Getting that boundary right
-now is the point.
+- **Sandboxed (opaque-origin iframe).** An untrusted plugin renders the same rail-panel /
+  detail-view slots inside the client-UI sandbox — a vanilla `render(ctx)` in an
+  `<iframe sandbox="allow-scripts">`, reaching host data only through the capability bridge
+  (`ctx.call`). These are registered like viewers, by id + source, in `UI_PLUGINS`
+  (`apps/portal/src/plugins/ui.ts`), and mounted by `<PluginSlot>`.
+
+**Calendar is the reference migration.** It used to live in `PLUGIN_UI` as React; it now runs in
+the sandbox — same rail panel and detail view, but no React and no host access beyond a single
+`calendar.list` capability. The render sites check `sandboxedSlot(id, slot)` first and fall back
+to the `PLUGIN_UI` map, so the two tiers coexist. A third-party plugin only ever gets the
+sandboxed tier; `PLUGIN_UI` stays the deliberately privileged seat for first-party code.
 
 ## Installing plugins (per user)
 
@@ -277,7 +356,7 @@ default).
 
 ## Applying plugins to a place (per-space)
 
-Installs are personal; a **place** (a space — see [Sharing & spaces](07-sharing-and-spaces.md))
+Installs are personal; a **place** (a space — see [Sharing & spaces](08-sharing-and-spaces.md))
 can also have plugins **applied** to it. A plugin applied to a group space is active for **every
 member** of that space — it isn't opt-in — so the write is gated to a space **owner** (the place's
 "admin"); any member may read what's applied. The mapping is the `space_plugins` table

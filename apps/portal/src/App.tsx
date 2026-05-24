@@ -18,18 +18,23 @@ import { PluginRail } from "@/components/plugin-rail";
 import { CommandPalette } from "@/components/command-palette";
 import { PluginStore } from "@/components/plugin-store";
 import { FilePreview } from "@/components/file-preview";
+import { ShareDialog } from "@/components/share-dialog";
 import { HomeView } from "@/components/home-view";
 import { BuildPluginView } from "@/components/build-plugin-view";
+import { SettingsView } from "@/components/settings-view";
 import { TweaksPanel } from "@/components/tweaks-panel";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import { type FileItem, type FileKind, PLUGIN_CATALOG } from "@/lib/mock-data";
+import type { InstalledCreator } from "@/plugins/viewers";
 import {
   listFiles,
   listShared,
   listSpaces,
   createSpace,
+  renameSpace,
   createFolder,
+  createFile,
   getOverview,
   contentUrl,
   uploadFiles,
@@ -50,13 +55,16 @@ import {
   type Role,
   type SpaceView,
   type Overview,
+  type ShareTarget,
 } from "@/lib/api";
 import { SpaceMembersDialog } from "@/components/space-members-dialog";
 import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
 import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
-import { PluginDataProvider } from "@/plugins/data";
+import { sandboxedSlot } from "@/plugins/ui";
+import { PluginSlot } from "@/components/plugin-slot";
+import { PluginDataProvider, usePluginCapabilities } from "@/plugins/data";
 import { ACCENT_HSL, ACCENT_HSL_DARK, DEFAULT_TWEAKS, FONT_STACK, type Tweaks } from "@/lib/tweaks";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { DemoBanner } from "@/components/demo-banner";
@@ -221,6 +229,22 @@ function DesktopApp() {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [storeOpen, setStoreOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  // How an opened file is shown: "split" docks beside the (still-usable) list,
+  // "full" covers the viewport. Remembered across files and reloads.
+  const [previewMode, setPreviewMode] = useState<"split" | "full">(() =>
+    localStorage.getItem("canopy.previewMode") === "full" ? "full" : "split",
+  );
+  const togglePreviewMode = () =>
+    setPreviewMode((m) => {
+      const next = m === "split" ? "full" : "split";
+      try {
+        localStorage.setItem("canopy.previewMode", next);
+      } catch {
+        /* storage unavailable — just won't persist */
+      }
+      return next;
+    });
+  const [shareTarget, setShareTarget] = useState<{ target: ShareTarget; label: string } | null>(null);
   const [membersSpace, setMembersSpace] = useState<{ id: string; name: string; role: Role } | null>(null);
   const [settingsPlugin, setSettingsPlugin] = useState<{ id: string; name: string } | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
@@ -258,12 +282,13 @@ function DesktopApp() {
         e.preventDefault();
         setTweak("theme", tweaks.theme === "dark" ? "light" : "dark");
       } else if (e.key === "Escape") {
+        if (previewFile) return; // the open preview owns Escape (it closes itself)
         setSelection(new Set());
       }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [tweaks.theme]);
+  }, [tweaks.theme, previewFile]);
 
   // Reflect the current view + space + folder in the URL so refresh / back-forward work.
   useEffect(() => {
@@ -419,6 +444,19 @@ function DesktopApp() {
     }
   }
 
+  async function renameSpaceFlow(id: string) {
+    const current = spaces.find((s) => s.id === id);
+    const name = window.prompt("Rename space", current?.name ?? "");
+    if (!name?.trim() || name.trim() === current?.name) return;
+    try {
+      await renameSpace(id, name.trim());
+      setSpaces(await listSpaces());
+      toast(`Renamed to “${name.trim()}”`);
+    } catch (err) {
+      toast("Couldn't rename space", { description: (err as Error).message });
+    }
+  }
+
   async function createFolderFlow() {
     if (space === "shared") {
       toast("Open a drive or space to create a folder");
@@ -432,6 +470,24 @@ function DesktopApp() {
       toast(`Created “${name.trim()}”`);
     } catch (err) {
       toast("Couldn't create folder", { description: (err as Error).message });
+    }
+  }
+
+  async function createFileFlow(creator: InstalledCreator) {
+    if (space === "shared") {
+      toast("Open a drive or space to create a file");
+      return;
+    }
+    const input = window.prompt(`${creator.label} name`, creator.defaultName);
+    if (!input?.trim()) return;
+    const base = input.trim();
+    const name = base.toLowerCase().endsWith(creator.extension) ? base : base + creator.extension;
+    try {
+      const file = await createFile(path, name, creator.template ?? "", creator.mime, space || undefined);
+      reload();
+      setPreviewFile(file); // open straight in the matching viewer/editor
+    } catch (err) {
+      toast("Couldn't create file", { description: (err as Error).message });
     }
   }
 
@@ -550,6 +606,19 @@ function DesktopApp() {
     }
   }
 
+  // What "Share" targets for a row: a whole place (group space), a folder within
+  // the active space, or a single file. Returns null for things that aren't one
+  // shareable item (e.g. the cross-space "Shared with me" view).
+  function shareTargetFor(f: FileItem): ShareTarget | null {
+    if (f.id === "__shared") return null;
+    if (f.id.startsWith("space:")) return { kind: "space", spaceId: f.id.slice(6) };
+    if (f.kind === "folder") {
+      const sid = space && space !== "shared" ? space : spaces.find((s) => s.kind === "personal")?.id;
+      return sid ? { kind: "folder", spaceId: sid, path: f.path ?? "" } : null;
+    }
+    return { kind: "file", fileId: f.id };
+  }
+
   async function onFileAction(action: string, f: FileItem) {
     if (action === "Delete") {
       if (f.kind === "folder") return;
@@ -570,7 +639,16 @@ function DesktopApp() {
         setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, starred: !next } : x))); // rollback
         toast("Couldn't update star", { description: (err as Error).message });
       }
-    } else if ((action === "Download" || action === "Copy link") && f.kind !== "folder") {
+    } else if (action === "Share") {
+      // One Share dialog for files, folders, and group spaces: people/places +
+      // links (web + WebDAV), each showing current shares with revoke.
+      const target = shareTargetFor(f);
+      if (!target) {
+        toast("Can’t share this", { description: "“Shared with me” isn’t a single shareable item." });
+        return;
+      }
+      setShareTarget({ target, label: f.name });
+    } else if (action === "Download" && f.kind !== "folder") {
       window.open(contentUrl(f.id), "_blank");
     } else {
       toast(action, { description: f.name });
@@ -613,6 +691,14 @@ function DesktopApp() {
           : "Recent";
 
   const spaceName = space && space !== "shared" ? (spaces.find((s) => s.id === space)?.name ?? "Space") : null;
+  // Where the "Connect a device" dialog offers to mount: the current place/folder
+  // (so it can be mounted on its own), or null when we're not in a files view.
+  const mountHere = (() => {
+    if (active !== "drive" || space === "shared") return null; // real folder browsing only (not the starred/family filters)
+    const segs = [spaceName, ...path.split("/").filter(Boolean)].filter((s): s is string => !!s);
+    const url = `${window.location.origin}/dav${segs.length ? "/" + segs.map(encodeURIComponent).join("/") : ""}`;
+    return { url, label: [spaceName ?? "My Drive", ...path.split("/").filter(Boolean)].join(" / ") };
+  })();
   const driveCrumb =
     space === "shared"
       ? ["Shared with me"]
@@ -631,12 +717,17 @@ function DesktopApp() {
           ? ["Trash"]
           : active === "build-plugin"
             ? ["Build a plugin"]
-            : active.startsWith("plugin:")
-            ? [installed.find((p) => `plugin:${p.id}` === active)?.name ?? "Plugin"]
-            : driveCrumb;
+            : active === "settings"
+              ? ["Settings"]
+              : active.startsWith("plugin:")
+              ? [installed.find((p) => `plugin:${p.id}` === active)?.name ?? "Plugin"]
+              : driveCrumb;
 
   const railAvailable = active !== "home" && installed.some((p) => p.contributes?.railPanel);
-  const showRail = tweaks.showRail && railAvailable;
+  // A docked preview claims the right side, so the plugin rail steps aside while
+  // it's open (the full-screen preview covers everything, rail included).
+  const previewDocked = !!previewFile && previewMode === "split";
+  const showRail = tweaks.showRail && railAvailable && !previewDocked;
 
   return (
     <PluginDataProvider githubInstalled={activeIds.includes("github")}>
@@ -649,6 +740,7 @@ function DesktopApp() {
         "app-grid min-h-0 flex-1",
         tweaks.sidebarCollapsed && "collapsed-sb",
         !showRail && "no-rail",
+        previewDocked && "preview-split",
         tweaks.density !== "default" && `density-${tweaks.density}`,
         tweaks.radius !== "default" && `radius-${tweaks.radius}`,
       )}
@@ -676,7 +768,10 @@ function DesktopApp() {
         currentSpace={active === "drive" ? space : ""}
         onOpenSpace={openSpace}
         onCreateSpace={createSpaceFlow}
+        onRenameSpace={renameSpaceFlow}
+        onToggleMount={togglePin}
         onNewFolder={createFolderFlow}
+        onNewFile={createFileFlow}
         onUpload={() => uploadInputRef.current?.click()}
         onConnectDevice={() => setConnectOpen(true)}
         auth={auth}
@@ -735,6 +830,8 @@ function DesktopApp() {
               </>
             ) : active === "build-plugin" ? (
               <BuildPluginView />
+            ) : active === "settings" ? (
+              <SettingsView />
             ) : active.startsWith("plugin:") ? (
               <PluginDetail id={active.replace("plugin:", "")} installed={installed} />
             ) : isFilesView ? (
@@ -893,10 +990,21 @@ function DesktopApp() {
 
       <FilePreview
         file={previewFile}
+        mode={previewMode}
+        onToggleMode={togglePreviewMode}
         onClose={() => setPreviewFile(null)}
         onSaved={reload}
         space={space === "shared" ? undefined : space || undefined}
       />
+
+      {shareTarget && (
+        <ShareDialog
+          target={shareTarget.target}
+          label={shareTarget.label}
+          open={!!shareTarget}
+          onOpenChange={(o) => !o && setShareTarget(null)}
+        />
+      )}
 
       {membersSpace && (
         <SpaceMembersDialog
@@ -909,7 +1017,12 @@ function DesktopApp() {
         />
       )}
 
-      <ConnectDeviceDialog open={connectOpen} onOpenChange={setConnectOpen} />
+      <ConnectDeviceDialog
+        open={connectOpen}
+        onOpenChange={setConnectOpen}
+        currentUrl={mountHere?.url}
+        currentLabel={mountHere?.label}
+      />
 
       <TweaksPanel t={tweaks} setTweak={setTweak} />
 
@@ -1009,7 +1122,9 @@ function TrashView({
 
 function PluginDetail({ id, installed }: { id: string; installed: { id: string; name: string; icon?: string; color?: string; contributes?: { store?: { tagline: string } } }[] }) {
   const manifest = installed.find((p) => p.id === id);
+  const sandboxed = sandboxedSlot(id, "detailView");
   const DetailView = PLUGIN_UI[id]?.DetailView;
+  const capabilities = usePluginCapabilities();
   if (!manifest) return null;
   return (
     <div>
@@ -1025,7 +1140,9 @@ function PluginDetail({ id, installed }: { id: string; installed: { id: string; 
           <div className="text-sm text-muted-foreground">{manifest.contributes?.store?.tagline}</div>
         </div>
       </div>
-      {DetailView ? (
+      {sandboxed ? (
+        <PluginSlot plugin={id} slot="detailView" source={sandboxed.source} capabilities={capabilities} />
+      ) : DetailView ? (
         <Suspense fallback={<div className="py-20 text-center text-sm text-muted-foreground">Loading…</div>}>
           <DetailView />
         </Suspense>

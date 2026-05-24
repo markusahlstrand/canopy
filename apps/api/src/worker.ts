@@ -1,5 +1,7 @@
-import type { StorageConnector } from "@canopy/core";
+import { createAiGateway, type StorageConnector } from "@canopy/core";
 import { createGithubConnector } from "@canopy/connector-github";
+import { createCloudflareAi, type WorkersAiBinding } from "./ai/cloudflare";
+import { AI_PROVIDER_FIELDS, providersFromUserConfig } from "./ai/user-config";
 import {
   FileService,
   createD1Db,
@@ -25,6 +27,8 @@ interface WorkerEnv {
   BUCKET: R2BucketLike;
   /** D1 database holding file/version/blob/permission metadata. */
   DB: D1Like;
+  /** Workers AI binding — when bound, the host exposes its models (Gemma) with no key. */
+  AI?: WorkersAiBinding;
   /** GitHub repo ("owner/repo") backing the read-only documentation + demo mounts. */
   GITHUB_REPO?: string;
   GITHUB_BRANCH?: string;
@@ -87,6 +91,10 @@ export default {
       cache: createCacheApiCacheStore(),
       secret: authConfig?.sessionSecret,
     };
+    // Workers AI (env.AI) is the host AI gateway on Cloudflare — Gemma & co. with no
+    // per-user key. Absent (e.g. the binding isn't configured), no host models exist.
+    const ai = env.AI ? createAiGateway([createCloudflareAi(env.AI)]) : undefined;
+
     const app = createApp({
       auth: createAuthApp(authConfig, onLogin),
       authConfig,
@@ -94,6 +102,9 @@ export default {
       drive: { service, blobs },
       dataSources,
       processors: PROCESSORS,
+      ai,
+      // Let users add their own Gemini / OpenAI-compatible keys in Settings → AI models.
+      aiUserConfig: { fields: AI_PROVIDER_FIELDS, build: providersFromUserConfig },
       waitUntil: (p) => ctx.waitUntil(p), // keep AI labeling alive after the response
     });
     return app.fetch(request, env);

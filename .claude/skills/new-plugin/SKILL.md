@@ -13,7 +13,7 @@ user a one-line test instruction.
 
 Before writing anything, read these so you match the real shapes exactly:
 
-- `documentation/08-build-a-plugin-with-ai.md` — the authoring spec (the source of truth).
+- `documentation/09-build-a-plugin-with-ai.md` — the authoring spec (the source of truth).
 - `documentation/canopy-plugin.schema.json` — the manifest schema you must validate against.
 - At least one example whose kind matches the idea:
   - read/render a file → `examples/plugins/image-viewer/{index.js,canopy.json}`
@@ -27,7 +27,7 @@ Do not invent fields or capabilities. If something isn't in the schema or the sp
 
 Default to a **sandboxed viewer** (or editor, if the idea is about changing the file). It's the only
 kind with a fast, no-host-rewrite feedback loop. Only build a detail-view / data-source / connector
-if the user explicitly asks for one — and if so, follow `documentation/04-writing-a-plugin.md`
+if the user explicitly asks for one — and if so, follow `documentation/05-writing-a-plugin.md`
 instead and tell the user it needs deeper host wiring.
 
 If the idea is ambiguous, make the smallest reasonable assumption, state it, and proceed — don't

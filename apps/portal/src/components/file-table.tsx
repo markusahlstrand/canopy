@@ -62,7 +62,7 @@ const COLUMNS: { key: SortKey; label: string; className: string }[] = [
   { key: "size", label: "Size", className: "w-[96px] text-right" },
 ];
 
-const STD_ACTIONS = ["Open", "Download", "Share", "Copy link"];
+const STD_ACTIONS = ["Open", "Download", "Share"];
 
 function RowActions({ file, onAction }: { file: FileItem; onAction: (action: string, f: FileItem) => void }) {
   return (
@@ -311,7 +311,6 @@ export function FileTable({
                   <ContextMenuItem onSelect={() => onOpen(f)}>Open</ContextMenuItem>
                   <ContextMenuItem onSelect={() => onAction("Download", f)}>Download</ContextMenuItem>
                   <ContextMenuItem onSelect={() => onAction("Share", f)}>Share</ContextMenuItem>
-                  <ContextMenuItem onSelect={() => onAction("Copy link", f)}>Copy link</ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem onSelect={() => onAction("Rename", f)}>Rename</ContextMenuItem>
                   <ContextMenuItem onSelect={() => onAction("Star", f)}>Star</ContextMenuItem>

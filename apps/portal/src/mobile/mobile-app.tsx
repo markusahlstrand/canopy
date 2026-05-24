@@ -8,10 +8,12 @@ import {
   fetchInstalledPlugins,
   listSpaces,
   uploadFiles,
+  createFile,
   loginUrl,
   type Me,
   type SpaceView,
 } from "@/lib/api";
+import { CREATORS } from "@/plugins/viewers";
 import { ANON_DEFAULT_INSTALLED, DEFAULT_INSTALLED } from "@/plugins/manifests";
 import { CURRENT_USER, type FileItem } from "@/lib/mock-data";
 import { DemoBanner } from "@/components/demo-banner";
@@ -62,6 +64,21 @@ export function MobileApp() {
   const signIn = () => {
     window.location.href = loginUrl(window.location.pathname + window.location.search);
   };
+
+  async function createNote() {
+    const creator = CREATORS.find((c) => c.extension === ".md");
+    if (!creator) return;
+    const input = window.prompt(`${creator.label} name`, creator.defaultName);
+    if (!input?.trim()) return;
+    const base = input.trim();
+    const name = base.toLowerCase().endsWith(creator.extension) ? base : base + creator.extension;
+    try {
+      const file = await createFile("", name, creator.template ?? "", creator.mime);
+      openFile(file); // opens in the detail sheet, which mounts the markdown editor
+    } catch (e) {
+      toast("Couldn't create note", { description: (e as Error).message });
+    }
+  }
 
   async function doUpload(list: FileList | null) {
     const files = list ? Array.from(list) : [];
@@ -143,6 +160,7 @@ export function MobileApp() {
         open={sheet === "new"}
         onOpenChange={(o) => setSheet(o ? "new" : null)}
         onUpload={() => uploadRef.current?.click()}
+        onNewNote={createNote}
       />
       <FileDetailSheet file={selFile} open={sheet === "file"} onOpenChange={(o) => setSheet(o ? "file" : null)} />
 

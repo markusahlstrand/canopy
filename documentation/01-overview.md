@@ -22,10 +22,11 @@ contributions — it does not know what S3 is, or what a calendar is.
   addressed and de-duplicated) or connect a bucket/folder you own and have Canopy index it
   in place. The product is "a small piece of well-made furniture" for a household, not
   another cloud silo.
-- **Two kinds of plugins, kept separate.** Storage connectors are trusted, typed I/O.
-  Extension plugins add UI and behaviour and are meant to run as sandboxed, dynamic code.
-  Conflating them would mix two very different security models — see
-  [How plugins work](how-plugins-work).
+- **One plugin, many roles — isolation per role.** A plugin can be a storage connector, a
+  data source, a processor, a file viewer, a UI surface, or several at once. Trusted roles
+  (typed I/O) run in-process; untrusted roles (UI, viewers) run sandboxed. The host runs each
+  role in the context its trust level demands, so combining roles in one plugin never mixes
+  their security models — see [How plugins work](how-plugins-work).
 
 ## What works today
 
@@ -57,8 +58,9 @@ planned.
   crawling it into the index (Cloudflare **Workflows** on the edge, an in-process runner on Node).
   The data model already supports it (a version can be a managed blob *or* an external pointer).
 - The dynamic plugin **runtime/sandbox** for *server* hooks (Worker Loader, `isolated-vm`) and
-  **capability enforcement**. Today's first-party plugins run in-process; the client-UI sandbox
-  (file viewers) is already built.
+  **capability enforcement**. The client-UI sandbox is already built — file viewers **and** UI
+  slots (rail panels / detail views) run untrusted in an opaque-origin iframe with a capability
+  bridge; first-party UI still runs trusted, in-process.
 - Vector and full-text search over the index.
 
 Anything marked _planned_ is design intent, not running code.
@@ -69,4 +71,5 @@ Anything marked _planned_ is design intent, not running code.
 - [Storage & files](storage-and-files) — blobs, files, versions, dedup, and virtual folders.
 - [Sharing & spaces](sharing-and-spaces) — spaces, roles, share-by-email, and the access model.
 - [How plugins work](how-plugins-work) — the plugin model, contributions, capabilities.
+- [What belongs in the core](what-belongs-in-the-core) — the core/adapter/plugin decision rule, and where search and content types fit.
 - [Writing a plugin](writing-a-plugin) — a hands-on walk-through using this very Documentation plugin.

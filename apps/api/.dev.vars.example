@@ -22,3 +22,22 @@ OIDC_CLIENT_SECRET=
 # GITHUB_REPO=owner/repo
 # GITHUB_BRANCH=main
 # GITHUB_TOKEN=        # only for private repos / higher rate limits
+
+# AI providers (the host AI gateway). Two ways to add models:
+#  1. In the UI — Settings → AI models (per-user keys, stored encrypted). Needs
+#     SESSION_SECRET set below so the keys can be encrypted at rest.
+#  2. Deployment-wide via the env vars here (a shared base for everyone). On
+#     Cloudflare the base comes from the Workers AI binding instead (no key).
+# The union of all of these is what plugins (e.g. Document AI) can pick from.
+#
+# SESSION_SECRET=        # any long random string; required to store keys/tokens
+#
+# Google Gemini — get a key from Google AI Studio. Exposes gemini-3.5-flash.
+# GOOGLE_AI_API_KEY=
+#
+# Any OpenAI-compatible endpoint, incl. local models (Ollama, LM Studio). List the
+# models to expose as `id|Label|vision` entries, comma-separated.
+# OPENAI_BASE_URL=http://localhost:11434/v1
+# OPENAI_MODELS=gemma3:27b|Gemma 3 27B|vision
+# OPENAI_API_KEY=      # omit for most local servers
+# OPENAI_LABEL=ollama  # provider name shown in the model picker

@@ -1,8 +1,7 @@
 import { lazy, type ComponentType } from "react";
 import { PluginRegistry } from "@canopy/core";
 import { buildManifest } from "./manifests";
-import { CalendarPanel } from "./rail-panels";
-import { CalendarView, TasksView } from "./detail-views";
+import { TasksView } from "./detail-views";
 import { GithubView } from "./github-view";
 import { DocumentAiView } from "./document-ai-view";
 
@@ -12,8 +11,10 @@ const DocumentationView = lazy(() => import("./documentation-view").then((m) => 
 /**
  * Host-side render map for plugin UI contributions. Manifests stay declarative
  * in @canopy/core; the actual React components for each contribution live here.
- * First-party plugins go through the same registry + slots a third-party plugin
- * would use.
+ * This is the **trusted, first-party tier**: components compiled into the host
+ * with full React + API access. Untrusted/third-party UI goes through the
+ * sandboxed slot path instead (see {@link sandboxedSlot} / UI_PLUGINS) — calendar
+ * has been migrated there as the reference implementation.
  */
 export interface PluginUI {
   RailPanel?: ComponentType;
@@ -22,7 +23,6 @@ export interface PluginUI {
 
 export const PLUGIN_UI: Record<string, PluginUI> = {
   documentation: { DetailView: DocumentationView },
-  calendar: { RailPanel: CalendarPanel, DetailView: CalendarView },
   tasks: { DetailView: TasksView },
   github: { DetailView: GithubView },
   "document-ai": { DetailView: DocumentAiView },

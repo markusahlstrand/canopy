@@ -2,7 +2,25 @@ import type { Db } from "./db";
 import type { BlobRepo, BlobStore } from "./blob-store";
 import type { FileRecord, FileVersion, FileWithVersion, Role, Space, User } from "./types";
 import { blobKey, commitUpload, prepareBlob, releaseBlob, type PrepareResult } from "./blobs";
-import { ROLE_RANK, deleteTuple, fileGrantsDetailed, fileRole, memberSpaceIds, spaceRole, writeTuple, type GrantDetail, type SubjectType } from "./authz";
+import { sha256hex } from "./hash";
+import {
+  ROLE_RANK,
+  deleteTuple,
+  fileGrantsDetailed,
+  fileRole,
+  folderGrantsDetailed,
+  folderObjectId,
+  folderRole,
+  maxRole,
+  parseFolderObjectId,
+  memberSpaceIds,
+  pathRole,
+  sharedFolders,
+  spaceRole,
+  writeTuple,
+  type GrantDetail,
+  type SubjectType,
+} from "./authz";
 import {
   addMember,
   createSpace as createGroupSpace,
@@ -11,6 +29,7 @@ import {
   listMembers,
   listSpacesForUser,
   removeMember,
+  renameSpace,
   setMounted,
   type SpaceMember,
   type SpaceView,
@@ -41,6 +60,16 @@ import {
   verifyAppPassword as verifyAppPwd,
   type AppPassword,
 } from "./app-passwords";
+import {
+  createShare as createShareRow,
+  getShare as getShareRow,
+  listShares as listShareRows,
+  revokeShare as revokeShareRow,
+  verifyShare as verifyShareRow,
+  type ShareFilter,
+  type ShareInfo,
+  type VerifiedShare,
+} from "./shares";
 import { deletePluginSettings, getPluginSettings, setPluginSettings } from "./plugin-settings";
 import { getInstalledPlugins, setInstalledPlugins } from "./plugin-installs";
 import {
@@ -236,6 +265,23 @@ export interface Caller {
 }
 
 /**
+ * One processor run over a file, flattened from a file's `metadata.processing`
+ * with the file it belongs to — for a plugin's activity view. Newest first.
+ */
+export interface ProcessingRun {
+  fileId: string;
+  fileName: string;
+  spaceName: string;
+  at: string;
+  plugin: string;
+  status: "ok" | "error";
+  model?: string;
+  labels?: string[];
+  described?: boolean;
+  note?: string;
+}
+
+/**
  * File/version operations over a {@link Db} + {@link BlobStore}, with access
  * enforced by relation tuples (see authz.ts). A file lives in a **space**
  * (stored in `tenant_id`); blobs are content-addressed within their space.
@@ -277,6 +323,14 @@ export class FileService {
   /** Create a shared group space (e.g. a family); the caller becomes its owner. */
   createSpace(caller: Caller, name: string): Promise<Space> {
     return createGroupSpace(this.db, { name, createdBy: caller.sub });
+  }
+
+  /** Rename a group space. Requires owner on the space. */
+  async renameSpace(caller: Caller, spaceId: string, name: string): Promise<Space> {
+    await this.requireSpace(caller.sub, spaceId, "owner");
+    const updated = await renameSpace(this.db, spaceId, name);
+    if (!updated) throw new NotFoundError("space not found");
+    return updated;
   }
 
   /** Members of a space. Requires viewer+ on the space. */
@@ -399,7 +453,7 @@ export class FileService {
   // ── files ────────────────────────────────────────────────────────────────
 
   async createFile(spaceId: string, userSub: string, input: CreateFileInput): Promise<FileWithVersion> {
-    await this.requireSpace(userSub, spaceId, "editor");
+    await this.requirePath(userSub, spaceId, input.path ?? "", "editor");
     const key = this.keyFor(spaceId, input.hash);
     const blob = await this.repo.find(key);
     if (!blob) throw new BlobMissingError();
@@ -445,7 +499,7 @@ export class FileService {
 
   /** Resolve a file by its virtual path within a space (for WebDAV). Requires viewer+. */
   async getByPath(userSub: string, spaceId: string, path: string): Promise<FileWithVersion | null> {
-    await this.requireSpace(userSub, spaceId, "viewer");
+    await this.requirePath(userSub, spaceId, path, "viewer");
     const segs = normPath(path).split("/");
     const name = segs.pop() ?? "";
     const dir = segs.join("/");
@@ -457,6 +511,295 @@ export class FileService {
       [spaceId, dir, name],
     );
     return row ? joinedToFileWithVersion(row) : null;
+  }
+
+  // ── WebDAV path-based writes (mount the drive in Finder/Explorer) ───────────
+  // These mirror getByPath: they address files by their virtual path within a
+  // space. PUT runs through the same content-addressed blob + versioning path as
+  // the JSON API; folder ops rewrite the derived `metadata.path` of descendants.
+  // Folders are virtual (derived from paths) with optional explicit rows for the
+  // empty case, so a folder move/copy/delete touches every file under its prefix.
+
+  /** A file row at a virtual path (no permission check — callers gate the space). */
+  private async fileAtPath(spaceId: string, path: string): Promise<FileRecord | null> {
+    const segs = normPath(path).split("/");
+    const name = segs.pop() ?? "";
+    const dir = segs.join("/");
+    if (!name) return null;
+    const row = await this.db.first<FileRow>(
+      `SELECT * FROM files WHERE tenant_id = ? AND deleted_at IS NULL
+         AND json_extract(metadata, '$.path') = ? AND name = ?`,
+      [spaceId, dir, name],
+    );
+    return row ? toFile(row) : null;
+  }
+
+  /** What lives at a virtual path: a `file`, a `folder`, or `null` (nothing). Requires viewer+. */
+  async pathKind(userSub: string, spaceId: string, path: string): Promise<"file" | "folder" | null> {
+    await this.requirePath(userSub, spaceId, path, "viewer");
+    const p = normPath(path);
+    if (!p) return "folder"; // the space root is always a collection
+    if (await this.fileAtPath(spaceId, p)) return "file";
+    const prefix = `${p}/`;
+    const folder = await this.db.first<{ x: number }>(
+      "SELECT 1 AS x FROM folders WHERE space_id = ? AND (path = ? OR path LIKE ?) LIMIT 1",
+      [spaceId, p, `${prefix}%`],
+    );
+    if (folder) return "folder";
+    const inFolder = await this.db.first<{ x: number }>(
+      `SELECT 1 AS x FROM files WHERE tenant_id = ? AND deleted_at IS NULL
+         AND (json_extract(metadata, '$.path') = ? OR json_extract(metadata, '$.path') LIKE ?) LIMIT 1`,
+      [spaceId, p, `${prefix}%`],
+    );
+    return inFolder ? "folder" : null;
+  }
+
+  /**
+   * Create or replace the file at a virtual path with raw bytes (a WebDAV PUT).
+   * Stores the bytes through the content-addressed blob path, then creates the
+   * file (if new) or appends a version (if it exists). Requires editor+.
+   */
+  async putByPath(
+    spaceId: string,
+    userSub: string,
+    path: string,
+    bytes: Uint8Array,
+    mime?: string,
+  ): Promise<{ created: boolean }> {
+    await this.requirePath(userSub, spaceId, path, "editor");
+    const p = normPath(path);
+    const segs = p.split("/");
+    const name = segs.pop() ?? "";
+    const dir = segs.join("/");
+    if (!name) throw new Error("a file path is required");
+    const hash = await sha256hex(bytes);
+    // Reserve a blob ref; createFile/addVersion consume exactly one.
+    await commitUpload(this.repo, this.store, { key: this.keyFor(spaceId, hash), expectedHash: hash, bytes });
+    const existing = await this.fileAtPath(spaceId, p);
+    if (existing) {
+      await this.addVersion({ sub: userSub }, existing.id, { hash, mime });
+      return { created: false };
+    }
+    await this.createFile(spaceId, userSub, { name, hash, mime, path: dir });
+    return { created: true };
+  }
+
+  /**
+   * Delete the file or folder at a virtual path (a WebDAV DELETE). A file goes to
+   * Trash (owner-gated, recoverable); a folder soft-deletes every file in or under
+   * it and drops its explicit rows. Folder delete is gated on space editor (not
+   * per-file owner) since it spans many files. Requires editor+.
+   */
+  async deleteByPath(caller: Caller, spaceId: string, path: string): Promise<void> {
+    await this.requirePath(caller.sub, spaceId, path, "editor", caller.email);
+    const p = normPath(path);
+    if (!p) throw new PermissionError("cannot delete the space root");
+    const file = await this.fileAtPath(spaceId, p);
+    if (file) {
+      await this.deleteFile(caller, file.id);
+      return;
+    }
+    if ((await this.pathKind(caller.sub, spaceId, p)) !== "folder") throw new NotFoundError();
+    const prefix = `${p}/`;
+    const now = new Date().toISOString();
+    await this.db.run(
+      `UPDATE files SET deleted_at = ?, updated_at = ? WHERE tenant_id = ? AND deleted_at IS NULL
+         AND (json_extract(metadata, '$.path') = ? OR json_extract(metadata, '$.path') LIKE ?)`,
+      [now, now, spaceId, p, `${prefix}%`],
+    );
+    await this.db.run("DELETE FROM folders WHERE space_id = ? AND (path = ? OR path LIKE ?)", [spaceId, p, `${prefix}%`]);
+    // Drop any folder-share grants on the deleted folder or its descendants.
+    await this.db.run("DELETE FROM relation_tuples WHERE object_type = 'folder' AND (object_id = ? OR object_id LIKE ?)", [
+      folderObjectId(spaceId, p),
+      `${folderObjectId(spaceId, `${p}/`)}%`,
+    ]);
+  }
+
+  /**
+   * Move/rename the file or folder at `from` to `to` within a space (a WebDAV
+   * MOVE). For a file this updates its name + `metadata.path`; for a folder it
+   * reparents every descendant's path and its explicit rows. `overwrite=false`
+   * (the `Overwrite: F` header) fails if the destination exists. Requires editor+.
+   */
+  async moveByPath(
+    caller: Caller,
+    spaceId: string,
+    fromPath: string,
+    toPath: string,
+    overwrite = true,
+  ): Promise<{ created: boolean }> {
+    await this.requirePath(caller.sub, spaceId, fromPath, "editor", caller.email);
+    await this.requirePath(caller.sub, spaceId, toPath, "editor", caller.email);
+    const from = normPath(fromPath);
+    const to = normPath(toPath);
+    if (!from || !to) throw new Error("source and destination paths are required");
+    if (from === to) return { created: false };
+    const destKind = await this.pathKind(caller.sub, spaceId, to);
+    if (destKind && !overwrite) throw new PermissionError("destination exists");
+    const now = new Date().toISOString();
+
+    const file = await this.fileAtPath(spaceId, from);
+    if (file) {
+      if (destKind === "folder") throw new PermissionError("cannot overwrite a folder with a file");
+      if (destKind === "file") {
+        const victim = await this.fileAtPath(spaceId, to);
+        if (victim) await this.purgeFile(caller, victim.id);
+      }
+      const toSegs = to.split("/");
+      const newName = toSegs.pop() ?? file.name;
+      const newDir = toSegs.join("/");
+      await this.db.run("UPDATE files SET name = ?, metadata = json_set(metadata, '$.path', ?), updated_at = ? WHERE id = ?", [
+        newName,
+        newDir,
+        now,
+        file.id,
+      ]);
+      return { created: !destKind };
+    }
+
+    if ((await this.pathKind(caller.sub, spaceId, from)) !== "folder") throw new NotFoundError();
+    if (destKind === "file") throw new PermissionError("cannot overwrite a file with a folder");
+    const fromPrefix = `${from}/`;
+    const rows = await this.db.all<{ id: string; p: string | null }>(
+      `SELECT id, json_extract(metadata, '$.path') AS p FROM files
+         WHERE tenant_id = ? AND deleted_at IS NULL
+           AND (json_extract(metadata, '$.path') = ? OR json_extract(metadata, '$.path') LIKE ?)`,
+      [spaceId, from, `${fromPrefix}%`],
+    );
+    for (const r of rows) {
+      const np = to + (r.p ?? "").slice(from.length); // `from` is a prefix of the old path
+      await this.db.run("UPDATE files SET metadata = json_set(metadata, '$.path', ?), updated_at = ? WHERE id = ?", [np, now, r.id]);
+    }
+    const folderRows = await this.db.all<{ path: string }>("SELECT path FROM folders WHERE space_id = ? AND (path = ? OR path LIKE ?)", [
+      spaceId,
+      from,
+      `${fromPrefix}%`,
+    ]);
+    for (const f of folderRows) {
+      const np = to + f.path.slice(from.length);
+      await this.db.run("UPDATE OR REPLACE folders SET path = ? WHERE space_id = ? AND path = ?", [np, spaceId, f.path]);
+    }
+    await this.reparentFolderGrants(spaceId, from, to);
+    return { created: !destKind };
+  }
+
+  // Move/rename a folder's share grants alongside the folder (their object_id
+  // embeds the path), so a grant on "A/B" follows it to "X/B".
+  private async reparentFolderGrants(spaceId: string, from: string, to: string): Promise<void> {
+    const rows = await this.db.all<{ object_id: string }>(
+      "SELECT DISTINCT object_id FROM relation_tuples WHERE object_type = 'folder' AND (object_id = ? OR object_id LIKE ?)",
+      [folderObjectId(spaceId, from), `${folderObjectId(spaceId, `${from}/`)}%`],
+    );
+    for (const r of rows) {
+      const parsed = parseFolderObjectId(r.object_id);
+      if (!parsed) continue;
+      const np = to + parsed.path.slice(from.length); // `from` is a prefix of the old path
+      await this.db.run("UPDATE OR REPLACE relation_tuples SET object_id = ? WHERE object_type = 'folder' AND object_id = ?", [
+        folderObjectId(spaceId, np),
+        r.object_id,
+      ]);
+    }
+  }
+
+  /**
+   * Copy the file or folder at `from` to `to` within a space (a WebDAV COPY). New
+   * file rows reference the same content-addressed blob (a ref bump, not a byte
+   * copy). `overwrite=false` fails if the destination exists. Requires editor+.
+   */
+  async copyByPath(
+    caller: Caller,
+    spaceId: string,
+    fromPath: string,
+    toPath: string,
+    overwrite = true,
+  ): Promise<{ created: boolean }> {
+    await this.requirePath(caller.sub, spaceId, fromPath, "editor", caller.email);
+    await this.requirePath(caller.sub, spaceId, toPath, "editor", caller.email);
+    const from = normPath(fromPath);
+    const to = normPath(toPath);
+    if (!from || !to) throw new Error("source and destination paths are required");
+    if (from === to) return { created: false };
+    const destKind = await this.pathKind(caller.sub, spaceId, to);
+    if (destKind && !overwrite) throw new PermissionError("destination exists");
+
+    const file = await this.fileAtPath(spaceId, from);
+    if (file) {
+      if (destKind === "folder") throw new PermissionError("cannot overwrite a folder with a file");
+      if (destKind === "file") {
+        const victim = await this.fileAtPath(spaceId, to);
+        if (victim) await this.purgeFile(caller, victim.id);
+      }
+      const toSegs = to.split("/");
+      const newName = toSegs.pop() ?? file.name;
+      const version = file.currentVersionId ? await this.loadVersion(file.currentVersionId) : null;
+      await this.copyFileRow(caller.sub, file, version, spaceId, newName, toSegs.join("/"));
+      return { created: !destKind };
+    }
+
+    if ((await this.pathKind(caller.sub, spaceId, from)) !== "folder") throw new NotFoundError();
+    if (destKind === "file") throw new PermissionError("cannot overwrite a file with a folder");
+    const fromPrefix = `${from}/`;
+    const rows = await this.db.all<JoinedRow>(
+      `SELECT f.*, ${VERSION_COLS}
+         FROM files f LEFT JOIN file_versions v ON v.id = f.current_version_id
+         WHERE f.tenant_id = ? AND f.deleted_at IS NULL
+           AND (json_extract(f.metadata, '$.path') = ? OR json_extract(f.metadata, '$.path') LIKE ?)`,
+      [spaceId, from, `${fromPrefix}%`],
+    );
+    for (const r of rows) {
+      const fwv = joinedToFileWithVersion(r);
+      const oldDir = typeof fwv.metadata.path === "string" ? fwv.metadata.path : "";
+      await this.copyFileRow(caller.sub, fwv, fwv.version, spaceId, fwv.name, to + oldDir.slice(from.length));
+    }
+    const now = new Date().toISOString();
+    await this.db.run("INSERT OR IGNORE INTO folders (space_id, path, created_at) VALUES (?, ?, ?)", [spaceId, to, now]);
+    const folderRows = await this.db.all<{ path: string }>("SELECT path FROM folders WHERE space_id = ? AND path LIKE ?", [
+      spaceId,
+      `${fromPrefix}%`,
+    ]);
+    for (const f of folderRows) {
+      await this.db.run("INSERT OR IGNORE INTO folders (space_id, path, created_at) VALUES (?, ?, ?)", [spaceId, to + f.path.slice(from.length), now]);
+    }
+    return { created: !destKind };
+  }
+
+  /** Insert a new file row + version pointing at an existing blob (one ref bump). */
+  private async copyFileRow(
+    userSub: string,
+    src: FileRecord,
+    version: FileVersion | null,
+    spaceId: string,
+    name: string,
+    dir: string,
+  ): Promise<void> {
+    if (!version || version.source !== "blob" || !version.blobKey) throw new NotFoundError("cannot copy a file without managed content");
+    if ((await this.repo.increment(version.blobKey)) == null) throw new BlobMissingError();
+    const now = new Date().toISOString();
+    const fileId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const metadata = { ...src.metadata, path: normPath(dir) };
+    await this.db.batch([
+      {
+        sql: `INSERT INTO files (id, tenant_id, owner_id, name, current_version_id, metadata, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [fileId, spaceId, userSub, name, versionId, JSON.stringify(metadata), now, now],
+      },
+      {
+        sql: `INSERT INTO file_versions (id, file_id, source, blob_hash, mime, size, created_at, created_by)
+              VALUES (?, ?, 'blob', ?, ?, ?, ?, ?)`,
+        params: [versionId, fileId, version.blobKey, version.mime, version.size, now, userSub],
+      },
+      {
+        sql: `INSERT OR IGNORE INTO relation_tuples (object_type, object_id, relation, subject_type, subject_id, subject_relation)
+              VALUES ('file', ?, 'owner', 'user', ?, '')`,
+        params: [fileId, userSub],
+      },
+      {
+        sql: `INSERT OR IGNORE INTO relation_tuples (object_type, object_id, relation, subject_type, subject_id, subject_relation)
+              VALUES ('file', ?, 'space', 'space', ?, '')`,
+        params: [fileId, spaceId],
+      },
+    ]);
   }
 
   // ── app passwords (Basic-auth tokens for WebDAV etc.) ───────────────────────
@@ -542,7 +885,7 @@ export class FileService {
     spaceId: string,
     dir = "",
   ): Promise<{ path: string; spaceName: string; files: ListedFile[]; folders: string[] }> {
-    await this.requireSpace(userSub, spaceId, "viewer");
+    await this.requirePath(userSub, spaceId, dir, "viewer");
     const path = normPath(dir);
     const rows = await this.db.all<JoinedRow>(
       `SELECT f.*, ${VERSION_COLS}
@@ -608,9 +951,54 @@ export class FileService {
     return items.map((f) => ({ ...f, sharedWith: byFile.get(f.id) ?? [], ownerLabel: userLabel(f.ownerId) }));
   }
 
+  /**
+   * Recent processor runs across every space the caller can see, newest first —
+   * the aggregate read behind a plugin's activity view. Flattens each file's
+   * `metadata.processing` log; optionally filtered to one plugin id.
+   */
+  async recentProcessing(userSub: string, opts?: { plugin?: string; limit?: number }): Promise<ProcessingRun[]> {
+    const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 200);
+    const spaces = await listSpacesForUser(this.db, userSub);
+    if (spaces.length === 0) return [];
+    const ids = spaces.map((s) => s.id);
+    const ph = ids.map(() => "?").join(",");
+    // Only files whose processing log is a non-empty array; recent files first.
+    const rows = await this.db.all<{ id: string; name: string; tenant_id: string; metadata: string }>(
+      `SELECT id, name, tenant_id, metadata FROM files
+         WHERE tenant_id IN (${ph}) AND deleted_at IS NULL
+           AND json_array_length(json_extract(metadata, '$.processing')) > 0
+         ORDER BY updated_at DESC
+         LIMIT ?`,
+      [...ids, limit],
+    );
+    const nameOf = new Map(spaces.map((s) => [s.id, s.name]));
+    const runs: ProcessingRun[] = [];
+    for (const r of rows) {
+      const meta = parseMeta(r.metadata);
+      const entries = Array.isArray(meta.processing) ? (meta.processing as Record<string, unknown>[]) : [];
+      for (const e of entries) {
+        if (opts?.plugin && e.plugin !== opts.plugin) continue;
+        runs.push({
+          fileId: r.id,
+          fileName: r.name,
+          spaceName: nameOf.get(r.tenant_id) ?? "",
+          at: typeof e.at === "string" ? e.at : "",
+          plugin: typeof e.plugin === "string" ? e.plugin : "",
+          status: e.status === "error" ? "error" : "ok",
+          model: typeof e.model === "string" ? e.model : undefined,
+          labels: Array.isArray(e.labels) ? (e.labels as string[]) : undefined,
+          described: e.described === true,
+          note: typeof e.note === "string" ? e.note : undefined,
+        });
+      }
+    }
+    runs.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+    return runs.slice(0, limit);
+  }
+
   /** Create an (empty) folder at a virtual path. Requires editor+ on the space. */
   async createFolder(spaceId: string, userSub: string, path: string): Promise<{ path: string }> {
-    await this.requireSpace(userSub, spaceId, "editor");
+    await this.requirePath(userSub, spaceId, path, "editor");
     const p = normPath(path);
     if (!p) throw new NotFoundError("folder path required");
     await this.db.run("INSERT OR IGNORE INTO folders (space_id, path, created_at) VALUES (?, ?, ?)", [
@@ -928,6 +1316,116 @@ export class FileService {
     return fileGrantsDetailed(this.db, fileId);
   }
 
+  // ── folder grants (share a folder + its subtree with a user/email/place) ─────
+
+  /** Grant a principal a role on a folder and everything under it. Capped by the caller's own role there. */
+  async shareFolderGrant(
+    caller: Caller,
+    spaceId: string,
+    path: string,
+    grant: { subjectType: SubjectType; subjectId: string; role: Role; subjectRelation?: string },
+  ): Promise<void> {
+    const p = normPath(path);
+    if (!p) throw new PermissionError("cannot share the space root as a folder");
+    await this.requirePath(caller.sub, spaceId, p, grant.role, caller.email);
+    await writeTuple(this.db, {
+      objectType: "folder",
+      objectId: folderObjectId(spaceId, p),
+      relation: grant.role,
+      subjectType: grant.subjectType,
+      subjectId: grant.subjectType === "email" ? normalizeEmail(grant.subjectId) : grant.subjectId,
+      subjectRelation: grant.subjectType === "space" ? (grant.subjectRelation ?? "member") : "",
+    });
+  }
+
+  /** Revoke a folder grant. Requires editor+ on the folder. */
+  async unshareFolderGrant(
+    caller: Caller,
+    spaceId: string,
+    path: string,
+    grant: { subjectType: SubjectType; subjectId: string; role: Role; subjectRelation?: string },
+  ): Promise<void> {
+    const p = normPath(path);
+    await this.requirePath(caller.sub, spaceId, p, "editor", caller.email);
+    await deleteTuple(this.db, {
+      objectType: "folder",
+      objectId: folderObjectId(spaceId, p),
+      relation: grant.role,
+      subjectType: grant.subjectType,
+      subjectId: grant.subjectType === "email" ? normalizeEmail(grant.subjectId) : grant.subjectId,
+      subjectRelation: grant.subjectType === "space" ? (grant.subjectRelation ?? "member") : "",
+    });
+  }
+
+  /** Grants on a folder, subject names/emails resolved (for the Share dialog). Requires viewer+. */
+  async listFolderGrants(caller: Caller, spaceId: string, path: string): Promise<GrantDetail[]> {
+    const p = normPath(path);
+    await this.requirePath(caller.sub, spaceId, p, "viewer", caller.email);
+    return folderGrantsDetailed(this.db, spaceId, p);
+  }
+
+  /** Folders shared with the caller (direct or via a place) — for "Shared with me". */
+  listSharedFolders(userSub: string): Promise<{ spaceId: string; path: string; role: Role }[]> {
+    return sharedFolders(this.db, userSub);
+  }
+
+  // ── share links (unguessable secret → scoped capability; see shares.ts) ──────
+
+  /**
+   * Mint a share link on a file/folder/space. The link's `role` is capped by the
+   * caller's own role on the target — a viewer can't mint a read-write link.
+   * Returns the plaintext secret once. The capability runs as the caller.
+   */
+  async createShare(caller: Caller, target: ShareFilter, opts: { role: Role; label?: string | null; expiresAt?: string | null }) {
+    if (target.objectType === "file") {
+      const file = await this.requirePerm(caller, target.fileId, opts.role);
+      return createShareRow(this.db, caller.sub, {
+        objectType: "file",
+        spaceId: file.tenantId,
+        fileId: target.fileId,
+        role: opts.role,
+        label: opts.label,
+        expiresAt: opts.expiresAt,
+      });
+    }
+    const spaceId = target.spaceId;
+    await this.requireSpace(caller.sub, spaceId, opts.role);
+    return createShareRow(this.db, caller.sub, {
+      objectType: target.objectType,
+      spaceId,
+      path: target.objectType === "folder" ? normPath(target.path) : "",
+      role: opts.role,
+      label: opts.label,
+      expiresAt: opts.expiresAt,
+    });
+  }
+
+  /** Active share links on a file/folder/space (secrets stripped). Requires viewer+. */
+  async listShares(caller: Caller, target: ShareFilter): Promise<ShareInfo[]> {
+    if (target.objectType === "file") {
+      await this.requirePerm(caller, target.fileId, "viewer");
+      return listShareRows(this.db, target);
+    }
+    await this.requireSpace(caller.sub, target.spaceId, "viewer");
+    return listShareRows(this.db, target.objectType === "folder" ? { ...target, path: normPath(target.path) } : target);
+  }
+
+  /** Revoke a share link. Allowed for its creator or anyone with editor+ on the target. */
+  async revokeShare(caller: Caller, id: string): Promise<void> {
+    const share = await getShareRow(this.db, id);
+    if (!share) throw new NotFoundError();
+    if (share.createdBy !== caller.sub) {
+      if (share.objectType === "file" && share.fileId) await this.requirePerm(caller, share.fileId, "editor");
+      else await this.requireSpace(caller.sub, share.spaceId, "editor");
+    }
+    await revokeShareRow(this.db, id);
+  }
+
+  /** Resolve a share secret to its capability (no auth — this *is* the auth). For WebDAV / `/s`. */
+  verifyShare(secret: string): Promise<VerifiedShare | null> {
+    return verifyShareRow(this.db, secret);
+  }
+
   /**
    * People the caller is connected to (space co-members + file-share peers),
    * optionally filtered by `q` — for the share-with picker. Viewer-level: it
@@ -943,9 +1441,22 @@ export class FileService {
   private async requirePerm(caller: Caller, id: string, required: Role, includeDeleted = false): Promise<FileRecord> {
     const file = await this.loadFile(id, includeDeleted);
     if (!file) throw new NotFoundError();
-    const role = await fileRole(this.db, id, caller.sub, caller.email ?? "");
+    // Effective role = the file's own grants ∪ any folder grant covering the
+    // folder it lives in (folder shares grant their whole subtree).
+    const folderPath = (file.metadata.path as string) || "";
+    const [fr, fo] = await Promise.all([
+      fileRole(this.db, id, caller.sub, caller.email ?? ""),
+      folderPath ? folderRole(this.db, file.tenantId, folderPath, caller.sub, caller.email ?? "") : Promise.resolve(null),
+    ]);
+    const role = maxRole(fr, fo);
     if (!role || ROLE_RANK[role] < ROLE_RANK[required]) throw new PermissionError();
     return file;
+  }
+
+  // Gate a path-based op: space membership ∪ a folder grant covering the path.
+  private async requirePath(userSub: string, spaceId: string, path: string, required: Role, email = ""): Promise<void> {
+    const role = await pathRole(this.db, spaceId, normPath(path), userSub, email);
+    if (!role || ROLE_RANK[role] < ROLE_RANK[required]) throw new PermissionError();
   }
 
   private async requireSpace(userSub: string, spaceId: string, required: Role): Promise<void> {

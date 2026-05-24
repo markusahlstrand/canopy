@@ -18,8 +18,29 @@ import { normalizeEmail } from "./users";
  * tuples in a single store precisely so it never fans out across databases.
  */
 
-export type ObjectType = "file" | "space";
+export type ObjectType = "file" | "space" | "folder";
 export type SubjectType = "user" | "space" | "email";
+
+// A folder isn't a row with a stable id (it's a virtual path within a space), so
+// a folder tuple's object_id encodes `${spaceId}<US>${path}`. A grant on a folder
+// covers that folder and everything under it — so access to a path is checked
+// against grants on the path itself and each of its ancestors.
+const FOLDER_SEP = "\u001f";
+export const folderObjectId = (spaceId: string, path: string): string => `${spaceId}${FOLDER_SEP}${path}`;
+export function parseFolderObjectId(objectId: string): { spaceId: string; path: string } | null {
+  const i = objectId.indexOf(FOLDER_SEP);
+  return i < 0 ? null : { spaceId: objectId.slice(0, i), path: objectId.slice(i + 1) };
+}
+/** A path's folder ancestors, innermost-out, *inclusive*, excluding the space root. e.g. "A/B/C" → ["A","A/B","A/B/C"]. */
+export function ancestorFolderPaths(path: string): string[] {
+  const segs = path.split("/").filter(Boolean);
+  return segs.map((_, i) => segs.slice(0, i + 1).join("/"));
+}
+
+/** The higher of two (possibly null) roles. */
+export function maxRole(a: Role | null, b: Role | null): Role | null {
+  return rankToRole(Math.max(a ? ROLE_RANK[a] : 0, b ? ROLE_RANK[b] : 0));
+}
 
 export interface Tuple {
   objectType: ObjectType;
@@ -177,6 +198,93 @@ export async function fileRole(db: Db, fileId: string, userSub: string, email = 
     [userSub, fileId, userSub, fileId, addr, fileId, fileId],
   );
   return rankToRole(row?.rank ?? 0);
+}
+
+/**
+ * The user's role from *folder grants* covering `path` in `spaceId` — a grant on
+ * the path or any ancestor folder applies (folders inherit downward). Subjects:
+ * user, email (pending), or a place's members. Null if no folder grant applies.
+ */
+export async function folderRole(db: Db, spaceId: string, path: string, userSub: string, email = ""): Promise<Role | null> {
+  const ids = ancestorFolderPaths(path).map((p) => folderObjectId(spaceId, p));
+  if (!ids.length) return null;
+  const ph = ids.map(() => "?").join(",");
+  const addr = normalizeEmail(email);
+  const row = await db.first<{ rank: number | null }>(
+    `${USER_SPACES}
+     SELECT MAX(rank) AS rank FROM (
+       SELECT ${RANK} AS rank FROM relation_tuples
+         WHERE object_type = 'folder' AND object_id IN (${ph}) AND subject_type = 'user' AND subject_id = ? AND subject_relation = ''
+       UNION ALL
+       SELECT ${RANK} FROM relation_tuples
+         WHERE object_type = 'folder' AND object_id IN (${ph}) AND subject_type = 'email' AND subject_id = ? AND subject_relation = ''
+       UNION ALL
+       SELECT ${RANK} FROM relation_tuples t JOIN user_spaces us ON us.space_id = t.subject_id
+         WHERE t.object_type = 'folder' AND t.object_id IN (${ph}) AND t.subject_type = 'space' AND t.subject_relation = 'member'
+     )`,
+    [userSub, ...ids, userSub, ...ids, addr, ...ids],
+  );
+  return rankToRole(row?.rank ?? 0);
+}
+
+/** Effective role on a *path* in a space: space membership ∪ any covering folder grant. */
+export async function pathRole(db: Db, spaceId: string, path: string, userSub: string, email = ""): Promise<Role | null> {
+  const [sr, fr] = await Promise.all([spaceRole(db, spaceId, userSub), folderRole(db, spaceId, path, userSub, email)]);
+  return maxRole(sr, fr);
+}
+
+/** Grants on a folder (space + path), subject directory info joined in — for the Share dialog. */
+export async function folderGrantsDetailed(db: Db, spaceId: string, path: string): Promise<GrantDetail[]> {
+  const objectId = folderObjectId(spaceId, path);
+  const rows = await db.all<{
+    relation: string;
+    subject_type: SubjectType;
+    subject_id: string;
+    subject_relation: string;
+    name: string | null;
+    email: string | null;
+    picture: string | null;
+  }>(
+    `SELECT t.relation, t.subject_type, t.subject_id, t.subject_relation,
+            u.name AS name, u.email AS email, u.picture AS picture
+       FROM relation_tuples t
+       LEFT JOIN users u ON t.subject_type = 'user' AND u.sub = t.subject_id
+       WHERE t.object_type = 'folder' AND t.object_id = ? AND t.relation IN ('owner','editor','viewer')`,
+    [objectId],
+  );
+  return rows.map((r) => ({
+    objectType: "folder" as const,
+    objectId,
+    relation: r.relation,
+    subjectType: r.subject_type,
+    subjectId: r.subject_id,
+    subjectRelation: r.subject_relation,
+    name: r.name,
+    email: r.subject_type === "email" ? r.subject_id : r.email,
+    picture: r.picture,
+  }));
+}
+
+/** Folders shared *with* the user (direct or via a place they belong to) — for "Shared with me". */
+export async function sharedFolders(db: Db, userSub: string): Promise<{ spaceId: string; path: string; role: Role }[]> {
+  const rows = await db.all<{ object_id: string; rank: number }>(
+    `${USER_SPACES}
+     SELECT object_id, MAX(rank) AS rank FROM (
+       SELECT object_id, ${RANK} AS rank FROM relation_tuples
+         WHERE object_type = 'folder' AND subject_type = 'user' AND subject_id = ? AND subject_relation = ''
+       UNION ALL
+       SELECT t.object_id, ${RANK} FROM relation_tuples t JOIN user_spaces us ON us.space_id = t.subject_id
+         WHERE t.object_type = 'folder' AND t.subject_type = 'space' AND t.subject_relation = 'member'
+     ) GROUP BY object_id`,
+    [userSub, userSub],
+  );
+  const out: { spaceId: string; path: string; role: Role }[] = [];
+  for (const r of rows) {
+    const parsed = parseFolderObjectId(r.object_id);
+    const role = rankToRole(r.rank);
+    if (parsed && role) out.push({ ...parsed, role });
+  }
+  return out;
 }
 
 /** Does the user hold at least `required` on the object? */

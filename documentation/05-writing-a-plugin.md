@@ -4,9 +4,12 @@ The page you're reading is rendered by a plugin. The **Documentation plugin** is
 because it touches both halves of the system: it declares a storage capability and it
 contributes a UI view. We'll build it up step by step — every snippet below is the real code.
 
-> While the dynamic runtime is still planned, plugins are wired in as first-party modules. The
-> manifest, capability, and contribution parts are exactly what a sandboxed plugin will use;
-> only the "ship the React" step changes later.
+> Documentation is a **first-party, trusted** plugin: its view is a React component compiled
+> into the host. That's the privileged tier. An *untrusted* plugin contributes the same rail
+> panels and detail views **sandboxed**, as a vanilla `render(ctx)` in an opaque-origin iframe —
+> see [Sandboxed UI slots](#sandboxed-ui-slots-rail-panels-and-detail-views) below. The manifest,
+> capability, and contribution parts are identical across both tiers; only how the UI is rendered
+> and what it can touch differ.
 
 ## 1. Declare the manifest
 
@@ -95,7 +98,9 @@ DocumentationView ─ listFiles("", "documentation") ─► GET /api/files?mount
 ## 4. Connect the view to the contribution
 
 The manifest said "I have a detail view." The portal needs to know _which component_ that is.
-Until the sandbox can ship plugin code, that mapping lives in `PLUGIN_UI`:
+Because Documentation is first-party and trusted, that mapping lives in `PLUGIN_UI` — the
+compiled-in React tier (an untrusted plugin would render its detail view sandboxed instead; see
+[below](#sandboxed-ui-slots-rail-panels-and-detail-views)):
 
 ```ts
 // apps/portal/src/plugins/index.tsx
@@ -266,6 +271,70 @@ from a CDN), and saves with ⌘/Ctrl-S or the Save button. If the CDN is unreach
 to a plain-text editor that still saves. The host performs the write through the same
 `PUT /api/file` the drive uses, so per-user scoping and the storage connector apply unchanged.
 
+## Sandboxed UI slots (rail panels and detail views)
+
+A viewer renders a *file*. A **UI slot** renders a *plugin surface* — the right-rail panel or the
+full-page detail view. First-party plugins like Documentation render these as trusted React in
+`PLUGIN_UI`; an **untrusted** plugin renders the very same slots in the same opaque-origin
+`<iframe sandbox="allow-scripts">` a viewer uses. The difference from a viewer: a slot isn't handed
+a file. It's handed *nothing* ambient, and asks the host for data through a **capability bridge**.
+
+The entry module exports one `render` per slot it contributes — a named export matching the
+contribution. No React; vanilla DOM, styled with the host theme tokens (`hsl(var(--primary))`,
+`--card`, `--border`, …) which the host mirrors into the frame so the slot looks native:
+
+```js
+// examples/plugins/calendar/index.js
+export async function detailView(ctx) {
+  // ctx.call(method, params) → the capability bridge (host fulfils it, with its credentials)
+  // ctx.container = the element to render into
+  const { events, source } = await ctx.call("calendar.list");
+  for (const ev of events) ctx.container.appendChild(renderEvent(ev));
+}
+
+export async function railPanel(ctx) {
+  const { events } = await ctx.call("calendar.list");
+  // …render the compact "Up next" list…
+}
+```
+
+`ctx.call` is the client-side counterpart to the server-hook `CapabilityGrants`: the plugin can
+only invoke methods the host wired up for it — that map **is** the grant. The host does the
+privileged work (here, the credentialed `GET /api/calendar`, with a sample-data fallback) and posts
+the result back. No `fetch`, no cookies, no host DOM ever cross into the frame.
+
+Register it like a viewer — by id and source — and declare the contributions in the manifest:
+
+```ts
+// apps/portal/src/plugins/ui.ts
+export const UI_PLUGINS: SandboxedUIPlugin[] = [
+  { id: "calendar", source: calendarSource, slots: ["detailView", "railPanel"] },
+];
+```
+
+```json
+// examples/plugins/calendar/canopy.json
+{
+  "id": "calendar",
+  "contributes": {
+    "railPanel":  { "id": "calendar-rail",   "title": "Calendar", "icon": "calendar" },
+    "detailView": { "id": "calendar-detail", "title": "Calendar" }
+  }
+}
+```
+
+At each render site the host calls `sandboxedSlot(id, slot)` and, if it matches, mounts
+`<PluginSlot>` instead of looking up `PLUGIN_UI` — so a sandboxed plugin and a first-party one light
+up the same rail tab and sidebar entry. The bridge (host ↔ iframe `postMessage`: id-correlated RPC
+for `ctx.call`, plus theme injection and auto-resize) lives in
+`apps/portal/src/components/plugin-slot.tsx`. **Calendar is the reference implementation** — it was
+a `PLUGIN_UI` React component and now runs entirely in the sandbox.
+
+> **Capability gap (today):** `ctx.call` is gated by the method map the host injects, so a plugin
+> can't call what wasn't granted. But there's no *declarative* `Capability` kind yet for "consume a
+> host data source" (the way `storage:read` declares a mount), so the calendar example manifest
+> lists `capabilities: []`. A `data:*` kind is the natural follow-up.
+
 ## Adding a storage connector instead
 
 A connector is the other kind of plugin. You implement `StorageConnector` and a factory, then
@@ -300,8 +369,11 @@ know what R2 is, and the Documentation plugin doesn't know it's reading from a f
 
 1. Write a `PluginManifest` — id, capabilities, contributions.
 2. Register it (add to the installed set / `createRegistry`).
-3. Build the contribution's component, reaching storage/data only through the host API.
-4. Map the contribution to its component in `PLUGIN_UI` (until the runtime ships).
+3. Build the contribution, reaching storage/data only through the host API or `ctx.call`.
+4. Wire the contribution to its renderer:
+   - **Sandboxed** (untrusted, the third-party path) — export `render(ctx)` per slot and
+     register the source in `viewers.ts` (file viewer) or `ui.ts` (rail / detail slot).
+   - **First-party trusted** — map the contribution to its React component in `PLUGIN_UI`.
 
 For a connector: implement `StorageConnector` + `StorageConnectorPlugin`, then mount it in
 the API.

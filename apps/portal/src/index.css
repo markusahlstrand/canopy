@@ -36,6 +36,7 @@
   --row-h: 44px;
   --sidebar-w: 248px;
   --rail-w: 320px;
+  --preview-w: min(640px, 42vw);
 }
 
 .dark {
@@ -146,6 +147,16 @@
 }
 .app-grid.collapsed-sb {
   --sidebar-w: 64px;
+}
+/* Docked file preview (split mode): a real column on the right, so the file list
+   stays interactive and reflows instead of being hidden behind an overlay. The
+   plugin rail steps aside while it's open (see showRail in App), so this pairs
+   with .no-rail. */
+.app-grid.preview-split {
+  grid-template-columns: var(--sidebar-w) 1fr var(--rail-w) var(--preview-w);
+}
+.app-grid.preview-split.no-rail {
+  grid-template-columns: var(--sidebar-w) 1fr var(--preview-w);
 }
 
 /* density */

@@ -34,6 +34,12 @@
 			"database_id": "REPLACE_WITH_D1_DATABASE_ID"
 		}
 	],
+	// Workers AI: the host AI gateway. With this bound, the deployment exposes its
+	// models (e.g. @cf/google/gemma-4-26b-a4b-it) to plugins with no per-user key —
+	// Document AI labels uploads out of the box. Edit the exposed list in src/ai/cloudflare.ts.
+	"ai": {
+		"binding": "AI"
+	},
 	// Non-secret config. Secrets (OIDC_CLIENT_SECRET, SESSION_SECRET, and
 	// GITHUB_TOKEN for a private repo) go via `wrangler secret put NAME`. The OIDC
 	// redirect URI is derived from the request origin (your deployed URL) —

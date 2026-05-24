@@ -67,6 +67,16 @@ export interface StorageConnectorPlugin {
 export interface ConnectorConfigField {
   key: string;
   label: string;
-  type: "string" | "secret" | "url" | "boolean";
+  type: "string" | "secret" | "url" | "boolean" | "select";
   required?: boolean;
+  /**
+   * Choices for a `"select"` field. Either provided statically, or left empty and
+   * filled by the host when serving the schema (see `optionsFrom`).
+   */
+  options?: { value: string; label: string }[];
+  /**
+   * Ask the host to populate `options` from a named, dynamic source when it serves
+   * the settings schema. `"ai-models"` = the models the AI gateway currently exposes.
+   */
+  optionsFrom?: "ai-models";
 }

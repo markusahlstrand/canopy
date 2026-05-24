@@ -18,7 +18,7 @@ const NEW_ITEMS: { icon: string; label: string; sub: string; color: string; acti
   { icon: "upload", label: "Upload files", sub: "From your phone", color: "145 33% 36%", action: "upload" },
   { icon: "image", label: "Photo or video", sub: "From camera roll", color: "38 92% 50%" },
   { icon: "folder", label: "New folder", sub: "Create in My Drive", color: "212 70% 48%" },
-  { icon: "note", label: "New note", sub: "Markdown · auto-synced", color: "212 92% 50%" },
+  { icon: "note", label: "New note", sub: "Markdown · auto-synced", color: "212 92% 50%", action: "note" },
   { icon: "file-text", label: "Scan document", sub: "Receipt, paper, mail", color: "248 60% 56%" },
 ];
 
@@ -26,10 +26,12 @@ export function NewActionSheet({
   open,
   onOpenChange,
   onUpload,
+  onNewNote,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onUpload: () => void;
+  onNewNote: () => void;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -48,6 +50,7 @@ export function NewActionSheet({
               onClick={() => {
                 onOpenChange(false);
                 if (it.action === "upload") onUpload();
+                else if (it.action === "note") onNewNote();
               }}
               className="flex items-center gap-3.5 border-b py-3 text-left last:border-0"
             >
@@ -116,7 +119,7 @@ export function FileDetailSheet({
         {file && (
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[18px] pb-8">
             {file.kind !== "folder" && (
-              <ShareDialog fileId={file.id} fileName={file.name} open={shareOpen} onOpenChange={setShareOpen} />
+              <ShareDialog target={{ kind: "file", fileId: file.id }} label={file.name} open={shareOpen} onOpenChange={setShareOpen} />
             )}
             {/* preview */}
             {(() => {

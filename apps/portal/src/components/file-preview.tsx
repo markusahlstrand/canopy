@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ShareDialog } from "@/components/share-dialog";
 import { Icon } from "@/lib/icons";
+import { cn } from "@/lib/utils";
 import { FileIcon } from "@/components/file-icon";
 import { AvatarGroup, PersonAvatar } from "@/components/person-avatar";
 import { PluginViewer } from "@/components/plugin-viewer";
@@ -380,13 +380,20 @@ function ProcessingLog({ entries }: { entries: ProcessingEntry[] }) {
   );
 }
 
+export type PreviewMode = "split" | "full";
+
 export function FilePreview({
   file,
+  mode,
+  onToggleMode,
   onClose,
   onSaved,
   space,
 }: {
   file: FileItem | null;
+  /** "split" docks beside the (still-interactive) file list; "full" covers the viewport. */
+  mode: PreviewMode;
+  onToggleMode: () => void;
   onClose: () => void;
   onSaved?: () => void;
   /** The space the file lives in (so a saved version's blob lands there). */
@@ -395,122 +402,175 @@ export function FilePreview({
   const [shareOpen, setShareOpen] = useState(false);
   // Bumped after a restore to remount the viewer so it refetches the current content.
   const [contentNonce, setContentNonce] = useState(0);
+
+  // The panel isn't a modal (in split mode the list stays usable), so it owns its
+  // own Escape-to-close. Skipped while a share dialog is layered on top of it.
+  useEffect(() => {
+    if (!file || shareOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [file, shareOpen, onClose]);
+
+  if (!file) return null;
+
+  const isFolder = file.kind === "folder";
+  const full = mode === "full";
+  const viewer = !isFolder ? findViewer(file.name) : undefined;
+  const editable = viewer?.plugin === "markdown-editor";
+
+  const viewerNode = viewer ? (
+    <PluginViewer
+      key={`${file.id}:${contentNonce}`}
+      file={{ source: viewer.source, name: file.name, url: contentUrl(file.id) }}
+      onSaved={onSaved}
+      onSaveContent={editable ? (text) => saveFileVersion(file.id, text, undefined, space) : undefined}
+    />
+  ) : (
+    <div
+      className="grid h-52 place-items-center rounded-lg border-2 border-dashed text-center"
+      style={{ borderColor: `hsl(${FILE_KIND_COLOR[file.kind]} / 0.4)` }}
+    >
+      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+        <FileIcon kind={file.kind} size={48} />
+        <span className="text-[13px]">No viewer installed for this file type</span>
+      </div>
+    </div>
+  );
+
+  const details = (
+    <>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+        <Detail label="Type">{file.kind}</Detail>
+        <Detail label="Size">
+          <span className="font-mono">{file.size}</span>
+        </Detail>
+        <Detail label="Modified">
+          <span className="font-mono">{file.modified}</span>
+        </Detail>
+        <Detail label="Owner">{file.owner ?? CURRENT_USER.name}</Detail>
+        <Detail label="Shared with">
+          {file.sharedWith?.length ? <AvatarGroup people={file.sharedWith} /> : "Only you"}
+        </Detail>
+        <Detail label="Location">
+          <span className="flex items-center gap-1.5">
+            <Icon name="cloud" size={14} className="text-muted-foreground" />
+            {file.location ?? STORAGE.label}
+          </span>
+        </Detail>
+        {file.labels && file.labels.length > 0 && (
+          <Detail label="Labels">
+            <span className="flex flex-wrap gap-1.5">
+              {file.labels.map((l) => (
+                <span
+                  key={l}
+                  className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11.5px] font-medium text-primary"
+                >
+                  <Icon name="tag" size={11} />
+                  {l}
+                </span>
+              ))}
+            </span>
+          </Detail>
+        )}
+      </div>
+
+      {!isFolder && (
+        <div>
+          <SectionLabel>Description</SectionLabel>
+          <DescriptionEditor key={file.id} fileId={file.id} initial={file.description ?? ""} onSaved={onSaved} />
+        </div>
+      )}
+
+      {!isFolder && (
+        <div>
+          <SectionLabel>Tags</SectionLabel>
+          <TagEditor key={file.id} fileId={file.id} initial={file.tags ?? []} onSaved={onSaved} />
+        </div>
+      )}
+
+      {!isFolder && file.processing && file.processing.length > 0 && <ProcessingLog entries={file.processing} />}
+
+      {!isFolder && (
+        <VersionHistory
+          fileId={file.id}
+          onRestored={() => {
+            setContentNonce((n) => n + 1);
+            onSaved?.();
+          }}
+        />
+      )}
+
+      {!isFolder && <Comments key={file.id} fileId={file.id} />}
+    </>
+  );
+
   return (
-    <Sheet open={!!file} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="w-[640px] max-w-[92vw] gap-0 sm:max-w-[640px]">
-        {file && (
+    <aside
+      aria-label={`Preview: ${file.name}`}
+      className={cn(
+        "flex min-w-0 flex-col bg-background",
+        full
+          ? "fixed inset-0 z-50 animate-in fade-in duration-200"
+          : "z-30 h-full border-l shadow-xl animate-in slide-in-from-right duration-300",
+      )}
+    >
+      {!isFolder && (
+        <ShareDialog target={{ kind: "file", fileId: file.id }} label={file.name} open={shareOpen} onOpenChange={setShareOpen} />
+      )}
+
+      <header className="flex items-center gap-3 border-b px-4 py-3">
+        <FileIcon kind={file.kind} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-semibold">{file.name}</div>
+          <div className="font-mono text-[12px] text-muted-foreground">
+            {file.size} · {file.modified}
+          </div>
+        </div>
+        {!isFolder && (
           <>
-            {file.kind !== "folder" && (
-              <ShareDialog fileId={file.id} fileName={file.name} open={shareOpen} onOpenChange={setShareOpen} />
-            )}
-            <SheetHeader className="flex-row items-center gap-3 border-b space-y-0">
-              <FileIcon kind={file.kind} />
-              <div className="min-w-0 flex-1">
-                <SheetTitle className="truncate">{file.name}</SheetTitle>
-                <div className="font-mono text-[12px] text-muted-foreground">
-                  {file.size} · {file.modified}
-                </div>
-              </div>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(contentUrl(file.id), "_blank")}>
-                <Icon name="download" size={14} /> Download
-              </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setShareOpen(true)}>
-                <Icon name="share" size={14} /> Share
-              </Button>
-            </SheetHeader>
-
-            <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
-              {(() => {
-                const viewer = file.kind !== "folder" ? findViewer(file.name) : undefined;
-                const editable = viewer?.plugin === "markdown-editor";
-                return viewer ? (
-                  <PluginViewer
-                    key={`${file.id}:${contentNonce}`}
-                    file={{ source: viewer.source, name: file.name, url: contentUrl(file.id) }}
-                    onSaved={onSaved}
-                    onSaveContent={editable ? (text) => saveFileVersion(file.id, text, undefined, space) : undefined}
-                  />
-                ) : (
-                  <div
-                    className="grid h-52 place-items-center rounded-lg border-2 border-dashed text-center"
-                    style={{ borderColor: `hsl(${FILE_KIND_COLOR[file.kind]} / 0.4)` }}
-                  >
-                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                      <FileIcon kind={file.kind} size={48} />
-                      <span className="text-[13px]">No viewer installed for this file type</span>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-                <Detail label="Type">{file.kind}</Detail>
-                <Detail label="Size">
-                  <span className="font-mono">{file.size}</span>
-                </Detail>
-                <Detail label="Modified">
-                  <span className="font-mono">{file.modified}</span>
-                </Detail>
-                <Detail label="Owner">{file.owner ?? CURRENT_USER.name}</Detail>
-                <Detail label="Shared with">
-                  {file.sharedWith?.length ? <AvatarGroup people={file.sharedWith} /> : "Only you"}
-                </Detail>
-                <Detail label="Location">
-                  <span className="flex items-center gap-1.5">
-                    <Icon name="cloud" size={14} className="text-muted-foreground" />
-                    {file.location ?? STORAGE.label}
-                  </span>
-                </Detail>
-                {file.labels && file.labels.length > 0 && (
-                  <Detail label="Labels">
-                    <span className="flex flex-wrap gap-1.5">
-                      {file.labels.map((l) => (
-                        <span
-                          key={l}
-                          className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11.5px] font-medium text-primary"
-                        >
-                          <Icon name="tag" size={11} />
-                          {l}
-                        </span>
-                      ))}
-                    </span>
-                  </Detail>
-                )}
-              </div>
-
-              {file.kind !== "folder" && (
-                <div>
-                  <SectionLabel>Description</SectionLabel>
-                  <DescriptionEditor key={file.id} fileId={file.id} initial={file.description ?? ""} onSaved={onSaved} />
-                </div>
-              )}
-
-              {file.kind !== "folder" && (
-                <div>
-                  <SectionLabel>Tags</SectionLabel>
-                  <TagEditor key={file.id} fileId={file.id} initial={file.tags ?? []} onSaved={onSaved} />
-                </div>
-              )}
-
-              {file.kind !== "folder" && file.processing && file.processing.length > 0 && (
-                <ProcessingLog entries={file.processing} />
-              )}
-
-              {file.kind !== "folder" && (
-                <VersionHistory
-                  fileId={file.id}
-                  onRestored={() => {
-                    setContentNonce((n) => n + 1);
-                    onSaved?.();
-                  }}
-                />
-              )}
-
-              {file.kind !== "folder" && <Comments key={file.id} fileId={file.id} />}
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => window.open(contentUrl(file.id), "_blank")}
+            >
+              <Icon name="download" size={14} /> Download
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setShareOpen(true)}>
+              <Icon name="share" size={14} /> Share
+            </Button>
           </>
         )}
-      </SheetContent>
-    </Sheet>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onToggleMode}
+          title={full ? "Dock to the side" : "Open full screen"}
+          aria-label={full ? "Dock to the side" : "Open full screen"}
+        >
+          <Icon name={full ? "minimize" : "maximize"} size={16} />
+        </Button>
+        <Button variant="ghost" size="icon-sm" onClick={onClose} title="Close" aria-label="Close preview">
+          <Icon name="x" size={16} />
+        </Button>
+      </header>
+
+      {full ? (
+        <div className="flex min-h-0 flex-1">
+          <div className="min-w-0 flex-1 overflow-auto bg-muted/20 p-6">
+            <div className="mx-auto max-w-[1100px]">{viewerNode}</div>
+          </div>
+          <div className="flex w-[360px] shrink-0 flex-col gap-6 overflow-y-auto border-l px-6 py-5">{details}</div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
+          {viewerNode}
+          {details}
+        </div>
+      )}
+    </aside>
   );
 }

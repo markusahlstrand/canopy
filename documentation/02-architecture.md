@@ -112,7 +112,9 @@ resolves it with **two kinds of version**:
   connector's `changes()` feed where available, else a periodic crawl. The crawl is a long-running
   job — a **Cloudflare Workflow** on the edge, an in-process runner on Node.
 
-Vector and full-text search layer on top of the index later.
+Vector and full-text search layer on top of the index later — as a core `SearchIndex` interface
+with swappable adapters, fed in-process and queried by plugins, not as a monolithic plugin. See
+[What belongs in the core → search](what-belongs-in-the-core).
 
 ## Real-time editing (planned)
 

@@ -68,7 +68,7 @@ wrangler d1 create canopy
 
 # 2. Set secrets (run from apps/api)
 wrangler secret put OIDC_CLIENT_SECRET   # only if your OIDC client is confidential
-wrangler secret put SESSION_SECRET       # 32+ random bytes; encrypts the session cookie
+wrangler secret put SESSION_SECRET       # 32+ random bytes; encrypts the session cookie + stored secrets (AI keys, tokens) at rest
 
 # 3. In apps/api/wrangler.jsonc, set vars.APP_BASE_URL to your deployed URL, and
 #    register <APP_BASE_URL>/api/auth/callback as an allowed callback on the OIDC client.

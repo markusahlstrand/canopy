@@ -274,6 +274,37 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
       `CREATE INDEX IF NOT EXISTS idx_space_plugins_plugin ON space_plugins (plugin_id)`,
     ],
   },
+  {
+    // Share links — an unguessable secret that grants a *scoped capability* on a
+    // file, a folder, or a whole space, to anyone holding it (no Canopy account
+    // needed). Sibling to app_passwords: only the secret's hash is stored, the
+    // plaintext is shown once. The same secret is used two ways — in a web link
+    // (`/s/<secret>`) and as the HTTP Basic password for a WebDAV mount (where it
+    // travels in the Authorization header, not the URL). Unlike a relation tuple
+    // (an *identity* grant) a share is a capability, so it lives here, not in
+    // relation_tuples. `role` gates writes; revoked_at / expires_at end it.
+    version: 13,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS shares (
+         id           TEXT PRIMARY KEY,
+         object_type  TEXT NOT NULL,                 -- 'file' | 'folder' | 'space'
+         space_id     TEXT NOT NULL,                 -- file's space, folder's space, or the space itself
+         file_id      TEXT,                          -- object_type='file' only
+         path         TEXT NOT NULL DEFAULT '',      -- object_type='folder' only (folder path); '' otherwise
+         role         TEXT NOT NULL,                 -- 'viewer' | 'editor'
+         secret_hash  TEXT NOT NULL,
+         label        TEXT,
+         created_by   TEXT NOT NULL,
+         created_at   TEXT NOT NULL,
+         last_used_at TEXT,
+         expires_at   TEXT,                           -- null = never expires
+         revoked_at   TEXT                            -- null = active
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_shares_secret ON shares (secret_hash)`,
+      `CREATE INDEX IF NOT EXISTS idx_shares_space ON shares (space_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_shares_creator ON shares (created_by)`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

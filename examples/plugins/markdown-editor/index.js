@@ -5,12 +5,16 @@
 // the host writes it back to this one file. If the CDN is unreachable we fall
 // back to a plain-text editor so editing still works offline.
 //
+// ```mermaid fenced blocks render as diagrams in the Markdown-mode preview pane
+// (mermaid is loaded lazily from a CDN; if it's blocked the block stays as code).
+//
 // Contract: export default `render(ctx)` with ctx.{container, file, emit}.
 //   ctx.file = { name, mime, bytes: ArrayBuffer, writable: boolean }
 //   save:  ctx.emit("save", { content })   → host replies { type:"canopy:save-result", ok, error? }
 
 const ESM = "https://esm.sh/@toast-ui/editor@3";
 const CSS = "https://cdn.jsdelivr.net/npm/@toast-ui/editor@3/dist/toastui-editor.css";
+const MERMAID_ESM = "https://esm.sh/mermaid@11";
 
 function injectCss(href) {
   return new Promise((resolve) => {
@@ -21,6 +25,26 @@ function injectCss(href) {
     link.onerror = resolve; // styling only — never block the editor on CSS
     document.head.appendChild(link);
   });
+}
+
+// Render ```mermaid code blocks in the preview as a <div class="mermaid"> holding
+// the diagram source as text; every other code block keeps the default markup.
+function mermaidCodeBlock(node) {
+  if ((node.info || "").trim().toLowerCase() === "mermaid") {
+    return [
+      { type: "openTag", tagName: "div", classNames: ["mermaid"], outerNewLine: true },
+      { type: "text", content: node.literal || "" },
+      { type: "closeTag", tagName: "div", outerNewLine: true },
+    ];
+  }
+  const attributes = node.info ? { "data-language": node.info } : {};
+  return [
+    { type: "openTag", tagName: "pre", outerNewLine: true },
+    { type: "openTag", tagName: "code", attributes },
+    { type: "text", content: node.literal || "" },
+    { type: "closeTag", tagName: "code" },
+    { type: "closeTag", tagName: "pre", outerNewLine: true },
+  ];
 }
 
 export default async function render(ctx) {
@@ -62,6 +86,38 @@ export default async function render(ctx) {
   // `getContent` is rebound depending on which editor we end up mounting.
   let getContent = () => text;
 
+  // mermaid is loaded lazily (and only once) the first time the preview actually
+  // contains a diagram; if the CDN is blocked, blocks just stay as <div> text.
+  let mermaid = null;
+  let mermaidTried = false;
+  async function ensureMermaid() {
+    if (mermaid || mermaidTried) return mermaid;
+    mermaidTried = true;
+    try {
+      mermaid = (await import(MERMAID_ESM)).default;
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default", fontFamily: "inherit" });
+    } catch {
+      mermaid = null; // offline / blocked — leave diagrams as source text
+    }
+    return mermaid;
+  }
+  async function renderMermaid() {
+    const nodes = [...container.querySelectorAll("div.mermaid:not([data-processed])")];
+    if (!nodes.length) return;
+    const m = await ensureMermaid();
+    if (!m) return;
+    try {
+      await m.run({ nodes, suppressErrors: true });
+    } catch {
+      /* a bad diagram must never break the editor */
+    }
+  }
+  let mermaidTimer;
+  const scheduleMermaid = () => {
+    clearTimeout(mermaidTimer);
+    mermaidTimer = setTimeout(renderMermaid, 250);
+  };
+
   try {
     await injectCss(CSS);
     const mod = await import(ESM);
@@ -74,10 +130,15 @@ export default async function render(ctx) {
       previewStyle: "vertical",
       usageStatistics: false,
       theme: dark ? "dark" : "light",
+      customHTMLRenderer: { codeBlock: mermaidCodeBlock },
     });
     getContent = () => editor.getMarkdown();
     // Attach the change listener next frame so the initial value doesn't mark dirty.
     requestAnimationFrame(() => editor.on("change", markDirty));
+    // The preview pane re-renders on edits and on switching to Markdown mode;
+    // watch the DOM and (re)draw any mermaid blocks that appear.
+    new MutationObserver(scheduleMermaid).observe(host, { childList: true, subtree: true });
+    scheduleMermaid();
   } catch {
     // Offline / CDN blocked → plain textarea editor (still fully editable + saveable).
     const ta = document.createElement("textarea");

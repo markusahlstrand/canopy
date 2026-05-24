@@ -5,11 +5,27 @@ import { Input } from "@/components/ui/input";
 import { Icon } from "@/lib/icons";
 import { createAppPassword, deleteAppPassword, listAppPasswords, type AppPassword } from "@/lib/api";
 
+/** Format an ISO timestamp as a short local date, or a fallback. */
+const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : null);
+
 /**
- * Connect a device over WebDAV: create/revoke app passwords and show the mount
- * URL + how to connect from Finder. The token is shown once on creation.
+ * Connect a device over WebDAV: create/revoke app passwords (the connected
+ * clients), and show the mount URL + how to connect from Finder. The token is
+ * shown once on creation. `currentUrl`/`currentLabel`, when given, offer to mount
+ * just the place/folder the user is currently viewing (the same password works
+ * for any path — the URL is what scopes the mount).
  */
-export function ConnectDeviceDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function ConnectDeviceDialog({
+  open,
+  onOpenChange,
+  currentUrl,
+  currentLabel,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  currentUrl?: string;
+  currentLabel?: string;
+}) {
   const [passwords, setPasswords] = useState<AppPassword[]>([]);
   const [name, setName] = useState("");
   const [fresh, setFresh] = useState<{ token: string } | null>(null);
@@ -17,6 +33,8 @@ export function ConnectDeviceDialog({ open, onOpenChange }: { open: boolean; onO
   const [busy, setBusy] = useState(false);
 
   const davUrl = `${window.location.origin}/dav`;
+  // Only offer the current location when it's a deeper mount than the whole drive.
+  const hereUrl = currentUrl && currentUrl !== davUrl ? currentUrl : null;
 
   useEffect(() => {
     if (!open) return;
@@ -59,10 +77,12 @@ export function ConnectDeviceDialog({ open, onOpenChange }: { open: boolean; onO
         </DialogHeader>
 
         <div className="rounded-lg bg-muted/60 p-3 text-[12.5px] leading-relaxed text-muted-foreground">
-          In Finder: <span className="font-medium text-foreground">Go → Connect to Server…</span>, enter the URL
+          In Finder: <span className="font-medium text-foreground">Go → Connect to Server…</span>, paste a URL
           below, then sign in with <span className="font-medium text-foreground">any username</span> and an app
-          password as the password.
-          <div className="mt-2 flex items-center gap-2">
+          password as the password. Once mounted it works like any folder — browse, open, and drag files in or out.
+
+          <div className="mt-2.5 text-[11px] font-medium uppercase tracking-wide">Whole drive</div>
+          <div className="mt-1 flex items-center gap-2">
             <code className="min-w-0 flex-1 truncate rounded bg-background px-2 py-1 font-mono text-[12px] text-foreground">
               {davUrl}
             </code>
@@ -70,6 +90,22 @@ export function ConnectDeviceDialog({ open, onOpenChange }: { open: boolean; onO
               Copy
             </Button>
           </div>
+
+          {hereUrl && (
+            <>
+              <div className="mt-2.5 text-[11px] font-medium uppercase tracking-wide">
+                Just this folder{currentLabel ? ` — ${currentLabel}` : ""}
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded bg-background px-2 py-1 font-mono text-[12px] text-foreground">
+                  {hereUrl}
+                </code>
+                <Button variant="ghost" size="sm" onClick={() => void copy(hereUrl)}>
+                  Copy
+                </Button>
+              </div>
+            </>
+          )}
         </div>
 
         {/* freshly created token (shown once) */}
@@ -99,26 +135,34 @@ export function ConnectDeviceDialog({ open, onOpenChange }: { open: boolean; onO
           </Button>
         </form>
 
-        {/* existing */}
+        {/* connected clients (one app password per device) */}
         <div className="flex flex-col gap-1.5">
-          {passwords.length === 0 && <p className="text-[13px] text-muted-foreground">No app passwords yet.</p>}
-          {passwords.map((p) => (
-            <div key={p.id} className="flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5">
-              <Icon name="cloud" size={15} className="text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-[13.5px]">{p.name}</span>
-              <span className="text-[11.5px] text-muted-foreground">
-                {p.lastUsedAt ? "used" : "never used"}
-              </span>
-              <button
-                className="text-muted-foreground hover:text-destructive disabled:opacity-40"
-                disabled={busy}
-                onClick={() => void deleteAppPassword(p.id).then(refresh)}
-                aria-label="Revoke"
-              >
-                <Icon name="x" size={15} />
-              </button>
-            </div>
-          ))}
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Connected devices</div>
+          {passwords.length === 0 && <p className="text-[13px] text-muted-foreground">No devices connected yet.</p>}
+          {passwords.map((p) => {
+            const last = fmtDate(p.lastUsedAt);
+            const added = fmtDate(p.createdAt);
+            return (
+              <div key={p.id} className="flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5">
+                <Icon name="cloud" size={15} className="text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13.5px]">{p.name}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">
+                    {last ? `Last used ${last}` : "Never used"}
+                    {added ? ` · added ${added}` : ""}
+                  </div>
+                </div>
+                <button
+                  className="text-muted-foreground hover:text-destructive disabled:opacity-40"
+                  disabled={busy}
+                  onClick={() => void deleteAppPassword(p.id).then(refresh)}
+                  aria-label="Revoke"
+                >
+                  <Icon name="x" size={15} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       </DialogContent>
     </Dialog>

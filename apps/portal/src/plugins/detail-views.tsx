@@ -1,13 +1,11 @@
 import { useState } from "react";
-import { ExternalLink } from "lucide-react";
 import { PersonAvatar } from "@/components/person-avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
-import { TONE_COLOR } from "@/lib/mock-data";
-import type { CalendarEvent, Task, TaskStatus } from "@/lib/api";
-import { useCalendar, useTasks } from "./data";
+import type { Task, TaskStatus } from "@/lib/api";
+import { useTasks } from "./data";
 
 const STATUS_META: Record<TaskStatus, { title: string; color: string }> = {
   todo: { title: "To do", color: "212 70% 48%" },
@@ -200,74 +198,6 @@ export function TasksView() {
         <ViewToggle value={mode} onChange={setMode} />
       </div>
       {mode === "board" ? <TasksBoard tasks={tasks} /> : <TasksList tasks={tasks} />}
-    </div>
-  );
-}
-
-const KIND_LABEL: Record<NonNullable<CalendarEvent["kind"]>, string> = {
-  milestone: "Milestone",
-  release: "Release",
-  issue: "Issue",
-  event: "Event",
-};
-
-/** Group events by calendar day, preserving chronological order. */
-function groupByDay(events: CalendarEvent[]): { day: string; items: CalendarEvent[] }[] {
-  const sorted = [...events].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
-  const groups: { day: string; items: CalendarEvent[] }[] = [];
-  for (const e of sorted) {
-    const day = new Date(e.start).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-    const last = groups[groups.length - 1];
-    if (last && last.day === day) last.items.push(e);
-    else groups.push({ day, items: [e] });
-  }
-  return groups;
-}
-
-export function CalendarView() {
-  const { events, source, loading } = useCalendar();
-  const groups = groupByDay(events);
-  return (
-    <div className="flex max-w-2xl flex-col gap-3.5">
-      <div className="flex items-center gap-2">
-        <SourcePill source={source} />
-        {loading && <span className="text-[12px] text-muted-foreground">Loading…</span>}
-      </div>
-      {groups.length === 0 && !loading && (
-        <div className="rounded-lg border border-dashed p-8 text-center text-[13px] text-muted-foreground">
-          No upcoming milestones or releases.
-        </div>
-      )}
-      <div className="flex flex-col gap-4">
-        {groups.map((g) => (
-          <div key={g.day} className="flex gap-4">
-            <div className="w-28 shrink-0 pt-1 text-[12.5px] font-medium text-muted-foreground">{g.day}</div>
-            <div className="flex flex-1 flex-col gap-2">
-              {g.items.map((e) => {
-                const tone = e.tone && TONE_COLOR[e.tone] ? TONE_COLOR[e.tone] : TONE_COLOR.primary;
-                const Title = e.url ? "a" : "span";
-                return (
-                  <div key={e.id} className="flex items-center gap-2.5 rounded-lg border bg-card p-2.5">
-                    <span className="h-8 w-1 shrink-0 rounded-full" style={{ background: `hsl(${tone})` }} />
-                    <Title
-                      {...(e.url ? { href: e.url, target: "_blank", rel: "noreferrer" } : {})}
-                      className={`flex-1 truncate text-[13.5px] font-medium ${e.url ? "hover:underline" : ""}`}
-                    >
-                      {e.title}
-                    </Title>
-                    {e.kind && (
-                      <Badge variant="outline" className="px-1.5 py-0 text-[10.5px] text-muted-foreground">
-                        {KIND_LABEL[e.kind]}
-                      </Badge>
-                    )}
-                    {e.url && <ExternalLink size={13} className="text-muted-foreground" />}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

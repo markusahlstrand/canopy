@@ -9,11 +9,11 @@ import { Icon } from "@/lib/icons";
  * There's no runtime plugin upload yet, so this doesn't load code in the browser.
  * Instead it turns a one-line idea into a ready-to-paste prompt for a coding agent
  * (Claude Code, Cursor, …) that follows the in-repo authoring spec
- * (documentation/08-build-a-plugin-with-ai.md). The fastest path is the bundled
+ * (documentation/09-build-a-plugin-with-ai.md). The fastest path is the bundled
  * Claude Code skill: `/new-plugin "<idea>"`.
  */
 
-const SPEC = "documentation/08-build-a-plugin-with-ai.md";
+const SPEC = "documentation/09-build-a-plugin-with-ai.md";
 const SCHEMA = "documentation/canopy-plugin.schema.json";
 const VIEWERS = "apps/portal/src/plugins/viewers.ts";
 

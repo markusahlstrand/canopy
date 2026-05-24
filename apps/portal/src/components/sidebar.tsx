@@ -11,7 +11,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { STORAGE, CURRENT_USER } from "@/lib/mock-data";
+import { CREATORS, type InstalledCreator } from "@/plugins/viewers";
 import type { Me, SpaceView } from "@/lib/api";
 
 function initialsOf(s: string): string {
@@ -24,6 +32,7 @@ const NAV = [
   { id: "drive", icon: "my-drive", label: "My Drive" },
   { id: "starred", icon: "starred", label: "Starred" },
   { id: "trash", icon: "trash", label: "Trash" },
+  { id: "settings", icon: "settings", label: "Settings" },
 ];
 
 interface SidebarProps {
@@ -37,7 +46,10 @@ interface SidebarProps {
   currentSpace: string;
   onOpenSpace: (id: string) => void;
   onCreateSpace: () => void;
+  onRenameSpace: (id: string) => void;
+  onToggleMount: (id: string, mounted: boolean) => void;
   onNewFolder: () => void;
+  onNewFile: (creator: InstalledCreator) => void;
   onUpload: () => void;
   onConnectDevice: () => void;
   auth: Me;
@@ -105,7 +117,10 @@ export function Sidebar({
   currentSpace,
   onOpenSpace,
   onCreateSpace,
+  onRenameSpace,
+  onToggleMount,
   onNewFolder,
+  onNewFile,
   onUpload,
   onConnectDevice,
   auth,
@@ -158,6 +173,11 @@ export function Sidebar({
             <DropdownMenuItem onClick={onNewFolder}>
               <Icon name="folder" size={15} /> New folder
             </DropdownMenuItem>
+            {CREATORS.map((creator) => (
+              <DropdownMenuItem key={creator.plugin + ":" + creator.id} onClick={() => onNewFile(creator)}>
+                <Icon name={creator.icon ?? "file"} size={15} /> {creator.label}
+              </DropdownMenuItem>
+            ))}
             <DropdownMenuItem onClick={onUpload}>
               <Icon name="upload" size={15} /> Upload files
             </DropdownMenuItem>
@@ -194,16 +214,42 @@ export function Sidebar({
             </button>
           </div>
           <div className="flex flex-col gap-0.5">
-            {groupSpaces.map((s) => (
-              <NavRow
-                key={s.id}
-                icon="users"
-                label={s.name}
-                active={active === "drive" && currentSpace === s.id}
-                collapsed={false}
-                onClick={() => onOpenSpace(s.id)}
-              />
-            ))}
+            {groupSpaces.map((s) => {
+              const isActive = active === "drive" && currentSpace === s.id;
+              return (
+                <ContextMenu key={s.id}>
+                  <ContextMenuTrigger asChild>
+                    <button
+                      onClick={() => onOpenSpace(s.id)}
+                      className={cn(
+                        "flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] transition-colors",
+                        isActive ? "bg-accent font-medium text-foreground" : "text-foreground/80 hover:bg-accent/60",
+                      )}
+                    >
+                      <span className={cn("shrink-0", isActive && "text-primary")}>
+                        <Icon name="users" size={17} />
+                      </span>
+                      <span className="flex-1 truncate text-left">{s.name}</span>
+                    </button>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="w-48">
+                    <ContextMenuItem onSelect={() => onOpenSpace(s.id)}>
+                      <Icon name="users" size={15} /> Open
+                    </ContextMenuItem>
+                    {s.role === "owner" && (
+                      <ContextMenuItem onSelect={() => onRenameSpace(s.id)}>
+                        <Icon name="edit" size={15} /> Rename
+                      </ContextMenuItem>
+                    )}
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onSelect={() => onToggleMount(s.id, !s.mounted)}>
+                      <Icon name={s.mounted ? "eye-off" : "eye"} size={15} />
+                      {s.mounted ? "Hide from My Drive" : "Show in My Drive"}
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
+              );
+            })}
             {groupSpaces.length === 0 && (
               <button
                 onClick={onCreateSpace}

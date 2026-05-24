@@ -76,7 +76,7 @@ fans out across databases.
 - **Surface, not silo.** A space is a shared *context*; the drive surfaces it as a folder, and
   (planned) the calendar would surface the same space as a shared calendar.
 
-See [`documentation/07-sharing-and-spaces.md`](documentation/07-sharing-and-spaces.md). Link sharing
+See [`documentation/08-sharing-and-spaces.md`](documentation/08-sharing-and-spaces.md). Link sharing
 ("anyone with the link") and folder-level sharing are planned.
 
 ## Develop
@@ -135,7 +135,7 @@ cp apps/api/wrangler.example.jsonc apps/api/wrangler.jsonc
 wrangler r2 bucket create canopy-drive
 cd apps/api
 wrangler secret put OIDC_CLIENT_SECRET     # if your OIDC client is confidential
-wrangler secret put SESSION_SECRET         # 32+ random bytes; encrypts the session cookie
+wrangler secret put SESSION_SECRET         # 32+ random bytes; encrypts the session cookie + stored secrets (AI keys, tokens) at rest
 
 # edit apps/api/wrangler.jsonc → set vars.APP_BASE_URL to your deployed URL,
 # then register <APP_BASE_URL>/api/auth/callback as a callback on your OIDC client

@@ -1,4 +1,4 @@
-import { viewerMatches, type ViewerContribution } from "@canopy/core";
+import { viewerMatches, type FileCreatorContribution, type ViewerContribution } from "@canopy/core";
 // Sample viewer plugins live in /examples/plugins. We pull their entry source as
 // raw text and hand it to the sandboxed iframe at preview time — the same path a
 // resolved third-party plugin (zip/github/npm) would take, just without a fetch.
@@ -48,3 +48,27 @@ export function findViewer(name: string, mime?: string): InstalledViewer | undef
   const ext = name.split(".").pop();
   return VIEWERS.find((v) => viewerMatches(v.match, { mime, ext }));
 }
+
+/** A new-file type the host's "New" menu can offer: a contribution + its owning plugin. */
+export interface InstalledCreator extends FileCreatorContribution {
+  /** Owning plugin id. */
+  plugin: string;
+}
+
+/**
+ * File types offerable from the "New" menu, built from installed plugins'
+ * `contributes.creators`. Mirrors VIEWERS — here the bundled markdown editor is
+ * registered directly; in production this is derived from installed manifests.
+ */
+export const CREATORS: InstalledCreator[] = [
+  {
+    plugin: "markdown-editor",
+    id: "markdown",
+    label: "Markdown document",
+    icon: "file-text",
+    defaultName: "Untitled",
+    extension: ".md",
+    mime: "text/markdown",
+    template: "# Untitled\n\n",
+  },
+];

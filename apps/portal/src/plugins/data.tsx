@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { getCalendar, getTasks, type CalendarEvent, type Task } from "@/lib/api";
 import { SAMPLE_TASKS, sampleEvents } from "./sample-data";
+import type { CapabilityMap } from "@/components/plugin-slot";
 
 /**
  * Plugin data wiring. Tasks/calendar render *live* data once a source plugin
@@ -59,32 +60,32 @@ export function useTasks(): { tasks: Task[]; source: Source; loading: boolean } 
   return state;
 }
 
-export function useCalendar(): { events: CalendarEvent[]; source: Source; loading: boolean } {
+/**
+ * Calendar fetch + sample fallback, decoupled from React so it can run inside a
+ * host capability handler (sandboxed plugins call this via `ctx.call`, not a hook).
+ * Connected → live GitHub data as-is; otherwise project-flavored sample events.
+ */
+async function fetchCalendarEvents(githubInstalled: boolean): Promise<{ events: CalendarEvent[]; source: Source }> {
+  if (!githubInstalled) return { events: sampleEvents(), source: "sample" };
+  try {
+    const r = await getCalendar();
+    if (r.source) return { events: r.events, source: "github" };
+  } catch {
+    // fall through to sample
+  }
+  return { events: sampleEvents(), source: "sample" };
+}
+
+/**
+ * The capability map handed to sandboxed UI-slot plugins ({@link PluginSlot}).
+ * Each entry is a method the host fulfils with its own credentials — the plugin
+ * can only call what's wired here. Keyed by `<domain>.<verb>`; `nonce` lets a
+ * settings change re-resolve on the next call.
+ */
+export function usePluginCapabilities(): CapabilityMap {
   const { githubInstalled, nonce } = useContext(Ctx);
-  const [state, setState] = useState<{ events: CalendarEvent[]; source: Source; loading: boolean }>({
-    events: sampleEvents(),
-    source: "sample",
-    loading: githubInstalled,
-  });
-
-  useEffect(() => {
-    if (!githubInstalled) {
-      setState({ events: sampleEvents(), source: "sample", loading: false });
-      return;
-    }
-    let alive = true;
-    setState((s) => ({ ...s, loading: true }));
-    getCalendar()
-      .then((r) => {
-        if (!alive) return;
-        if (r.source) setState({ events: r.events, source: "github", loading: false });
-        else setState({ events: sampleEvents(), source: "sample", loading: false });
-      })
-      .catch(() => alive && setState({ events: sampleEvents(), source: "sample", loading: false }));
-    return () => {
-      alive = false;
-    };
-  }, [githubInstalled, nonce]);
-
-  return state;
+  void nonce; // referenced so the map is rebuilt after a refresh()
+  return {
+    "calendar.list": () => fetchCalendarEvents(githubInstalled),
+  };
 }

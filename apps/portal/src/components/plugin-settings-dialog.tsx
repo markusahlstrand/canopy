@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Icon } from "@/lib/icons";
 import {
   applySpacePlugin,
@@ -133,6 +134,36 @@ export function PluginSettingsDialog({
                     />
                     {f.label}
                   </label>
+                );
+              }
+              if (f.type === "select") {
+                const options = f.options ?? [];
+                return (
+                  <div key={f.key} className="flex flex-col gap-1.5">
+                    <label className="text-[12.5px] font-medium text-foreground">
+                      {f.label}
+                      {f.required && <span className="ml-1 text-destructive">*</span>}
+                    </label>
+                    {options.length === 0 ? (
+                      <p className="text-[12.5px] text-muted-foreground">
+                        No AI models available — configure a provider on the server (or deploy on
+                        Cloudflare to use Workers AI).
+                      </p>
+                    ) : (
+                      <Select value={values[f.key] || undefined} onValueChange={(v) => setValue(f.key, v)}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Auto — first available" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {options.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                              {o.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
                 );
               }
               const isSecret = f.type === "secret";

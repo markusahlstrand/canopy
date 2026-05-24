@@ -4,7 +4,10 @@ import { resolve } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
 import { createLocalConnector } from "@canopy/connector-local";
 import { createGithubConnector } from "@canopy/connector-github";
-import type { StorageConnector } from "@canopy/core";
+import { createAiGateway, type AiProvider, type StorageConnector } from "@canopy/core";
+import { createGeminiAi } from "./ai/gemini";
+import { createOpenAiCompatAi, parseModelSpecs } from "./ai/openai-compat";
+import { AI_PROVIDER_FIELDS, providersFromUserConfig } from "./ai/user-config";
 import {
   FileService,
   createSqlCacheStore,
@@ -91,8 +94,32 @@ const dataSources: DataSourceDeps = {
       }
     : {},
   cache: createSqlCacheStore(db),
-  secret: authConfig?.sessionSecret,
+  // Encrypts stored secrets (provider keys, tokens) at rest. Falls back to a bare
+  // SESSION_SECRET so the UI can save keys in dev even with auth/OIDC switched off.
+  secret: authConfig?.sessionSecret ?? process.env.SESSION_SECRET,
 };
+
+// AI providers off Node env (no Workers AI binding here): a Gemini key, and/or any
+// OpenAI-compatible endpoint — including a local model (Ollama, LM Studio) so Gemma
+// can back Document AI in dev. The union of their models is what plugins see.
+const aiProviders: AiProvider[] = [];
+if (process.env.GOOGLE_AI_API_KEY) aiProviders.push(createGeminiAi(process.env.GOOGLE_AI_API_KEY));
+if (process.env.OPENAI_BASE_URL) {
+  const models = parseModelSpecs(process.env.OPENAI_MODELS);
+  if (models.length) {
+    aiProviders.push(
+      createOpenAiCompatAi({
+        baseUrl: process.env.OPENAI_BASE_URL,
+        apiKey: process.env.OPENAI_API_KEY,
+        label: process.env.OPENAI_LABEL,
+        models,
+      }),
+    );
+  } else {
+    console.warn("  ⚠ OPENAI_BASE_URL set but OPENAI_MODELS is empty — no local models exposed");
+  }
+}
+const ai = aiProviders.length ? createAiGateway(aiProviders) : undefined;
 
 const app = createApp({
   auth: createAuthApp(authConfig, onLogin),
@@ -101,6 +128,9 @@ const app = createApp({
   drive: { service, blobs },
   dataSources,
   processors: PROCESSORS,
+  ai,
+  // Let users add their own Gemini / OpenAI-compatible keys in Settings → AI models.
+  aiUserConfig: { fields: AI_PROVIDER_FIELDS, build: providersFromUserConfig },
 });
 
 // Single-process mode: if the built SPA exists, serve it from this same server.
@@ -118,5 +148,6 @@ serve({ fetch: app.fetch, port }, (info) => {
   console.log(`  drive       → sqlite:${dbPath} + blobs:${blobsRoot} (per-user)`);
   console.log(`  documentation + demo → ${ghRepo ? `github:${ghRepo}@${ghBranch}` : `${documentationRoot} / ${demoRoot}`}`);
   console.log(`  auth        → ${authConfig ? authConfig.issuer : "not configured (anonymous)"}`);
+  console.log(`  ai          → ${ai ? ai.models().map((m) => m.id).join(", ") : "no providers (set GOOGLE_AI_API_KEY or OPENAI_BASE_URL)"}`);
   console.log(`  ui          → ${serveSpa ? distDir : "served by Vite (dev)"}`);
 });

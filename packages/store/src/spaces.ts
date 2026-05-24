@@ -95,6 +95,12 @@ export async function getSpace(db: Db, id: string): Promise<Space | null> {
   return row ? toSpace(row) : null;
 }
 
+/** Rename a space. Returns the updated space, or null if it doesn't exist. */
+export async function renameSpace(db: Db, id: string, name: string): Promise<Space | null> {
+  await db.run("UPDATE spaces SET name = ? WHERE id = ?", [name, id]);
+  return getSpace(db, id);
+}
+
 /** Spaces the user can see (personal + any group they belong to). */
 export async function listSpaces(db: Db, userSub: string): Promise<Space[]> {
   const ids = await memberSpaceIds(db, userSub);
