@@ -1,3 +1,6 @@
+import type { PluginManifest } from "@canopy/core";
+import { BUNDLED_MANIFESTS } from "@/plugins/bundled-manifests";
+
 export type FileKind = "folder" | "pdf" | "image" | "note" | "doc" | "audio" | "video";
 
 /** One run of a server-side processor over a file, from metadata.processing. */
@@ -86,13 +89,42 @@ export interface CatalogItem {
   color: string;
 }
 
-export const PLUGIN_CATALOG: CatalogItem[] = [
+/**
+ * First-party feature plugins — server-backed UI with no local bundle, so their
+ * store metadata is authored here. The bundled viewer plugins (image/pdf/markdown/
+ * code/univer) are appended below, projected from their own manifests.
+ */
+const FEATURE_CATALOG: CatalogItem[] = [
   { id: "calendar", icon: "calendar", label: "Calendar", category: "Productivity", tagline: "Shared family calendar with smart conflicts", popular: true, color: "145 33% 36%" },
   { id: "tasks", icon: "check-square", label: "Tasks", category: "Productivity", tagline: "A real to-do list for the household", popular: true, color: "212 70% 48%" },
   { id: "github", icon: "github", label: "GitHub", category: "Productivity", tagline: "Sync issues to Tasks, releases & milestones to Calendar", popular: true, color: "240 6% 20%" },
   { id: "document-ai", icon: "sparkles", label: "Document AI", category: "Productivity", tagline: "Auto-label each document by type with Gemini Flash", popular: true, color: "262 60% 55%" },
+  { id: "synology", icon: "hard-drive", label: "Synology", category: "Media", tagline: "Browse a Synology NAS as a space — directly or via QuickConnect", color: "190 65% 42%" },
   { id: "documentation", icon: "book", label: "Documentation", category: "Help", tagline: "How Canopy works — guides for using it and building plugins", color: "212 70% 48%" },
-  { id: "code-editor", icon: "file-code", label: "Code Editor", category: "Productivity", tagline: "Edit code inline with the VS Code editor.", color: "207 90% 54%" },
+];
+
+/** Project a bundled plugin's manifest into a store catalog row. */
+function toCatalogItem(m: PluginManifest): CatalogItem {
+  const store = m.contributes?.store;
+  return {
+    id: m.id,
+    icon: m.icon ?? "plugin",
+    label: m.name,
+    category: store?.category ?? "Productivity",
+    tagline: store?.tagline ?? m.description ?? "",
+    popular: store?.popular,
+    color: m.color ?? "212 70% 48%",
+  };
+}
+
+/**
+ * Everything installable from the store: first-party feature plugins plus the
+ * bundled viewer plugins, the latter derived from their manifests so file-type
+ * handlers (image/pdf/markdown/code/univer) are listed alongside the rest.
+ */
+export const PLUGIN_CATALOG: CatalogItem[] = [
+  ...FEATURE_CATALOG,
+  ...BUNDLED_MANIFESTS.map(toCatalogItem),
 ];
 
 export const STORAGE = { label: "Cloudflare R2", used: "12.4 GB", total: "50 GB", percent: 25 };

@@ -47,6 +47,7 @@ import {
   moveFile,
   setSpaceMounted,
   fetchMe,
+  rememberOpened,
   fetchInstalledPlugins,
   fetchActivePlugins,
   fetchCustomPlugins,
@@ -72,6 +73,7 @@ import { PluginSlot } from "@/components/plugin-slot";
 import { PluginDataProvider, usePluginCapabilities } from "@/plugins/data";
 import { ACCENT_HSL, ACCENT_HSL_DARK, DEFAULT_TWEAKS, FONT_STACK, type Tweaks } from "@/lib/tweaks";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useOnline } from "@/hooks/use-online";
 import { DemoBanner } from "@/components/demo-banner";
 import { InviteBanner } from "@/components/invite-banner";
 import { OfflineBanner } from "@/components/offline-banner";
@@ -212,6 +214,9 @@ function DesktopApp() {
   const [refreshKey, setRefreshKey] = useState(0);
   const reload = () => setRefreshKey((k) => k + 1);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  // False when the backend is unreachable (or the browser is offline): the app
+  // goes view-only — writes are blocked and served from the offline cache.
+  const online = useOnline();
 
   const [auth, setAuth] = useState<Me>({ user: null, authConfigured: false });
   useEffect(() => {
@@ -276,7 +281,12 @@ function DesktopApp() {
       return next;
     });
   const [shareTarget, setShareTarget] = useState<{ target: ShareTarget; label: string } | null>(null);
-  const [membersSpace, setMembersSpace] = useState<{ id: string; name: string; role: Role } | null>(null);
+  const [membersSpace, setMembersSpace] = useState<{
+    id: string;
+    name: string;
+    role: Role;
+    tab?: "members" | "plugins" | "settings";
+  } | null>(null);
   const [settingsPlugin, setSettingsPlugin] = useState<{ id: string; name: string } | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [overview, setOverview] = useState<Overview>({ files: 0, bytes: 0 });
@@ -391,7 +401,11 @@ function DesktopApp() {
 
   // Load the current location. At the personal root, mounted group spaces appear
   // as folders (the merged "family" feel) alongside a "Shared with me" entry.
+  // Only the drive view needs a folder load — Trash/Settings/plugin views have
+  // their own data, and the selected `space` can be one they can't list (a left
+  // group space, a stale id), which would 403 a pointless background fetch.
   useEffect(() => {
+    if (active !== "drive") return;
     let cancelled = false;
     setLoadError(null);
     const load = space === "shared" ? listShared() : listFiles(path, space || undefined);
@@ -420,7 +434,7 @@ function DesktopApp() {
     return () => {
       cancelled = true;
     };
-  }, [space, path, refreshKey, spaces]);
+  }, [active, space, path, refreshKey, spaces]);
 
   // Load Trash when the Trash view is open (and on refresh after restore/purge).
   useEffect(() => {
@@ -454,7 +468,10 @@ function DesktopApp() {
     if (f.id.startsWith("space:")) return openSpace(f.id.slice(6)); // a mounted group space
     if (f.id === "__shared") return openSpace("shared"); // "Shared with me"
     if (f.kind === "folder" && f.path != null) setPath(f.path);
-    else setPreviewFile(f);
+    else {
+      rememberOpened(f); // keep it (and its bytes) available offline
+      setPreviewFile(f);
+    }
   }
 
   function onCrumbClick(index: number) {
@@ -489,6 +506,10 @@ function DesktopApp() {
   }
 
   async function createFolderFlow() {
+    if (!online) {
+      toast("You're offline", { description: "You can't create folders until you're back online." });
+      return;
+    }
     if (space === "shared") {
       toast("Open a drive or space to create a folder");
       return;
@@ -509,6 +530,10 @@ function DesktopApp() {
   }
 
   async function createFileFlow(creator: InstalledCreator) {
+    if (!online) {
+      toast("You're offline", { description: "You can't create files until you're back online." });
+      return;
+    }
     if (space === "shared") {
       toast("Open a drive or space to create a file");
       return;
@@ -533,6 +558,10 @@ function DesktopApp() {
   async function upload(fileList: FileList | null) {
     const files = fileList ? Array.from(fileList) : [];
     if (files.length === 0) return;
+    if (!online) {
+      toast("You're offline", { description: "Uploads resume when the connection is back." });
+      return;
+    }
     if (space === "shared") {
       toast("Open a drive or space to upload");
       return;
@@ -818,6 +847,10 @@ function DesktopApp() {
         onOpenSpace={openSpace}
         onCreateSpace={createSpaceFlow}
         onRenameSpace={renameSpaceFlow}
+        onManageSpace={(id) => {
+          const s = spaces.find((sp) => sp.id === id);
+          if (s) setMembersSpace({ id, name: s.name, role: s.role, tab: "settings" });
+        }}
         onToggleMount={togglePin}
         onNewFolder={createFolderFlow}
         onNewFile={createFileFlow}
@@ -838,6 +871,7 @@ function DesktopApp() {
           onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
           onUpload={() => uploadInputRef.current?.click()}
           readonly={active === "drive" && readonly}
+          offline={!online}
           railAvailable={railAvailable}
           railOpen={tweaks.showRail}
           onToggleRail={() => setTweak("showRail", !tweaks.showRail)}
@@ -1057,7 +1091,6 @@ function DesktopApp() {
         onToggleMode={togglePreviewMode}
         onClose={() => setPreviewFile(null)}
         onSaved={reload}
-        space={space === "shared" ? undefined : space || undefined}
         installedPluginIds={activeIds}
       />
 
@@ -1078,6 +1111,24 @@ function DesktopApp() {
           open={!!membersSpace}
           onOpenChange={(o) => !o && setMembersSpace(null)}
           onPluginsChanged={refreshActive}
+          initialTab={membersSpace.tab}
+          onRenamed={async (name) => {
+            setMembersSpace((m) => (m ? { ...m, name } : m));
+            setSpaces(await listSpaces());
+            toast(`Renamed to “${name}”`);
+          }}
+          onDeleted={async () => {
+            const deletedName = membersSpace.name;
+            if (space === membersSpace.id) {
+              // We were inside the space we just deleted — fall back to My Drive.
+              setActive("drive");
+              setSpace("");
+              setPath("");
+            }
+            setMembersSpace(null);
+            setSpaces(await listSpaces());
+            toast(`Deleted “${deletedName}”`);
+          }}
         />
       )}
 
@@ -1184,12 +1235,33 @@ function TrashView({
   );
 }
 
-function PluginDetail({ id, installed }: { id: string; installed: { id: string; name: string; icon?: string; color?: string; contributes?: { store?: { tagline: string } } }[] }) {
+function PluginDetail({
+  id,
+  installed,
+}: {
+  id: string;
+  installed: {
+    id: string;
+    name: string;
+    icon?: string;
+    color?: string;
+    description?: string;
+    contributes?: {
+      store?: { tagline: string };
+      viewers?: { match: string[] }[];
+      creators?: { label: string; extension: string }[];
+    };
+  }[];
+}) {
   const manifest = installed.find((p) => p.id === id);
   const sandboxed = sandboxedSlot(id, "detailView");
   const DetailView = PLUGIN_UI[id]?.DetailView;
   const capabilities = usePluginCapabilities();
   if (!manifest) return null;
+  // Viewer plugins have no detail view; instead of an empty page, show what file
+  // types they handle and create — derived straight from the manifest.
+  const fileTypes = [...new Set(manifest.contributes?.viewers?.flatMap((v) => v.match) ?? [])];
+  const creates = manifest.contributes?.creators?.map((c) => `${c.label} (${c.extension})`) ?? [];
   return (
     <div>
       <div className="mb-5 flex items-center gap-3.5">
@@ -1210,6 +1282,34 @@ function PluginDetail({ id, installed }: { id: string; installed: { id: string; 
         <Suspense fallback={<div className="py-20 text-center text-sm text-muted-foreground">Loading…</div>}>
           <DetailView />
         </Suspense>
+      ) : fileTypes.length > 0 ? (
+        <div className="max-w-lg space-y-6 py-2">
+          {manifest.description && (
+            <p className="text-sm leading-relaxed text-muted-foreground">{manifest.description}</p>
+          )}
+          <div>
+            <div className="mb-2 text-[13px] font-medium">Opens these file types</div>
+            <div className="flex flex-wrap gap-1.5">
+              {fileTypes.map((t) => (
+                <span key={t} className="rounded-md bg-secondary px-2 py-1 font-mono text-[12px] text-secondary-foreground">
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+          {creates.length > 0 && (
+            <div>
+              <div className="mb-2 text-[13px] font-medium">Creates from the New menu</div>
+              <div className="flex flex-wrap gap-1.5">
+                {creates.map((c) => (
+                  <span key={c} className="rounded-md bg-secondary px-2 py-1 text-[12px] text-secondary-foreground">
+                    {c}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       ) : (
         <div className="grid place-items-center py-20 text-center">
           <div className="text-[15px] font-semibold">{manifest.name} is ready</div>

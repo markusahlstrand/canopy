@@ -44,6 +44,19 @@ set of paths. Storage stays flat; the tree is computed. You can also create an *
 — it's recorded explicitly (a row in `folders`) so it shows up before it has any files, and is
 merged into the derived tree.
 
+## Full-text search
+
+Every managed file is mirrored into a **full-text index** — an FTS5 virtual table (`search_index`)
+behind the core `SearchIndex` interface, backed by libsql on Node and D1 on Cloudflare. The index
+is **kept in sync on change**: creating, editing, moving, or trashing a file reindexes (or drops)
+it, folding the file name, extracted body text, and metadata (description, AI labels, tags) into
+one searchable document. A boot-time backfill (`reindexAll`) covers anything created before the
+index existed.
+
+Queries go through the host's `GET /api/search`, **scoped to the caller's spaces** — you never see
+hits for items you can't read. The portal's ⌘K command palette is the first consumer. See
+[What belongs in the core → search](what-belongs-in-the-core) for the core/adapter/plugin layering.
+
 ## Uploading (content-addressed, de-duplicated)
 
 ```

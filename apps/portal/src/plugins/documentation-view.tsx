@@ -71,7 +71,7 @@ function pluginLabel(name: string): string {
 }
 // Plugin pages, grouped and ordered to match the "Built-in plugins" overview.
 const PLUGIN_GROUPS: { label: string; slugs: string[] }[] = [
-  { label: "Apps", slugs: ["plugin-calendar", "plugin-tasks", "plugin-github", "plugin-document-ai", "plugin-documentation"] },
+  { label: "Apps", slugs: ["plugin-calendar", "plugin-tasks", "plugin-github", "plugin-synology", "plugin-document-ai", "plugin-documentation"] },
   {
     label: "File viewers & editors",
     slugs: ["plugin-image-viewer", "plugin-pdf-viewer", "plugin-markdown-editor", "plugin-univer-office", "plugin-code-editor"],

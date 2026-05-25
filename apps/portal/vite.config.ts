@@ -11,6 +11,9 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
+      // We register the worker ourselves in main.tsx (via virtual:pwa-register)
+      // so we can poll for updates; don't also inject the default register script.
+      injectRegister: false,
       manifest: {
         name: 'Canopy',
         short_name: 'Canopy',

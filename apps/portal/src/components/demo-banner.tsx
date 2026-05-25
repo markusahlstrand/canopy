@@ -1,11 +1,12 @@
 import type { Me } from "@/lib/api";
 
 /**
- * Thin banner shown when auth is configured but no one is signed in — i.e. the
- * public demo. Hidden once logged in (and when auth isn't configured at all).
+ * Thin banner shown whenever no one is signed in — i.e. the public demo. Hidden
+ * once logged in. Shows regardless of whether the backend has auth configured, so
+ * a logged-out visitor always gets the login affordance instead of a fake persona.
  */
 export function DemoBanner({ auth, onSignIn }: { auth: Me; onSignIn: () => void }) {
-  if (!auth.authConfigured || auth.user) return null;
+  if (auth.user) return null;
   return (
     <div className="flex shrink-0 items-center justify-center gap-1.5 border-b bg-primary/10 px-4 py-1.5 text-center text-[13px] text-foreground">
       <span>You're viewing a demo.</span>

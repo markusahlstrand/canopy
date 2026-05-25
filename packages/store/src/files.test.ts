@@ -247,6 +247,32 @@ describe("FileService over libsql", () => {
     expect(await svc.listVersions({ sub: USER }, f.id)).toHaveLength(2);
   });
 
+  it("a file-share editor saves a new version via the file-scoped upload (blob lands in the file's space)", async () => {
+    // USER owns a file in their own space and shares it (file grant only) with bob,
+    // who has NO membership or folder grant on that space.
+    const f = await upload("shared-note.md", "v1");
+    await svc.shareGrant({ sub: USER }, f.id, { subjectType: "user", subjectId: "bob", role: "editor" });
+
+    // bob can't stage via the space-scoped flow — he holds no space/folder role.
+    // That gap is exactly why blobs used to land in the wrong space and addVersion 409'd.
+    const v2 = enc("v2 by bob");
+    const h2 = await sha256hex(v2);
+    await expect(svc.prepareUpload(space, "bob", h2)).rejects.toBeInstanceOf(PermissionError);
+
+    // The file-scoped flow gates on editor of the file and keys the blob to the
+    // file's own space, so addVersion finds it.
+    const prep = await svc.prepareFileUpload({ sub: "bob" }, f.id, h2);
+    if (!prep.exists) await svc.commitFileUpload({ sub: "bob" }, f.id, h2, v2);
+    const updated = await svc.addVersion({ sub: "bob" }, f.id, { hash: h2, mime: "text/plain", coalesce: false });
+
+    expect(updated.currentVersionId).not.toBe(f.currentVersionId);
+    expect(await new Response(await store.store.get(updated.version!.blobKey!)).text()).toBe("v2 by bob");
+
+    // A viewer (read-only) can't stage a version.
+    await svc.shareGrant({ sub: USER }, f.id, { subjectType: "user", subjectId: "carol", role: "viewer" });
+    await expect(svc.prepareFileUpload({ sub: "carol" }, f.id, h2)).rejects.toBeInstanceOf(PermissionError);
+  });
+
   it("a folder-grant editor (no space membership) can upload via the blob flow", async () => {
     const fam = await svc.createSpace({ sub: USER }, "Family");
     await svc.createFolder(fam.id, USER, "Shared");
@@ -284,6 +310,46 @@ describe("FileService over libsql", () => {
     await svc.purgeFile({ sub: USER }, b.id); // ref 1 → 0, blob gone
     expect(store.map.has(key)).toBe(false);
     expect(await db.first("SELECT 1 FROM blobs WHERE hash = ?", [key])).toBeNull();
+  });
+
+  it("deleteSpace removes the space and everything scoped to it, releasing blobs", async () => {
+    const fam = await svc.createSpace({ sub: USER }, "Family");
+    await addMember(db, fam.id, "bob", "editor");
+    await svc.createFolder(fam.id, USER, "Shared");
+    await svc.applySpacePlugin({ sub: USER }, fam.id, "notes");
+    await svc.createSpaceInvite({ sub: USER }, fam.id, "viewer");
+
+    // A file that lives only in this space — its blob has a single ref.
+    const bytes = enc("only in the family space");
+    const hash = await sha256hex(bytes);
+    await svc.prepareUpload(fam.id, USER, hash);
+    await svc.commitUpload(fam.id, USER, hash, bytes);
+    const f = await svc.createFile(fam.id, USER, { name: "doc.md", hash, mime: "text/plain" });
+    const key = f.version!.blobKey!;
+    expect(store.map.has(key)).toBe(true);
+
+    // A non-owner can't delete it.
+    await expect(svc.deleteSpace({ sub: "bob" }, fam.id)).rejects.toBeInstanceOf(PermissionError);
+    // Neither can anyone delete a personal ("My Drive") space.
+    await expect(svc.deleteSpace({ sub: USER }, space)).rejects.toBeInstanceOf(PermissionError);
+
+    await svc.deleteSpace({ sub: USER }, fam.id);
+
+    // The space, its file, and the sole blob ref are gone.
+    expect(await db.first("SELECT 1 FROM spaces WHERE id = ?", [fam.id])).toBeNull();
+    expect(await db.first("SELECT 1 FROM files WHERE id = ?", [f.id])).toBeNull();
+    expect(store.map.has(key)).toBe(false);
+    expect(await db.first("SELECT 1 FROM blobs WHERE hash = ?", [key])).toBeNull();
+
+    // And so is everything scoped to it: members/grants, folders, plugins, invites.
+    const count = async (sql: string) => (await db.first<{ n: number }>(`SELECT COUNT(*) AS n FROM ${sql}`, [fam.id]))?.n;
+    expect(await count("relation_tuples WHERE object_type = 'space' AND object_id = ?")).toBe(0);
+    expect(await count("folders WHERE space_id = ?")).toBe(0);
+    expect(await count("space_plugins WHERE space_id = ?")).toBe(0);
+    expect(await count("space_invites WHERE space_id = ?")).toBe(0);
+
+    // It no longer shows up for its members.
+    expect((await svc.spaces(USER)).some((s) => s.id === fam.id)).toBe(false);
   });
 
   it("delete moves a file to Trash without destroying content; restore brings it back", async () => {

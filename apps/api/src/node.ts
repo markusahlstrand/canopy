@@ -11,6 +11,7 @@ import { AI_PROVIDER_FIELDS, providersFromUserConfig } from "./ai/user-config";
 import {
   FileService,
   createSqlCacheStore,
+  createSqlSearchIndex,
   createSqlBlobRepo,
   ensurePersonalSpace,
   resolveInvites,
@@ -20,13 +21,14 @@ import {
 import { createFsBlobStore, createLibsqlDb } from "@canopy/store/node";
 import { createApp, type DataSourceDeps } from "./app";
 import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
-import { parseRepo } from "./data-sources";
+import { parseRepo, synologyConnectorFor } from "./data-sources";
 import { readAuthConfig } from "./auth/config";
 import { createAuthApp } from "./auth/routes";
 
-// Load local secrets from apps/api/.dev.vars if present (Node 20.12+).
+// Load local secrets from the repo-root .dev.vars if present (Node 20.12+) —
+// the same file `wrangler dev` reads, alongside wrangler.jsonc.
 try {
-  process.loadEnvFile(resolve(process.cwd(), ".dev.vars"));
+  process.loadEnvFile(resolve(process.cwd(), "../../.dev.vars"));
 } catch {
   // no .dev.vars — fall back to the ambient environment
 }
@@ -60,9 +62,16 @@ const githubCfg = ghRepo ? { owner: ghOwner!, repo: ghName!, branch: ghBranch, t
 const db = createLibsqlDb(`file:${dbPath}`);
 await runMigrations(db);
 const blobs = createFsBlobStore(blobsRoot);
+const search = createSqlSearchIndex(db);
 const service = new FileService(db, blobs, createSqlBlobRepo(db), {
   globalDedup: process.env.CANOPY_GLOBAL_DEDUP === "1",
+  index: search,
 });
+// Backfill the full-text index for any files that predate it (idempotent).
+void service
+  .reindexAll()
+  .then((r) => r.indexed && console.log(`  ↻ search: indexed ${r.indexed} existing file(s)`))
+  .catch((err) => console.warn(`  ⚠ search backfill failed: ${(err as Error).message}`));
 
 const authConfig = readAuthConfig();
 if (authConfig && !authConfig.sessionSecret) {
@@ -97,8 +106,10 @@ const dataSources: DataSourceDeps = {
   // Encrypts stored secrets (provider keys, tokens) at rest. Falls back to a bare
   // SESSION_SECRET so the UI can save keys in dev even with auth/OIDC switched off.
   secret: authConfig?.sessionSecret ?? process.env.SESSION_SECRET,
-  // Browse a configured GitHub repo's files live as a read-only space.
+  // Browse a connected backend live as a space: a GitHub repo, or a Synology NAS
+  // over FileStation (direct or via QuickConnect).
   connectorFor: (pluginId, config) => {
+    if (pluginId === "synology") return synologyConnectorFor(config);
     if (pluginId !== "github") return null;
     const p = parseRepo(config.repo ?? "");
     return p
@@ -140,6 +151,8 @@ const app = createApp({
   readonlyMounts: { documentation, demo },
   drive: { service, blobs },
   dataSources,
+  // libsql FTS5 search index (same SQL adapter as D1 on the edge).
+  search,
   processors: processorsOf(SERVER_PLUGINS),
   ai,
   // Let users add their own Gemini / OpenAI-compatible keys in Settings → AI models.

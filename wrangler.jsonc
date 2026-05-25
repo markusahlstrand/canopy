@@ -1,0 +1,72 @@
+// Canopy's single Cloudflare Worker — the canonical, committed config.
+//
+// Deploy it three ways, all from the repo root:
+//   • One click: the "Deploy to Cloudflare" button in README.md
+//   • From your machine: `pnpm deploy` (builds the portal, then `wrangler deploy`)
+//   • Local edge dev: `pnpm cf:dev`
+//
+// Resource IDs are intentionally OMITTED: Cloudflare auto-provisions the R2
+// bucket, D1 database, and Workers AI on first deploy (resource provisioning),
+// so a fork deploys with zero setup. Wrangler writes the new IDs back into your
+// LOCAL copy of this file on deploy — don't commit them; the committed config
+// stays ID-less so the button keeps working for the next person.
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "canopy",
+	// Worker entry lives in apps/api; the whole repo is the build context so the
+	// @canopy/* workspace packages resolve (they export ./src directly).
+	"main": "apps/api/src/worker.ts",
+	"compatibility_date": "2026-05-01",
+	// Serve the built SPA from Static Assets; run the Worker first only for the API.
+	"assets": {
+		"directory": "apps/portal/dist",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": [
+			"/api/*",
+			"/dav/*"
+		]
+	},
+	// Content-addressed blobs. Provisioned as "canopy-canopy-drive" on first deploy.
+	"r2_buckets": [
+		{
+			"binding": "BUCKET",
+			"bucket_name": "canopy-drive"
+		}
+	],
+	// File/version/blob/permission metadata. The schema is applied by the
+	// migration runner on first request, so a freshly provisioned (empty) D1 is
+	// ready with no manual step.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "canopy"
+		}
+	],
+	// Workers AI: the host AI gateway. With this bound, the deployment exposes its
+	// models (e.g. @cf/google/gemma-4-26b-a4b-it) to plugins with no per-user key —
+	// Document AI labels uploads out of the box. Edit the exposed list in src/ai/cloudflare.ts.
+	"ai": {
+		"binding": "AI"
+	},
+	// Non-secret config. A fresh deploy runs as the anonymous demo: docs + a demo
+	// drive are read live from the GitHub repo below (no R2 needed for them).
+	//
+	// To enable login, add the OIDC vars and set the secrets — see .dev.vars.example:
+	//   vars:    OIDC_ISSUER, OIDC_CLIENT_ID, (OIDC_AUDIENCE, APP_BASE_URL)
+	//   secrets: OIDC_CLIENT_SECRET (confidential client), SESSION_SECRET (cookie + at-rest key)
+	// via `wrangler secret put NAME`. The redirect URI defaults to your deployed
+	// origin; register <your-url>/api/auth/callback on the OIDC client.
+	"vars": {
+		"GITHUB_REPO": "markusahlstrand/canopy",
+		"GITHUB_BRANCH": "main"
+	},
+	// Daily version-retention sweep: thins old snapshots to the retention curve (#11).
+	"triggers": {
+		"crons": [
+			"0 2 * * *"
+		]
+	},
+	"observability": {
+		"enabled": true
+	}
+}

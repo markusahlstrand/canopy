@@ -335,6 +335,32 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    // Full-text search index (#17). An FTS5 virtual table that backs the SQL
+    // `SearchIndex` adapter — the same backend runs on libsql (Node) and D1
+    // (Cloudflare), exactly like `kv_cache`. It's a *derived* index, never the
+    // source of truth: trusted connectors/processors feed it (upsert/delete by
+    // item id) and plugins query it through a scoped grant. ACL is enforced at
+    // query time on `space_id` — every query is constrained to the caller's
+    // readable spaces — so the facets (space_id, kind, …) are stored UNINDEXED
+    // alongside the indexed `title`/`text`. unicode61 + diacritic folding so
+    // "resume" matches "résumé".
+    version: 16,
+    statements: [
+      `CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
+         id           UNINDEXED,
+         space_id     UNINDEXED,
+         kind         UNINDEXED,
+         path         UNINDEXED,
+         connector_id UNINDEXED,
+         modified_at  UNINDEXED,
+         metadata     UNINDEXED,
+         title,
+         text,
+         tokenize = 'unicode61 remove_diacritics 2'
+       )`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

@@ -25,7 +25,7 @@ import {
   type Comment,
   type FileVersion,
 } from "@/lib/api";
-import { FILE_KIND_COLOR, STORAGE, CURRENT_USER, type FileItem, type ProcessingEntry } from "@/lib/mock-data";
+import { FILE_KIND_COLOR, STORAGE, type FileItem, type ProcessingEntry } from "@/lib/mock-data";
 
 function Detail({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -272,6 +272,7 @@ function TagEditor({ fileId, initial, onSaved }: { fileId: string; initial: stri
 function Comments({ fileId }: { fileId: string }) {
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [me, setMe] = useState<string | null>(null);
+  const [myName, setMyName] = useState("You");
   const [demo, setDemo] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -284,6 +285,7 @@ function Comments({ fileId }: { fileId: string }) {
         if (!active) return;
         setComments(list);
         setMe(meRes.user?.sub ?? null);
+        setMyName(meRes.user?.name ?? meRes.user?.email ?? "You");
         setDemo(!meRes.authConfigured);
       })
       .catch(() => active && setComments([]));
@@ -355,7 +357,7 @@ function Comments({ fileId }: { fileId: string }) {
           ))
         )}
         <div className="flex items-center gap-2.5">
-          <PersonAvatar name={CURRENT_USER.name} size="md" />
+          <PersonAvatar name={myName} size="md" />
           <Input
             placeholder="Add a comment…"
             value={draft}
@@ -433,7 +435,6 @@ export function FilePreview({
   onToggleMode,
   onClose,
   onSaved,
-  space,
   installedPluginIds,
 }: {
   file: FileItem | null;
@@ -442,8 +443,6 @@ export function FilePreview({
   onToggleMode: () => void;
   onClose: () => void;
   onSaved?: () => void;
-  /** The space the file lives in (so a saved version's blob lands there). */
-  space?: string;
   /** Plugins active for this user — gates store-listed viewers (e.g. code-editor). */
   installedPluginIds?: string[];
 }) {
@@ -477,7 +476,7 @@ export function FilePreview({
       key={`${file.id}:${contentNonce}`}
       file={{ source: viewer.source, name: file.name, url: contentUrl(file.id) }}
       onSaved={onSaved}
-      onSaveContent={editable ? (text) => saveFileVersion(file.id, text, undefined, space) : undefined}
+      onSaveContent={editable ? (text) => saveFileVersion(file.id, text) : undefined}
     />
   ) : (
     <div
@@ -501,7 +500,7 @@ export function FilePreview({
         <Detail label="Modified">
           <span className="font-mono">{file.modified}</span>
         </Detail>
-        <Detail label="Owner">{file.owner ?? CURRENT_USER.name}</Detail>
+        <Detail label="Owner">{file.owner ?? "Unknown"}</Detail>
         <Detail label="Shared with">
           {file.sharedWith?.length ? <AvatarGroup people={file.sharedWith} /> : "Only you"}
         </Detail>

@@ -11,6 +11,7 @@ import {
   type CacheStore,
   type ConnectorConfigField,
   type DocumentProcessor,
+  type SearchIndex,
   type ServerDataSource,
   type StorageConnector,
 } from "@canopy/core";
@@ -167,6 +168,13 @@ export interface AppDeps {
     fields: ConnectorConfigField[];
     build: (config: Record<string, string>) => AiProvider[];
   };
+  /**
+   * The deployment's search index — the SQL FTS adapter on both targets (libsql
+   * on Node, D1 on Cloudflare), chosen here the same way the cache backend is.
+   * A reserved slot: the feed (#20) and the scoped `index:query` grant (#21) wire
+   * into it; nothing consumes it yet.
+   */
+  search?: SearchIndex;
   /** Keep background work (e.g. labeling) alive after the response — `ctx.waitUntil` on a Worker. */
   waitUntil?: (p: Promise<unknown>) => void;
 }
@@ -432,6 +440,17 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
+  // Full-text search across the files the caller can read. The drive service
+  // resolves the caller's readable spaces into the ACL scope (the query never
+  // carries space ids), then queries the index. Empty `q` → empty result.
+  app.get("/api/search", driveRoute(async (c, caller) => {
+    const q = (c.req.query("q") ?? "").trim();
+    if (!q) return c.json({ items: [] });
+    const limit = Number(c.req.query("limit")) || undefined;
+    const cursor = c.req.query("cursor") || undefined;
+    return c.json(await drive!.service.search(caller.sub, { text: q, limit, cursor }));
+  }));
+
   // Spaces the caller can see (for the space switcher). Real drive spaces, plus a
   // read-only "connected" space for each source plugin the caller has a connector
   // configured for (e.g. their GitHub repo) — derived from the plugin's settings,
@@ -469,6 +488,12 @@ export function createApp(deps: AppDeps) {
     const trimmed = name?.trim();
     if (!trimmed) return c.json({ error: "name required" }, 400);
     return c.json(await drive!.service.renameSpace(caller, c.req.param("id")!, trimmed));
+  }));
+
+  // Permanently delete a group space and everything in it. Owner only.
+  app.delete("/api/spaces/:id", driveRoute(async (c, caller) => {
+    await drive!.service.deleteSpace(caller, c.req.param("id")!);
+    return c.json({ ok: true });
   }));
 
   app.get("/api/spaces/:id/members", driveRoute(async (c, caller) =>
@@ -623,6 +648,25 @@ export function createApp(deps: AppDeps) {
   app.patch("/api/files/:id/metadata", driveRoute(async (c, caller) => {
     const patch = await c.req.json<Record<string, unknown>>();
     return c.json(await drive!.service.patchMetadata(caller, c.req.param("id")!, patch));
+  }));
+
+  // Stage a blob for a *specific file's* next version, keyed to the file's own
+  // space and gated by editor on the file. Unlike /api/uploads/* (which keys by
+  // ?space=), this can't land the blob in the wrong space, so the version POST
+  // below always finds it — including for files shared from another space.
+  app.post("/api/files/:id/uploads/prepare", driveRoute(async (c, caller) => {
+    const { hash } = await c.req.json<{ hash: string; size?: number }>();
+    if (!hash) return c.json({ error: "hash required" }, 400);
+    const id = c.req.param("id")!;
+    const res = await drive!.service.prepareFileUpload(caller, id, hash);
+    return c.json(res.exists ? { exists: true } : { exists: false, upload: { method: "PUT", url: `/api/files/${id}/uploads/${hash}` } });
+  }));
+
+  // Stream bytes for a file-scoped blob; the token is the claimed hash, re-verified.
+  app.put("/api/files/:id/uploads/:hash", driveRoute(async (c, caller) => {
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    const res = await drive!.service.commitFileUpload(caller, c.req.param("id")!, c.req.param("hash")!, bytes);
+    return c.json({ hash: res.hash, size: res.size }, 201);
   }));
 
   // New content version — never alters metadata. Dedup applies to its blob.

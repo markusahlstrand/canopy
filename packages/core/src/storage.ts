@@ -44,6 +44,12 @@ export interface StorageConnector {
   read(path: string): Promise<ReadableStream<Uint8Array>>;
   write(path: string, body: ReadableStream<Uint8Array> | Uint8Array): Promise<StorageEntry>;
   remove(path: string): Promise<void>;
+  /**
+   * Optional: create an (empty) folder. Connectors with a real directory concept
+   * (a NAS, a filesystem) implement it; flat key stores (R2) omit it — folders
+   * there exist only implicitly as key prefixes.
+   */
+  mkdir?(path: string): Promise<void>;
   /** Optional: presigned URL for direct client transfer. */
   signedUrl?(path: string, op: "get" | "put", expiresInSeconds?: number): Promise<string>;
   /**

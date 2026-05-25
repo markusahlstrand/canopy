@@ -103,7 +103,10 @@ management) · **Cryptomator** (client-side encryption you can layer on any of t
 - **No native mobile or desktop sync** — responsive web and a WebDAV mount only; no Dropbox-style
   block-level delta sync.
 - **No real-time office editing** — collaborative Markdown is designed, not built.
-- **Search isn't built** — the index model is designed; full-text / vector search is planned.
+- **Search works, with edges pending** — the core `SearchIndex` interface and a full-text
+  (SQLite/D1 FTS) adapter are built; files are reindexed on change and searchable from a ⌘K
+  command palette via `GET /api/search`. Still in progress: the connected-space `changes()` feed
+  and the plugin-facing `queryIndex` grant. Vector / semantic search is still planned.
 - **Small ecosystem** — a handful of first-party plugins vs Nextcloud's hundreds.
 - **No end-to-end encryption** — it encrypts *secrets* at rest, not file contents E2E.
 - **Not a NAS** — no disk management, RAID, snapshots, or backup orchestration.

@@ -1,5 +1,6 @@
-import type { ServerDataSource } from "@canopy/core";
+import type { ServerDataSource, StorageConnector } from "@canopy/core";
 import { createGithubCalendarProvider, createGithubTaskProvider } from "@canopy/connector-github";
+import { synologyConnectorPlugin } from "@canopy/connector-synology";
 
 // The GitHub data source — the `data-source` role (typed records into Tasks /
 // Calendar) of the first-party GitHub plugin. Its contract (`ServerDataSource`)
@@ -50,3 +51,27 @@ export const githubDataSource: ServerDataSource = {
     };
   },
 };
+
+// The Synology plugin's only role is the storage connector (see connectorFor in
+// node.ts / worker.ts). Registering it as a "data source" with no tasks/calendar
+// is just how a connector-only plugin gets a settings form (its config schema)
+// and a connected space today — the same machinery GitHub uses. The config
+// schema is the connector's own, so the two never drift.
+export const synologyDataSource: ServerDataSource = {
+  id: "synology",
+  configFields: synologyConnectorPlugin.configFields,
+  build: () => ({}),
+};
+
+/**
+ * Build a Synology {@link StorageConnector} from a resolved config, or null when
+ * the config is incomplete (no address / credentials) — so an un-set-up plugin
+ * simply has no connected space rather than erroring.
+ */
+export function synologyConnectorFor(config: Record<string, string>): StorageConnector | null {
+  try {
+    return synologyConnectorPlugin.create("connector:synology", config);
+  } catch {
+    return null;
+  }
+}

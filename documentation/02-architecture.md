@@ -92,6 +92,44 @@ data-source endpoints `GET /api/tasks`, `GET /api/calendar`, `GET /api/integrati
 AI through the host **AI gateway** — a swappable provider abstraction over Workers AI, Gemini, or
 a local model). See [How plugins work](how-plugins-work) for the contract behind these.
 
+## Offline & reachability
+
+The portal is a PWA, and it stays useful — **read-only** — when the API can't be reached. Two
+pieces make that work: a reachability signal and an IndexedDB cache of what you've already seen.
+
+**Reachability, not just `navigator.onLine`.** Every API call goes through one `apiFetch` wrapper
+that marks the backend *reachable* on any HTTP response and *unreachable* when the request throws
+(DNS failure, connection refused, a stopped dev server). `navigator.onLine` only knows the network
+interface is up — commonly true while the API is down — so the UI trusts the wrapper instead:
+"online" means **`navigator.onLine` && backend reachable**. The moment a call fails, an offline
+banner appears and writes are gated; the next successful call clears it. There's no background
+ping — recovery rides on the next real request (a navigation or window refocus).
+
+This also closes a subtle auth trap. `/api/auth/me` returning `authConfigured:false` means *auth is
+switched off* (demo mode) — a very different thing from *the server is unreachable*. The client
+keeps them apart: a network failure never collapses into demo mode; it falls back to the last-known
+signed-in identity (flagged offline), so reloading while offline doesn't appear to sign you out.
+
+**The offline cache (IndexedDB).** As you browse online, the client writes through to IndexedDB:
+
+- **Listings** — the file rows of every folder/view you open, keyed by space + path, so Starred,
+  Recent, and browsed folders still populate offline.
+- **Content bytes** — the bytes of files you **open** (your *recent* set) and of **starred** files
+  (warmed proactively as their listings load), so their viewers render offline. Per-file
+  size-capped and LRU-evicted.
+- **Last-known identity** — so the account UI shows the real you offline, not a signed-out state.
+
+Reads fall back to the cache only when the network throws; a live response always wins and refreshes
+it. The cache is **best-effort** — a blocked, full, or absent IndexedDB just means "no offline copy",
+never an error. Writes (upload, create, rename, share) are disabled while offline; the app is
+strictly view-only until the backend returns.
+
+**App shell + service worker.** A Workbox service worker (via `vite-plugin-pwa`) precaches the built
+SPA and serves it for navigations, and runtime-caches `GET /api/file(s)` so already-fetched
+listings/contents survive a reload. The SW ships only in the **production build** — dev runs plain
+Vite with no SW, so in development the IndexedDB layer is what provides offline. The read-only
+mounts and the public share landing are excluded from the SPA navigation fallback.
+
 ## Deployment
 
 - **Node / Docker:** `apps/api/src/node.ts` serves the Hono app via `@hono/node-server` (the portal
@@ -114,9 +152,12 @@ resolves it with **two kinds of version**:
   connector's `changes()` feed where available, else a periodic crawl. The crawl is a long-running
   job — a **Cloudflare Workflow** on the edge, an in-process runner on Node.
 
-Vector and full-text search layer on top of the index later — as a core `SearchIndex` interface
-with swappable adapters, fed in-process and queried by plugins, not as a monolithic plugin. See
-[What belongs in the core → search](what-belongs-in-the-core).
+Full-text search is a core `SearchIndex` interface with swappable adapters — a SQLite/D1 **FTS5**
+adapter is built (Vectorize / semantic search is a later one), fed in-process and queried by
+plugins, not a monolithic plugin. The index is fed on every managed-drive change and queried
+through the host's ACL-scoped `GET /api/search`, surfaced in a **⌘K command palette**; still being
+wired are the connected-space `changes()` feed and the scoped `queryIndex` grant that lets
+sandboxed plugins query. See [What belongs in the core → search](what-belongs-in-the-core).
 
 ## Real-time editing (planned)
 

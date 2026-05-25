@@ -171,6 +171,15 @@ export default async function render(ctx) {
     statusEl.style.color = c || "#6b7280";
   };
 
+  // Save is only actionable when there are unsaved changes. Disable it until the
+  // file goes dirty, and grey it out so the state reads clearly.
+  const setSaveEnabled = (on) => {
+    saveBtn.disabled = !on;
+    saveBtn.style.opacity = on ? "1" : "0.5";
+    saveBtn.style.cursor = on ? "pointer" : "default";
+  };
+  setSaveEnabled(false);
+
   // Slides are read-only (no open-source slide editor exists yet) — render an
   // outline and bail out before any of the editor/save plumbing.
   if (info.kind === "slide") {
@@ -221,6 +230,7 @@ export default async function render(ctx) {
     if (!dirty) {
       dirty = true;
       setStatus("Unsaved changes", "#b45309");
+      setSaveEnabled(true);
     }
   };
 
@@ -297,8 +307,8 @@ export default async function render(ctx) {
   }
 
   function doSave() {
-    if (!file.writable) return;
-    saveBtn.disabled = true;
+    if (!file.writable || !dirty) return;
+    setSaveEnabled(false);
     setStatus("Saving…");
     ctx.emit("save", { content: getContent() });
   }
@@ -312,11 +322,12 @@ export default async function render(ctx) {
   addEventListener("message", (e) => {
     const m = e.data;
     if (!m || m.type !== "canopy:save-result") return;
-    saveBtn.disabled = false;
     if (m.ok) {
       dirty = false;
+      setSaveEnabled(false); // saved → nothing to save until the next edit
       setStatus("Saved ✓", "#15803d");
     } else {
+      setSaveEnabled(true); // changes are still pending — let the user retry
       setStatus("Save failed: " + (m.error || "unknown error"), "#b91c1c");
     }
   });

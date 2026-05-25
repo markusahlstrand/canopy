@@ -25,9 +25,9 @@ are the adapters, and plugins reach it through the `kv` grant. A "feature" is a 
 slice** through all three layers, not a single box you drop on one side of a line:
 
 ```
-                STORAGE          CACHE            SEARCH*
+                STORAGE          CACHE            SEARCH
   ┌───────────┬───────────────┬───────────────┬──────────────────┐
-  │  CORE     │StorageConnector│  CacheStore   │  SearchIndex*    │  the interface
+  │  CORE     │StorageConnector│  CacheStore   │  SearchIndex     │  the interface
   │ interface │               │               │                  │  (zero deps)
   ├───────────┼───────────────┼───────────────┼──────────────────┤
   │  ADAPTER  │ local · r2 ·  │ sql ·         │ libsql-FTS ·     │  swappable
@@ -68,7 +68,7 @@ In table form:
 | Layer | Owns | You reach for it when… | Examples |
 |---|---|---|---|
 | **Core (guarantee)** | A cross-cutting invariant | every plugin must trust it and it can't be opt-in | ACL & spaces, capability broker, item identity |
-| **Core interface + adapter** | A shared, privileged data plane | every plugin needs it consistent, but the backend should swap per deployment | `StorageConnector`, `CacheStore`, `SearchIndex`* |
+| **Core interface + adapter** | A shared, privileged data plane | every plugin needs it consistent, but the backend should swap per deployment | `StorageConnector`, `CacheStore`, `SearchIndex` |
 | **Plugin** | An opinion or a presentation | it's optional, domain-specific, or removable | Calendar, Tasks, Documentation, viewers, content types* |
 
 <sub>* planned / designed, not yet built.</sub>
@@ -108,22 +108,27 @@ This is what keeps Canopy from drifting into SharePoint territory. The answer to
 platform do X?" is rarely "put X in the core." It's "ship X as a default plugin." That way the
 *product* can be rich while the *core* stays a thin substrate.
 
-## Worked example: search *(planned)*
+## Worked example: search *(built; plugin query grant pending)*
 
-Search is the textbook case of question 2, and the codebase already decided it. The shape is
-**reserved but not built**: the `index:query` capability and the `queryIndex` grant are declared
-in `@canopy/core` (recorded, not yet enforced — see [How plugins work](how-plugins-work)), and
-`StorageConnector` already carries an optional `changes()` feed meant for indexing. Search was
-never meant to be a single monolithic plugin; it was always meant to be a **core-queryable
-index**.
+Search is the textbook case of question 2, and the codebase has now built the bottom two layers.
+The **`SearchIndex` interface is drawn** in `@canopy/core` — a feed side (`upsert`/`delete`) and
+an ACL-scoped query side — and a **SQLite/D1 FTS5 adapter** (`createSqlSearchIndex`) sits behind
+it, selected per deployment in the host exactly like the cache backend. `StorageConnector` already
+carries the optional `changes()` feed meant for indexing. The index is now **fed on every
+managed-drive change** and queried by the host's ACL-scoped `GET /api/search`, surfaced through a
+**⌘K command palette**. What's left is the plugin-facing edges: feeding from *connected* spaces via
+`connector.changes()`, and enforcing the scoped `queryIndex` grant so sandboxed plugins can query
+too. Search was never meant to be a single monolithic plugin; it was always meant to be a
+**core-queryable index**.
 
 So it follows the storage pattern exactly:
 
 - **Core** — a thin `SearchIndex` interface: a feed side (`upsert`/`delete`) and a query side.
-- **Adapter** — the backend swaps per deployment: libsql/SQLite FTS on Node, D1 FTS or
-  Cloudflare Vectorize on the edge, or an external service. **"Platform search that needs a
-  service" is just another adapter** — not a fork in the design, exactly like R2 is just another
-  `StorageConnector`.
+- **Adapter** — the backend swaps per deployment: a single SQLite **FTS5** adapter
+  (`createSqlSearchIndex`) already covers both Node (libsql) *and* the edge (D1) — both are SQLite
+  — while **Cloudflare Vectorize** (semantic) or an external service would be further adapters.
+  **"Platform search that needs a service" is just another adapter** — not a fork in the design,
+  exactly like R2 is just another `StorageConnector`.
 - **Feeding it** — trusted, in-process connectors and processors push documents in on change
   (the same place [Document AI](how-plugins-work) already runs). This is the I/O boundary; it
   isn't sandboxed.
@@ -151,9 +156,13 @@ flowchart TD
 The payoff: "platform search" vs. "plugin search" stops being a decision. It's one index, fed
 and queried through stable contracts, with the backend chosen per deployment.
 
-> **Status:** the `index:query` capability and the `changes()` feed exist as interface slots;
-> the `SearchIndex` service, its adapters, and grant enforcement are **not built**. The slot
-> being reserved is precisely why now is the moment to draw the interface well.
+> **Status:** the `SearchIndex` interface and a SQLite/D1 **FTS5 adapter** are built — wired into
+> the host per deployment, with a shared contract-test suite the backend passes. The index is fed
+> on every managed-drive change, queried by the host's ACL-scoped `GET /api/search`, and surfaced
+> in a ⌘K command palette. Still pending: feeding it from *connected* spaces via
+> `connector.changes()`, and enforcing the scoped `queryIndex` grant so plugins can query (the
+> palette is host UI today, not yet a plugin contribution). **Vectorize / semantic search** remains
+> a later adapter.
 
 ## Worked example: content types *(mostly buildable today)*
 

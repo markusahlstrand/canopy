@@ -16,7 +16,9 @@ specialised for paperwork, not a general drive.
 ## Where Canopy differs
 
 - Canopy is a **general** drive / portal. Its **Document AI** auto-labels and describes uploads — a
-  lighter, more general take than Paperless's OCR + tagging — and full-text search isn't built yet.
+  lighter, more general take than Paperless's OCR + tagging — and full-text search works today
+  (a core search index + FTS adapter, reindexed on change and queried from a ⌘K command palette;
+  semantic search and a plugin-facing query grant are still to come).
 - Edge-native, plugin-extensible, with sharing and spaces; not a dedicated DMS.
 - The directions rhyme: Canopy's content-types + AI labeling head toward some of what Paperless
   does well today.

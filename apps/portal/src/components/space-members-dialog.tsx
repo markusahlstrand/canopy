@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,12 +13,14 @@ import {
   addMember,
   applySpacePlugin,
   createInvite,
+  deleteSpace,
   getSpacePlugins,
   inviteUrl,
   listInvites,
   listMembers,
   removeMember,
   removeSpacePlugin,
+  renameSpace,
   revokeInvite,
   type Member,
   type Role,
@@ -38,6 +41,9 @@ export function SpaceMembersDialog({
   open,
   onOpenChange,
   onPluginsChanged,
+  initialTab = "members",
+  onRenamed,
+  onDeleted,
 }: {
   spaceId: string;
   spaceName: string;
@@ -47,6 +53,12 @@ export function SpaceMembersDialog({
   onOpenChange: (open: boolean) => void;
   /** Called after a plugin is applied/removed, so the host can refresh its active set. */
   onPluginsChanged?: () => void;
+  /** Which tab to open on (e.g. "settings" when launched from the sidebar's settings entry). */
+  initialTab?: "members" | "plugins" | "settings";
+  /** Called after the space is renamed, so the host can refresh its name in the switcher. */
+  onRenamed?: (name: string) => void;
+  /** Called after the space is deleted, so the host can close + navigate away. */
+  onDeleted?: () => void;
 }) {
   const canManage = role === "owner";
   const [members, setMembers] = useState<Member[]>([]);
@@ -55,6 +67,8 @@ export function SpaceMembersDialog({
   const [email, setEmail] = useState("");
   const [memberRole, setMemberRole] = useState<Role>("editor");
   const [linkRole, setLinkRole] = useState<Role>("editor");
+  const [name, setName] = useState(spaceName);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pluginBusy, setPluginBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -130,6 +144,20 @@ export function SpaceMembersDialog({
     }
   }
 
+  // Delete is terminal — don't refresh() afterwards (the space is gone); hand off to
+  // the host to close the dialog and navigate away.
+  async function doDelete() {
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteSpace(spaceId);
+      onDeleted?.();
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-[460px]">
@@ -137,10 +165,11 @@ export function SpaceMembersDialog({
           <DialogTitle className="truncate">{spaceName}</DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="members" className="flex min-h-0 flex-1 flex-col gap-3">
+        <Tabs defaultValue={initialTab} className="flex min-h-0 flex-1 flex-col gap-3">
           <TabsList className="shrink-0 self-start">
             <TabsTrigger value="members">Members</TabsTrigger>
             <TabsTrigger value="plugins">Plugins</TabsTrigger>
+            {canManage && <TabsTrigger value="settings">Settings</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="members" className="flex min-h-0 flex-1 flex-col gap-3">
@@ -255,7 +284,7 @@ export function SpaceMembersDialog({
                 <div key={m.sub || m.email} className="flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5">
                   <PersonAvatar name={m.name ?? m.email ?? m.sub} size="md" />
                   <span className="min-w-0 flex-1 truncate text-[13.5px]">
-                    {m.name ?? m.email ?? m.sub}
+                    {m.email ?? m.name ?? m.sub}
                     {m.pending && <span className="ml-1.5 text-[11px] text-muted-foreground">· invited</span>}
                   </span>
                   <span className="text-[12px] capitalize text-muted-foreground">{m.role}</span>
@@ -323,6 +352,60 @@ export function SpaceMembersDialog({
               )}
             </div>
           </TabsContent>
+
+          {canManage && (
+            <TabsContent value="settings" className="flex min-h-0 flex-1 flex-col gap-4">
+              {error && <p className="shrink-0 text-[12.5px] text-destructive">{error}</p>}
+
+              <form
+                className="flex shrink-0 flex-col gap-1.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const next = name.trim();
+                  if (!next || next === spaceName) return;
+                  void run(async () => {
+                    await renameSpace(spaceId, next);
+                    onRenamed?.(next);
+                  });
+                }}
+              >
+                <label className="text-[12px] font-medium text-muted-foreground">Space name</label>
+                <div className="flex items-center gap-2">
+                  <Input value={name} onChange={(e) => setName(e.target.value)} disabled={busy} />
+                  <Button type="submit" size="sm" disabled={busy || !name.trim() || name.trim() === spaceName}>
+                    Save
+                  </Button>
+                </div>
+              </form>
+
+              {/* Danger zone — deleting is permanent and affects every member. */}
+              <div className="mt-auto flex shrink-0 flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+                <span className="text-[12.5px] font-medium text-destructive">Delete this space</span>
+                <p className="text-[12px] text-muted-foreground">
+                  Permanently removes the space and all of its files for everyone in it. This can’t be undone.
+                </p>
+                {confirmingDelete ? (
+                  <div className="flex items-center gap-2">
+                    <Button variant="destructive" size="sm" disabled={busy} onClick={() => void doDelete()}>
+                      Yes, delete “{spaceName}”
+                    </Button>
+                    <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirmingDelete(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="self-start gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => setConfirmingDelete(true)}
+                  >
+                    <Icon name="trash" size={14} /> Delete space
+                  </Button>
+                )}
+              </div>
+            </TabsContent>
+          )}
         </Tabs>
       </DialogContent>
     </Dialog>

@@ -137,6 +137,9 @@ interface AiGateway {
   AI's `model` field gets its choices — it's a `select` with `optionsFrom: "ai-models"`, which
   the host fills in when it serves the settings form. So the user just picks a model and an
   output **language**; there's no per-plugin API key.
+- The same gateway is reachable from trusted host UI at `POST /api/ai/generate` (the `ai:generate`
+  surface). The **Plugin Studio** uses it to have the model author a new plugin — see
+  [Build a plugin with AI](build-a-plugin-with-ai). Sandboxed plugins don't reach this endpoint.
 
 Because the gateway is an interface, "which model" is a deployment / user choice, not a code
 change — the same swap-the-adapter pattern as storage and the cache.
@@ -199,10 +202,18 @@ type Capability =
   | { kind: "index:query" }
   | { kind: "storage:read"; connectors?: string[] }  // e.g. just the "documentation" mount
   | { kind: "net:fetch"; hosts: string[] }           // outbound only to these hosts
-  | { kind: "kv" };
+  | { kind: "kv" }
+  | { kind: "ai:generate"; models?: string[] };      // inference via the host AI gateway
 ```
 
 The Documentation plugin, for example, declares `{ kind: "storage:read", connectors: ["documentation"] }`.
+
+`ai:generate` lets a plugin run inference through the host AI gateway without ever holding a
+provider key (the host routes by model id; see [the gateway below](#the-host-ai-gateway)). Today
+it's reached only by trusted, first-party host UI — the **Plugin Studio** uses it via
+`POST /api/ai/generate` to author new plugins. The grant for *sandboxed* plugins is reserved but
+not yet wired, so a generated viewer can't call it; it's the manifest a future server-hook sandbox
+will honor.
 
 ### What a plugin receives — `CapabilityGrants`
 
@@ -214,7 +225,7 @@ declared capabilities into a single `grants` object of scoped host functions —
 interface CapabilityGrants {
   fetch?:      (input: string, init?: RequestInit) => Promise<Response>;   // net:fetch — granted hosts only
   getItem?:    (id: string) => Promise<unknown>;                           // item:read
-  queryIndex?: (query: unknown) => Promise<unknown>;                       // index:query
+  queryIndex?: (query: SearchQuery) => Promise<Page<SearchHit>>;           // index:query
   kv?: { get(key: string): Promise<string | null>; put(key: string, value: string): Promise<void> }; // kv
 }
 ```
@@ -227,8 +238,9 @@ whole object differently per adapter: as Worker `env` bindings + `globalOutbound
 
 > **Status:** the `kv` grant and the broker exist today; `fetch` / `getItem` / `queryIndex` are
 > declared and recorded but **not yet enforced**, because the server-hook sandbox that would
-> inject them isn't built yet. Enforcement arrives with the runtime below. (The trusted GitHub
-> data source already uses the same scoped cache directly.)
+> inject them isn't built yet. Enforcement arrives with the runtime below. (The `SearchIndex` that
+> `queryIndex` will query is already built — interface + a SQLite/D1 FTS adapter; and the trusted
+> GitHub data source already uses the same scoped cache directly.)
 
 ## A shared, swappable cache (`CacheStore`)
 

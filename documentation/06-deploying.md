@@ -14,17 +14,14 @@ one origin. There are two targets, and both reuse the same portable Hono app (`a
 
 ## Cloudflare (single Worker + Static Assets)
 
-The Worker entry is `apps/api/src/worker.ts`; configuration is `apps/api/wrangler.jsonc`. That
-file is **gitignored** because it holds your own D1 `database_id` (which points at your
-Cloudflare account) — copy the tracked template to create it:
-
-```bash
-cp apps/api/wrangler.example.jsonc apps/api/wrangler.jsonc
-```
+The Worker entry is `apps/api/src/worker.ts`; configuration is the committed `wrangler.jsonc`
+at the **repo root**. It's one Worker for the whole monorepo — the root is the build context,
+so the `@canopy/*` workspace packages resolve (they export `./src` directly) and the Worker
+bundles from source with no per-package build step.
 
 The key bits:
 
-- `assets.directory: "../portal/dist"` — the built SPA is uploaded as static assets.
+- `assets.directory: "apps/portal/dist"` — the built SPA is uploaded as static assets.
 - `not_found_handling: "single-page-application"` — unmatched paths fall back to `index.html`.
 - `run_worker_first: ["/api/*", "/dav/*"]` — the Worker handles the API and WebDAV; everything
   else is served straight from the asset store, so the Worker isn't even invoked for static files.
@@ -33,47 +30,40 @@ The key bits:
 - `r2_buckets` — the `BUCKET` binding holds the content-addressed **blobs**. Workers have no
   filesystem, so on Cloudflare the drive is always D1 + R2 (the libsql/fs adapters are Node-only).
 
-### Config: tracked template, gitignored copy
+### Config: committed and ID-less (resource provisioning)
 
-Canopy is open source, so the committed config can't carry one deployment's account-specific
-identifiers. The split mirrors the `.dev.vars` / `.dev.vars.example` convention:
+The committed `wrangler.jsonc` declares its R2/D1/AI bindings **without IDs**. On the first
+`wrangler deploy` (or via the button), Cloudflare **provisions** the bucket and database, binds
+them, and writes the new IDs back into your *local* copy of the file. The committed config stays
+ID-less — that's what lets a fork or the "Deploy to Cloudflare" button stand up its own resources
+with zero setup, and why there's no longer a gitignored template to copy.
 
-| File | Tracked? | Holds |
-| --- | --- | --- |
-| `wrangler.example.jsonc` | ✅ committed | the template — shared, non-secret config with `database_id` left as `REPLACE_WITH_D1_DATABASE_ID` |
-| `wrangler.jsonc` | 🚫 gitignored | your real config — the same file with **your** D1 `database_id` filled in |
+> Keep the provisioned IDs out of commits (`git checkout wrangler.jsonc` after a deploy if you
+> see them appear) so the next deployer still gets clean provisioning. To deploy repeatedly
+> against the *same* database, either leave the IDs in your working copy (just don't commit
+> them) or select the existing `canopy` database when Wrangler prompts.
 
-You make the gitignored copy once with `cp apps/api/wrangler.example.jsonc apps/api/wrangler.jsonc`,
-then paste in the `database_id` that `wrangler d1 create` prints. Wrangler auto-discovers
-`wrangler.jsonc`, so `wrangler dev` / `wrangler deploy` / `pnpm deploy` just work — no flags.
+### One click: Deploy to Cloudflare
 
-Why not a secret? A D1 `database_id` configures a **binding**, which Wrangler resolves at
-*deploy* time from the config file; secrets (`wrangler secret put`) are *runtime* env vars
-the Worker reads at request time and can't wire up a binding. (The id isn't actually a
-credential — it only identifies the database within your account, which is reachable only with
-your Cloudflare API token — but keeping it out of the repo stops forks from pointing at it.)
+The button in the repo `README` (`https://deploy.workers.cloudflare.com/?url=<repo>`) forks the
+repo into your GitHub account and deploys it via Workers Builds, provisioning R2/D1/AI. When
+prompted, set **Build command** to `pnpm install && pnpm --filter @canopy/portal build` and
+**Deploy command** to `npx wrangler deploy`. A fresh deploy comes up as the anonymous demo;
+add the OIDC vars + secrets afterwards to enable login.
 
-> **Maintainers:** when you add shared config (a new `var`, binding, or route), update
-> `wrangler.example.jsonc` too — existing clones won't pick it up automatically, since their
-> real `wrangler.jsonc` is gitignored.
-
-### Deploy steps
+### Deploy from your machine
 
 ```bash
-# 1. Create your local config, then the R2 bucket (blobs) and D1 database (metadata)
-cp apps/api/wrangler.example.jsonc apps/api/wrangler.jsonc
-wrangler r2 bucket create canopy-drive
-wrangler d1 create canopy
-#    → paste the printed database_id into d1_databases[0].database_id in wrangler.jsonc
-
-# 2. Set secrets (run from apps/api)
+# 1. (optional) Set secrets to enable login — skip for the anonymous demo:
 wrangler secret put OIDC_CLIENT_SECRET   # only if your OIDC client is confidential
 wrangler secret put SESSION_SECRET       # 32+ random bytes; encrypts the session cookie + stored secrets (AI keys, tokens) at rest
 
-# 3. In apps/api/wrangler.jsonc, set vars.APP_BASE_URL to your deployed URL, and
-#    register <APP_BASE_URL>/api/auth/callback as an allowed callback on the OIDC client.
+# 2. (optional) To enable login, add vars.OIDC_ISSUER / OIDC_CLIENT_ID (and optionally
+#    APP_BASE_URL) to wrangler.jsonc, then register <your-url>/api/auth/callback as an
+#    allowed callback on the OIDC client.
 
-# 4. Build the SPA and deploy the Worker (from the repo root)
+# 3. Build the SPA and deploy the Worker (from the repo root). Wrangler provisions R2/D1/AI
+#    on the first run.
 pnpm deploy
 ```
 
@@ -81,7 +71,7 @@ pnpm deploy
 bundle and bindings without shipping:
 
 ```bash
-cd apps/api && wrangler deploy --dry-run
+wrangler deploy --dry-run   # from the repo root
 ```
 
 ### Notes
@@ -139,7 +129,7 @@ docker run -p 8787:8787 \
 
 The drive's data root — the SQLite DB plus the content-addressed blobs — is the `/data` volume
 (`CANOPY_LOCAL_ROOT`). Auth env vars (see
-`apps/api/.dev.vars.example`) are passed at runtime — secrets are never baked into the image
+`.dev.vars.example`) are passed at runtime — secrets are never baked into the image
 (`.dev.vars` is in `.dockerignore`). The image has a healthcheck on `/api/health`.
 
 ## A note on auth callbacks

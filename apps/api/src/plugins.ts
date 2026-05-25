@@ -1,5 +1,6 @@
 import type { DocumentProcessor, ServerDataSource, ServerPlugin } from "@canopy/core";
-import { githubDataSource } from "./data-sources";
+import { synologyConnectorPlugin } from "@canopy/connector-synology";
+import { githubDataSource, synologyDataSource } from "./data-sources";
 import { documentAiProcessor } from "./processors";
 
 /**
@@ -12,6 +13,7 @@ import { documentAiProcessor } from "./processors";
  */
 export const SERVER_PLUGINS: ServerPlugin[] = [
   { id: "github", dataSource: githubDataSource },
+  { id: "synology", dataSource: synologyDataSource, connectors: [synologyConnectorPlugin] },
   { id: "document-ai", processors: [documentAiProcessor] },
 ];
 

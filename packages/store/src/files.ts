@@ -294,6 +294,83 @@ export interface ProcessingRun {
 }
 
 /**
+ * The slice of a `SearchIndex` the drive feeds and queries. Structural (not the
+ * `@canopy/core` type) so the store stays core-independent — `createSqlSearchIndex`
+ * satisfies it. The drive feeds docs in on every file mutation and queries them
+ * scoped to the caller's readable spaces.
+ */
+export interface DriveSearchIndex {
+  upsert(docs: SearchFeedDoc | SearchFeedDoc[]): Promise<void>;
+  delete(ids: string | string[]): Promise<void>;
+  query(
+    query: { text: string; kinds?: string[]; filter?: Record<string, unknown>; limit?: number; cursor?: string },
+    scope: { spaceIds: string[] },
+  ): Promise<{ items: DriveSearchHit[]; cursor?: string }>;
+}
+export interface SearchFeedDoc {
+  id: string;
+  spaceId: string;
+  title: string;
+  text?: string;
+  kind?: string;
+  path?: string;
+  connectorId?: string;
+  modifiedAt?: string;
+  metadata?: Record<string, unknown>;
+}
+export interface DriveSearchHit {
+  id: string;
+  spaceId: string;
+  score: number;
+  title: string;
+  snippet?: string;
+  kind?: string;
+  path?: string;
+  modifiedAt?: string;
+}
+
+/** Cap on the body bytes we read for indexing — keeps a huge file from blocking a write. */
+const INDEX_MAX_TEXT_BYTES = 512 * 1024;
+
+/** Whether a file's bytes are worth decoding as text to index (markdown, plain text, code, structured). */
+function isTextLike(name: string, mime?: string | null): boolean {
+  if (mime && (mime.startsWith("text/") || /(json|xml|yaml|markdown|javascript|typescript|csv|html|svg)/i.test(mime))) {
+    return true;
+  }
+  return /\.(md|markdown|txt|text|csv|tsv|json|ya?ml|toml|ini|cfg|log|html?|xml|svg|js|jsx|ts|tsx|css|scss|less|py|rb|go|rs|java|kt|c|h|cc|cpp|hpp|sh|bash|sql|php)$/i.test(name);
+}
+
+/** Read up to `cap` bytes of a stream and decode as UTF-8 (lossy) — for indexing only. */
+async function readCappedText(stream: ReadableStream<Uint8Array>, cap: number): Promise<string> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < cap) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.byteLength;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  const buf = new Uint8Array(Math.min(total, cap));
+  let off = 0;
+  for (const c of chunks) {
+    if (off >= buf.byteLength) break;
+    const take = Math.min(c.byteLength, buf.byteLength - off);
+    buf.set(c.subarray(0, take), off);
+    off += take;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(buf);
+}
+
+const asStrings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/**
  * File/version operations over a {@link Db} + {@link BlobStore}, with access
  * enforced by relation tuples (see authz.ts). A file lives in a **space**
  * (stored in `tenant_id`); blobs are content-addressed within their space.
@@ -303,7 +380,7 @@ export class FileService {
     private readonly db: Db,
     private readonly store: BlobStore,
     private readonly repo: BlobRepo,
-    private readonly opts: { globalDedup?: boolean; versionCoalesceWindowMs?: number } = {},
+    private readonly opts: { globalDedup?: boolean; versionCoalesceWindowMs?: number; index?: DriveSearchIndex } = {},
   ) {}
 
   keyFor(spaceId: string, hash: string): string {
@@ -343,6 +420,57 @@ export class FileService {
     const updated = await renameSpace(this.db, spaceId, name);
     if (!updated) throw new NotFoundError("space not found");
     return updated;
+  }
+
+  /**
+   * Permanently delete a group space and everything scoped to it: all files (with
+   * their versions, comments, and per-file grants — releasing each blob ref like
+   * {@link purgeFile}), explicit folders, share links, applied plugins, invite
+   * links, every member's mount preference, and the space's own access tuples.
+   * Irreversible. Requires owner. A personal ("My Drive") space can't be deleted.
+   */
+  async deleteSpace(caller: Caller, spaceId: string): Promise<void> {
+    await this.requireSpace(caller.sub, spaceId, "owner");
+    const space = await getSpace(this.db, spaceId);
+    if (!space) throw new NotFoundError("space not found");
+    if (space.kind === "personal") throw new PermissionError("a personal space can't be deleted");
+
+    // Files (incl. trashed) live in tenant_id = spaceId; gather their blob refs to
+    // release after the rows are gone.
+    const files = await this.db.all<{ id: string }>("SELECT id FROM files WHERE tenant_id = ?", [spaceId]);
+    const fileIds = files.map((f) => f.id);
+    const blobHashes: string[] = [];
+    if (fileIds.length) {
+      const ph = fileIds.map(() => "?").join(",");
+      const versions = await this.db.all<{ blob_hash: string | null }>(
+        `SELECT blob_hash FROM file_versions WHERE file_id IN (${ph}) AND blob_hash IS NOT NULL`,
+        fileIds,
+      );
+      for (const v of versions) if (v.blob_hash) blobHashes.push(v.blob_hash);
+    }
+
+    const stmts: { sql: string; params: unknown[] }[] = [];
+    if (fileIds.length) {
+      const ph = fileIds.map(() => "?").join(",");
+      stmts.push(
+        { sql: `DELETE FROM file_versions WHERE file_id IN (${ph})`, params: fileIds },
+        { sql: `DELETE FROM file_comments WHERE file_id IN (${ph})`, params: fileIds },
+        { sql: `DELETE FROM relation_tuples WHERE object_type = 'file' AND object_id IN (${ph})`, params: fileIds },
+        { sql: `DELETE FROM files WHERE id IN (${ph})`, params: fileIds },
+      );
+    }
+    stmts.push(
+      { sql: "DELETE FROM folders WHERE space_id = ?", params: [spaceId] },
+      { sql: "DELETE FROM shares WHERE space_id = ?", params: [spaceId] },
+      { sql: "DELETE FROM space_plugins WHERE space_id = ?", params: [spaceId] },
+      { sql: "DELETE FROM space_invites WHERE space_id = ?", params: [spaceId] },
+      { sql: "DELETE FROM space_prefs WHERE space_id = ?", params: [spaceId] },
+      { sql: "DELETE FROM relation_tuples WHERE object_type = 'space' AND object_id = ?", params: [spaceId] },
+      { sql: "DELETE FROM spaces WHERE id = ?", params: [spaceId] },
+    );
+    await this.db.batch(stmts);
+
+    for (const h of blobHashes) await releaseBlob(this.repo, this.store, h);
   }
 
   /** Members of a space. Requires viewer+ on the space. */
@@ -467,6 +595,24 @@ export class FileService {
     return commitUpload(this.repo, this.store, { key: this.keyFor(spaceId, hash), expectedHash: hash, bytes });
   }
 
+  // ── uploads scoped to an existing file ──────────────────────────────────────
+  // Staging a blob for a file's *next version*. Gated on editor of the file
+  // itself (not space-wide upload rights), so someone holding only a file/folder
+  // share can save — and keyed to the file's own space, so {@link addVersion}
+  // (which looks under `file.tenantId`) is guaranteed to find it. Callers that
+  // upload by space can't know a shared file's space, which is how a blob ends up
+  // in the wrong space and `addVersion` 409s with BlobMissing.
+
+  async prepareFileUpload(caller: Caller, id: string, hash: string): Promise<PrepareResult> {
+    const file = await this.requirePerm(caller, id, "editor");
+    return prepareBlob(this.repo, this.keyFor(file.tenantId, hash));
+  }
+
+  async commitFileUpload(caller: Caller, id: string, hash: string, bytes: Uint8Array) {
+    const file = await this.requirePerm(caller, id, "editor");
+    return commitUpload(this.repo, this.store, { key: this.keyFor(file.tenantId, hash), expectedHash: hash, bytes });
+  }
+
   // ── files ────────────────────────────────────────────────────────────────
 
   async createFile(spaceId: string, userSub: string, input: CreateFileInput): Promise<FileWithVersion> {
@@ -504,6 +650,7 @@ export class FileService {
       },
     ]);
 
+    await this.reindex(fileId);
     return (await this.getFile({ sub: userSub }, fileId))!;
   }
 
@@ -619,6 +766,11 @@ export class FileService {
     if ((await this.pathKind(caller.sub, spaceId, p)) !== "folder") throw new NotFoundError();
     const prefix = `${p}/`;
     const now = new Date().toISOString();
+    const affected = await this.db.all<{ id: string }>(
+      `SELECT id FROM files WHERE tenant_id = ? AND deleted_at IS NULL
+         AND (json_extract(metadata, '$.path') = ? OR json_extract(metadata, '$.path') LIKE ?)`,
+      [spaceId, p, `${prefix}%`],
+    );
     await this.db.run(
       `UPDATE files SET deleted_at = ?, updated_at = ? WHERE tenant_id = ? AND deleted_at IS NULL
          AND (json_extract(metadata, '$.path') = ? OR json_extract(metadata, '$.path') LIKE ?)`,
@@ -630,6 +782,7 @@ export class FileService {
       folderObjectId(spaceId, p),
       `${folderObjectId(spaceId, `${p}/`)}%`,
     ]);
+    await this.deindex(affected.map((r) => r.id));
   }
 
   /**
@@ -671,6 +824,7 @@ export class FileService {
         now,
         file.id,
       ]);
+      await this.reindex(file.id);
       return { created: !destKind };
     }
 
@@ -686,6 +840,7 @@ export class FileService {
     for (const r of rows) {
       const np = to + (r.p ?? "").slice(from.length); // `from` is a prefix of the old path
       await this.db.run("UPDATE files SET metadata = json_set(metadata, '$.path', ?), updated_at = ? WHERE id = ?", [np, now, r.id]);
+      await this.reindex(r.id);
     }
     const folderRows = await this.db.all<{ path: string }>("SELECT path FROM folders WHERE space_id = ? AND (path = ? OR path LIKE ?)", [
       spaceId,
@@ -817,6 +972,7 @@ export class FileService {
         params: [fileId, spaceId],
       },
     ]);
+    await this.reindex(fileId);
   }
 
   // ── app passwords (Basic-auth tokens for WebDAV etc.) ───────────────────────
@@ -1108,6 +1264,7 @@ export class FileService {
       new Date().toISOString(),
       id,
     ]);
+    await this.reindex(id);
     return this.getFile(caller, id);
   }
 
@@ -1153,6 +1310,7 @@ export class FileService {
       // Balance refcounts: drop the superseded content, or — if the same bytes were
       // re-saved — the extra ref the upload step reserved for a row we didn't add.
       if (head.blob_hash) await releaseBlob(this.repo, this.store, head.blob_hash);
+      await this.reindex(id);
       return this.getFile(caller, id);
     }
 
@@ -1165,6 +1323,7 @@ export class FileService {
       },
       { sql: "UPDATE files SET current_version_id = ?, updated_at = ? WHERE id = ?", params: [versionId, now, id] },
     ]);
+    await this.reindex(id);
     return this.getFile(caller, id);
   }
 
@@ -1354,6 +1513,7 @@ export class FileService {
     await this.requirePerm(caller, id, "owner");
     const now = new Date().toISOString();
     await this.db.run("UPDATE files SET deleted_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+    await this.deindex(id);
   }
 
   /** Files in the caller's Trash (deleted but recoverable), across their spaces. Most recently deleted first. */
@@ -1377,6 +1537,7 @@ export class FileService {
       new Date().toISOString(),
       id,
     ]);
+    await this.reindex(id);
   }
 
   /**
@@ -1396,6 +1557,7 @@ export class FileService {
       { sql: "DELETE FROM files WHERE id = ?", params: [id] },
     ]);
     for (const v of versions) if (v.blob_hash) await releaseBlob(this.repo, this.store, v.blob_hash);
+    await this.deindex(id);
   }
 
   // ── sharing (per-file grants) ───────────────────────────────────────────────
@@ -1558,6 +1720,94 @@ export class FileService {
   async connectedPeople(caller: Caller, q?: string): Promise<User[]> {
     const spaceIds = await memberSpaceIds(this.db, caller.sub);
     return connectedUsers(this.db, caller.sub, spaceIds, q);
+  }
+
+  // ── search index (feed on change + ACL-scoped query) ────────────────────────
+  // The index is a *derived* cache: every mutation re-feeds the affected file(s)
+  // and deletions drop them. All feeding is best-effort — a search hiccup must
+  // never fail a file operation — and a no-op when no index is configured.
+
+  /** Re-feed a single file into the index from its current DB state (incl. body text). */
+  private async reindex(fileId: string): Promise<void> {
+    const index = this.opts.index;
+    if (!index) return;
+    try {
+      const file = await this.loadFile(fileId);
+      if (!file) {
+        await index.delete(fileId); // trashed/gone — make sure it's not searchable
+        return;
+      }
+      const version = file.currentVersionId ? await this.loadVersion(file.currentVersionId) : null;
+      let body: string | undefined;
+      if (version?.source === "blob" && version.blobKey && isTextLike(file.name, version.mime)) {
+        const stream = await this.store.get(version.blobKey);
+        if (stream) body = await readCappedText(stream, INDEX_MAX_TEXT_BYTES);
+      }
+      // Fold user-facing metadata (description, AI labels, tags) into the indexed
+      // text so a file is findable by those too, not just its name and body.
+      const meta = [
+        typeof file.metadata.description === "string" ? file.metadata.description : "",
+        ...asStrings(file.metadata.labels),
+        ...asStrings(file.metadata.tags),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      await index.upsert({
+        id: file.id,
+        spaceId: file.tenantId,
+        title: file.name,
+        text: [body, meta].filter(Boolean).join("\n") || undefined,
+        kind: "file",
+        path: typeof file.metadata.path === "string" ? file.metadata.path : "",
+        modifiedAt: file.updatedAt,
+        metadata: file.metadata,
+      });
+    } catch (err) {
+      console.warn(`[search] reindex failed for ${fileId}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Drop file(s) from the index. Best-effort. */
+  private async deindex(ids: string | string[]): Promise<void> {
+    const index = this.opts.index;
+    if (!index) return;
+    try {
+      await index.delete(ids);
+    } catch (err) {
+      console.warn(`[search] deindex failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Full-text search over the files the caller can read. The ACL scope is the
+   * caller's member spaces (personal + any group space) — resolved here and
+   * passed to the index as `SearchScope`, never taken from the query — so a
+   * search can't reach a space the caller can't see.
+   */
+  async search(
+    userSub: string,
+    query: { text: string; kinds?: string[]; filter?: Record<string, unknown>; limit?: number; cursor?: string },
+  ): Promise<{ items: DriveSearchHit[]; cursor?: string }> {
+    const index = this.opts.index;
+    if (!index) return { items: [] };
+    await ensurePersonalSpace(this.db, userSub);
+    const spaceIds = await memberSpaceIds(this.db, userSub);
+    if (spaceIds.length === 0) return { items: [] };
+    return index.query(query, { spaceIds });
+  }
+
+  /**
+   * Backfill: index every live file not yet in the index (idempotent). Run once
+   * at startup so files that predate the index become searchable. Returns the
+   * count newly indexed.
+   */
+  async reindexAll(): Promise<{ indexed: number }> {
+    if (!this.opts.index) return { indexed: 0 };
+    const rows = await this.db.all<{ id: string }>(
+      "SELECT id FROM files WHERE deleted_at IS NULL AND id NOT IN (SELECT id FROM search_index)",
+    );
+    for (const r of rows) await this.reindex(r.id);
+    return { indexed: rows.length };
   }
 
   // ── authorization ──────────────────────────────────────────────────────────

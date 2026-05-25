@@ -8,7 +8,9 @@ import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import { PLUGIN_CATALOG } from "@/lib/mock-data";
 
-const CATEGORIES = ["All", "Productivity", "Help"];
+// Derived from the catalog so any category a plugin declares (e.g. Media for the
+// image viewer) shows up as a filter chip without hand-maintaining this list.
+const CATEGORIES = ["All", ...Array.from(new Set(PLUGIN_CATALOG.map((p) => p.category)))];
 
 interface PluginStoreProps {
   open: boolean;

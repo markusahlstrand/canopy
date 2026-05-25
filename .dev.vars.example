@@ -1,5 +1,6 @@
-# Copy to apps/api/.dev.vars and fill in to enable login.
-# Without these, the API runs with auth disabled (anonymous browsing).
+# Copy to .dev.vars (repo root, next to wrangler.jsonc) and fill in to enable
+# login. Without these, the API runs with auth disabled (anonymous browsing).
+# The "Deploy to Cloudflare" button reads this file to offer these as secrets.
 
 # Your authhero (or any OIDC) issuer — discovery is read from
 # ${OIDC_ISSUER}/.well-known/openid-configuration

@@ -3,6 +3,7 @@ import { PluginRegistry, type PluginManifest } from "@canopy/core";
 import { buildManifest } from "./manifests";
 import { TasksView } from "./detail-views";
 import { GithubView } from "./github-view";
+import { SynologyView } from "./synology-view";
 import { DocumentAiView } from "./document-ai-view";
 
 // Lazy-loaded: pulls react-markdown + remark-gfm into a separate chunk.
@@ -25,6 +26,7 @@ export const PLUGIN_UI: Record<string, PluginUI> = {
   documentation: { DetailView: DocumentationView },
   tasks: { DetailView: TasksView },
   github: { DetailView: GithubView },
+  synology: { DetailView: SynologyView },
   "document-ai": { DetailView: DocumentAiView },
 };
 

@@ -7,6 +7,7 @@ import {
   createD1Db,
   createR2BlobStore,
   createSqlBlobRepo,
+  createSqlSearchIndex,
   ensurePersonalSpace,
   resolveInvites,
   runMigrations,
@@ -16,7 +17,7 @@ import {
 } from "@canopy/store";
 import { createApp, type DataSourceDeps } from "./app";
 import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
-import { parseRepo } from "./data-sources";
+import { parseRepo, synologyConnectorFor } from "./data-sources";
 import { createCacheApiCacheStore } from "./cache-api";
 import { createAuthApp } from "./auth/routes";
 import { readAuthConfig, type EnvVars } from "./auth/config";
@@ -57,7 +58,8 @@ export default {
     await (schemaReady ??= runMigrations(db));
 
     const blobs = createR2BlobStore(env.BUCKET);
-    const service = new FileService(db, blobs, createSqlBlobRepo(db));
+    const search = createSqlSearchIndex(db);
+    const service = new FileService(db, blobs, createSqlBlobRepo(db), { index: search });
 
     const readonlyMounts: Record<string, StorageConnector> = {};
     let demoDefaults: Record<string, Record<string, string>> = {};
@@ -90,8 +92,11 @@ export default {
       demoDefaults,
       cache: createCacheApiCacheStore(),
       secret: authConfig?.sessionSecret,
-      // Browse a configured GitHub repo's files live as a read-only space.
+      // Browse a connected backend live as a space: a GitHub repo, or a Synology
+      // NAS over FileStation. From the edge only QuickConnect relay / a public
+      // HTTPS endpoint is reachable — a LAN address or self-signed cert is not.
       connectorFor: (pluginId, config) => {
+        if (pluginId === "synology") return synologyConnectorFor(config);
         if (pluginId !== "github") return null;
         const p = parseRepo(config.repo ?? "");
         return p
@@ -114,6 +119,8 @@ export default {
       readonlyMounts,
       drive: { service, blobs },
       dataSources,
+      // D1 FTS5 search index — the same SQL adapter as libsql on Node.
+      search,
       processors: processorsOf(SERVER_PLUGINS),
       ai,
       // Let users add their own Gemini / OpenAI-compatible keys in Settings → AI models.

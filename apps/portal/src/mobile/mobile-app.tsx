@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import {
   fetchMe,
   fetchInstalledPlugins,
+  saveInstalledPlugins,
   listSpaces,
   uploadFiles,
   createFile,
@@ -15,10 +16,11 @@ import {
 } from "@/lib/api";
 import { CREATORS } from "@/plugins/viewers";
 import { ANON_DEFAULT_INSTALLED, DEFAULT_INSTALLED } from "@/plugins/manifests";
-import { CURRENT_USER, type FileItem } from "@/lib/mock-data";
+import { PLUGIN_CATALOG, type FileItem } from "@/lib/mock-data";
 import { DemoBanner } from "@/components/demo-banner";
 import { InviteBanner } from "@/components/invite-banner";
 import { OfflineBanner } from "@/components/offline-banner";
+import { PullToRefresh } from "@/components/pull-to-refresh";
 import { HomeScreen, DriveScreen, SpacesScreen, AppsScreen } from "./screens";
 import { NewActionSheet, FileDetailSheet } from "./sheets";
 
@@ -38,6 +40,8 @@ export function MobileApp() {
   const [auth, setAuth] = useState<Me>({ user: null, authConfigured: false });
   const [spaces, setSpaces] = useState<SpaceView[]>([]);
   const [installed, setInstalled] = useState<string[]>(ANON_DEFAULT_INSTALLED);
+  // Bumped on pull-to-refresh; screens fold it into their fetch deps to reload.
+  const [refreshKey, setRefreshKey] = useState(0);
   const uploadRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -53,12 +57,34 @@ export function MobileApp() {
     );
   }, [auth.user]);
 
-  const userName =
-    auth.user?.name ?? auth.user?.email?.split("@")[0] ?? CURRENT_USER.name.split(" ")[0]!;
+  const userName = auth.user?.name ?? auth.user?.email?.split("@")[0] ?? "there";
+
+  // Mirror the desktop: persist only when we can (signed-in or demo mode), else
+  // just update locally so the optimistic install still works for the session.
+  const canPersist = !auth.authConfigured || !!auth.user;
+  function installApp(id: string) {
+    if (installed.includes(id)) return;
+    const next = [...installed, id];
+    setInstalled(next);
+    if (canPersist) saveInstalledPlugins(next).catch(() => {});
+    const name = PLUGIN_CATALOG.find((c) => c.id === id)?.label ?? id;
+    toast(`${name} installed`, { description: "Open it from the Apps tab." });
+  }
 
   function openFile(f: FileItem) {
     setSelFile(f);
     setSheet("file");
+  }
+
+  // Reload the data this shell owns and signal screens to refetch theirs. The
+  // min delay keeps the spinner from flashing when the network is quick.
+  async function handleRefresh() {
+    setRefreshKey((k) => k + 1);
+    await Promise.all([
+      fetchMe().then(setAuth).catch(() => {}),
+      listSpaces().then(setSpaces).catch(() => setSpaces([])),
+      new Promise((r) => setTimeout(r, 500)),
+    ]);
   }
 
   const signIn = () => {
@@ -97,21 +123,22 @@ export function MobileApp() {
       <OfflineBanner />
       <DemoBanner auth={auth} onSignIn={signIn} />
       <InviteBanner auth={auth} onAccepted={() => window.location.reload()} />
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      <PullToRefresh onRefresh={handleRefresh} className="min-h-0 flex-1 overflow-y-auto">
         {view === "home" && (
           <HomeScreen
             userName={userName}
             spaceCount={spaces.filter((s) => s.kind === "group").length}
             installed={installed}
+            refreshKey={refreshKey}
             onOpenFile={openFile}
             onNav={(v) => setView(v as View)}
           />
         )}
-        {view === "drive" && <DriveScreen onOpenFile={openFile} />}
-        {view === "spaces" && <SpacesScreen spaces={spaces} onOpenFile={openFile} />}
-        {view === "apps" && <AppsScreen installed={installed} />}
+        {view === "drive" && <DriveScreen refreshKey={refreshKey} onOpenFile={openFile} />}
+        {view === "spaces" && <SpacesScreen spaces={spaces} refreshKey={refreshKey} onOpenFile={openFile} />}
+        {view === "apps" && <AppsScreen installed={installed} onInstall={installApp} />}
         <div className="h-24" />
-      </main>
+      </PullToRefresh>
 
       {/* FAB */}
       {sheet !== "file" && (

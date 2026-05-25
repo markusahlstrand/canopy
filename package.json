@@ -15,13 +15,15 @@
     "dev:api": "pnpm --filter @canopy/api dev",
     "build": "pnpm -r build",
     "start": "pnpm --filter @canopy/portal build && pnpm --filter @canopy/api start",
-    "deploy": "pnpm --filter @canopy/portal build && pnpm --filter @canopy/api run deploy",
+    "cf:dev": "wrangler dev",
+    "deploy": "pnpm --filter @canopy/portal build && wrangler deploy",
     "deploy:cf": "pnpm run deploy",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "wrangler": "^4.42.0"
   }
 }

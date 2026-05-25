@@ -33,6 +33,7 @@ Two different switches, depending on the plugin:
 | [Calendar](plugin-calendar) | Upcoming events as a detail view + an "Up next" rail panel |
 | [Tasks](plugin-tasks) | A shared to-do list, with "Create task from file" |
 | [GitHub](plugin-github) | A data source feeding issues → Tasks and releases → Calendar |
+| [Synology](plugin-synology) | A storage connector browsing a Synology NAS as a space (direct or QuickConnect) |
 | [Document AI](plugin-document-ai) | Auto-labels each document by type with an AI model |
 | [Documentation](plugin-documentation) | Renders these docs from the read-only docs mount |
 
@@ -45,6 +46,14 @@ Two different switches, depending on the plugin:
 | [Markdown Editor](plugin-markdown-editor) | Markdown — view, edit, and mermaid diagrams |
 | [Univer Office](plugin-univer-office) | Spreadsheets (CSV/TSV) and Univer documents |
 | [Code Editor](plugin-code-editor) | Source code, with the VS Code editor (Monaco) |
+
+## Search (⌘K)
+
+A **⌘K / Ctrl-K command palette** searches files by name, content, and AI labels and jumps to a
+result, querying the host's ACL-scoped `GET /api/search`. Unlike everything above it currently
+ships **in the shell**, not as a registered plugin — it's slated to become a plugin contribution
+once the `index:query` → `queryIndex()` grant lands. See
+[What belongs in the core → search](what-belongs-in-the-core).
 
 ## See also
 

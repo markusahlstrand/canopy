@@ -1,11 +1,19 @@
 # Canopy
 
-An extensible, plugin-driven portal — a slim core with everything else as plugins. The
-first app is a **drive** over bring-your-own storage (local filesystem or Cloudflare R2).
+An extensible, Google-Workspace-style portal built as a **slim core with everything else as
+plugins**. The first app is a **drive** over bring-your-own storage (local filesystem or
+Cloudflare R2) — and the same shell hosts first-party apps (calendar, tasks, documentation)
+and sandboxed file viewers right alongside it.
+
+![Canopy's home screen: drive stats and recent files, with spaces and installed plugins in the sidebar](documentation/assets/home.png)
 
 Built adapter-first so the same code runs locally on Node and as a single Cloudflare Worker.
 Auth is OIDC (authhero). The UI is a Vite + React SPA with a desktop shell and a responsive
 mobile shell.
+
+> 📖 **The full guide ships inside the app.** Open the **Documentation** plugin — it's the
+> landing page when you're signed out — to browse it, or read the same pages as markdown in
+> [`documentation/`](documentation/), starting with the [Overview](documentation/01-overview.md).
 
 ## Layout
 
@@ -98,7 +106,7 @@ Without auth configured, the app runs as an anonymous demo. To enable login, cop
 example env and fill in your OIDC issuer + client:
 
 ```bash
-cp apps/api/.dev.vars.example apps/api/.dev.vars   # then edit
+cp .dev.vars.example .dev.vars   # then edit
 ```
 
 It uses a confidential or public (PKCE) OIDC client, exchanges the code server-side (BFF),
@@ -124,27 +132,40 @@ docker run -p 8787:8787 -v /srv/files:/data canopy   # add -e SESSION_SECRET=…
 
 ## Deploy to Cloudflare
 
-Canopy deploys as a **single Worker**: the API runs on the Worker and the built SPA is
-served from Cloudflare **Static Assets**. Storage is **R2** (Workers have no filesystem).
-Config is in `apps/api/wrangler.jsonc` — gitignored (it holds your own D1 `database_id`), so
-copy the tracked `wrangler.example.jsonc` template first.
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/markusahlstrand/canopy)
+
+One click forks the repo into your own GitHub account and deploys it to your Cloudflare
+account. The **R2 bucket, D1 database, and Workers AI** binding are provisioned automatically
+(the committed [`wrangler.jsonc`](wrangler.jsonc) declares them without IDs), and the D1 schema
+is created on first request — so a fresh deploy comes up as a **working anonymous demo with no
+secrets**. When prompted by Workers Builds, use:
+
+- **Build command:** `pnpm install && pnpm --filter @canopy/portal build` (produces the SPA in `apps/portal/dist`)
+- **Deploy command:** `npx wrangler deploy`
+
+To turn on login afterwards, add the OIDC vars and secrets — see [`.dev.vars.example`](.dev.vars.example).
+
+### Deploy from your machine
+
+Canopy is a **single Worker**: the API runs on the Worker and the built SPA is served from
+Cloudflare **Static Assets** (Workers have no filesystem, so storage is **R2**). Config is the
+committed, ID-less [`wrangler.jsonc`](wrangler.jsonc) at the repo root; Cloudflare provisions
+R2/D1/AI on the first deploy.
 
 ```bash
-# one-time setup
-cp apps/api/wrangler.example.jsonc apps/api/wrangler.jsonc
-wrangler r2 bucket create canopy-drive
-cd apps/api
+# optional — enable login (a fresh deploy runs as the anonymous demo without these):
 wrangler secret put OIDC_CLIENT_SECRET     # if your OIDC client is confidential
 wrangler secret put SESSION_SECRET         # 32+ random bytes; encrypts the session cookie + stored secrets (AI keys, tokens) at rest
-
-# edit apps/api/wrangler.jsonc → set vars.APP_BASE_URL to your deployed URL,
-# then register <APP_BASE_URL>/api/auth/callback as a callback on your OIDC client
+# then add vars.OIDC_ISSUER / OIDC_CLIENT_ID to wrangler.jsonc and register
+# <your-url>/api/auth/callback as a callback on your OIDC client
 
 pnpm deploy        # from the repo root: builds the portal, then `wrangler deploy`
 ```
 
-`wrangler deploy --dry-run` validates the bundle and bindings without deploying. For the
-in-app guide, open the **Documentation** plugin → _Deploying_. For the architecture, see
+`wrangler deploy --dry-run` validates the bundle and bindings without deploying. Wrangler writes
+the provisioned resource IDs back into your local `wrangler.jsonc` — leave those out of commits so
+the button keeps working ID-less for the next person. For the in-app guide, open the
+**Documentation** plugin → _Deploying_. For the architecture, see
 [`documentation/02-architecture.md`](documentation/02-architecture.md).
 
 ## License

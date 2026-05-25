@@ -6,10 +6,17 @@ Humans can follow it top to bottom too. For the design rationale behind each pie
 [How plugins work](how-plugins-work) and [Writing a plugin](writing-a-plugin); this page is the
 fast path.
 
-> **The 30-second version:** the only plugin kind that runs today with **no host edits beyond one
-> registration line** is a **sandboxed file viewer**. If you just want to "build your own plugin in
-> minutes", build a viewer. Run `/new-plugin "describe your idea"` in Claude Code and it does
-> everything below for you.
+> **The 30-second version:** the only plugin kind that runs today with **no host edits** is a
+> **sandboxed file viewer**. If you just want to "build your own plugin in minutes", build a viewer.
+> There are two ways:
+>
+> - **In the running app — Plugin Studio** (no setup, no repo edits): open it from the plugin store's
+>   "Build your own with AI". Describe the viewer; the deployment's own AI writes it, you preview it
+>   live against a sample file, and **Install** persists it and activates it for your account. This is
+>   the runtime path — it uses everything below, just driven by the host LLM instead of you.
+> - **As code** (this page): run `/new-plugin "describe your idea"` in Claude Code, or follow these
+>   steps yourself, to add a viewer to the repo. Use this for first-party/bundled viewers or when you
+>   want the source in version control.
 
 ---
 
@@ -17,7 +24,7 @@ fast path.
 
 | You want to… | Kind | Runs today? | Where the code goes |
 |---|---|---|---|
-| Render/edit a file type in the preview (PDF, image, CSV, 3D, …) | **Viewer** | ✅ Yes | `examples/plugins/<id>/index.js` + one line in `viewers.ts` |
+| Render/edit a file type in the preview (PDF, image, CSV, 3D, …) | **Viewer** | ✅ Yes | **Plugin Studio** (runtime, no code) — or `examples/plugins/<id>/` + two manifest-driven lists (`bundled-manifests.ts` / `bundled.ts`) |
 | Add a full-page tool or rail panel opened from the sidebar | **UI slot** | ✅ Yes (sandboxed) | `examples/plugins/<id>/index.js` (a `render(ctx)` per slot) + one line in `ui.ts`; or first-party React in `PLUGIN_UI` |
 | Feed external data into Tasks / Calendar | **Data source** | ⚠️ Server-side wiring | `apps/api/src/data-sources.ts` |
 | Add a new storage backend | **Connector** | ✅ Yes | A `packages/connectors/*` package |
@@ -173,34 +180,54 @@ Study the bundled examples for more shapes — they're the reference implementat
 
 ## 5. Register it so it actually runs
 
-There is **no runtime upload/install flow yet** — viewers are bundled at build time. To make a new
-viewer run, add it to [`apps/portal/src/plugins/viewers.ts`](../apps/portal/src/plugins/viewers.ts):
+There are two ways to make a viewer run, depending on whether it lives in the app or in the repo.
+
+### Path A — Plugin Studio (runtime install, no repo edit)
+
+This is what the Studio does for you, and the path a generated plugin takes. The viewer is **stored
+and installed at runtime**: its `canopy.json` and `index.js` are saved per-user
+(`POST /api/plugins/custom`), the manifest is merged into the plugin registry, and its
+`contributes.viewers` are merged into the host's viewer resolver — so opening a matching file picks
+it up with **no `viewers.ts` change and no rebuild**. Here, `canopy.json` *is* read at runtime: it's
+the source of truth for the store card, the registry, and which file types the viewer claims. Uninstall
+it from the Studio's "Your generated plugins" list. (Today this path installs **sandboxed viewers**;
+a generated plugin can't use host-trusted grants like `ai:generate`.)
+
+### Path B — bundle it in the repo
+
+For a first-party or version-controlled viewer, register the plugin in two manifest-driven lists.
+The host **parses your `canopy.json` at runtime**, so its `contributes.viewers` is what decides the
+file types the viewer claims — there's no separate viewer entry to keep in sync.
 
 ```ts
-// 1) import the entry source as raw text (Vite ?raw):
-import csvViewerSource from "../../../../examples/plugins/csv-viewer/index.js?raw";
+// apps/portal/src/plugins/bundled-manifests.ts — add a ?raw manifest import + an entry:
+import csvManifest from "../../../../examples/plugins/csv-viewer/canopy.json?raw";
+export const BUNDLED_MANIFESTS: PluginManifest[] = [
+  // …existing… ,
+  csvManifest,                 // order here = store / sidebar order
+].map((raw) => JSON.parse(raw) as PluginManifest);
 
-// 2) add an entry to the VIEWERS array. ORDER MATTERS — the first match wins,
-//    so put specific matchers above broad ones (e.g. ".csv" before a "text/*").
-export const VIEWERS: InstalledViewer[] = [
-  {
-    plugin: "csv-viewer",
-    id: "csv",
-    title: "CSV",
-    match: ["text/csv", ".csv", ".tsv"],
-    source: csvViewerSource,
-  },
-  // …existing entries…
-];
+// apps/portal/src/plugins/bundled.ts — map the plugin id to its entry source:
+import csvSource from "../../../../examples/plugins/csv-viewer/index.js?raw";
+const SOURCE_BY_ID: Record<string, string> = {
+  // …existing… ,
+  "csv-viewer": csvSource,
+};
 ```
 
-That's the whole registration. (The `canopy.json` isn't read at runtime today — it's the
-forward-compatible manifest for when the resolver in `@canopy/plugin-sources` is wired to the app.
-Keep it correct anyway; it's the source of truth for the store and the future loader.)
+That's the whole registration — `VIEWERS` and `CREATORS` are derived from each manifest's
+`contributes` in [`viewers.ts`](../apps/portal/src/plugins/viewers.ts). Match precedence is
+first-match-wins in the order the plugins are listed, so put a specific viewer before a broad one.
 
 ---
 
 ## 6. See it run (the feedback loop)
+
+**Plugin Studio (Path A):** the loop is built in — after generating, drop a sample file matching the
+viewer's `match` and it renders live in the same sandbox right there. Tweak the idea, regenerate,
+preview again; **Install** when it's right.
+
+**Bundled (Path B):**
 
 ```bash
 pnpm dev          # portal on :5768 + API on :8787 (or: pnpm dev:api & pnpm --filter @canopy/portal dev)
@@ -209,6 +236,10 @@ pnpm dev          # portal on :5768 + API on :8787 (or: pnpm dev:api & pnpm --fi
 Upload a file your `match` covers (e.g. a `.csv`) and open its preview. Your viewer renders inside
 the sandbox. If something throws, the preview shows **"Viewer failed to load"** with the error — fix
 and the Vite HMR reload picks it up.
+
+> The Studio requires an AI provider for the account (deployment default or one added under
+> **Settings → AI**). With none configured it falls back to a copy-paste prompt for an external
+> coding agent — i.e. Path B.
 
 ---
 
@@ -219,8 +250,10 @@ and the Vite HMR reload picks it up.
    right `match` and the **minimal** capabilities.
 3. Create `examples/plugins/<id>/index.js` — `export default render(ctx)`, build DOM from
    `file.bytes`, inline styles only, no host/global access, CDN imports must degrade gracefully.
-4. Wire it into `apps/portal/src/plugins/viewers.ts`: a `?raw` import + a `VIEWERS` entry, specific
-   matchers before broad ones.
+4. Register it (bundled path): add the manifest to `apps/portal/src/plugins/bundled-manifests.ts`
+   and the entry source to `apps/portal/src/plugins/bundled.ts`. `contributes.viewers` drives the
+   match; list specific viewers before broad ones. (Or skip this entirely and use the Plugin Studio,
+   which installs at runtime.)
 5. If it's an **editor**: add `item:write`, implement the `save`/`canopy:save-result` handshake, and
    extend the editor gate in `file-preview.tsx`.
 6. Validate the manifest against the schema, then tell the user to run `pnpm dev` and open a matching
@@ -240,7 +273,8 @@ Follow documentation/09-build-a-plugin-with-ai.md exactly. Specifically:
   and examples/plugins/<id>/index.js (export default render(ctx)).
 - The entry runs in an opaque-origin sandboxed iframe: only ctx.file (name, mime, bytes, writable),
   no host DOM/cookies/storage, inline styles only. CDN import() is allowed but must degrade gracefully.
-- Register it in apps/portal/src/plugins/viewers.ts (a ?raw import + a VIEWERS entry; specific
-  matchers before broad ones).
+- Register it (bundled): add the manifest to apps/portal/src/plugins/bundled-manifests.ts and the
+  entry source to apps/portal/src/plugins/bundled.ts. contributes.viewers drives the match; list
+  specific viewers before broad ones.
 - Use the minimal capabilities. Then tell me which file type to drop to test it.
 ```

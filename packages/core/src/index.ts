@@ -3,6 +3,7 @@ export * from "./ai";
 export * from "./contributions";
 export * from "./providers";
 export * from "./cache";
+export * from "./search";
 export * from "./capabilities";
 export * from "./plugin";
 export * from "./plugin-roles";

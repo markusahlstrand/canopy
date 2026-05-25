@@ -19,7 +19,8 @@ Before writing anything, read these so you match the real shapes exactly:
   - read/render a file → `examples/plugins/image-viewer/{index.js,canopy.json}`
   - load a CDN library → `examples/plugins/pdf-viewer/index.js`
   - edit + save a file → `examples/plugins/markdown-editor/index.js`
-- `apps/portal/src/plugins/viewers.ts` — where you register a viewer.
+- `apps/portal/src/plugins/bundled-manifests.ts` + `bundled.ts` — where you register a bundled
+  viewer (manifest list + id→source map; `viewers.ts` derives `VIEWERS` from them).
 
 Do not invent fields or capabilities. If something isn't in the schema or the spec, it doesn't exist.
 
@@ -35,8 +36,8 @@ block on questions unless the file type to handle is genuinely unclear.
 
 ## Step 2 — Pick id + match
 
-- `id`: short, unique, kebab-case (e.g. `gpx-viewer`). Check `examples/plugins/` and the `VIEWERS`
-  array in `viewers.ts` to avoid collisions.
+- `id`: short, unique, kebab-case (e.g. `gpx-viewer`). Check `examples/plugins/` and
+  `bundled-manifests.ts` to avoid collisions.
 - `match`: the MIME types / extensions this viewer handles. Be specific (e.g. `[".gpx", "application/gpx+xml"]`).
 - Pick a sensible lucide `icon` and an HSL `color` (e.g. `"160 60% 45%"`).
 
@@ -65,12 +66,19 @@ For an **editor** also: read the spec's save section, emit `save` with `{ conten
 
 ## Step 4 — Register it so it runs
 
-Edit `apps/portal/src/plugins/viewers.ts`:
+The manifest is the source of truth: `VIEWERS` (and `CREATORS`) are derived from each bundled
+plugin's `contributes`, so you register the plugin in two manifest-driven lists — no `VIEWERS` entry
+to hand-write.
 
-1. Add a raw import next to the existing ones:
-   `import <id>Source from "../../../../examples/plugins/<id>/index.js?raw";`
-2. Add an entry to the `VIEWERS` array: `{ plugin: "<id>", id: "<viewer-id>", title, match, source: <id>Source }`.
-   **Order matters** — the first matching viewer wins, so place specific matchers above broad ones.
+1. In `apps/portal/src/plugins/bundled-manifests.ts`: add a raw import
+   `import <id>Manifest from "../../../../examples/plugins/<id>/canopy.json?raw";` and add it to the
+   `BUNDLED_MANIFESTS` array (order = store/sidebar order).
+2. In `apps/portal/src/plugins/bundled.ts`: add a raw import
+   `import <id>Source from "../../../../examples/plugins/<id>/index.js?raw";` and add `"<id>": <id>Source`
+   to `SOURCE_BY_ID`.
+
+**Match precedence** is first-match-wins in the order plugins are listed, so place a specific viewer
+(via its manifest order) above broad ones.
 
 If you built an **editor**, also extend the gate in `apps/portal/src/components/file-preview.tsx`
 (the `viewer?.plugin === "markdown-editor"` check) to include your plugin id, and confirm

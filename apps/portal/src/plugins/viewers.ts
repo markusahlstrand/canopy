@@ -1,13 +1,5 @@
 import { viewerMatches, type FileCreatorContribution, type ViewerContribution } from "@canopy/core";
-import { PLUGIN_CATALOG } from "@/lib/mock-data";
-// Sample viewer plugins live in /examples/plugins. We pull their entry source as
-// raw text and hand it to the sandboxed iframe at preview time — the same path a
-// resolved third-party plugin (zip/github/npm) would take, just without a fetch.
-import imageViewerSource from "../../../../examples/plugins/image-viewer/index.js?raw";
-import pdfViewerSource from "../../../../examples/plugins/pdf-viewer/index.js?raw";
-import markdownEditorSource from "../../../../examples/plugins/markdown-editor/index.js?raw";
-import codeEditorSource from "../../../../examples/plugins/code-editor/index.js?raw";
-import univerOfficeSource from "../../../../examples/plugins/univer-office/index.js?raw";
+import { BUNDLED_PLUGINS } from "./bundled";
 
 /** A viewer the host can mount: a contribution plus the code that implements it. */
 export interface InstalledViewer extends ViewerContribution {
@@ -18,95 +10,42 @@ export interface InstalledViewer extends ViewerContribution {
 }
 
 /**
- * Viewers available to the preview surface. In production this list is built
- * from installed plugins' `contributes.viewers`; here we register the two
- * bundled samples directly.
+ * Viewers available to the preview surface, derived from each bundled plugin's
+ * `contributes.viewers` — the manifest is the single source of truth for which
+ * file types a plugin handles. (Plugin Studio / third-party viewers come in
+ * through {@link setCustomViewers} at runtime; same shape, different origin.)
  */
-export const VIEWERS: InstalledViewer[] = [
-  {
-    plugin: "markdown-editor",
-    id: "markdown",
-    title: "Markdown",
-    match: ["text/markdown", ".md", ".markdown", ".mdx"],
-    source: markdownEditorSource,
-  },
-  {
-    plugin: "univer-office",
-    id: "univer",
-    title: "Univer Office",
-    // Spreadsheets/docs: delimited text + Univer native JSON snapshots. No
-    // overlap with the code editor's `.json` (we use `.univer`/`.usheet`/…).
-    match: ["text/csv", ".csv", ".tsv", ".usheet", ".udoc", ".uslide", ".univer"],
-    source: univerOfficeSource,
-  },
-  {
-    plugin: "image-viewer",
-    id: "image",
-    title: "Image",
-    match: ["image/*", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic", ".avif"],
-    source: imageViewerSource,
-  },
-  {
-    plugin: "pdf-viewer",
-    id: "pdf",
-    title: "PDF",
-    match: ["application/pdf", ".pdf"],
-    source: pdfViewerSource,
-  },
-  {
-    plugin: "code-editor",
-    id: "code",
-    title: "Code",
-    // Specific code/config extensions only — markdown stays with the markdown
-    // editor above, and these don't overlap with image/pdf matchers.
-    match: [
-      "application/javascript", "text/javascript", "application/json", "text/css",
-      ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".json", ".jsonc",
-      ".html", ".htm", ".css", ".scss", ".less", ".py", ".rb", ".go", ".rs",
-      ".java", ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".php", ".swift",
-      ".kt", ".kts", ".sh", ".bash", ".zsh", ".sql", ".yaml", ".yml", ".toml",
-      ".xml", ".ini", ".env", ".lua", ".r", ".pl", ".dockerfile", ".vue",
-      ".svelte", ".graphql", ".proto",
-    ],
-    source: codeEditorSource,
-  },
-];
-
-// Viewer plugins that also appear in the store are gated on install state;
-// built-in viewers (image/pdf/markdown/univer — not in the catalog) are always
-// available, so opening common file types never depends on an install step.
-const STORE_GATED = new Set(PLUGIN_CATALOG.map((c) => c.id));
+export const VIEWERS: InstalledViewer[] = BUNDLED_PLUGINS.flatMap(({ manifest, source }) =>
+  (manifest.contributes?.viewers ?? []).map((v) => ({ ...v, plugin: manifest.id, source })),
+);
 
 // Viewers from AI-generated (Plugin Studio) plugins, loaded at runtime from the
 // API. Unlike the bundled VIEWERS these aren't known at build time, so the host
-// registers them imperatively once the caller's custom plugins resolve. They're
-// always install-gated (a generated viewer only applies when its plugin is in
-// the active set) and take precedence over the bundled list so a user's own
-// viewer can intentionally override a built-in for a file type.
+// registers them imperatively once the caller's custom plugins resolve. They
+// take precedence over the bundled list so a user's own viewer can intentionally
+// override a built-in for a file type.
 let CUSTOM_VIEWERS: InstalledViewer[] = [];
-const CUSTOM_IDS = new Set<string>();
 
 /** Replace the runtime custom-viewer set (call when the caller's custom plugins load/change). */
 export function setCustomViewers(viewers: InstalledViewer[]): void {
   CUSTOM_VIEWERS = viewers;
-  CUSTOM_IDS.clear();
-  for (const v of viewers) CUSTOM_IDS.add(v.plugin);
 }
 
 /**
  * First viewer whose `match` covers this file, or undefined.
  *
- * When `installedIds` is given, store-listed and generated viewers are only
- * offered if the plugin is in that set; an uninstalled match is skipped so
- * resolution falls through to the next matching (built-in) viewer, or to "no
- * viewer". Omit `installedIds` to resolve without gating.
+ * Every viewer belongs to an installable plugin, so when `installedIds` is given
+ * a match is only offered if its plugin is installed; an uninstalled match is
+ * skipped so resolution falls through to the next matching viewer, or to "no
+ * viewer". Omit `installedIds` to resolve without gating. The baseline viewers
+ * (image/pdf/markdown) ship installed by default, so common types preview out of
+ * the box.
  */
 export function findViewer(name: string, mime?: string, installedIds?: string[]): InstalledViewer | undefined {
   const ext = name.split(".").pop();
   return [...CUSTOM_VIEWERS, ...VIEWERS].find((v) => {
     if (!viewerMatches(v.match, { mime, ext })) return false;
-    const gated = STORE_GATED.has(v.plugin) || CUSTOM_IDS.has(v.plugin);
-    if (installedIds && gated && !installedIds.includes(v.plugin)) return false;
+    if (installedIds && !installedIds.includes(v.plugin)) return false;
     return true;
   });
 }
@@ -118,61 +57,16 @@ export interface InstalledCreator extends FileCreatorContribution {
 }
 
 /**
- * File types offerable from the "New" menu, built from installed plugins'
- * `contributes.creators`. Mirrors VIEWERS — here the bundled markdown editor is
- * registered directly; in production this is derived from installed manifests.
+ * File types offerable from the "New" menu, built from each bundled plugin's
+ * `contributes.creators`. Mirrors {@link VIEWERS}: declared once in the manifest,
+ * surfaced here.
  */
-export const CREATORS: InstalledCreator[] = [
-  {
-    plugin: "markdown-editor",
-    id: "markdown",
-    label: "Markdown document",
-    icon: "file-text",
-    defaultName: "Untitled",
-    extension: ".md",
-    mime: "text/markdown",
-    template: "# Untitled\n\n",
-  },
-  {
-    plugin: "univer-office",
-    id: "sheet",
-    label: "Spreadsheet",
-    icon: "table-2",
-    defaultName: "Untitled",
-    // A blank .csv opens in the Univer spreadsheet editor and saves back as CSV.
-    extension: ".csv",
-    mime: "text/csv",
-    template: "",
-  },
-  {
-    plugin: "univer-office",
-    id: "doc",
-    label: "Document",
-    icon: "file-text",
-    defaultName: "Untitled",
-    // A minimal Univer IDocumentData snapshot (empty paragraph + section break);
-    // opens in the Univer document editor and saves the JSON snapshot back.
-    extension: ".udoc",
-    mime: "application/json",
-    template: JSON.stringify(
-      {
-        id: "doc",
-        body: {
-          dataStream: "\r\n",
-          textRuns: [],
-          paragraphs: [{ startIndex: 0 }],
-          sectionBreaks: [{ startIndex: 1 }],
-        },
-        documentStyle: {
-          pageSize: { width: 595, height: 842 },
-          marginTop: 50,
-          marginBottom: 50,
-          marginLeft: 50,
-          marginRight: 50,
-        },
-      },
-      null,
-      2,
-    ),
-  },
-];
+export const CREATORS: InstalledCreator[] = BUNDLED_PLUGINS.flatMap(({ manifest }) =>
+  (manifest.contributes?.creators ?? []).map((c) => ({ ...c, plugin: manifest.id })),
+);
+
+/** Creators from installed plugins only — the "New" menu shouldn't offer a file
+ * type whose viewer plugin isn't installed (you'd create something you can't open). */
+export function creatorsFor(installedIds: string[]): InstalledCreator[] {
+  return CREATORS.filter((c) => installedIds.includes(c.plugin));
+}

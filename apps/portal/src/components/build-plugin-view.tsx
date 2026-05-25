@@ -4,18 +4,19 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/lib/icons";
 
 /**
- * "Build your own plugin with AI" — a guided prompt generator.
+ * "Build your own plugin with AI" — a guided prompt generator (the **external-agent**
+ * path). It doesn't load code in the browser: it turns a one-line idea into a
+ * ready-to-paste prompt for a coding agent (Claude Code, Cursor, …) that follows the
+ * in-repo authoring spec (documentation/09-build-a-plugin-with-ai.md). The fastest
+ * path is the bundled Claude Code skill: `/new-plugin "<idea>"`.
  *
- * There's no runtime plugin upload yet, so this doesn't load code in the browser.
- * Instead it turns a one-line idea into a ready-to-paste prompt for a coding agent
- * (Claude Code, Cursor, …) that follows the in-repo authoring spec
- * (documentation/09-build-a-plugin-with-ai.md). The fastest path is the bundled
- * Claude Code skill: `/new-plugin "<idea>"`.
+ * For the in-app path — where the host LLM writes, previews, and installs a plugin at
+ * runtime — see {@link PluginStudioView}. This component is also its graceful fallback
+ * when no AI provider is configured.
  */
 
 const SPEC = "documentation/09-build-a-plugin-with-ai.md";
 const SCHEMA = "documentation/canopy-plugin.schema.json";
-const VIEWERS = "apps/portal/src/plugins/viewers.ts";
 
 function buildPrompt(idea: string): string {
   const desc = idea.trim() || "<describe your plugin, e.g. render .gpx GPS tracks on a small map>";
@@ -27,8 +28,9 @@ Follow ${SPEC} exactly. Specifically:
 - The entry runs in an opaque-origin sandboxed iframe: you get only ctx.file
   (name, mime, bytes, writable) and ctx.container — no host DOM/cookies/storage,
   inline styles only. CDN import() is allowed but must degrade gracefully.
-- Register it in ${VIEWERS} (a ?raw import + a VIEWERS entry; put specific
-  matchers before broad ones).
+- Register it (bundled path): add the manifest to apps/portal/src/plugins/bundled-manifests.ts
+  and the entry source to apps/portal/src/plugins/bundled.ts. contributes.viewers drives the
+  match; list specific viewers before broad ones.
 - Use the minimal capabilities. Then tell me which file type to drop to test it.`;
 }
 

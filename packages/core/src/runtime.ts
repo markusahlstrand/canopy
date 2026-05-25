@@ -1,4 +1,6 @@
 import type { PluginBundle } from "./plugin";
+import type { Page } from "./storage";
+import type { SearchHit, SearchQuery } from "./search";
 
 /**
  * The concrete, scoped host functions granted to a running plugin instance,
@@ -13,8 +15,12 @@ export interface CapabilityGrants {
   fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   /** Read-only item access, if granted. */
   getItem?: (id: string) => Promise<unknown>;
-  /** Index query, if granted. */
-  queryIndex?: (query: unknown) => Promise<unknown>;
+  /**
+   * Index query, if granted. The plugin supplies only a `SearchQuery`; the host
+   * resolves the caller's readable spaces and applies the `SearchScope` itself,
+   * so a plugin can't search spaces it can't read.
+   */
+  queryIndex?: (query: SearchQuery) => Promise<Page<SearchHit>>;
   /** Namespaced KV, if granted. */
   kv?: { get(key: string): Promise<string | null>; put(key: string, value: string): Promise<void> };
 }

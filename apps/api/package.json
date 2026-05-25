@@ -6,14 +6,13 @@
   "scripts": {
     "dev": "tsx watch src/node.ts",
     "start": "tsx src/node.ts",
-    "cf:dev": "wrangler dev",
-    "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@canopy/connector-github": "workspace:*",
     "@canopy/connector-local": "workspace:*",
     "@canopy/connector-r2": "workspace:*",
+    "@canopy/connector-synology": "workspace:*",
     "@canopy/core": "workspace:*",
     "@canopy/store": "workspace:*",
     "@hono/node-server": "^1.14.4",
@@ -22,7 +21,6 @@
   "devDependencies": {
     "@types/node": "^25.9.1",
     "tsx": "^4.20.6",
-    "typescript": "~6.0.3",
-    "wrangler": "^4.42.0"
+    "typescript": "~6.0.3"
   }
 }

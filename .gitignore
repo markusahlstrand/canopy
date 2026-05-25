@@ -12,9 +12,9 @@ coverage/
 !.env.example
 .dev.vars
 
-# local wrangler config — holds your own D1 database_id. Copy the tracked
-# wrangler.example.jsonc to wrangler.jsonc and fill it in (the example stays committed).
-apps/api/wrangler.jsonc
+# wrangler.jsonc is committed and ID-less (Cloudflare provisions R2/D1/AI on
+# deploy). Wrangler writes the provisioned IDs back into it on `wrangler deploy`
+# — don't commit those local changes; keep the committed config ID-less.
 
 # local drive storage — real user files live here at runtime and must never be
 # committed. The demo drive's fixtures are a tracked folder at the repo root

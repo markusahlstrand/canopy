@@ -18,8 +18,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { STORAGE, CURRENT_USER } from "@/lib/mock-data";
-import { CREATORS, type InstalledCreator } from "@/plugins/viewers";
+import { STORAGE } from "@/lib/mock-data";
+import { creatorsFor, type InstalledCreator } from "@/plugins/viewers";
 import type { Me, SpaceView } from "@/lib/api";
 
 function initialsOf(s: string): string {
@@ -49,6 +49,8 @@ interface SidebarProps {
   onOpenSpace: (id: string) => void;
   onCreateSpace: () => void;
   onRenameSpace: (id: string) => void;
+  /** Open the space's settings (members/plugins/danger zone). Owner only. */
+  onManageSpace: (id: string) => void;
   onToggleMount: (id: string, mounted: boolean) => void;
   onNewFolder: () => void;
   onNewFile: (creator: InstalledCreator) => void;
@@ -121,6 +123,7 @@ export function Sidebar({
   onOpenSpace,
   onCreateSpace,
   onRenameSpace,
+  onManageSpace,
   onToggleMount,
   onNewFolder,
   onNewFile,
@@ -130,18 +133,18 @@ export function Sidebar({
   onSignIn,
   onSignOut,
 }: SidebarProps) {
+  const creators = creatorsFor(installedPlugins.map((p) => p.id));
   const groupSpaces = spaces.filter((s) => s.kind === "group");
   const connectedSpaces = spaces.filter((s) => s.kind === "connected");
   const realUser = auth.user;
+  // No real user → render the "Sign in" row, never a fabricated demo persona.
   const displayUser = realUser
     ? {
         name: realUser.name ?? realUser.email ?? "Account",
         email: realUser.email ?? "",
         initials: initialsOf(realUser.name ?? realUser.email ?? "U"),
       }
-    : auth.authConfigured
-      ? null
-      : CURRENT_USER;
+    : null;
   return (
     <aside className="flex h-full flex-col border-r bg-card">
       {/* Logo row */}
@@ -178,7 +181,7 @@ export function Sidebar({
             <DropdownMenuItem onClick={onNewFolder}>
               <Icon name="folder" size={15} /> New folder
             </DropdownMenuItem>
-            {CREATORS.map((creator) => (
+            {creators.map((creator) => (
               <DropdownMenuItem key={creator.plugin + ":" + creator.id} onClick={() => onNewFile(creator)}>
                 <Icon name={creator.icon ?? "file"} size={15} /> {creator.label}
               </DropdownMenuItem>
@@ -243,9 +246,14 @@ export function Sidebar({
                       <Icon name="users" size={15} /> Open
                     </ContextMenuItem>
                     {s.role === "owner" && (
-                      <ContextMenuItem onSelect={() => onRenameSpace(s.id)}>
-                        <Icon name="edit" size={15} /> Rename
-                      </ContextMenuItem>
+                      <>
+                        <ContextMenuItem onSelect={() => onRenameSpace(s.id)}>
+                          <Icon name="edit" size={15} /> Rename
+                        </ContextMenuItem>
+                        <ContextMenuItem onSelect={() => onManageSpace(s.id)}>
+                          <Icon name="settings" size={15} /> Settings
+                        </ContextMenuItem>
+                      </>
                     )}
                     <ContextMenuSeparator />
                     <ContextMenuItem onSelect={() => onToggleMount(s.id, !s.mounted)}>

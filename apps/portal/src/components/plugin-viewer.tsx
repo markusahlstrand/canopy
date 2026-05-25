@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { fetchContent } from "@/lib/api";
 
 /**
  * Sandboxed file-viewer host.
@@ -141,10 +142,7 @@ export function PluginViewer({
       };
       if (msg?.type === "canopy:viewer-ready") {
         try {
-          const res = await fetch(file.url);
-          if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-          const bytes = await res.arrayBuffer();
-          const mime = res.headers.get("content-type") ?? "application/octet-stream";
+          const { bytes, mime } = await fetchContent(file.url);
           if (cancelled) return;
           iframe?.contentWindow?.postMessage(
             { type: "canopy:init", code: file.source, file: { name: file.name, mime, bytes, writable } },

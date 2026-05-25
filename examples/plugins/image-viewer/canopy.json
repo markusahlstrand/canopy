@@ -14,6 +14,10 @@
         "title": "Image",
         "match": ["image/*", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic", ".avif"]
       }
-    ]
+    ],
+    "store": {
+      "category": "Media",
+      "tagline": "Preview photos and images inline."
+    }
   }
 }

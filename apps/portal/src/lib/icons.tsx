@@ -67,6 +67,7 @@ const MAP: Record<string, LucideIcon> = {
   x: X,
   home: House,
   "my-drive": HardDrive,
+  "hard-drive": HardDrive,
   family: Users,
   users: Users,
   starred: Star,

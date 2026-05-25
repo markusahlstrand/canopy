@@ -1,5 +1,17 @@
 import type { AiMessage, Page, PluginManifest, StorageEntry } from "@canopy/core";
 import type { FileItem, FileKind, ProcessingEntry } from "@/lib/mock-data";
+import { apiFetch } from "@/lib/connectivity";
+import {
+  cacheContent,
+  cacheListing,
+  cacheMe,
+  hasContent,
+  listingKey,
+  readContent,
+  readListing,
+  readMe,
+  rememberRecent,
+} from "@/lib/offline-cache";
 
 const EXT_KIND: Record<string, FileKind> = {
   pdf: "pdf",
@@ -105,20 +117,85 @@ function toFileItems(data: DriveListing, dir: string): FileItem[] {
   return [...folders, ...files];
 }
 
+/** One full-text search hit: the file (as a `FileItem`, openable in the preview) + a matched snippet. */
+export interface SearchResult {
+  file: FileItem;
+  /** A highlighted excerpt around the match, when the backend produced one. */
+  snippet?: string;
+}
+
+interface ApiSearchHit {
+  id: string;
+  spaceId: string;
+  score: number;
+  title: string;
+  snippet?: string;
+  kind?: string;
+  path?: string;
+  modifiedAt?: string;
+}
+
+/**
+ * Full-text search across files the signed-in user can read (name, body, labels).
+ * Backed by the server's `/api/search`; results are mapped into `FileItem`s so a
+ * hit opens in the preview like any other file. Returns [] for blank queries or
+ * when offline/unauthenticated.
+ */
+export async function searchFiles(q: string, limit = 8): Promise<SearchResult[]> {
+  const query = q.trim();
+  if (!query) return [];
+  try {
+    const res = await apiFetch(`/api/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as { items?: ApiSearchHit[] };
+    return (data.items ?? []).map((h) => ({
+      snippet: h.snippet,
+      file: {
+        id: h.id,
+        name: h.title,
+        kind: kindForName(h.title),
+        modified: h.modifiedAt ? fmtDate(h.modifiedAt) : "—",
+        size: "—",
+        path: h.path ?? "",
+      },
+    }));
+  } catch {
+    return []; // backend unreachable → no results (the UI stays usable)
+  }
+}
+
 /** List a virtual folder of a space (default: personal). Folders first, then files. */
 export async function listFiles(dir = "", spaceId?: string): Promise<FileItem[]> {
+  const key = listingKey(spaceId, dir);
   const sp = spaceId ? `&space=${encodeURIComponent(spaceId)}` : "";
-  const res = await fetch(`/api/files?path=${encodeURIComponent(dir)}${sp}`);
-  if (res.status === 401) return []; // not signed in → empty drive
-  if (!res.ok) throw new Error(`list failed: ${res.status}`);
-  return toFileItems(await res.json(), dir);
+  try {
+    const res = await apiFetch(`/api/files?path=${encodeURIComponent(dir)}${sp}`);
+    if (res.status === 401) return []; // not signed in → empty drive
+    if (!res.ok) throw new Error(`list failed: ${res.status}`);
+    const items = toFileItems(await res.json(), dir);
+    void cacheListing(key, items); // for offline browsing
+    void warmStarred(items); // pre-fetch starred bytes so they open offline
+    return items;
+  } catch (err) {
+    // Backend unreachable (or errored): serve the last-known copy if we have one.
+    const cached = await readListing(key);
+    if (cached) return cached;
+    throw err;
+  }
 }
 
 /** Files shared directly with the caller (outside their own spaces). */
 export async function listShared(): Promise<FileItem[]> {
-  const res = await fetch("/api/files?shared=1");
-  if (!res.ok) return [];
-  return toFileItems(await res.json(), "");
+  const key = listingKey("shared", "");
+  try {
+    const res = await apiFetch("/api/files?shared=1");
+    if (!res.ok) return [];
+    const items = toFileItems(await res.json(), "");
+    void cacheListing(key, items);
+    return items;
+  } catch {
+    return (await readListing(key)) ?? [];
+  }
 }
 
 /** URL to stream a file's current version. */
@@ -135,11 +212,57 @@ export function contentUrl(id: string): string {
   return `/api/files/${id}/content`;
 }
 
+/**
+ * Fetch a file's bytes for a viewer, transparently using the offline cache.
+ * Online: streams from the API and stores a copy (this is what makes a viewed
+ * file "recent" and available offline). Offline: serves the cached copy, or
+ * re-throws if we never cached it. Keyed by the content URL.
+ */
+export async function fetchContent(url: string): Promise<{ bytes: ArrayBuffer; mime: string }> {
+  try {
+    const res = await apiFetch(url);
+    if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+    const bytes = await res.arrayBuffer();
+    const mime = res.headers.get("content-type") ?? "application/octet-stream";
+    // Cache a copy — the original may be transferred to a sandboxed viewer.
+    void cacheContent(url, { bytes: bytes.slice(0), mime, name: "", size: bytes.byteLength, at: Date.now() });
+    return { bytes, mime };
+  } catch (err) {
+    const cached = await readContent(url);
+    if (cached) return { bytes: cached.bytes, mime: cached.mime };
+    throw err;
+  }
+}
+
+/** Record an opened file as "recent" so its content is kept for offline use. */
+export function rememberOpened(file: FileItem): void {
+  if (file.kind === "folder") return;
+  void rememberRecent(file.id);
+}
+
+/** Best-effort: pre-cache the bytes of starred files we just listed, for offline viewing. */
+async function warmStarred(items: FileItem[]): Promise<void> {
+  for (const f of items) {
+    if (!f.starred || f.kind === "folder") continue;
+    const url = contentUrl(f.id);
+    if (await hasContent(url)) continue;
+    try {
+      const res = await apiFetch(url);
+      if (!res.ok) continue;
+      const bytes = await res.arrayBuffer();
+      const mime = res.headers.get("content-type") ?? "application/octet-stream";
+      await cacheContent(url, { bytes, mime, name: f.name, size: bytes.byteLength, at: Date.now() });
+    } catch {
+      break; // network died mid-warm — stop trying
+    }
+  }
+}
+
 /** Store bytes content-addressed in a space, skipping the upload if it already exists. Returns the hash. */
 async function uploadBlob(bytes: Uint8Array, spaceId?: string): Promise<string> {
   const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
   const hash = await sha256hex(bytes);
-  const prep = await fetch(`/api/uploads/prepare${sp}`, {
+  const prep = await apiFetch(`/api/uploads/prepare${sp}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ hash, size: bytes.byteLength }),
@@ -147,7 +270,28 @@ async function uploadBlob(bytes: Uint8Array, spaceId?: string): Promise<string> 
   if (!prep.ok) throw new Error(`prepare failed: ${prep.status}`);
   const { exists } = (await prep.json()) as { exists: boolean };
   if (!exists) {
-    const put = await fetch(`/api/uploads/${hash}${sp}`, { method: "PUT", body: bytes as unknown as BodyInit });
+    const put = await apiFetch(`/api/uploads/${hash}${sp}`, { method: "PUT", body: bytes as unknown as BodyInit });
+    if (!put.ok) throw new Error(`upload failed: ${put.status}`);
+  }
+  return hash;
+}
+
+/**
+ * Store bytes for an existing file's next version. Keyed server-side to the
+ * file's own space (not whatever space is active in the UI), so the version POST
+ * always finds the blob — even for a file shared from another space. Returns the hash.
+ */
+async function uploadFileBlob(id: string, bytes: Uint8Array): Promise<string> {
+  const hash = await sha256hex(bytes);
+  const prep = await apiFetch(`/api/files/${id}/uploads/prepare`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ hash, size: bytes.byteLength }),
+  });
+  if (!prep.ok) throw new Error(`prepare failed: ${prep.status}`);
+  const { exists } = (await prep.json()) as { exists: boolean };
+  if (!exists) {
+    const put = await apiFetch(`/api/files/${id}/uploads/${hash}`, { method: "PUT", body: bytes as unknown as BodyInit });
     if (!put.ok) throw new Error(`upload failed: ${put.status}`);
   }
   return hash;
@@ -159,7 +303,7 @@ export async function uploadFiles(dir: string, files: File[], spaceId?: string):
   for (const file of files) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const hash = await uploadBlob(bytes, spaceId);
-    const res = await fetch(`/api/files${sp}`, {
+    const res = await apiFetch(`/api/files${sp}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: file.name, hash, mime: file.type || undefined, path: dir }),
@@ -183,7 +327,7 @@ export async function createFile(
 ): Promise<FileItem> {
   const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
   const hash = await uploadBlob(new TextEncoder().encode(content), spaceId);
-  const res = await fetch(`/api/files${sp}`, {
+  const res = await apiFetch(`/api/files${sp}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name, hash, mime, path: dir }),
@@ -201,14 +345,15 @@ export async function createFile(
 }
 
 /**
- * Save new text content as a NEW version of a file (metadata untouched). Blob goes
- * in the file's space. This is an explicit user Save, so `coalesce: false` forces a
- * discrete version rather than merging into the current one's editing-session window.
+ * Save new text content as a NEW version of a file (metadata untouched). The blob
+ * is staged file-scoped, so it lands in the file's own space regardless of which
+ * space is active in the UI. This is an explicit user Save, so `coalesce: false`
+ * forces a discrete version rather than merging into the current editing-session window.
  */
-export async function saveFileVersion(id: string, text: string, mime = "text/markdown", spaceId?: string): Promise<void> {
+export async function saveFileVersion(id: string, text: string, mime = "text/markdown"): Promise<void> {
   const bytes = new TextEncoder().encode(text);
-  const hash = await uploadBlob(bytes, spaceId);
-  const res = await fetch(`/api/files/${id}/versions`, {
+  const hash = await uploadFileBlob(id, bytes);
+  const res = await apiFetch(`/api/files/${id}/versions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ hash, mime, coalesce: false }),
@@ -231,7 +376,7 @@ export interface FileVersion {
 
 /** A file's version history, newest first (the first entry is the current version). */
 export async function listVersions(id: string): Promise<FileVersion[]> {
-  const res = await fetch(`/api/files/${id}/versions`);
+  const res = await apiFetch(`/api/files/${id}/versions`);
   if (!res.ok) return [];
   return (await res.json()) as FileVersion[];
 }
@@ -243,7 +388,7 @@ export function versionContentUrl(id: string, versionId: string): string {
 
 /** Pin or unpin a version so retention/pruning never removes it. */
 export async function setVersionKeep(id: string, versionId: string, keep: boolean): Promise<void> {
-  const res = await fetch(`/api/files/${id}/versions/${versionId}/keep`, {
+  const res = await apiFetch(`/api/files/${id}/versions/${versionId}/keep`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ keep }),
@@ -253,19 +398,19 @@ export async function setVersionKeep(id: string, versionId: string, keep: boolea
 
 /** Restore an older version — appends its content as the new current version. */
 export async function restoreVersion(id: string, versionId: string): Promise<void> {
-  const res = await fetch(`/api/files/${id}/versions/${versionId}/restore`, { method: "POST" });
+  const res = await apiFetch(`/api/files/${id}/versions/${versionId}/restore`, { method: "POST" });
   if (!res.ok) throw new Error(`restore version failed: ${res.status}`);
 }
 
 /** Move a drive file to Trash (recoverable). */
 export async function deleteFile(id: string): Promise<void> {
-  const res = await fetch(`/api/files/${id}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/files/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
 }
 
 /** Files in the caller's Trash, newest deletion first. */
 export async function listTrash(): Promise<FileItem[]> {
-  const res = await fetch("/api/files?trash=1");
+  const res = await apiFetch("/api/files?trash=1");
   if (res.status === 401) return [];
   if (!res.ok) throw new Error(`trash failed: ${res.status}`);
   const data = (await res.json()) as DriveListing;
@@ -282,19 +427,19 @@ export async function listTrash(): Promise<FileItem[]> {
 
 /** Restore a file from Trash. */
 export async function restoreFile(id: string): Promise<void> {
-  const res = await fetch(`/api/files/${id}/restore`, { method: "POST" });
+  const res = await apiFetch(`/api/files/${id}/restore`, { method: "POST" });
   if (!res.ok) throw new Error(`restore failed: ${res.status}`);
 }
 
 /** Permanently delete a file and its content (irreversible). */
 export async function purgeFile(id: string): Promise<void> {
-  const res = await fetch(`/api/files/${id}?permanent=1`, { method: "DELETE" });
+  const res = await apiFetch(`/api/files/${id}?permanent=1`, { method: "DELETE" });
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
 }
 
 /** Star/unstar a file — persisted as `metadata.starred` (a metadata edit, no new version). */
 export async function setStarred(id: string, starred: boolean): Promise<void> {
-  const res = await fetch(`/api/files/${id}/metadata`, {
+  const res = await apiFetch(`/api/files/${id}/metadata`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ starred }),
@@ -304,7 +449,7 @@ export async function setStarred(id: string, starred: boolean): Promise<void> {
 
 /** Set a file's user tags — persisted as `metadata.tags` (distinct from AI `labels`; no new version). */
 export async function setTags(id: string, tags: string[]): Promise<void> {
-  const res = await fetch(`/api/files/${id}/metadata`, {
+  const res = await apiFetch(`/api/files/${id}/metadata`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ tags }),
@@ -314,7 +459,7 @@ export async function setTags(id: string, tags: string[]): Promise<void> {
 
 /** Set a file's description — persisted as `metadata.description` (a metadata edit, no new version). */
 export async function setDescription(id: string, description: string): Promise<void> {
-  const res = await fetch(`/api/files/${id}/metadata`, {
+  const res = await apiFetch(`/api/files/${id}/metadata`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ description }),
@@ -335,14 +480,14 @@ export interface Comment {
 
 /** A file's comments, oldest first. Empty when the caller can't see the file. */
 export async function listComments(fileId: string): Promise<Comment[]> {
-  const res = await fetch(`/api/files/${fileId}/comments`);
+  const res = await apiFetch(`/api/files/${fileId}/comments`);
   if (!res.ok) return [];
   return (await res.json()) as Comment[];
 }
 
 /** Post a comment on a file. */
 export async function addComment(fileId: string, body: string): Promise<Comment> {
-  const res = await fetch(`/api/files/${fileId}/comments`, {
+  const res = await apiFetch(`/api/files/${fileId}/comments`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ body }),
@@ -353,13 +498,13 @@ export async function addComment(fileId: string, body: string): Promise<Comment>
 
 /** Delete a comment (author or file owner only). */
 export async function deleteComment(fileId: string, commentId: string): Promise<void> {
-  const res = await fetch(`/api/files/${fileId}/comments/${commentId}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/files/${fileId}/comments/${commentId}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`delete comment failed: ${res.status}`);
 }
 
 /** Move a file into a virtual folder — persisted as `metadata.path` (a metadata edit, no new version). */
 export async function moveFile(id: string, path: string): Promise<void> {
-  const res = await fetch(`/api/files/${id}/metadata`, {
+  const res = await apiFetch(`/api/files/${id}/metadata`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path }),
@@ -370,7 +515,7 @@ export async function moveFile(id: string, path: string): Promise<void> {
 /** Create an empty folder at a virtual path within a space. */
 export async function createFolder(path: string, spaceId?: string): Promise<void> {
   const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
-  const res = await fetch(`/api/folders${sp}`, {
+  const res = await apiFetch(`/api/folders${sp}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path }),
@@ -386,7 +531,7 @@ export interface Overview {
 /** File count + bytes used in a space (for the dashboard). */
 export async function getOverview(spaceId?: string): Promise<Overview> {
   const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
-  const res = await fetch(`/api/overview${sp}`);
+  const res = await apiFetch(`/api/overview${sp}`);
   if (!res.ok) return { files: 0, bytes: 0 };
   return (await res.json()) as Overview;
 }
@@ -407,14 +552,14 @@ export interface SpaceView {
 
 /** Spaces the caller can see, with their role + mount preference. */
 export async function listSpaces(): Promise<SpaceView[]> {
-  const res = await fetch("/api/spaces");
+  const res = await apiFetch("/api/spaces");
   if (!res.ok) return [];
   return (await res.json()) as SpaceView[];
 }
 
 /** Create a shared (group) space. */
 export async function createSpace(name: string): Promise<{ id: string; name: string }> {
-  const res = await fetch("/api/spaces", {
+  const res = await apiFetch("/api/spaces", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name }),
@@ -425,7 +570,7 @@ export async function createSpace(name: string): Promise<{ id: string; name: str
 
 /** Rename a space (owner only). */
 export async function renameSpace(spaceId: string, name: string): Promise<void> {
-  const res = await fetch(`/api/spaces/${spaceId}`, {
+  const res = await apiFetch(`/api/spaces/${spaceId}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name }),
@@ -433,9 +578,15 @@ export async function renameSpace(spaceId: string, name: string): Promise<void> 
   if (!res.ok) throw new Error(`rename space failed: ${res.status}`);
 }
 
+/** Permanently delete a space and everything in it (owner only). Irreversible. */
+export async function deleteSpace(spaceId: string): Promise<void> {
+  const res = await apiFetch(`/api/spaces/${spaceId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete space failed: ${res.status}`);
+}
+
 /** Pin/unpin a space into My Drive. */
 export async function setSpaceMounted(spaceId: string, mounted: boolean): Promise<void> {
-  await fetch(`/api/spaces/${spaceId}/prefs`, {
+  await apiFetch(`/api/spaces/${spaceId}/prefs`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ mounted }),
@@ -450,14 +601,14 @@ export interface AppPassword {
 }
 
 export async function listAppPasswords(): Promise<AppPassword[]> {
-  const res = await fetch("/api/app-passwords");
+  const res = await apiFetch("/api/app-passwords");
   if (!res.ok) return [];
   return (await res.json()) as AppPassword[];
 }
 
 /** Create an app password; returns the plaintext token ONCE. */
 export async function createAppPassword(name: string): Promise<{ id: string; token: string }> {
-  const res = await fetch("/api/app-passwords", {
+  const res = await apiFetch("/api/app-passwords", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name }),
@@ -467,7 +618,7 @@ export async function createAppPassword(name: string): Promise<{ id: string; tok
 }
 
 export async function deleteAppPassword(id: string): Promise<void> {
-  await fetch(`/api/app-passwords/${id}`, { method: "DELETE" });
+  await apiFetch(`/api/app-passwords/${id}`, { method: "DELETE" });
 }
 
 /** A share link (the unguessable secret is never returned after creation). */
@@ -498,7 +649,7 @@ const sharesUrl = (t: ShareTarget, query = false): string => {
 };
 
 export async function listShares(t: ShareTarget): Promise<ShareLink[]> {
-  const res = await fetch(sharesUrl(t, true));
+  const res = await apiFetch(sharesUrl(t, true));
   if (!res.ok) return [];
   return (await res.json()) as ShareLink[];
 }
@@ -510,7 +661,7 @@ export async function createShare(
 ): Promise<{ id: string; secret: string }> {
   const body: Record<string, unknown> = { ...opts };
   if (t.kind === "folder") body.path = t.path;
-  const res = await fetch(sharesUrl(t), {
+  const res = await apiFetch(sharesUrl(t), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -520,7 +671,7 @@ export async function createShare(
 }
 
 export async function revokeShare(id: string): Promise<void> {
-  await fetch(`/api/shares/${id}`, { method: "DELETE" });
+  await apiFetch(`/api/shares/${id}`, { method: "DELETE" });
 }
 
 export interface Member {
@@ -533,14 +684,14 @@ export interface Member {
 }
 
 export async function listMembers(spaceId: string): Promise<Member[]> {
-  const res = await fetch(`/api/spaces/${spaceId}/members`);
+  const res = await apiFetch(`/api/spaces/${spaceId}/members`);
   if (!res.ok) throw new Error(`members failed: ${res.status}`);
   return (await res.json()) as Member[];
 }
 
 /** Add a member by email. Returns the member (or a pending invite if they have no account yet). */
 export async function addMember(spaceId: string, email: string, role: Role): Promise<Member> {
-  const res = await fetch(`/api/spaces/${spaceId}/members`, {
+  const res = await apiFetch(`/api/spaces/${spaceId}/members`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email, role }),
@@ -551,7 +702,7 @@ export async function addMember(spaceId: string, email: string, role: Role): Pro
 
 /** Remove a member or pending invite by principal (a user sub or an invited email). */
 export async function removeMember(spaceId: string, principal: string): Promise<void> {
-  const res = await fetch(`/api/spaces/${spaceId}/members`, {
+  const res = await apiFetch(`/api/spaces/${spaceId}/members`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sub: principal }),
@@ -585,7 +736,7 @@ export function inviteUrl(token: string): string {
 
 /** Mint a single-use invite link for a space at a role. Owner only. */
 export async function createInvite(spaceId: string, role: Role): Promise<SpaceInvite> {
-  const res = await fetch(`/api/spaces/${spaceId}/invites`, {
+  const res = await apiFetch(`/api/spaces/${spaceId}/invites`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ role }),
@@ -596,27 +747,27 @@ export async function createInvite(spaceId: string, role: Role): Promise<SpaceIn
 
 /** Active (unused, unexpired) invite links for a space. */
 export async function listInvites(spaceId: string): Promise<SpaceInvite[]> {
-  const res = await fetch(`/api/spaces/${spaceId}/invites`);
+  const res = await apiFetch(`/api/spaces/${spaceId}/invites`);
   if (!res.ok) return [];
   return (await res.json()) as SpaceInvite[];
 }
 
 /** Revoke an invite link before it's used. */
 export async function revokeInvite(spaceId: string, token: string): Promise<void> {
-  const res = await fetch(`/api/spaces/${spaceId}/invites/${encodeURIComponent(token)}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/spaces/${spaceId}/invites/${encodeURIComponent(token)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`revoke invite failed: ${res.status}`);
 }
 
 /** Preview an invite link — what space/role it grants and whether it's still valid. No sign-in needed. */
 export async function getInvite(token: string): Promise<InviteInfo> {
-  const res = await fetch(`/api/invites/${encodeURIComponent(token)}`);
+  const res = await apiFetch(`/api/invites/${encodeURIComponent(token)}`);
   if (!res.ok) return { status: "not_found" };
   return (await res.json()) as InviteInfo;
 }
 
 /** Redeem an invite link — the signed-in account joins the space. */
 export async function acceptInvite(token: string): Promise<{ spaceId: string; alreadyMember: boolean }> {
-  const res = await fetch(`/api/invites/${encodeURIComponent(token)}/accept`, { method: "POST" });
+  const res = await apiFetch(`/api/invites/${encodeURIComponent(token)}/accept`, { method: "POST" });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `accept invite failed: ${res.status}`);
   return (await res.json()) as { spaceId: string; alreadyMember: boolean };
 }
@@ -630,7 +781,7 @@ export interface PendingInvite {
 
 /** Spaces the caller was invited to by email that haven't resolved yet (for the banner). */
 export async function listPendingInvites(): Promise<PendingInvite[]> {
-  const res = await fetch("/api/invites/pending");
+  const res = await apiFetch("/api/invites/pending");
   if (!res.ok) return [];
   // Only trust an array shape: a stale/misrouted server can answer 200 with a
   // non-array body (e.g. the `:token` route's `{status}` object), and the banner
@@ -641,7 +792,7 @@ export async function listPendingInvites(): Promise<PendingInvite[]> {
 
 /** Claim all pending email invites for the signed-in (verified) account. */
 export async function acceptPendingInvites(): Promise<{ accepted: number }> {
-  const res = await fetch("/api/invites/pending/accept", { method: "POST" });
+  const res = await apiFetch("/api/invites/pending/accept", { method: "POST" });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `accept failed: ${res.status}`);
   return (await res.json()) as { accepted: number };
 }
@@ -668,7 +819,7 @@ export interface Person {
 
 /** Connected people matching `q` (space co-members + file-share peers) — for the share picker. */
 export async function searchPeople(q: string): Promise<Person[]> {
-  const res = await fetch(`/api/people?q=${encodeURIComponent(q)}`);
+  const res = await apiFetch(`/api/people?q=${encodeURIComponent(q)}`);
   if (!res.ok) return [];
   const data = await res.json().catch(() => null);
   return Array.isArray(data) ? (data as Person[]) : [];
@@ -676,7 +827,7 @@ export async function searchPeople(q: string): Promise<Person[]> {
 
 /** Current grants on a file (for the Share dialog). */
 export async function listGrants(fileId: string): Promise<Grant[]> {
-  const res = await fetch(`/api/files/${fileId}/grants`);
+  const res = await apiFetch(`/api/files/${fileId}/grants`);
   if (!res.ok) throw new Error(`grants failed: ${res.status}`);
   return (await res.json()) as Grant[];
 }
@@ -687,7 +838,7 @@ export async function shareFile(
   subject: { subjectType: "user" | "space" | "email"; subjectId: string },
   role: Role,
 ): Promise<void> {
-  const res = await fetch(`/api/files/${fileId}/grants`, {
+  const res = await apiFetch(`/api/files/${fileId}/grants`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...subject, role }),
@@ -697,7 +848,7 @@ export async function shareFile(
 
 /** Revoke a grant. */
 export async function unshareFile(fileId: string, grant: Grant): Promise<void> {
-  const res = await fetch(`/api/files/${fileId}/grants`, {
+  const res = await apiFetch(`/api/files/${fileId}/grants`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     // The backend expects `role` (matching the POST shape); a Grant names it `relation`.
@@ -713,7 +864,7 @@ export async function unshareFile(fileId: string, grant: Grant): Promise<void> {
 
 /** Grants on a folder (space + path) and its subtree — the folder-level mirror of file grants. */
 export async function listFolderGrants(spaceId: string, path: string): Promise<Grant[]> {
-  const res = await fetch(`/api/spaces/${spaceId}/folder-grants?path=${encodeURIComponent(path)}`);
+  const res = await apiFetch(`/api/spaces/${spaceId}/folder-grants?path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`grants failed: ${res.status}`);
   return (await res.json()) as Grant[];
 }
@@ -724,7 +875,7 @@ export async function shareFolder(
   subject: { subjectType: "user" | "space" | "email"; subjectId: string },
   role: Role,
 ): Promise<void> {
-  const res = await fetch(`/api/spaces/${spaceId}/folder-grants`, {
+  const res = await apiFetch(`/api/spaces/${spaceId}/folder-grants`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...subject, role, path }),
@@ -733,7 +884,7 @@ export async function shareFolder(
 }
 
 export async function unshareFolder(spaceId: string, path: string, grant: Grant): Promise<void> {
-  const res = await fetch(`/api/spaces/${spaceId}/folder-grants`, {
+  const res = await apiFetch(`/api/spaces/${spaceId}/folder-grants`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -762,7 +913,7 @@ function mountEntryToItem(mount: string, e: StorageEntry): FileItem {
 
 /** List a read-only mount (e.g. the documentation mount). */
 export async function listMount(path: string, mount: string): Promise<FileItem[]> {
-  const res = await fetch(`/api/files?mount=${mount}&path=${encodeURIComponent(path)}`);
+  const res = await apiFetch(`/api/files?mount=${mount}&path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`list failed: ${res.status}`);
   const page: Page<StorageEntry> = await res.json();
   return page.items.map((e) => mountEntryToItem(mount, e));
@@ -774,7 +925,7 @@ export function mountFileUrl(path: string, mount: string): string {
 }
 
 export async function readText(path: string, mount: string): Promise<string> {
-  const res = await fetch(mountFileUrl(path, mount));
+  const res = await apiFetch(mountFileUrl(path, mount));
   if (!res.ok) throw new Error(`read failed: ${res.status}`);
   return res.text();
 }
@@ -791,15 +942,25 @@ export interface AuthUser {
 export interface Me {
   user: AuthUser | null;
   authConfigured: boolean;
+  /** Set when this is a last-known value served because the API was unreachable. */
+  offline?: boolean;
 }
 
 export async function fetchMe(): Promise<Me> {
   try {
-    const res = await fetch("/api/auth/me");
+    const res = await apiFetch("/api/auth/me");
     if (!res.ok) return { user: null, authConfigured: false };
-    return (await res.json()) as Me;
+    const me = (await res.json()) as Me;
+    void cacheMe(me); // remember the identity for offline reloads
+    return me;
   } catch {
-    return { user: null, authConfigured: false };
+    // The API is unreachable — crucially NOT "auth is unconfigured". Falling back
+    // to authConfigured:false here would render the demo persona; instead reuse
+    // the last-known identity (flagged offline), and otherwise report a signed-out
+    // *configured* app so the UI shows an offline/login state, never demo mode.
+    const cached = await readMe<Me>();
+    if (cached) return { ...cached, offline: true };
+    return { user: null, authConfigured: true, offline: true };
   }
 }
 
@@ -812,7 +973,7 @@ export async function fetchMe(): Promise<Me> {
  */
 export async function fetchInstalledPlugins(): Promise<string[] | null> {
   try {
-    const res = await fetch("/api/plugins/installed");
+    const res = await apiFetch("/api/plugins/installed");
     if (!res.ok) return null;
     const data = (await res.json()) as { ids?: unknown };
     return Array.isArray(data.ids) ? data.ids.filter((x): x is string => typeof x === "string") : null;
@@ -823,7 +984,7 @@ export async function fetchInstalledPlugins(): Promise<string[] | null> {
 
 /** Persist the full installed-plugin set. Throws on failure (e.g. anonymous). */
 export async function saveInstalledPlugins(ids: string[]): Promise<void> {
-  const res = await fetch("/api/plugins/installed", {
+  const res = await apiFetch("/api/plugins/installed", {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ids }),
@@ -838,7 +999,7 @@ export async function saveInstalledPlugins(ids: string[]): Promise<void> {
  */
 export async function fetchActivePlugins(): Promise<string[] | null> {
   try {
-    const res = await fetch("/api/plugins/active");
+    const res = await apiFetch("/api/plugins/active");
     if (!res.ok) return null;
     const data = (await res.json()) as { ids?: unknown };
     return Array.isArray(data.ids) ? data.ids.filter((x): x is string => typeof x === "string") : null;
@@ -851,7 +1012,7 @@ export async function fetchActivePlugins(): Promise<string[] | null> {
 
 /** Plugin ids applied to a space (any member can read). */
 export async function getSpacePlugins(spaceId: string): Promise<string[]> {
-  const res = await fetch(`/api/spaces/${encodeURIComponent(spaceId)}/plugins`);
+  const res = await apiFetch(`/api/spaces/${encodeURIComponent(spaceId)}/plugins`);
   if (!res.ok) return [];
   const data = (await res.json()) as { ids?: unknown };
   return Array.isArray(data.ids) ? data.ids.filter((x): x is string => typeof x === "string") : [];
@@ -859,7 +1020,7 @@ export async function getSpacePlugins(spaceId: string): Promise<string[]> {
 
 /** Apply a plugin to a space (owner only). Throws on failure (e.g. 403). */
 export async function applySpacePlugin(spaceId: string, pluginId: string): Promise<void> {
-  const res = await fetch(`/api/spaces/${encodeURIComponent(spaceId)}/plugins`, {
+  const res = await apiFetch(`/api/spaces/${encodeURIComponent(spaceId)}/plugins`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pluginId }),
@@ -869,7 +1030,7 @@ export async function applySpacePlugin(spaceId: string, pluginId: string): Promi
 
 /** Remove a plugin from a space (owner only). Throws on failure. */
 export async function removeSpacePlugin(spaceId: string, pluginId: string): Promise<void> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/spaces/${encodeURIComponent(spaceId)}/plugins/${encodeURIComponent(pluginId)}`,
     { method: "DELETE" },
   );
@@ -884,7 +1045,7 @@ export interface PluginPlace {
 
 /** The group spaces the caller owns, each flagged with whether `pluginId` is applied there. */
 export async function getPluginPlaces(pluginId: string): Promise<PluginPlace[]> {
-  const res = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/places`);
+  const res = await apiFetch(`/api/plugins/${encodeURIComponent(pluginId)}/places`);
   if (!res.ok) return [];
   const data = (await res.json()) as { places?: PluginPlace[] };
   return Array.isArray(data.places) ? data.places : [];
@@ -931,7 +1092,7 @@ export interface Integrations {
 export async function getIntegrations(): Promise<Integrations> {
   const empty: Integrations = { sources: [], sourceId: null, repo: null, usingDefault: false };
   try {
-    const res = await fetch("/api/integrations");
+    const res = await apiFetch("/api/integrations");
     if (!res.ok) return empty;
     return (await res.json()) as Integrations;
   } catch {
@@ -961,7 +1122,7 @@ export interface AiModel {
 /** Models available for plugins to use, or [] when the server has no AI provider. */
 export async function listAiModels(): Promise<AiModel[]> {
   try {
-    const res = await fetch("/api/ai/models");
+    const res = await apiFetch("/api/ai/models");
     if (!res.ok) return [];
     const data = (await res.json()) as { models?: AiModel[] };
     return Array.isArray(data.models) ? data.models : [];
@@ -982,7 +1143,7 @@ export async function aiGenerate(req: {
   maxTokens?: number;
   json?: boolean;
 }): Promise<string> {
-  const res = await fetch("/api/ai/generate", {
+  const res = await apiFetch("/api/ai/generate", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(req),
@@ -1006,7 +1167,7 @@ export interface CustomPlugin {
 /** The caller's generated plugins (empty when none or unavailable). */
 export async function fetchCustomPlugins(): Promise<CustomPlugin[]> {
   try {
-    const res = await fetch("/api/plugins/custom");
+    const res = await apiFetch("/api/plugins/custom");
     if (!res.ok) return [];
     const data = (await res.json()) as { plugins?: CustomPlugin[] };
     return Array.isArray(data.plugins) ? data.plugins : [];
@@ -1017,7 +1178,7 @@ export async function fetchCustomPlugins(): Promise<CustomPlugin[]> {
 
 /** Persist + install a generated plugin. Throws with the server's message on rejection. */
 export async function saveCustomPlugin(manifest: PluginManifest, source: string): Promise<void> {
-  const res = await fetch("/api/plugins/custom", {
+  const res = await apiFetch("/api/plugins/custom", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ manifest, source }),
@@ -1028,7 +1189,7 @@ export async function saveCustomPlugin(manifest: PluginManifest, source: string)
 
 /** Uninstall + delete a generated plugin. */
 export async function deleteCustomPlugin(id: string): Promise<void> {
-  const res = await fetch(`/api/plugins/custom/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/plugins/custom/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`delete plugin failed: ${res.status}`);
 }
 
@@ -1060,14 +1221,14 @@ export async function listProcessing(plugin?: string, limit?: number): Promise<P
   if (plugin) params.set("plugin", plugin);
   if (limit) params.set("limit", String(limit));
   const qs = params.toString();
-  const res = await fetch(`/api/processing${qs ? `?${qs}` : ""}`);
+  const res = await apiFetch(`/api/processing${qs ? `?${qs}` : ""}`);
   if (!res.ok) return [];
   return (await res.json()) as ProcessingRun[];
 }
 
 /** Fetch a source plugin's settings schema + current values (secrets redacted). */
 export async function getPluginSettings(pluginId: string): Promise<PluginSettings | null> {
-  const res = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/settings`);
+  const res = await apiFetch(`/api/plugins/${encodeURIComponent(pluginId)}/settings`);
   if (!res.ok) return null;
   return (await res.json()) as PluginSettings;
 }
@@ -1077,7 +1238,7 @@ export async function getPluginSettings(pluginId: string): Promise<PluginSetting
  * treated as "keep existing" server-side (so the user needn't re-enter the token).
  */
 export async function savePluginSettings(pluginId: string, values: Record<string, string>): Promise<void> {
-  const res = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/settings`, {
+  const res = await apiFetch(`/api/plugins/${encodeURIComponent(pluginId)}/settings`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ values }),
@@ -1087,7 +1248,7 @@ export async function savePluginSettings(pluginId: string, values: Record<string
 
 /** Tasks from the connected source. `source` is null when nothing is connected. */
 export async function getTasks(): Promise<{ source: string | null; tasks: Task[] }> {
-  const res = await fetch("/api/tasks");
+  const res = await apiFetch("/api/tasks");
   if (!res.ok) return { source: null, tasks: [] };
   return (await res.json()) as { source: string | null; tasks: Task[] };
 }
@@ -1098,7 +1259,7 @@ export async function getCalendar(range?: { from: string; to: string }): Promise
   events: CalendarEvent[];
 }> {
   const q = range ? `?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}` : "";
-  const res = await fetch(`/api/calendar${q}`);
+  const res = await apiFetch(`/api/calendar${q}`);
   if (!res.ok) return { source: null, events: [] };
   return (await res.json()) as { source: string | null; events: CalendarEvent[] };
 }
@@ -1108,5 +1269,5 @@ export function loginUrl(returnTo: string): string {
 }
 
 export async function logout(): Promise<void> {
-  await fetch("/api/auth/logout", { method: "POST" });
+  await apiFetch("/api/auth/logout", { method: "POST" });
 }

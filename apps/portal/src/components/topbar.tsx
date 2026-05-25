@@ -10,7 +10,6 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { CURRENT_USER } from "@/lib/mock-data";
 import type { Me } from "@/lib/api";
 
 function initialsOf(s: string): string {
@@ -34,6 +33,8 @@ interface TopbarProps {
   auth: Me;
   onSignIn: () => void;
   onSignOut: () => void;
+  /** Backend unreachable — the app is view-only, so disable uploads. */
+  offline?: boolean;
 }
 
 export function Topbar({
@@ -51,18 +52,20 @@ export function Topbar({
   auth,
   onSignIn,
   onSignOut,
+  offline,
 }: TopbarProps) {
   const realUser = auth.user;
+  // Logged out whenever there's no real authenticated user. Never fall back to a
+  // fabricated demo persona — that used to render "MC" (Maya Chen) in the avatar
+  // and hide the login button whenever the backend reported auth as unconfigured.
+  const loggedOut = !realUser;
   const display = realUser
     ? {
         name: realUser.name ?? realUser.email ?? "Account",
         email: realUser.email ?? "",
         initials: initialsOf(realUser.name ?? realUser.email ?? "U"),
       }
-    : auth.authConfigured
-      ? { name: "Not signed in", email: "", initials: "?" }
-      : CURRENT_USER;
-  const loggedOut = auth.authConfigured && !auth.user;
+    : { name: "Not signed in", email: "", initials: "?" };
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
       {/* Breadcrumb */}
@@ -125,7 +128,12 @@ export function Topbar({
 
       {/* Upload — hidden in a read-only (connected) space */}
       {!readonly && (
-        <Button onClick={onUpload} className="gap-1.5">
+        <Button
+          onClick={onUpload}
+          disabled={offline}
+          title={offline ? "Unavailable while offline" : undefined}
+          className="gap-1.5"
+        >
           <Icon name="upload" size={16} />
           Upload
         </Button>
@@ -133,7 +141,12 @@ export function Topbar({
 
       {/* Account: square login button when logged out, avatar menu otherwise */}
       {loggedOut ? (
-        <Button onClick={onSignIn} className="gap-1.5">
+        <Button
+          onClick={onSignIn}
+          disabled={auth.offline}
+          title={auth.offline ? "You're offline" : undefined}
+          className="gap-1.5"
+        >
           <Icon name="log-out" size={16} className="rotate-180" /> Log in
         </Button>
       ) : (
@@ -159,17 +172,9 @@ export function Topbar({
             <Icon name="plugin" size={15} /> Plugin store
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          {realUser ? (
-            <DropdownMenuItem onClick={onSignOut}>
-              <Icon name="log-out" size={15} /> Sign out
-            </DropdownMenuItem>
-          ) : (
-            auth.authConfigured && (
-              <DropdownMenuItem onClick={onSignIn}>
-                <Icon name="log-out" size={15} className="rotate-180" /> Sign in
-              </DropdownMenuItem>
-            )
-          )}
+          <DropdownMenuItem onClick={onSignOut}>
+            <Icon name="log-out" size={15} /> Sign out
+          </DropdownMenuItem>
         </DropdownMenuContent>
         </DropdownMenu>
       )}

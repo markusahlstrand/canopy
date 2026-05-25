@@ -25,6 +25,10 @@
         "mime": "text/markdown",
         "template": "# Untitled\n\n"
       }
-    ]
+    ],
+    "store": {
+      "category": "Productivity",
+      "tagline": "Write and edit Markdown with a rich editor."
+    }
   }
 }

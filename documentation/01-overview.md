@@ -54,6 +54,13 @@ planned.
 - `@canopy/portal` — the Vite + React SPA (desktop + mobile), with first-party Calendar, Tasks,
   and Documentation plugins, **sandboxed file viewers** (image, PDF, a Markdown editor), and `@canopy/plugin-sources`
   for resolving plugins from GitHub/npm/zip.
+- **Offline & PWA** — the portal installs as a PWA and stays **read-only-usable** when the API is
+  unreachable: an IndexedDB cache of the listings you've browsed plus the bytes of starred and
+  recently-opened files, behind a reachability signal that raises an offline banner and gates
+  writes. See [Architecture → Offline & reachability](architecture).
+- **Full-text search** — an ACL-scoped FTS index (a core `SearchIndex` interface + a SQLite/D1
+  **FTS5** adapter), reindexed on every file change and queried via `GET /api/search` behind a
+  **⌘K command palette**. See [What belongs in the core → search](what-belongs-in-the-core).
 
 **Planned (designed, not yet implemented):**
 
@@ -64,7 +71,9 @@ planned.
   **capability enforcement**. The client-UI sandbox is already built — file viewers **and** UI
   slots (rail panels / detail views) run untrusted in an opaque-origin iframe with a capability
   bridge; first-party UI still runs trusted, in-process.
-- Vector and full-text search over the index.
+- Vector / semantic search over the index — **Cloudflare Vectorize** as a second adapter
+  alongside the full-text index (which is built — see *Built* above). The plugin-facing
+  `queryIndex` grant and the connected-space `changes()` feed are likewise still being wired.
 
 Anything marked _planned_ is design intent, not running code.
 

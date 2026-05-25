@@ -77,19 +77,21 @@ export function HomeScreen({
   userName,
   spaceCount,
   installed,
+  refreshKey,
   onOpenFile,
   onNav,
 }: {
   userName: string;
   spaceCount: number;
   installed: string[];
+  refreshKey: number;
   onOpenFile: (f: FileItem) => void;
   onNav: (view: string) => void;
 }) {
   const [recent, setRecent] = useState<FileItem[]>([]);
   useEffect(() => {
     listFiles("").then((items) => setRecent(items.slice(0, 6))).catch(() => setRecent([]));
-  }, []);
+  }, [refreshKey]);
 
   // Up to three installed apps to preview, resolved from the store catalog.
   const apps = installed
@@ -244,7 +246,7 @@ const SOURCES: { id: Source; label: string }[] = [
   { id: "shared", label: "Shared" },
 ];
 
-export function DriveScreen({ onOpenFile }: { onOpenFile: (f: FileItem) => void }) {
+export function DriveScreen({ refreshKey, onOpenFile }: { refreshKey: number; onOpenFile: (f: FileItem) => void }) {
   const [source, setSource] = useState<Source>("drive");
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -262,7 +264,7 @@ export function DriveScreen({ onOpenFile }: { onOpenFile: (f: FileItem) => void 
         setFiles([]);
         setError(e.message);
       });
-  }, [source, path]);
+  }, [source, path, refreshKey]);
 
   const filtered = useMemo(() => {
     if (source !== "drive") return files;
@@ -361,12 +363,12 @@ export function DriveScreen({ onOpenFile }: { onOpenFile: (f: FileItem) => void 
 
 const ROLE_LABEL: Record<string, string> = { owner: "Owner", editor: "Can edit", viewer: "Can view" };
 
-export function SpacesScreen({ spaces, onOpenFile }: { spaces: SpaceView[]; onOpenFile: (f: FileItem) => void }) {
+export function SpacesScreen({ spaces, refreshKey, onOpenFile }: { spaces: SpaceView[]; refreshKey: number; onOpenFile: (f: FileItem) => void }) {
   // A space the user has drilled into (its files), or null at the list level.
   const [open, setOpen] = useState<SpaceView | null>(null);
   const groups = spaces.filter((s) => s.kind === "group");
 
-  if (open) return <SpaceFilesScreen space={open} onBack={() => setOpen(null)} onOpenFile={onOpenFile} />;
+  if (open) return <SpaceFilesScreen space={open} refreshKey={refreshKey} onBack={() => setOpen(null)} onOpenFile={onOpenFile} />;
 
   return (
     <div>
@@ -424,10 +426,12 @@ export function SpacesScreen({ spaces, onOpenFile }: { spaces: SpaceView[]; onOp
 
 function SpaceFilesScreen({
   space,
+  refreshKey,
   onBack,
   onOpenFile,
 }: {
   space: SpaceView;
+  refreshKey: number;
   onBack: () => void;
   onOpenFile: (f: FileItem) => void;
 }) {
@@ -442,7 +446,7 @@ function SpaceFilesScreen({
         setFiles([]);
         setError(e.message);
       });
-  }, [space.id, path]);
+  }, [space.id, path, refreshKey]);
 
   const segments = path.split("/").filter(Boolean);
 
@@ -481,7 +485,7 @@ function SpaceFilesScreen({
 
 // ── Apps ────────────────────────────────────────────────────────────────
 
-export function AppsScreen({ installed }: { installed: string[] }) {
+export function AppsScreen({ installed, onInstall }: { installed: string[]; onInstall: (id: string) => void }) {
   // Resolve installed ids and the rest of the store from the shared catalog, so
   // this stays in sync with what the user actually has (no hardcoded list).
   const installedApps = PLUGIN_CATALOG.filter((c) => installed.includes(c.id));
@@ -520,7 +524,7 @@ export function AppsScreen({ installed }: { installed: string[] }) {
                   <div className="text-[14px] font-semibold">{s.label}</div>
                   <div className="text-[12px] text-muted-foreground">{s.tagline}</div>
                 </div>
-                <button className="h-7 rounded-full bg-primary px-3 text-[12.5px] font-semibold text-primary-foreground">Install</button>
+                <button onClick={() => onInstall(s.id)} className="h-7 rounded-full bg-primary px-3 text-[12.5px] font-semibold text-primary-foreground active:scale-95">Install</button>
               </div>
             ))}
           </div>
