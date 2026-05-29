@@ -26,6 +26,13 @@ export interface RailPanelContribution {
 export interface DetailViewContribution {
   id: string;
   title: string;
+  /**
+   * Place a launcher for this view in the left sidebar, under a section heading
+   * the plugin names (e.g. "Games", "Tools"). This is what makes a plugin a
+   * standalone *app* — reachable on its own, not only when a matching file opens.
+   * Omit to keep the detail view reachable from Home / the plugin list only.
+   */
+  nav?: { section: string };
 }
 
 /** A field the plugin adds to the file preview details grid. */

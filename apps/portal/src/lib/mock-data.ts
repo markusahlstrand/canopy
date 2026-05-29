@@ -79,11 +79,20 @@ export const TONE_COLOR: Record<string, string> = {
   accent: "38 92% 50%",
 };
 
+/**
+ * Which Settings tab a plugin is configured from. "ai" plugins go through the host
+ * AI gateway (Document AI); "connector" plugins are StorageConnectorPlugins that
+ * back a space (Synology, GitHub). Everything else is "general" and only appears in
+ * the catalog browser (the Plugins tab). Defaults to "general" when omitted.
+ */
+export type PluginGroup = "ai" | "connector" | "general";
+
 export interface CatalogItem {
   id: string;
   icon: string;
   label: string;
   category: "Productivity" | "Finance" | "Lifestyle" | "Security" | "Media" | "Wellness" | "Help";
+  group?: PluginGroup;
   tagline: string;
   popular?: boolean;
   color: string;
@@ -97,9 +106,9 @@ export interface CatalogItem {
 const FEATURE_CATALOG: CatalogItem[] = [
   { id: "calendar", icon: "calendar", label: "Calendar", category: "Productivity", tagline: "Shared family calendar with smart conflicts", popular: true, color: "145 33% 36%" },
   { id: "tasks", icon: "check-square", label: "Tasks", category: "Productivity", tagline: "A real to-do list for the household", popular: true, color: "212 70% 48%" },
-  { id: "github", icon: "github", label: "GitHub", category: "Productivity", tagline: "Sync issues to Tasks, releases & milestones to Calendar", popular: true, color: "240 6% 20%" },
-  { id: "document-ai", icon: "sparkles", label: "Document AI", category: "Productivity", tagline: "Auto-label each document by type with Gemini Flash", popular: true, color: "262 60% 55%" },
-  { id: "synology", icon: "hard-drive", label: "Synology", category: "Media", tagline: "Browse a Synology NAS as a space — directly or via QuickConnect", color: "190 65% 42%" },
+  { id: "github", icon: "github", label: "GitHub", category: "Productivity", group: "connector", tagline: "Sync issues to Tasks, releases & milestones to Calendar", popular: true, color: "240 6% 20%" },
+  { id: "document-ai", icon: "sparkles", label: "Document AI", category: "Productivity", group: "ai", tagline: "Auto-label each document by type with Gemini Flash", popular: true, color: "262 60% 55%" },
+  { id: "synology", icon: "hard-drive", label: "Synology", category: "Media", group: "connector", tagline: "Browse a Synology NAS as a space — directly or via QuickConnect", color: "190 65% 42%" },
   { id: "documentation", icon: "book", label: "Documentation", category: "Help", tagline: "How Canopy works — guides for using it and building plugins", color: "212 70% 48%" },
 ];
 

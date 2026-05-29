@@ -25,8 +25,19 @@ export const UI_PLUGINS: SandboxedUIPlugin[] = [
   { id: "calendar", source: calendarSource, slots: ["detailView", "railPanel"] },
 ];
 
+// Slots from AI-generated (Plugin Studio) "app" plugins, loaded at runtime from the
+// API. Unlike the build-time UI_PLUGINS these aren't known until the caller's custom
+// plugins resolve, so the host registers them imperatively — the detail-view sibling
+// of setCustomViewers. Keyed by plugin id.
+let CUSTOM_SLOTS: SandboxedUIPlugin[] = [];
+
+/** Replace the runtime custom-slot set (call when the caller's custom plugins load/change). */
+export function setCustomSlots(plugins: SandboxedUIPlugin[]): void {
+  CUSTOM_SLOTS = plugins;
+}
+
 /** The sandboxed source for `id`'s `slot`, or undefined if it isn't sandboxed. */
 export function sandboxedSlot(id: string, slot: SlotName): { source: string } | undefined {
-  const plugin = UI_PLUGINS.find((p) => p.id === id && p.slots.includes(slot));
+  const plugin = [...CUSTOM_SLOTS, ...UI_PLUGINS].find((p) => p.id === id && p.slots.includes(slot));
   return plugin ? { source: plugin.source } : undefined;
 }

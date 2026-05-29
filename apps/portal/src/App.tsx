@@ -16,13 +16,12 @@ import { FileTable, type SortKey, type SortState, type PluginMenuItem } from "@/
 import { FileIcon } from "@/components/file-icon";
 import { PluginRail } from "@/components/plugin-rail";
 import { CommandPalette } from "@/components/command-palette";
-import { PluginStore } from "@/components/plugin-store";
 import { FilePreview } from "@/components/file-preview";
 import { ShareDialog } from "@/components/share-dialog";
 import { HomeView } from "@/components/home-view";
 import { BuildPluginView } from "@/components/build-plugin-view";
 import { PluginStudioView } from "@/components/plugin-studio-view";
-import { SettingsView } from "@/components/settings-view";
+import { SettingsView, type SettingsTab } from "@/components/settings-view";
 import { TweaksPanel } from "@/components/tweaks-panel";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
@@ -68,7 +67,7 @@ import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
 import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
 import { setCustomViewers, type InstalledViewer } from "@/plugins/viewers";
-import { sandboxedSlot } from "@/plugins/ui";
+import { sandboxedSlot, setCustomSlots } from "@/plugins/ui";
 import { PluginSlot } from "@/components/plugin-slot";
 import { PluginDataProvider, usePluginCapabilities } from "@/plugins/data";
 import { ACCENT_HSL, ACCENT_HSL_DARK, DEFAULT_TWEAKS, FONT_STACK, type Tweaks } from "@/lib/tweaks";
@@ -170,21 +169,26 @@ function DesktopApp() {
   // isn't personally installed, and a local install/uninstall reflects instantly.
   const [installedIds, setInstalledIds] = useState<string[]>(ANON_DEFAULT_INSTALLED);
   const [activeServerIds, setActiveServerIds] = useState<string[]>(ANON_DEFAULT_INSTALLED);
-  const activeIds = useMemo(
-    () => [...new Set([...installedIds, ...activeServerIds])],
-    [installedIds, activeServerIds],
-  );
   // AI-generated plugins (Plugin Studio): manifest + ESM source, authored at
-  // runtime and merged into the registry (sidebar/store) and the viewer resolver
-  // the same way a resolved zip/github plugin would be.
+  // runtime and merged into the registry (sidebar/store) and the viewer/app slot
+  // resolvers the same way a resolved zip/github plugin would be. A saved custom
+  // plugin is, by virtue of existing, installed for its author — so its id counts
+  // as active: registered in the registry, launchable from the sidebar, and its
+  // viewers ungated for real files (not just the Studio preview).
   const [customPlugins, setCustomPlugins] = useState<CustomPlugin[]>([]);
   const refreshCustom = () => fetchCustomPlugins().then(setCustomPlugins);
   const customManifests = useMemo(() => customPlugins.map((p) => p.manifest), [customPlugins]);
+  const activeIds = useMemo(
+    () => [...new Set([...installedIds, ...activeServerIds, ...customManifests.map((m) => m.id)])],
+    [installedIds, activeServerIds, customManifests],
+  );
   const registry = useMemo(() => createRegistry(activeIds, customManifests), [activeIds, customManifests]);
   const installed = useMemo(() => registry.list().map((r) => r.manifest), [registry]);
   const refreshActive = () => fetchActivePlugins().then((ids) => ids && setActiveServerIds(ids));
 
-  // Feed generated viewers into the (module-level) resolver whenever they change.
+  // Feed generated viewers + app slots into the (module-level) resolvers whenever
+  // they change. A custom plugin is a file viewer (contributes.viewers) and/or a
+  // standalone app (contributes.detailView, rendered in the sandboxed detail slot).
   useEffect(() => {
     const viewers: InstalledViewer[] = customPlugins.flatMap((p) =>
       (p.manifest.contributes?.viewers ?? []).map((v) => ({
@@ -194,6 +198,11 @@ function DesktopApp() {
       })),
     );
     setCustomViewers(viewers);
+    setCustomSlots(
+      customPlugins
+        .filter((p) => p.manifest.contributes?.detailView)
+        .map((p) => ({ id: p.manifest.id, source: p.source, slots: ["detailView"] })),
+    );
   }, [customPlugins]);
 
   const [active, setActive] = useState(() => readUrlState().active);
@@ -263,7 +272,9 @@ function DesktopApp() {
   }, [auth, initialHadView]);
 
   const [cmdOpen, setCmdOpen] = useState(false);
-  const [storeOpen, setStoreOpen] = useState(false);
+  // Which Settings tab is shown. The standalone store sheet was retired, so "browse
+  // plugins" entry points now deep-link to Settings → Plugins via openPluginsTab().
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   // How an opened file is shown: "split" docks beside the (still-usable) list,
   // "full" covers the viewport. Remembered across files and reloads.
@@ -608,6 +619,12 @@ function DesktopApp() {
     if (id.startsWith("plugin:")) setActivePlugin(id.replace("plugin:", ""));
   }
 
+  // "Browse plugins" / store entry points: jump to Settings with the Plugins tab open.
+  function openPluginsTab() {
+    setSettingsTab("plugins");
+    navigate("settings");
+  }
+
   function installPlugin(id: string) {
     if (installedIds.includes(id)) return;
     persistInstalled([...installedIds, id]);
@@ -838,7 +855,6 @@ function DesktopApp() {
         active={active}
         onNavigate={navigate}
         installedPlugins={installed}
-        onOpenStore={() => setStoreOpen(true)}
         collapsed={tweaks.sidebarCollapsed}
         onToggle={() => setTweak("sidebarCollapsed", !tweaks.sidebarCollapsed)}
         spaces={spaces}
@@ -866,7 +882,7 @@ function DesktopApp() {
           breadcrumb={breadcrumb}
           onCrumbClick={active === "drive" ? onCrumbClick : undefined}
           onOpenCmd={() => setCmdOpen(true)}
-          onOpenStore={() => setStoreOpen(true)}
+          onOpenStore={openPluginsTab}
           theme={tweaks.theme}
           onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
           onUpload={() => uploadInputRef.current?.click()}
@@ -928,7 +944,24 @@ function DesktopApp() {
             ) : active === "build-plugin" ? (
               <BuildPluginView />
             ) : active === "settings" ? (
-              <SettingsView />
+              <SettingsView
+                tab={settingsTab}
+                onTabChange={setSettingsTab}
+                installedIds={installedIds}
+                onInstall={installPlugin}
+                onUninstall={uninstallPlugin}
+                onConfigure={(id) =>
+                  setSettingsPlugin({ id, name: PLUGIN_CATALOG.find((p) => p.id === id)?.label ?? id })
+                }
+                onBuildWithAI={() => navigate("plugin-studio")}
+                customPlugins={customPlugins}
+                onOpenCustom={(id) => navigate(`plugin:${id}`)}
+                onUninstallCustom={async (id) => {
+                  await deleteCustomPlugin(id).catch(() => {});
+                  void refreshCustom();
+                  void refreshActive();
+                }}
+              />
             ) : active.startsWith("plugin:") ? (
               <PluginDetail id={active.replace("plugin:", "")} installed={installed} />
             ) : isFilesView ? (
@@ -1056,23 +1089,8 @@ function DesktopApp() {
         installedIds={installedIds}
         onNavigate={navigate}
         onOpenFile={setPreviewFile}
-        onOpenStore={() => setStoreOpen(true)}
+        onOpenStore={openPluginsTab}
         onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
-      />
-
-      <PluginStore
-        open={storeOpen}
-        onOpenChange={setStoreOpen}
-        installedIds={installedIds}
-        onInstall={installPlugin}
-        onUninstall={uninstallPlugin}
-        onConfigure={(id) =>
-          setSettingsPlugin({ id, name: PLUGIN_CATALOG.find((p) => p.id === id)?.label ?? id })
-        }
-        onBuildWithAI={() => {
-          setStoreOpen(false);
-          navigate("plugin-studio");
-        }}
       />
 
       {settingsPlugin && (

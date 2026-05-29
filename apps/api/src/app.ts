@@ -49,8 +49,10 @@ function mimeFor(name: string): string {
   return MIME[ext] ?? "application/octet-stream";
 }
 
-/** Output token ceiling for /api/ai/generate, so a runaway generation can't rack up cost. */
-const AI_MAX_TOKENS = 8192;
+/** Output token ceiling for /api/ai/generate, so a runaway generation can't rack up cost.
+ * Generous because Plugin Studio emits a whole viewer module; capable models (Gemini
+ * Flash) can do far more, while the cap still guards against an unbounded generation. */
+const AI_MAX_TOKENS = 32768;
 /** Max ESM source we'll persist for a generated plugin (a single sandboxed viewer module). */
 const MAX_PLUGIN_SOURCE = 256 * 1024;
 /** Capabilities a Studio-generated (sandboxed viewer) plugin may declare — nothing host-trusted. */
@@ -58,10 +60,12 @@ const SANDBOX_VIEWER_CAPS = new Set(["item:read", "item:write", "net:fetch"]);
 
 /**
  * Structural check for a manifest submitted to `/api/plugins/custom`. The studio
- * builds sandboxed viewers only, so we reject anything that asks for a capability
- * the sandbox can't safely back, or that isn't a viewer. Returns an error string,
- * or null when the manifest is acceptable. (The browser validates against the full
- * JSON schema before submitting; this is the server's defense-in-depth copy.)
+ * builds two sandboxed kinds — a **file viewer** (`contributes.viewers`, opened by
+ * matching files) or a standalone **app** (`contributes.detailView`, launched from
+ * the sidebar) — so we accept either, but reject any capability the sandbox can't
+ * safely back. Returns an error string, or null when the manifest is acceptable.
+ * (The browser validates against the full JSON schema before submitting; this is
+ * the server's defense-in-depth copy.)
  */
 function validateCustomManifest(m: unknown): string | null {
   if (!m || typeof m !== "object") return "manifest must be an object";
@@ -72,14 +76,24 @@ function validateCustomManifest(m: unknown): string | null {
   if (!Array.isArray(man.capabilities)) return "manifest.capabilities must be an array";
   for (const cap of man.capabilities as Capability[]) {
     if (!cap || typeof cap !== "object" || !SANDBOX_VIEWER_CAPS.has((cap as { kind?: string }).kind ?? ""))
-      return `capability "${(cap as { kind?: string })?.kind}" is not allowed for a generated viewer`;
+      return `capability "${(cap as { kind?: string })?.kind}" is not allowed for a generated plugin`;
     if (cap.kind === "net:fetch" && (!Array.isArray(cap.hosts) || cap.hosts.length === 0))
       return "net:fetch requires a non-empty hosts list";
   }
-  const viewers = (man.contributes as { viewers?: unknown } | undefined)?.viewers;
-  if (!Array.isArray(viewers) || viewers.length === 0) return "manifest must contribute at least one viewer";
-  for (const v of viewers as { match?: unknown }[]) {
+  const contributes = man.contributes as { viewers?: unknown; detailView?: unknown } | undefined;
+  const viewers = contributes?.viewers;
+  const detailView = contributes?.detailView;
+  const hasViewers = Array.isArray(viewers) && viewers.length > 0;
+  const hasApp = !!detailView && typeof detailView === "object";
+  if (!hasViewers && !hasApp)
+    return "manifest must contribute at least one viewer or a detailView (app)";
+  for (const v of (hasViewers ? (viewers as { match?: unknown }[]) : [])) {
     if (!Array.isArray(v.match) || v.match.length === 0) return "each viewer needs a non-empty match list";
+  }
+  if (hasApp) {
+    const dv = detailView as { id?: unknown; title?: unknown };
+    if (typeof dv.id !== "string" || !dv.id.trim()) return "detailView needs an id";
+    if (typeof dv.title !== "string" || !dv.title.trim()) return "detailView needs a title";
   }
   return null;
 }
@@ -1104,6 +1118,25 @@ export function createApp(deps: AppDeps) {
     }
     await drive!.service.setPluginSettings(caller.sub, src.id, JSON.stringify(stored));
     return c.json({ ok: true });
+  }));
+
+  // Actively exercise a connector-backed plugin (Synology, etc.): build its
+  // connector from the caller's saved config and attempt a root listing, so the
+  // plugin's own page can show *why* a connection fails (bad credentials,
+  // unreachable host, a QuickConnect that won't resolve) instead of silently
+  // pretending it's connected the moment config exists. `connectorFor` covers the
+  // "not configured" / "no connector" cases; the listing surfaces live failures.
+  app.get("/api/plugins/:id/test", driveRoute(async (c) => {
+    const pluginId = c.req.param("id")!;
+    const resolved = await resolveConfig(c, pluginId);
+    const connector = resolved && dataSources?.connectorFor ? dataSources.connectorFor(pluginId, resolved.config) : null;
+    if (!connector) return c.json({ ok: false, error: "not configured" });
+    try {
+      await connector.list("");
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message });
+    }
   }));
 
   // The places (group spaces the caller owns) a plugin can be applied to, each

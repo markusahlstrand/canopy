@@ -94,6 +94,23 @@ function posixBasename(p: string): string {
   return p.replace(/\/+$/, "").split("/").pop() ?? "";
 }
 
+/**
+ * Read a Synology API response as JSON. DSM always answers with JSON, so a body
+ * that won't parse means we never reached DSM — typically an intermediary error
+ * page (e.g. Cloudflare's plain-text "error code: 1003" when an edge runtime
+ * fetches a Cloudflare-fronted address by IP). Surface that legibly instead of
+ * letting a raw `JSON.parse` throw an opaque "Unexpected token …".
+ */
+async function readJson<T>(res: Response, what: string): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const snippet = text.trim().replace(/\s+/g, " ").slice(0, 200);
+    throw new Error(`Synology ${what}: expected JSON but got HTTP ${res.status} "${snippet || "(empty body)"}"`);
+  }
+}
+
 export function createSynologyConnector(id: string, config: SynologyConfig): StorageConnector {
   const doFetch = config.fetchImpl ?? fetch;
   const shareRoot = (config.shareRoot ?? "").replace(/\/+$/, ""); // e.g. "/home"
@@ -142,8 +159,12 @@ export function createSynologyConnector(id: string, config: SynologyConfig): Sto
     const url = `${candidate}/webapi/query.cgi?api=SYNO.API.Info&version=1&method=query&query=SYNO.API.Auth`;
     const res = await doFetch(url, { signal: AbortSignal.timeout(4000) });
     if (!res.ok) return false;
-    const body = (await res.json()) as { success?: boolean };
-    return body.success === true;
+    try {
+      const body = (await res.json()) as { success?: boolean };
+      return body.success === true;
+    } catch {
+      return false; // non-JSON (a proxy/CDN error page) → not a usable DSM endpoint
+    }
   }
 
   /** Discover API paths + versions once (falls back to sane defaults). */
@@ -190,7 +211,7 @@ export function createSynologyConnector(id: string, config: SynologyConfig): Sto
     });
     if (config.otpCode) params.set("otp_code", config.otpCode);
     const res = await doFetch(`${base}/webapi/${auth.path}?${params}`);
-    const body = (await res.json()) as { success?: boolean; data?: { sid?: string }; error?: { code?: number } };
+    const body = await readJson<{ success?: boolean; data?: { sid?: string }; error?: { code?: number } }>(res, "login");
     if (!body.success || !body.data?.sid) throw new SynologyError(body.error?.code ?? 0, "SYNO.API.Auth");
     sid = body.data.sid;
     return sid;
@@ -210,7 +231,7 @@ export function createSynologyConnector(id: string, config: SynologyConfig): Sto
     const run = async (token: string): Promise<{ success: boolean; data?: T; code?: number }> => {
       const qs = new URLSearchParams({ api, version: String(version), method, ...params, _sid: token });
       const res = await doFetch(`${base}/webapi/${path}?${qs}`);
-      const body = (await res.json()) as { success?: boolean; data?: T; error?: { code?: number } };
+      const body = await readJson<{ success?: boolean; data?: T; error?: { code?: number } }>(res, `${api}.${method}`);
       return { success: !!body.success, data: body.data, code: body.error?.code };
     };
 
@@ -311,7 +332,7 @@ export function createSynologyConnector(id: string, config: SynologyConfig): Sto
       form.set("overwrite", "true");
       form.set("file", new Blob([bytes as BlobPart]), name);
       const res = await doFetch(`${baseUrl}/webapi/${cgi}?_sid=${encodeURIComponent(token)}`, { method: "POST", body: form });
-      const result = (await res.json()) as { success?: boolean; error?: { code?: number } };
+      const result = await readJson<{ success?: boolean; error?: { code?: number } }>(res, "SYNO.FileStation.Upload");
       if (!result.success) throw new SynologyError(result.error?.code ?? 0, "SYNO.FileStation.Upload");
       return { path: toRelative(fsPath), name, kind: "file", size: bytes.byteLength, modifiedAt: new Date().toISOString() };
     },

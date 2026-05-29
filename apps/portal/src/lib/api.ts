@@ -69,6 +69,23 @@ async function sha256hex(bytes: Uint8Array): Promise<string> {
   return hex;
 }
 
+/**
+ * Turn a failed response into an Error carrying the *server's* reason. The API
+ * answers errors as `{ error: "<message>" }` (see `handle()` in the API app), so
+ * a connector failure — "QuickConnect … no candidate address responded", bad
+ * DSM credentials, an edge proxy's non-JSON page — reaches the user instead of a
+ * generic "<verb> failed: 400". Falls back to the status when there's no body.
+ */
+async function apiError(res: Response, fallback: string): Promise<Error> {
+  try {
+    const body = (await res.json()) as { error?: string };
+    if (body?.error) return new Error(body.error);
+  } catch {
+    // non-JSON body (e.g. an upstream 502 HTML page) — fall back to the status
+  }
+  return new Error(`${fallback}: ${res.status}`);
+}
+
 // ── the drive (DB-backed, content-addressed) ─────────────────────────────────
 
 /** Shape of a file record returned by the API (an enriched FileWithVersion). */
@@ -171,7 +188,7 @@ export async function listFiles(dir = "", spaceId?: string): Promise<FileItem[]>
   try {
     const res = await apiFetch(`/api/files?path=${encodeURIComponent(dir)}${sp}`);
     if (res.status === 401) return []; // not signed in → empty drive
-    if (!res.ok) throw new Error(`list failed: ${res.status}`);
+    if (!res.ok) throw await apiError(res, "list failed");
     const items = toFileItems(await res.json(), dir);
     void cacheListing(key, items); // for offline browsing
     void warmStarred(items); // pre-fetch starred bytes so they open offline
@@ -221,7 +238,7 @@ export function contentUrl(id: string): string {
 export async function fetchContent(url: string): Promise<{ bytes: ArrayBuffer; mime: string }> {
   try {
     const res = await apiFetch(url);
-    if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+    if (!res.ok) throw await apiError(res, "fetch failed");
     const bytes = await res.arrayBuffer();
     const mime = res.headers.get("content-type") ?? "application/octet-stream";
     // Cache a copy — the original may be transferred to a sandboxed viewer.
@@ -555,6 +572,23 @@ export async function listSpaces(): Promise<SpaceView[]> {
   const res = await apiFetch("/api/spaces");
   if (!res.ok) return [];
   return (await res.json()) as SpaceView[];
+}
+
+/**
+ * Actively test a connector-backed plugin's connection (Synology, etc.). A saved
+ * config makes a `connector:<id>` space *appear*, but that alone doesn't mean the
+ * backend is reachable — this hits `/api/plugins/:id/test`, which builds the
+ * connector and tries a root listing, so a plugin page can show the real failure.
+ */
+export async function testConnector(pluginId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await apiFetch(`/api/plugins/${encodeURIComponent(pluginId)}/test`);
+    if (res.status === 401) return { ok: false, error: "Sign in to test the connection." };
+    if (!res.ok) return { ok: false, error: `test failed: ${res.status}` };
+    return (await res.json()) as { ok: boolean; error?: string };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
 }
 
 /** Create a shared (group) space. */

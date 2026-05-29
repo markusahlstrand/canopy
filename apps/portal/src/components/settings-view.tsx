@@ -1,32 +1,126 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Icon } from "@/lib/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PluginBrowser } from "@/components/plugin-browser";
 import {
   getPluginSettings,
   listAiModels,
   savePluginSettings,
   type AiModel,
+  type CustomPlugin,
   type PluginConfigField,
 } from "@/lib/api";
 
+/** The Settings tabs, also used by the host to deep-link (e.g. "Browse plugins"). */
+export type SettingsTab = "ai" | "connectors" | "plugins";
+
+export interface SettingsViewProps {
+  tab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
+  installedIds: string[];
+  onInstall: (id: string) => void;
+  onUninstall: (id: string) => void;
+  /** Open a plugin's config + places dialog. */
+  onConfigure: (id: string) => void;
+  /** Open the "Build your own plugin with AI" page. */
+  onBuildWithAI: () => void;
+  /** The caller's Plugin Studio creations, listed under the Plugins tab. */
+  customPlugins?: CustomPlugin[];
+  /** Launch a custom app plugin. */
+  onOpenCustom?: (id: string) => void;
+  /** Uninstall a custom plugin. */
+  onUninstallCustom?: (id: string) => void;
+}
+
 /**
- * Settings — a hub for user- and deployment-level configuration. Today it hosts the
- * **AI models** section: the provider keys a user adds (Gemini, an OpenAI-compatible
- * endpoint) feed the host AI gateway, and the models that result are what plugins
- * like Document AI can pick. Connectors, default plugins, and more belong here next.
+ * Settings — the hub for user- and deployment-level configuration, and the home for
+ * all plugin management since the standalone store sheet was retired. Three tabs:
+ * **AI** (provider keys that feed the host AI gateway, plus AI plugins like Document
+ * AI), **Connectors** (StorageConnectorPlugins that back a space — Synology, GitHub),
+ * and **Plugins** (the full catalog browser — search, install, configure everything).
  */
-export function SettingsView() {
+export function SettingsView({
+  tab,
+  onTabChange,
+  installedIds,
+  onInstall,
+  onUninstall,
+  onConfigure,
+  onBuildWithAI,
+  customPlugins,
+  onOpenCustom,
+  onUninstallCustom,
+}: SettingsViewProps) {
+  const browserProps = { installedIds, onInstall, onUninstall, onConfigure };
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-6">
+    <div className="mx-auto flex max-w-3xl flex-col gap-6">
       <div>
         <h1 className="text-[22px] font-semibold tracking-tight">Settings</h1>
         <p className="mt-0.5 text-[13px] text-muted-foreground">
           Configure the providers and plugins this account uses.
         </p>
       </div>
-      <AiModelsSection />
+
+      <Tabs value={tab} onValueChange={(v) => onTabChange(v as SettingsTab)} className="gap-5">
+        <TabsList variant="line" className="self-start">
+          <TabsTrigger value="ai">AI</TabsTrigger>
+          <TabsTrigger value="connectors">Connectors</TabsTrigger>
+          <TabsTrigger value="plugins">Plugins</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="ai" className="flex flex-col gap-5">
+          <AiModelsSection />
+          <TabSection
+            title="AI plugins"
+            description="Plugins that run inference through the gateway above."
+          >
+            <PluginBrowser group="ai" {...browserProps} />
+          </TabSection>
+        </TabsContent>
+
+        <TabsContent value="connectors" className="flex flex-col gap-3">
+          <TabSection
+            title="Connectors"
+            description="Mount an external store as a space. Install one, then open its settings to add credentials and choose where it appears."
+          >
+            <PluginBrowser group="connector" {...browserProps} />
+          </TabSection>
+        </TabsContent>
+
+        <TabsContent value="plugins" className="flex flex-col gap-3">
+          <PluginBrowser
+            {...browserProps}
+            onBuildWithAI={onBuildWithAI}
+            custom={customPlugins}
+            onOpenCustom={onOpenCustom}
+            onUninstallCustom={onUninstallCustom}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
+  );
+}
+
+/** A titled block within a tab, used for the AI-plugins and Connectors lists. */
+function TabSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-3">
+      <div>
+        <h2 className="text-[15px] font-semibold">{title}</h2>
+        <p className="text-[12.5px] text-muted-foreground">{description}</p>
+      </div>
+      {children}
+    </section>
   );
 }
 

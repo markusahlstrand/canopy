@@ -58,25 +58,34 @@ export function candidatesFromServerInfo(
   const extPort = Number(service.ext_port) || undefined; // WAN-facing (port-forwarded) https port
   const intPort = Number(service.port) || undefined; // LAN https port (often 5001)
 
-  const remote: string[] = [];
+  // Remote candidates are split by host kind: a *hostname* is tried before a
+  // *bare IP* of the same reachability tier. Edge runtimes (Cloudflare Workers)
+  // route outbound fetches through Cloudflare; fetching a Cloudflare-fronted
+  // address by IP gets bounced with "error code: 1003" (Direct IP Access Not
+  // Allowed), whereas the hostname form carries a real Host header and works.
+  const remoteHost: string[] = [];
+  const remoteIp: string[] = [];
   const lan: string[] = [];
 
+  const isIp = (h: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(":");
+  const pushRemote = (host: string, port?: number) => (isIp(host) ? remoteIp : remoteHost).push(httpsUrl(host, port));
+
   // DDNS / fully-qualified name — the friendliest reachable name when set.
-  if (present(server.ddns)) remote.push(httpsUrl(server.ddns, extPort));
-  if (present(server.fqdn)) remote.push(httpsUrl(server.fqdn, extPort));
+  if (present(server.ddns)) pushRemote(server.ddns, extPort);
+  if (present(server.fqdn)) pushRemote(server.fqdn, extPort);
 
   // SmartDNS hostname (resolves to LAN when you're home, relay otherwise) — the
   // relay terminates on standard https, so no explicit WAN-forwarded port.
-  if (present(smartdns.host)) remote.push(httpsUrl(smartdns.host));
+  if (present(smartdns.host)) pushRemote(smartdns.host);
 
   // Direct WAN IP, if a port is forwarded.
   const external = (server.external ?? {}) as Record<string, unknown>;
-  if (present(external.ip) && extPort) remote.push(httpsUrl(external.ip, extPort));
+  if (present(external.ip) && extPort) pushRemote(external.ip, extPort);
 
   // Relay tunnel — the always-available fallback that needs no port-forwarding.
-  if (present(service.relay_ip)) remote.push(httpsUrl(service.relay_ip, Number(service.relay_port) || undefined));
+  if (present(service.relay_ip)) pushRemote(service.relay_ip, Number(service.relay_port) || undefined);
   const controlHost = present(env.control_host) ? env.control_host : "quickconnect.to";
-  remote.push(httpsUrl(`${id}.${controlHost}`)); // generic tunnel name, last resort
+  pushRemote(`${id}.${controlHost}`); // generic tunnel name, last resort
 
   // LAN interfaces — reachable only on the same network (self-hosted Node).
   const interfaces = Array.isArray(server.interface) ? (server.interface as Record<string, unknown>[]) : [];
@@ -89,7 +98,7 @@ export function candidatesFromServerInfo(
     }
   }
 
-  const ordered = preferLan ? [...lan, ...remote] : [...remote, ...lan];
+  const ordered = preferLan ? [...lan, ...remoteHost, ...remoteIp] : [...remoteHost, ...remoteIp, ...lan];
   return [...new Set(ordered)]; // de-dupe, preserve order
 }
 

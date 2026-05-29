@@ -58,7 +58,10 @@
 	// origin; register <your-url>/api/auth/callback on the OIDC client.
 	"vars": {
 		"GITHUB_REPO": "markusahlstrand/canopy",
-		"GITHUB_BRANCH": "main"
+		"GITHUB_BRANCH": "main",
+		"OIDC_ISSUER": "https://token.sesamy.dev",
+		"OIDC_CLIENT_ID": "canopy",
+		"OIDC_AUDIENCE": "urn:canopy"
 	},
 	// Daily version-retention sweep: thins old snapshots to the retention curve (#11).
 	"triggers": {

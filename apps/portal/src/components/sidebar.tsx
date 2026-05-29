@@ -39,7 +39,6 @@ interface SidebarProps {
   active: string;
   onNavigate: (id: string) => void;
   installedPlugins: PluginManifest[];
-  onOpenStore: () => void;
   collapsed: boolean;
   onToggle: () => void;
   spaces: SpaceView[];
@@ -114,7 +113,6 @@ export function Sidebar({
   active,
   onNavigate,
   installedPlugins,
-  onOpenStore,
   collapsed,
   onToggle,
   spaces,
@@ -136,6 +134,17 @@ export function Sidebar({
   const creators = creatorsFor(installedPlugins.map((p) => p.id));
   const groupSpaces = spaces.filter((s) => s.kind === "group");
   const connectedSpaces = spaces.filter((s) => s.kind === "connected");
+  // Installed "app" plugins that declare a sidebar launcher (contributes.detailView.nav),
+  // grouped under the section heading each one names (e.g. "Games", "Tools").
+  const navSections = (() => {
+    const groups = new Map<string, PluginManifest[]>();
+    for (const p of installedPlugins) {
+      const section = p.contributes?.detailView?.nav?.section?.trim();
+      if (!section) continue;
+      groups.set(section, [...(groups.get(section) ?? []), p]);
+    }
+    return [...groups.entries()];
+  })();
   const realUser = auth.user;
   // No real user → render the "Sign in" row, never a fabricated demo persona.
   const displayUser = realUser
@@ -296,40 +305,33 @@ export function Sidebar({
         </div>
       )}
 
-      {/* Plugins */}
-      <div className={cn("mt-5 flex min-h-0 flex-1 flex-col px-3", collapsed && "px-2")}>
-        {!collapsed && (
-          <div className="mb-1 flex items-center justify-between px-2.5">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Plugins</span>
-            <button onClick={onOpenStore} className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-accent">
-              <Icon name="plus" size={14} />
-            </button>
-          </div>
-        )}
-        <div className="flex flex-col gap-0.5 overflow-y-auto">
-          {installedPlugins.map((p) => (
-            <NavRow
-              key={p.id}
-              icon={p.icon ?? "plugin"}
-              label={p.name}
-              dot={p.id === "tasks"}
-              count={p.id === "calendar" ? 3 : p.id === "tasks" ? 4 : undefined}
-              active={active === `plugin:${p.id}`}
-              collapsed={collapsed}
-              onClick={() => onNavigate(`plugin:${p.id}`)}
-            />
-          ))}
+      {/* App plugins (Plugin Studio "apps" / any plugin contributing a navigable
+          detailView) launch straight from the sidebar, grouped by their declared
+          section. File-viewer plugins have no entry here — they open via files. */}
+      {navSections.map(([section, plugins]) => (
+        <div key={section} className={cn("mt-4 px-3", collapsed && "px-2")}>
           {!collapsed && (
-            <button
-              onClick={onOpenStore}
-              className="flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13.5px] text-muted-foreground hover:bg-accent/60"
-            >
-              <Icon name="plugin" size={17} />
-              Browse plugins
-            </button>
+            <div className="mb-1 px-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {section}
+            </div>
           )}
+          <div className="flex flex-col gap-0.5">
+            {plugins.map((p) => (
+              <NavRow
+                key={p.id}
+                icon={p.icon ?? "plugin"}
+                label={p.name}
+                active={active === `plugin:${p.id}`}
+                collapsed={collapsed}
+                onClick={() => onNavigate(`plugin:${p.id}`)}
+              />
+            ))}
+          </div>
         </div>
-      </div>
+      ))}
+
+      {/* Spacer anchors the storage + user cards to the bottom. */}
+      <div className="min-h-4 flex-1" />
 
       {/* Storage card */}
       {!collapsed && (

@@ -5,12 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Icon } from "@/lib/icons";
 import { PluginViewer } from "@/components/plugin-viewer";
+import { PluginSlot } from "@/components/plugin-slot";
 import { BuildPluginView } from "@/components/build-plugin-view";
+import { cn } from "@/lib/utils";
 import { aiGenerate, listAiModels, saveCustomPlugin, type AiModel, type CustomPlugin } from "@/lib/api";
 import {
   buildGenerationMessages,
   parseGeneratedPlugin,
   type GeneratedPlugin,
+  type PluginKind,
 } from "@/lib/plugin-author-prompt";
 
 /**
@@ -34,6 +37,7 @@ export function PluginStudioView({
 }) {
   const [models, setModels] = useState<AiModel[] | null>(null); // null = still loading
   const [model, setModel] = useState("");
+  const [kind, setKind] = useState<PluginKind>("viewer");
   const [idea, setIdea] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,10 +67,15 @@ export function PluginStudioView({
     setGenerated(null);
     try {
       const text = await aiGenerate({
-        messages: buildGenerationMessages(idea),
+        messages: buildGenerationMessages(idea, kind),
         model: model || undefined,
-        json: true,
-        maxTokens: 4096,
+        // The contract asks for two fenced blocks (manifest + source), not one JSON
+        // object — so we don't force strict JSON mode (which not every model supports,
+        // e.g. Workers AI Gemma) and which would reject the ```js block. A generous
+        // budget leaves room for a full viewer module (and any reasoning tokens);
+        // capable models (Gemini Flash) handle this easily, smaller ones clamp to
+        // their own limit. The server caps at AI_MAX_TOKENS regardless.
+        maxTokens: 16384,
       });
       setGenerated(parseGeneratedPlugin(text));
     } catch (e) {
@@ -118,6 +127,11 @@ export function PluginStudioView({
   const viewers = m?.contributes?.viewers ?? [];
   const matches = [...new Set(viewers.flatMap((v) => v.match))];
   const caps = (m?.capabilities ?? []).map((c) => c.kind);
+  // Preview as an app (render the detail view directly) when the generated manifest
+  // declares one — regardless of the toggle, since the model decides what it built.
+  const detailView = m?.contributes?.detailView;
+  const navSection = detailView?.nav?.section;
+  const previewAsApp = !!detailView;
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 py-1">
@@ -132,14 +146,31 @@ export function PluginStudioView({
         <div>
           <h1 className="text-[22px] font-semibold tracking-tight">Plugin Studio</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Describe a file viewer. The AI writes it, you preview it live, then install it — all
-            in-app. It runs in the same sandbox as every other plugin.
+            Describe a file viewer or a standalone app. The AI writes it, you preview it live, then
+            install it — all in-app. It runs in the same sandbox as every other plugin.
           </p>
         </div>
       </div>
 
-      {/* Idea + model */}
+      {/* Kind + idea + model */}
       <div className="flex flex-col gap-2">
+        <div className="inline-flex self-start rounded-md border p-0.5 text-[13px]">
+          {([
+            ["viewer", "File viewer"],
+            ["app", "App"],
+          ] as const).map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setKind(k)}
+              className={cn(
+                "rounded-[5px] px-3 py-1 transition-colors",
+                kind === k ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <label htmlFor="studio-idea" className="text-[13px] font-medium">
           What should it do?
         </label>
@@ -148,7 +179,11 @@ export function PluginStudioView({
           value={idea}
           onChange={(e) => setIdea(e.target.value)}
           rows={3}
-          placeholder="e.g. Render .gpx GPS tracks on a small map, or show EXIF metadata for photos"
+          placeholder={
+            kind === "app"
+              ? "e.g. A snake game, a pomodoro timer, or a unit converter"
+              : "e.g. Render .gpx GPS tracks on a small map, or show EXIF metadata for photos"
+          }
           className="w-full resize-y rounded-md border bg-transparent px-3 py-2 text-[14px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
         />
         <div className="flex flex-wrap items-center gap-2">
@@ -171,7 +206,9 @@ export function PluginStudioView({
             {busy && !generated ? "Generating…" : generated ? "Regenerate" : "Generate plugin"}
           </Button>
           <span className="text-[12px] text-muted-foreground">
-            Today the studio builds sandboxed file viewers.
+            {kind === "app"
+              ? "An app launches from its own section in the sidebar."
+              : "A viewer opens when you preview a matching file."}
           </span>
         </div>
       </div>
@@ -199,6 +236,11 @@ export function PluginStudioView({
               </div>
               {m.description && <p className="text-[12.5px] text-muted-foreground">{m.description}</p>}
               <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {navSection && (
+                  <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-secondary-foreground">
+                    Sidebar · {navSection}
+                  </span>
+                )}
                 {matches.map((mt) => (
                   <code key={mt} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
                     {mt}
@@ -220,17 +262,25 @@ export function PluginStudioView({
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <span className="text-[13px] font-medium">Live preview</span>
-              <input
-                ref={fileInput}
-                type="file"
-                className="hidden"
-                onChange={(e) => pickSample(e.target.files?.[0] ?? undefined)}
-              />
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileInput.current?.click()}>
-                <Upload size={14} /> {sample ? "Change sample" : "Choose a sample file"}
-              </Button>
+              {!previewAsApp && (
+                <>
+                  <input
+                    ref={fileInput}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => pickSample(e.target.files?.[0] ?? undefined)}
+                  />
+                  <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileInput.current?.click()}>
+                    <Upload size={14} /> {sample ? "Change sample" : "Choose a sample file"}
+                  </Button>
+                </>
+              )}
             </div>
-            {sample ? (
+            {previewAsApp ? (
+              <div className="overflow-hidden rounded-lg border">
+                <PluginSlot plugin={m!.id} slot="detailView" source={generated!.source} capabilities={{}} />
+              </div>
+            ) : sample ? (
               <PluginViewer
                 key={sample.url}
                 file={{ source: generated!.source, name: sample.name, url: sample.url }}

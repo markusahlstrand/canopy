@@ -53,12 +53,17 @@ import {
   CloudOff,
   Link2,
   RotateCcw,
+  RefreshCw,
+  TriangleAlert,
   Pencil,
   Eye,
   EyeOff,
   X,
   Maximize2,
   Minimize2,
+  Gamepad2,
+  Timer,
+  Calculator,
   type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties } from "react";
@@ -122,11 +127,17 @@ const MAP: Record<string, LucideIcon> = {
   "cloud-off": CloudOff,
   link: Link2,
   restore: RotateCcw,
+  refresh: RefreshCw,
+  "alert-triangle": TriangleAlert,
   edit: Pencil,
   eye: Eye,
   "eye-off": EyeOff,
   maximize: Maximize2,
   minimize: Minimize2,
+  "gamepad-2": Gamepad2,
+  gamepad: Gamepad2,
+  timer: Timer,
+  calculator: Calculator,
 };
 
 export function Icon({

@@ -33,6 +33,14 @@ describe("candidatesFromServerInfo", () => {
     expect(out[0]).toBe("https://192.168.1.50:5001");
   });
 
+  it("tries hostname candidates before bare-IP ones (edge fetch by IP hits Cloudflare 1003)", () => {
+    const out = candidatesFromServerInfo(info, "abc123");
+    const bareIp = out.indexOf("https://203.0.113.7:5051"); // server.external.ip
+    expect(bareIp).toBeGreaterThan(out.indexOf("https://myhome.synology.me:5051"));
+    expect(bareIp).toBeGreaterThan(out.indexOf("https://abc123.de.quickconnect.to"));
+    expect(bareIp).toBeGreaterThan(out.indexOf("https://abc123.quickconnect.to"));
+  });
+
   it("skips NULL/empty fields and de-dupes", () => {
     const out = candidatesFromServerInfo({ server: { fqdn: "NULL", ddns: "" }, service: {} }, "x");
     expect(out.every((u) => !u.includes("NULL"))).toBe(true);
@@ -197,6 +205,20 @@ describe("createSynologyConnector", () => {
     await expect(c.remove("docs/old.txt")).resolves.toBeUndefined();
     expect(nas.calls.some((u) => u.includes("CreateFolder"))).toBe(true);
     expect(nas.calls.some((u) => u.includes("Delete"))).toBe(true);
+  });
+
+  it("turns a non-JSON edge response (e.g. Cloudflare 1003) into a clear error, not a parse crash", async () => {
+    const fetchImpl = (async (input: string | URL) => {
+      const u = new URL(typeof input === "string" ? input : input.toString());
+      // Info discovery is best-effort; let it succeed so we reach login.
+      if (u.searchParams.get("api") === "SYNO.API.Info") {
+        return new Response(JSON.stringify({ success: true, data: {} }), { headers: { "content-type": "application/json" } });
+      }
+      return new Response("error code: 1003", { status: 403 }); // Cloudflare "Direct IP Access Not Allowed"
+    }) as unknown as typeof fetch;
+    const c = createSynologyConnector("syn", { ...base, fetchImpl });
+    await expect(c.list("")).rejects.toThrow(/error code: 1003/);
+    await expect(c.list("")).rejects.not.toThrow(/Unexpected token/);
   });
 
   it("enumerates shares at the root when no shareRoot is set", async () => {
