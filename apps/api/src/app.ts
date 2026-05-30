@@ -27,6 +27,7 @@ import {
 import type { AuthConfig } from "./auth/config";
 import { getSessionUser } from "./auth/routes";
 import { registerWebdav } from "./webdav";
+import { registerMcp } from "./mcp";
 import type { ProcessingEntry } from "./processors";
 import { AI_CONFIG_ID } from "./ai/user-config";
 import { decryptString, encryptString } from "./crypto";
@@ -1209,6 +1210,10 @@ export function createApp(deps: AppDeps) {
 
   // WebDAV mount (read-only) — Basic auth via an app password, outside /api.
   if (drive) registerWebdav(app, drive);
+
+  // Remote MCP server (search/fetch + read-write tools) for Claude & ChatGPT,
+  // outside /api. OAuth bearer tokens from the OIDC provider; see ./mcp.
+  if (drive) registerMcp(app, { drive, authConfig });
 
   return app;
 }

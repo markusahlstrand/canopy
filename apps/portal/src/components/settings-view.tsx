@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PluginBrowser } from "@/components/plugin-browser";
+import { McpSection } from "@/components/mcp-section";
 import {
   getPluginSettings,
   listAiModels,
@@ -80,7 +81,8 @@ export function SettingsView({
           </TabSection>
         </TabsContent>
 
-        <TabsContent value="connectors" className="flex flex-col gap-3">
+        <TabsContent value="connectors" className="flex flex-col gap-5">
+          <McpSection />
           <TabSection
             title="Connectors"
             description="Mount an external store as a space. Install one, then open its settings to add credentials and choose where it appears."

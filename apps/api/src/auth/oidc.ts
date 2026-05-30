@@ -20,6 +20,8 @@ interface Discovery {
   token_endpoint: string;
   userinfo_endpoint?: string;
   end_session_endpoint?: string;
+  /** JWKS location — used to verify access-token signatures (the MCP resource server). */
+  jwks_uri?: string;
 }
 
 function base64url(bytes: Uint8Array): string {
