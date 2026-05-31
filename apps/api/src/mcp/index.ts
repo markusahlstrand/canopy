@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { BlobStore, Caller, FileService } from "@canopy/store";
 import type { AuthConfig } from "../auth/config";
+import { discover } from "../auth/oidc";
 import { mcpAuth } from "./auth";
 import { handleMcp } from "./transport";
 
@@ -29,11 +30,23 @@ export type MCPEnv = { Variables: { mcpCaller: Caller } };
 export function registerMcp(app: Hono, deps: { drive: DriveDeps; authConfig: AuthConfig | null }): void {
   const mcp = new Hono<MCPEnv>();
 
-  mcp.get("/.well-known/oauth-protected-resource", (c) => {
+  mcp.get("/.well-known/oauth-protected-resource", async (c) => {
     const origin = deps.authConfig?.appBaseUrl ?? new URL(c.req.url).origin;
+    // Advertise the AS issuer *exactly* as the provider declares it in discovery
+    // (trailing slash and all). MCP clients reject AS metadata whose `issuer` doesn't
+    // byte-match the value they built the well-known URL from, so we can't hand them
+    // the trailing-slash-stripped `authConfig.issuer` — we echo the discovered one.
+    let issuer = deps.authConfig?.issuer ?? "https://canopy.token.sesamy.dev";
+    if (deps.authConfig) {
+      try {
+        issuer = (await discover(deps.authConfig)).issuer;
+      } catch {
+        /* provider unreachable — fall back to the configured issuer */
+      }
+    }
     return c.json({
       resource: `${origin}/mcp`,
-      authorization_servers: [deps.authConfig?.issuer ?? "https://token.sesamy.dev"],
+      authorization_servers: [issuer],
       bearer_methods_supported: ["header"],
     });
   });
