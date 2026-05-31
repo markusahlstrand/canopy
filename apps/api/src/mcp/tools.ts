@@ -10,6 +10,7 @@ import {
   type Caller,
 } from "@canopy/store";
 import type { DriveDeps } from "./index";
+import { documentTextExtractor } from "../extract";
 
 /** Cap on the bytes `fetch` returns inline as text (matches the indexer's cap). */
 const MAX_TEXT_BYTES = 512 * 1024;
@@ -113,7 +114,7 @@ export function registerTools(server: McpServer, ctx: { caller: Caller; drive: D
     {
       title: "Fetch a file",
       description:
-        "Fetch a file's full text content and metadata by id (ids come from `search` or `list_folder`). Binary files return metadata and a download `url` with empty text.",
+        "Fetch a file's full text content and metadata by id (ids come from `search` or `list_folder`). PDFs return their extracted text layer; other binary files return metadata and a download `url` with empty text.",
       inputSchema: { id: z.string().describe("The file id to fetch") },
     },
     ({ id }) =>
@@ -121,10 +122,16 @@ export function registerTools(server: McpServer, ctx: { caller: Caller; drive: D
         const file = await service.getFile(caller, id);
         const v = file.version;
         let text = "";
-        if (v && v.source === "blob" && v.blobKey && isTextLike(file.name, v.mime)) {
+        if (v && v.source === "blob" && v.blobKey) {
           const { key } = await service.getContentKey(caller, id);
-          const stream = await drive.blobs.get(key);
-          if (stream) text = await readText(stream, MAX_TEXT_BYTES);
+          if (isTextLike(file.name, v.mime)) {
+            const stream = await drive.blobs.get(key);
+            if (stream) text = await readText(stream, MAX_TEXT_BYTES);
+          } else if (documentTextExtractor.supports(file.name, v.mime)) {
+            // PDFs etc.: return the extracted text layer instead of empty text.
+            const stream = await drive.blobs.get(key);
+            if (stream) text = (await documentTextExtractor.extract(stream, file.name, v.mime)) ?? "";
+          }
         }
         return ok({
           id: file.id,

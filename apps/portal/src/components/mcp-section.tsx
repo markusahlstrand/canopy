@@ -103,7 +103,7 @@ export function McpSection() {
           Assistants
         </span>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={needsSignIn} onClick={() => open("https://claude.ai/settings/connectors")}>
+          <Button size="sm" disabled={needsSignIn} onClick={() => open("https://claude.ai/customize/connectors")}>
             <Icon name="link" size={14} />
             Add to Claude
           </Button>
@@ -146,7 +146,7 @@ export function McpSection() {
         </summary>
         <div className="mt-2 flex flex-col gap-2 leading-relaxed">
           <p>
-            <span className="font-medium text-foreground">Claude</span> — Settings →{" "}
+            <span className="font-medium text-foreground">Claude</span> — Customize →{" "}
             <span className="font-medium text-foreground">Connectors</span> →{" "}
             <span className="font-medium text-foreground">Add custom connector</span>, paste the URL
             above, then approve the sign-in. (Custom connectors require a Pro/Team/Enterprise plan.)

@@ -371,6 +371,18 @@ async function readCappedText(stream: ReadableStream<Uint8Array>, cap: number): 
 const asStrings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
 /**
+ * Optional extractor that turns a non-text document's bytes into plain text for
+ * indexing/reading (e.g. a PDF's embedded text layer). Injected so `@canopy/store`
+ * stays dependency-free — the parser implementation lives in the app.
+ */
+export interface DocumentTextExtractor {
+  /** Whether this extractor handles the file — checked before fetching its bytes. */
+  supports(name: string, mime?: string | null): boolean;
+  /** Best-effort: extracted text, or undefined if nothing usable. Must not throw. */
+  extract(stream: ReadableStream<Uint8Array>, name: string, mime?: string | null): Promise<string | undefined>;
+}
+
+/**
  * File/version operations over a {@link Db} + {@link BlobStore}, with access
  * enforced by relation tuples (see authz.ts). A file lives in a **space**
  * (stored in `tenant_id`); blobs are content-addressed within their space.
@@ -380,7 +392,12 @@ export class FileService {
     private readonly db: Db,
     private readonly store: BlobStore,
     private readonly repo: BlobRepo,
-    private readonly opts: { globalDedup?: boolean; versionCoalesceWindowMs?: number; index?: DriveSearchIndex } = {},
+    private readonly opts: {
+      globalDedup?: boolean;
+      versionCoalesceWindowMs?: number;
+      index?: DriveSearchIndex;
+      textExtractor?: DocumentTextExtractor;
+    } = {},
   ) {}
 
   keyFor(spaceId: string, hash: string): string {
@@ -1739,9 +1756,16 @@ export class FileService {
       }
       const version = file.currentVersionId ? await this.loadVersion(file.currentVersionId) : null;
       let body: string | undefined;
-      if (version?.source === "blob" && version.blobKey && isTextLike(file.name, version.mime)) {
-        const stream = await this.store.get(version.blobKey);
-        if (stream) body = await readCappedText(stream, INDEX_MAX_TEXT_BYTES);
+      if (version?.source === "blob" && version.blobKey) {
+        const extractor = this.opts.textExtractor;
+        if (isTextLike(file.name, version.mime)) {
+          const stream = await this.store.get(version.blobKey);
+          if (stream) body = await readCappedText(stream, INDEX_MAX_TEXT_BYTES);
+        } else if (extractor?.supports(file.name, version.mime)) {
+          // Non-text doc (e.g. PDF) — pull its text layer so it's searchable too.
+          const stream = await this.store.get(version.blobKey);
+          if (stream) body = await extractor.extract(stream, file.name, version.mime);
+        }
       }
       // Fold user-facing metadata (description, AI labels, tags) into the indexed
       // text so a file is findable by those too, not just its name and body.

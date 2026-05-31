@@ -107,6 +107,51 @@ describe("FileService search feed", () => {
     expect(ids(await svc.search(USER, { text: "ephemeral" }))).toEqual([]);
   });
 
+  it("indexes a non-text doc (e.g. PDF) via the injected textExtractor", async () => {
+    const seen: string[] = [];
+    const withExtractor = new FileService(db, store.store, createSqlBlobRepo(db), {
+      index: createSqlSearchIndex(db),
+      textExtractor: {
+        supports: (name, mime) => (mime ?? "").includes("pdf") || /\.pdf$/i.test(name),
+        extract: async (stream, name) => {
+          seen.push(name);
+          await stream.cancel().catch(() => {}); // mirror real callers: don't leak the body
+          return "Quarterly figures: the mitochondria revenue powerhouse summary.";
+        },
+      },
+    });
+    // The raw bytes contain none of the searchable words — only the extractor's
+    // output does, so a hit proves the text came through the extractor branch.
+    const bytes = enc("%PDF-1.7 opaque binary with no searchable words");
+    const hash = await sha256hex(bytes);
+    if (!(await withExtractor.prepareUpload(space, USER, hash)).exists) await withExtractor.commitUpload(space, USER, hash, bytes);
+    const f = await withExtractor.createFile(space, USER, { name: "budget.pdf", hash, mime: "application/pdf" });
+
+    expect(seen).toEqual(["budget.pdf"]); // extractor was consulted exactly once
+    expect(ids(await withExtractor.search(USER, { text: "powerhouse" }))).toEqual([f.id]);
+  });
+
+  it("skips the extractor for unsupported binary types (still findable by name)", async () => {
+    const seen: string[] = [];
+    const withExtractor = new FileService(db, store.store, createSqlBlobRepo(db), {
+      index: createSqlSearchIndex(db),
+      textExtractor: {
+        supports: (name, mime) => (mime ?? "").includes("pdf") || /\.pdf$/i.test(name),
+        extract: async (_stream, name) => {
+          seen.push(name);
+          return "should never be indexed";
+        },
+      },
+    });
+    const bytes = enc("\x89PNG raw image bytes");
+    const hash = await sha256hex(bytes);
+    if (!(await withExtractor.prepareUpload(space, USER, hash)).exists) await withExtractor.commitUpload(space, USER, hash, bytes);
+    const f = await withExtractor.createFile(space, USER, { name: "holiday-photo.png", hash, mime: "image/png" });
+
+    expect(seen).toEqual([]); // supports() gated it out before fetching bytes
+    expect(ids(await withExtractor.search(USER, { text: "holiday" }))).toEqual([f.id]); // name still indexed
+  });
+
   it("backfills pre-existing files via reindexAll", async () => {
     // A service with no index — the file is created but never fed.
     const noIndex = new FileService(db, store.store, createSqlBlobRepo(db));

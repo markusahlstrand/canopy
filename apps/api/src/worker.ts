@@ -18,6 +18,7 @@ import {
 import { createApp, type DataSourceDeps } from "./app";
 import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
 import { parseRepo, synologyConnectorFor } from "./data-sources";
+import { documentTextExtractor } from "./extract";
 import { createCacheApiCacheStore } from "./cache-api";
 import { createAuthApp } from "./auth/routes";
 import { readAuthConfig, type EnvVars } from "./auth/config";
@@ -59,7 +60,7 @@ export default {
 
     const blobs = createR2BlobStore(env.BUCKET);
     const search = createSqlSearchIndex(db);
-    const service = new FileService(db, blobs, createSqlBlobRepo(db), { index: search });
+    const service = new FileService(db, blobs, createSqlBlobRepo(db), { index: search, textExtractor: documentTextExtractor });
 
     const readonlyMounts: Record<string, StorageConnector> = {};
     let demoDefaults: Record<string, Record<string, string>> = {};
