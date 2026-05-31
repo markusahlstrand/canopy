@@ -2,20 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(xargs ls -1)",
-      "Bash(sed -n '1,40p' packages/store/src/index.ts)",
-      "Bash(sed -n '1,60p' apps/api/package.json)",
       "Bash(pnpm --filter @canopy/api add unpdf)",
-      "Bash(cd /Users/markus/Projects/private/canopy *)",
-      "Read(//Users/markus/Desktop/**)",
-      "Bash(pnpm --filter @canopy/api exec tsx /tmp/extract-smoke.ts \"demo/Documents/House lease 2024.pdf\")",
-      "Bash(pnpm --filter @canopy/api exec tsx /tmp/extract-smoke.ts \"/Users/markus/Downloads/Presupuesto - P16646.pdf\")",
-      "Bash(pnpm --filter @canopy/api exec tsx /tmp/extract-smoke.ts \"/Users/markus/Projects/private/canopy/demo/Documents/House lease 2024.pdf\")",
       "Bash(pnpm --filter @canopy/store exec vitest run search-feed files search)",
       "Bash(pnpm --filter @canopy/store exec vitest run search-feed)"
     ],
-    "additionalDirectories": [
-      "/tmp",
-      "/private/tmp"
-    ]
+    "additionalDirectories": []
   }
 }
