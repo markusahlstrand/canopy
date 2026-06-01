@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { BlobStore, Caller, FileService } from "@canopy/store";
+import type { DocWorker } from "@canopy/docworker";
 import type { AuthConfig } from "../auth/config";
 import { discover } from "../auth/oidc";
 import { mcpAuth } from "./auth";
@@ -10,10 +11,13 @@ import { handleMcp } from "./transport";
 export interface DriveDeps {
   service: FileService;
   blobs: BlobStore;
+  /** Document parser for the read tools (ranged text, outline, tables). */
+  docWorker: DocWorker;
 }
 
-/** Hono environment for the MCP routes — the verified caller is stashed here by `mcpAuth`. */
-export type MCPEnv = { Variables: { mcpCaller: Caller } };
+/** Hono environment for the MCP routes — the verified caller (and the connecting
+ *  app's id, from the token's `azp`/`client_id`) are stashed here by `mcpAuth`. */
+export type MCPEnv = { Variables: { mcpCaller: Caller; mcpClientId?: string } };
 
 /**
  * Mount the remote MCP server (Model Context Protocol over Streamable HTTP) so
@@ -36,17 +40,20 @@ export function registerMcp(app: Hono, deps: { drive: DriveDeps; authConfig: Aut
     // (trailing slash and all). MCP clients reject AS metadata whose `issuer` doesn't
     // byte-match the value they built the well-known URL from, so we can't hand them
     // the trailing-slash-stripped `authConfig.issuer` — we echo the discovered one.
-    let issuer = deps.authConfig?.issuer ?? "https://canopy.token.sesamy.dev";
+    let issuer: string | undefined;
     if (deps.authConfig) {
       try {
         issuer = (await discover(deps.authConfig)).issuer;
       } catch {
         /* provider unreachable — fall back to the configured issuer */
+        issuer = deps.authConfig.issuer;
       }
     }
+    // Only advertise an Authorization Server when we actually have one; with no
+    // auth configured, omit it rather than point clients at a hard-coded issuer.
     return c.json({
       resource: `${origin}/mcp`,
-      authorization_servers: [issuer],
+      ...(issuer ? { authorization_servers: [issuer] } : {}),
       bearer_methods_supported: ["header"],
     });
   });

@@ -33,7 +33,7 @@ Two different switches, depending on the plugin:
 | [Calendar](plugin-calendar) | Upcoming events as a detail view + an "Up next" rail panel |
 | [Tasks](plugin-tasks) | A shared to-do list, with "Create task from file" |
 | [GitHub](plugin-github) | A data source feeding issues → Tasks and releases → Calendar |
-| [Synology](plugin-synology) | A storage connector browsing a Synology NAS as a space (direct or QuickConnect) |
+| [Synology](plugin-synology) | A storage connector browsing a Synology NAS as a space (direct, Tailscale, or QuickConnect) |
 | [Document AI](plugin-document-ai) | Auto-labels each document by type with an AI model |
 | [Documentation](plugin-documentation) | Renders these docs from the read-only docs mount |
 

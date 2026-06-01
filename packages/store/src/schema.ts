@@ -361,6 +361,41 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    // MCP clients — which AI assistants (Claude, ChatGPT, editors) a user has
+    // connected to their drive over the remote MCP server. The MCP endpoint is
+    // stateless (a fresh server per request, bearer token discarded after verify),
+    // so it keeps no connection state of its own; this is the one durable trace.
+    // Keyed by the connecting app's id (the access token's `azp`/`client_id`, or a
+    // slug of the MCP `initialize` clientInfo name) and bumped on every request, so
+    // Settings can show "Connected · Claude · last active 2m ago". `name`/`version`
+    // come from the `initialize` handshake (absent on later calls — see mcp/transport.ts).
+    version: 17,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS mcp_clients (
+         user_sub      TEXT NOT NULL,
+         client_id     TEXT NOT NULL,
+         name          TEXT,
+         version       TEXT,
+         first_seen_at TEXT NOT NULL,
+         last_seen_at  TEXT NOT NULL,
+         PRIMARY KEY (user_sub, client_id)
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_mcp_clients_user ON mcp_clients (user_sub, last_seen_at)`,
+    ],
+  },
+  {
+    // Per-space presentation: an optional icon name + accent color (an HSL triplet
+    // like "145 33% 36%", matching the plugin-catalog convention) so a space is
+    // recognizable in the sidebar. Both nullable — a space with neither falls back
+    // to the default people icon. Run-once via the migration guard, so plain ADD
+    // COLUMNs are safe.
+    version: 18,
+    statements: [
+      `ALTER TABLE spaces ADD COLUMN icon TEXT`,
+      `ALTER TABLE spaces ADD COLUMN color TEXT`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

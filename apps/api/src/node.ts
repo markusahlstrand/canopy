@@ -23,6 +23,7 @@ import { createApp, type DataSourceDeps } from "./app";
 import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
 import { parseRepo, synologyConnectorFor } from "./data-sources";
 import { documentTextExtractor } from "./extract";
+import { inProcessDocWorker } from "@canopy/docworker";
 import { readAuthConfig } from "./auth/config";
 import { createAuthApp } from "./auth/routes";
 
@@ -151,7 +152,7 @@ const app = createApp({
   auth: createAuthApp(authConfig, onLogin),
   authConfig,
   readonlyMounts: { documentation, demo },
-  drive: { service, blobs },
+  drive: { service, blobs, docWorker: inProcessDocWorker() },
   dataSources,
   // libsql FTS5 search index (same SQL adapter as D1 on the edge).
   search,

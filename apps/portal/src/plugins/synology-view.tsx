@@ -98,15 +98,17 @@ export function SynologyView() {
       ) : (
         <div className="rounded-lg border border-dashed p-5 text-[13px] text-muted-foreground">
           No NAS connected yet. Open <span className="font-medium text-foreground">Settings</span> to add your DiskStation — a
-          direct address (e.g. <span className="font-mono">https://nas.example:5001</span>) or a QuickConnect ID, plus a DSM
-          account.
+          direct address (e.g. <span className="font-mono">https://nas.example:5001</span>), a Tailscale host (e.g.{" "}
+          <span className="font-mono">nas.tailnet.ts.net</span>), or a QuickConnect ID, plus a DSM account.
         </div>
       )}
 
       <div className="rounded-lg bg-muted/60 p-3 text-[12.5px] leading-relaxed text-muted-foreground">
         Once connected, a <span className="font-medium text-foreground">Synology</span> space appears in the sidebar and lists
-        files live from the NAS. From a cloud deployment, only a QuickConnect relay or a public HTTPS address is reachable — a
-        LAN-only address works from a self-hosted server on the same network.
+        files live from the NAS. From a cloud deployment, only a QuickConnect relay or a public HTTPS address is reachable. A
+        self-hosted server reaches a LAN address directly, or a Tailscale host (<span className="font-mono">100.x</span> or a
+        MagicDNS name) when that server is on the same tailnet — the NAS can join via the Synology Tailscale package or a
+        subnet router.
       </div>
 
       <PluginSettingsDialog

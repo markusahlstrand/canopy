@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchContent } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 /**
  * Sandboxed file-viewer host.
@@ -47,14 +48,30 @@ const BOOTSTRAP = `<!doctype html>
 <script type="module">
   const send = (msg, transfer) => parent.postMessage(msg, "*", transfer || []);
   let started = false;
+  let fillMode = false;
 
-  const reportHeight = () =>
+  const reportHeight = () => {
+    if (fillMode) return; // fill viewers (e.g. images) are sized by the host, not by their content
     send({ type: "canopy:height", height: Math.ceil(document.documentElement.scrollHeight) });
+  };
 
   addEventListener("message", async (e) => {
     const msg = e.data;
     if (!msg || msg.type !== "canopy:init" || started) return;
     started = true;
+    fillMode = !!msg.fill;
+    if (fillMode) {
+      // The host has sized our iframe to the available space — fill it instead of
+      // growing to fit the content (that loop is what made images shrink away).
+      document.documentElement.style.height = "100%";
+      document.body.style.height = "100%";
+      const r = document.getElementById("root");
+      r.style.height = "100%";
+      r.style.boxSizing = "border-box";
+      r.style.display = "flex";
+      r.style.alignItems = "center";
+      r.style.justifyContent = "center";
+    }
     try {
       const blob = new Blob([msg.code], { type: "text/javascript" });
       const url = URL.createObjectURL(blob);
@@ -66,6 +83,7 @@ const BOOTSTRAP = `<!doctype html>
       await render({
         container: root,
         file: msg.file,
+        fill: fillMode,
         emit: (action, data) => send({ type: "canopy:action", action, data }),
       });
       send({ type: "canopy:rendered" });
@@ -102,11 +120,14 @@ type Status = "loading" | "ready" | "error";
 export function PluginViewer({
   file,
   className,
+  fill,
   onSaved,
   onSaveContent,
 }: {
   file: ViewerFile;
   className?: string;
+  /** Size the iframe to fill its parent (height 100%) instead of auto-growing to fit content. */
+  fill?: boolean;
   onSaved?: () => void;
   /** When provided, the viewer can save: the host persists the edited text (as a new version). */
   onSaveContent?: (content: string) => Promise<void>;
@@ -145,7 +166,7 @@ export function PluginViewer({
           const { bytes, mime } = await fetchContent(file.url);
           if (cancelled) return;
           iframe?.contentWindow?.postMessage(
-            { type: "canopy:init", code: file.source, file: { name: file.name, mime, bytes, writable } },
+            { type: "canopy:init", code: file.source, file: { name: file.name, mime, bytes, writable }, fill },
             "*",
             [bytes],
           );
@@ -184,7 +205,7 @@ export function PluginViewer({
       cancelled = true;
       window.removeEventListener("message", onMessage);
     };
-  }, [file.url, file.source, file.name, writable]);
+  }, [file.url, file.source, file.name, writable, fill]);
 
   if (status === "error") {
     return (
@@ -200,15 +221,15 @@ export function PluginViewer({
   }
 
   return (
-    <div className={className}>
+    <div className={cn(className, fill && "h-full w-full min-h-0")}>
       <iframe
         ref={iframeRef}
         title="File preview"
         // No allow-same-origin: the frame gets a unique opaque origin.
         sandbox="allow-scripts"
         srcDoc={BOOTSTRAP}
-        className="w-full rounded-lg border bg-background"
-        style={{ height, transition: "height 120ms ease" }}
+        className={cn("w-full rounded-lg border bg-background", fill && "h-full")}
+        style={fill ? undefined : { height, transition: "height 120ms ease" }}
       />
     </div>
   );

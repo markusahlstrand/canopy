@@ -12,8 +12,16 @@ export * from "./quickconnect";
 /**
  * Storage connector over a Synology DiskStation (DSM) via its FileStation Web
  * API. Reachable either directly (`baseUrl`, e.g. on the LAN or a public HTTPS
- * endpoint) or through a `quickConnectId` that the {@link resolveQuickConnect}
- * helper turns into a reachable address.
+ * endpoint), over a Tailscale tailnet (`tailscaleHost`, see {@link tailscaleBaseUrl}),
+ * or through a `quickConnectId` that the {@link resolveQuickConnect} helper turns
+ * into a reachable address.
+ *
+ * Tailscale note: the tailnet address (a MagicDNS name or a `100.x` IP) is only
+ * reachable from a process that is itself on the tailnet, so this only works when
+ * Canopy's API runs in Node on a tailnet device — not on the Cloudflare Workers
+ * edge, which is not a tailnet peer. The NAS can join the tailnet directly (the
+ * Synology Tailscale package) or be exposed via another node's advertised subnet
+ * route (e.g. the Home Assistant Tailscale add-on routing the LAN).
  *
  * Notes on the API: every call carries a session id (`_sid`) obtained from
  * `SYNO.API.Auth`; the connector logs in lazily on first use and re-authenticates
@@ -27,6 +35,14 @@ export interface SynologyConfig {
   baseUrl?: string;
   /** QuickConnect ID — resolved to a base URL when `baseUrl` is absent. */
   quickConnectId?: string;
+  /**
+   * Tailscale host the NAS is reachable at on your tailnet — a MagicDNS name
+   * ("nas.tailnet.ts.net") or a `100.x` address, optionally with a scheme/port.
+   * Turned into a base URL by {@link tailscaleBaseUrl} (plain HTTP on DSM's 5000
+   * by default, since WireGuard already encrypts the hop). Used when `baseUrl` is
+   * absent; ignored on the Workers edge, which can't reach a tailnet.
+   */
+  tailscaleHost?: string;
   account: string;
   password: string;
   /** One-time code, when the account has 2-step verification enabled. */
@@ -123,7 +139,11 @@ export function createSynologyConnector(id: string, config: SynologyConfig): Sto
   function toFsPath(rel: string): string {
     const clean = (rel ?? "").replace(/^\/+|\/+$/g, "");
     const joined = [shareRoot, clean].filter(Boolean).join("/");
-    return joined || "/";
+    if (!joined) return "/";
+    // DSM FileStation paths must be absolute — without a `shareRoot`, navigating
+    // into a share (e.g. "home") would otherwise yield "home" and DSM rejects it
+    // (FileStation error 401).
+    return joined.startsWith("/") ? joined : `/${joined}`;
   }
   /** An absolute DSM path → the connector-relative path the host addresses it by. */
   function toRelative(full: string): string {
@@ -352,6 +372,20 @@ export function createSynologyConnector(id: string, config: SynologyConfig): Sto
   };
 }
 
+/**
+ * Turn a Tailscale host into a DSM base URL. Accepts a MagicDNS name
+ * ("nas.tailnet.ts.net") or a `100.x` address, with an optional scheme and/or
+ * port. A bare host defaults to plain HTTP on DSM's 5000: traffic over the
+ * tailnet is already WireGuard-encrypted, so this sidesteps DSM's self-signed
+ * cert on 5001 (which Node's fetch rejects by default).
+ */
+export function tailscaleBaseUrl(host: string): string {
+  const h = host.trim().replace(/\/+$/, "");
+  if (/^https?:\/\//i.test(h)) return h; // full URL given — respect it as-is
+  if (/:\d+$/.test(h)) return `http://${h}`; // host:port — assume http over the tailnet
+  return `http://${h}:5000`; // bare host — DSM's default HTTP port
+}
+
 const configFields: ConnectorConfigField[] = [
   {
     key: "mode",
@@ -360,11 +394,31 @@ const configFields: ConnectorConfigField[] = [
     required: true,
     options: [
       { value: "direct", label: "Direct address (LAN or public HTTPS)" },
+      { value: "tailscale", label: "Tailscale (reachable over your tailnet)" },
       { value: "quickconnect", label: "QuickConnect ID" },
     ],
   },
-  { key: "baseUrl", label: "Address (e.g. https://nas.example.com:5001)", type: "url" },
-  { key: "quickConnectId", label: "QuickConnect ID", type: "string" },
+  {
+    key: "baseUrl",
+    label: "Address (e.g. https://nas.example.com:5001)",
+    type: "url",
+    showWhen: { field: "mode", in: ["direct"] },
+  },
+  {
+    key: "tailscaleHost",
+    label: "Tailscale host — MagicDNS name or 100.x IP (e.g. nas.tailnet.ts.net). Defaults to http://…:5000.",
+    type: "string",
+    showWhen: { field: "mode", in: ["tailscale"] },
+  },
+  {
+    key: "tailscaleAuthKey",
+    label:
+      "Tailscale auth key — only for cloud/edge deploys, so the parser can join YOUR tailnet to reach this NAS. " +
+      "Use an ephemeral, tagged key. Not needed when self-hosting on a machine already on the tailnet.",
+    type: "secret",
+    showWhen: { field: "mode", in: ["tailscale"] },
+  },
+  { key: "quickConnectId", label: "QuickConnect ID", type: "string", showWhen: { field: "mode", in: ["quickconnect"] } },
   { key: "account", label: "DSM account", type: "string", required: true },
   { key: "password", label: "DSM password", type: "secret", required: true },
   { key: "otpCode", label: "One-time code (only if 2-step verification is on)", type: "secret" },
@@ -378,10 +432,17 @@ export const synologyConnectorPlugin: StorageConnectorPlugin = {
   create(id, config) {
     const account = String(config.account ?? "");
     const password = String(config.password ?? "");
-    const baseUrl = config.baseUrl ? String(config.baseUrl) : undefined;
+    const tailscaleHost = config.tailscaleHost ? String(config.tailscaleHost) : undefined;
+    // A direct baseUrl wins; otherwise a Tailscale host is synthesised into one.
+    const baseUrl = config.baseUrl
+      ? String(config.baseUrl)
+      : tailscaleHost
+        ? tailscaleBaseUrl(tailscaleHost)
+        : undefined;
     const quickConnectId = config.quickConnectId ? String(config.quickConnectId) : undefined;
     if (!account || !password) throw new Error("synology connector requires 'account' and 'password'");
-    if (!baseUrl && !quickConnectId) throw new Error("synology connector requires a 'baseUrl' or 'quickConnectId'");
+    if (!baseUrl && !quickConnectId)
+      throw new Error("synology connector requires a 'baseUrl', 'tailscaleHost', or 'quickConnectId'");
     return createSynologyConnector(id, {
       account,
       password,

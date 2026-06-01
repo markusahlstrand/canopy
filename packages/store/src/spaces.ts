@@ -8,6 +8,8 @@ interface SpaceRow {
   kind: string;
   created_by: string;
   created_at: string;
+  icon: string | null;
+  color: string | null;
 }
 const toSpace = (r: SpaceRow): Space => ({
   id: r.id,
@@ -15,6 +17,8 @@ const toSpace = (r: SpaceRow): Space => ({
   kind: r.kind === "group" ? "group" : "personal",
   createdBy: r.created_by,
   createdAt: r.created_at,
+  icon: r.icon ?? null,
+  color: r.color ?? null,
 });
 
 /** Deterministic personal-space id for a user. */
@@ -32,15 +36,20 @@ export async function ensurePersonalSpace(db: Db, userSub: string): Promise<stri
 }
 
 /** Create a shared (group) space owned by its creator. */
-export async function createSpace(db: Db, input: { name: string; createdBy: string }): Promise<Space> {
+export async function createSpace(
+  db: Db,
+  input: { name: string; createdBy: string; icon?: string | null; color?: string | null },
+): Promise<Space> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const icon = input.icon ?? null;
+  const color = input.color ?? null;
   await db.run(
-    `INSERT INTO spaces (id, name, kind, created_by, created_at) VALUES (?, ?, 'group', ?, ?)`,
-    [id, input.name, input.createdBy, now],
+    `INSERT INTO spaces (id, name, kind, created_by, created_at, icon, color) VALUES (?, ?, 'group', ?, ?, ?, ?)`,
+    [id, input.name, input.createdBy, now, icon, color],
   );
   await writeTuple(db, { objectType: "space", objectId: id, relation: "owner", subjectType: "user", subjectId: input.createdBy });
-  return { id, name: input.name, kind: "group", createdBy: input.createdBy, createdAt: now };
+  return { id, name: input.name, kind: "group", createdBy: input.createdBy, createdAt: now, icon, color };
 }
 
 /** Grant a user a role in a space (a tuple `space:<id>#<role>@user:<sub>`). */

@@ -4,7 +4,7 @@ import { CanopyMark } from "@/components/canopy-mark";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -155,6 +155,7 @@ export function Sidebar({
       }
     : null;
   return (
+    <TooltipProvider>
     <aside className="flex h-full flex-col border-r bg-card">
       {/* Logo row */}
       <div className={cn("flex h-14 items-center gap-2 px-3", collapsed && "justify-center px-0")}>
@@ -244,15 +245,18 @@ export function Sidebar({
                         isActive ? "bg-accent font-medium text-foreground" : "text-foreground/80 hover:bg-accent/60",
                       )}
                     >
-                      <span className={cn("shrink-0", isActive && "text-primary")}>
-                        <Icon name="users" size={17} />
+                      <span
+                        className={cn("shrink-0", isActive && "text-primary")}
+                        style={!isActive && s.color ? { color: `hsl(${s.color})` } : undefined}
+                      >
+                        <Icon name={s.icon || "users"} size={17} />
                       </span>
                       <span className="flex-1 truncate text-left">{s.name}</span>
                     </button>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-48">
                     <ContextMenuItem onSelect={() => onOpenSpace(s.id)}>
-                      <Icon name="users" size={15} /> Open
+                      <Icon name={s.icon || "users"} size={15} /> Open
                     </ContextMenuItem>
                     {s.role === "owner" && (
                       <>
@@ -408,5 +412,6 @@ export function Sidebar({
         </button>
       )}
     </aside>
+    </TooltipProvider>
   );
 }

@@ -68,6 +68,10 @@ export interface Space {
   kind: "personal" | "group";
   createdBy: string;
   createdAt: string;
+  /** Optional sidebar icon name (defaults to the people icon when null). */
+  icon: string | null;
+  /** Optional accent color — an HSL triplet like "145 33% 36%". */
+  color: string | null;
 }
 
 /** Directory entry, upserted on login so files can be shared by email. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSynologyConnector } from "./index";
+import { createSynologyConnector, synologyConnectorPlugin, tailscaleBaseUrl } from "./index";
 import { candidatesFromServerInfo, resolveQuickConnect } from "./quickconnect";
 
 // ── QuickConnect resolution (pure parsing + the coordinator round-trip) ────────
@@ -63,6 +63,43 @@ describe("resolveQuickConnect", () => {
   it("throws a clear error for an unknown id (errno 4)", async () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ errno: 4 }))) as unknown as typeof fetch;
     await expect(resolveQuickConnect("nope", { fetchImpl })).rejects.toThrow(/Unknown QuickConnect ID/);
+  });
+});
+
+// ── Tailscale base-URL synthesis ───────────────────────────────────────────────
+
+describe("tailscaleBaseUrl", () => {
+  it("defaults a bare MagicDNS host to plain HTTP on DSM's 5000", () => {
+    expect(tailscaleBaseUrl("nas.tailnet.ts.net")).toBe("http://nas.tailnet.ts.net:5000");
+  });
+
+  it("defaults a bare 100.x tailnet IP the same way", () => {
+    expect(tailscaleBaseUrl("100.101.102.103")).toBe("http://100.101.102.103:5000");
+  });
+
+  it("keeps an explicit port (assuming http over the tailnet)", () => {
+    expect(tailscaleBaseUrl("nas.tailnet.ts.net:5001")).toBe("http://nas.tailnet.ts.net:5001");
+  });
+
+  it("respects a full URL as-is and trims a trailing slash", () => {
+    expect(tailscaleBaseUrl("https://nas.tailnet.ts.net:5001/")).toBe("https://nas.tailnet.ts.net:5001");
+  });
+});
+
+describe("synologyConnectorPlugin.create", () => {
+  it("builds a connector from a tailscaleHost (no baseUrl needed)", () => {
+    const c = synologyConnectorPlugin.create("connector:synology", {
+      account: "u",
+      password: "p",
+      tailscaleHost: "nas.tailnet.ts.net",
+    });
+    expect(c).not.toBeNull();
+  });
+
+  it("requires a baseUrl, tailscaleHost, or quickConnectId", () => {
+    expect(() => synologyConnectorPlugin.create("connector:synology", { account: "u", password: "p" })).toThrow(
+      /baseUrl.*tailscaleHost.*quickConnectId/,
+    );
   });
 });
 
@@ -235,5 +272,15 @@ describe("createSynologyConnector", () => {
     const page = await c.list("");
     expect(page.items.map((e) => e.name)).toEqual(["home", "photo"]);
     expect(page.items.every((e) => e.kind === "folder")).toBe(true);
+  });
+
+  it("lists a share subfolder with an ABSOLUTE DSM path when no shareRoot is set", async () => {
+    // Without a shareRoot, navigating into a share must send folder_path "/home",
+    // not "home" — DSM rejects a relative path with FileStation error 401.
+    const nas = fakeNas();
+    const c = createSynologyConnector("syn", { account: "u", password: "p", baseUrl: "https://nas.test:5001", fetchImpl: nas.fetchImpl });
+    await c.list("home");
+    const listCall = nas.calls.find((u) => u.includes("method=list") && u.includes("folder_path"));
+    expect(listCall && decodeURIComponent(listCall)).toContain("folder_path=/home");
   });
 });

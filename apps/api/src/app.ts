@@ -24,6 +24,7 @@ import {
   type Caller,
   type FileService,
 } from "@canopy/store";
+import type { DocWorker } from "@canopy/docworker";
 import type { AuthConfig } from "./auth/config";
 import { getSessionUser } from "./auth/routes";
 import { registerWebdav } from "./webdav";
@@ -130,6 +131,12 @@ const PROCESSING_LOG_MAX = 20;
 export interface DriveDeps {
   service: FileService;
   blobs: BlobStore;
+  /**
+   * Document parser for the MCP read tools (ranged PDF text, outline, spreadsheet
+   * tables). An adapter, so the heavy parsing can run in-process on pure Node or
+   * be offloaded to a container backend — see {@link DocWorker}.
+   */
+  docWorker: DocWorker;
 }
 
 /**
@@ -490,11 +497,16 @@ export function createApp(deps: AppDeps) {
     return c.json(spaces);
   }));
 
-  // Create a shared (group) space — e.g. a family.
+  // Create a shared (group) space — e.g. a family. `icon`/`color` are optional
+  // presentation hints (icon name + HSL-triplet accent) for the sidebar.
   app.post("/api/spaces", driveRoute(async (c, caller) => {
-    const { name } = await c.req.json<{ name: string }>();
-    if (!name) return c.json({ error: "name required" }, 400);
-    return c.json(await drive!.service.createSpace(caller, name), 201);
+    const { name, icon, color } = await c.req.json<{ name: string; icon?: string | null; color?: string | null }>();
+    const trimmed = name?.trim();
+    if (!trimmed) return c.json({ error: "name required" }, 400);
+    return c.json(
+      await drive!.service.createSpace(caller, { name: trimmed, icon: icon ?? null, color: color ?? null }),
+      201,
+    );
   }));
 
   // Rename a space. Owner only.
@@ -848,6 +860,11 @@ export function createApp(deps: AppDeps) {
     await drive!.service.deleteAppPassword(caller.sub, c.req.param("id")!);
     return c.json({ ok: true });
   }));
+
+  // ── MCP connections (which AI assistants connected, read-only) ──────────────
+  // The MCP server is stateless, so this is recorded as a side effect of each
+  // verified MCP request (see mcp/transport.ts) and just surfaced here for Settings.
+  app.get("/api/mcp/connections", driveRoute(async (_c, caller) => _c.json(await drive!.service.listMcpClients(caller.sub))));
 
   // ── share links (unguessable secret → scoped capability; WebDAV + /s) ────────
   // A link's role is capped by the caller's own role on the target (see store).

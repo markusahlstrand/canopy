@@ -18,6 +18,9 @@
     "cf:dev": "wrangler dev",
     "deploy": "pnpm --filter @canopy/portal build && wrangler deploy",
     "deploy:cf": "pnpm run deploy",
+    "deploy:cf:worker-only": "pnpm --filter @canopy/portal build && wrangler deploy --containers-rollout=none",
+    "docworker:dev": "pnpm --filter @canopy/docworker-service dev",
+    "docworker:build": "docker build --platform linux/amd64 -f apps/docworker/Dockerfile -t canopy-docworker .",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint"
   },

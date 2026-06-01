@@ -14,8 +14,9 @@ one origin. There are two targets, and both reuse the same portable Hono app (`a
 
 ## Cloudflare (single Worker + Static Assets)
 
-The Worker entry is `apps/api/src/worker.ts`; configuration is the committed `wrangler.jsonc`
-at the **repo root**. It's one Worker for the whole monorepo — the root is the build context,
+The Worker entry is `apps/api/src/worker-cf.ts` (it re-exports the portable handler from
+`worker.ts` plus the document-parser Durable Object); configuration is the committed
+`wrangler.jsonc` at the **repo root**. It's one Worker for the whole monorepo — the root is the build context,
 so the `@canopy/*` workspace packages resolve (they export `./src` directly) and the Worker
 bundles from source with no per-package build step.
 
@@ -88,6 +89,62 @@ wrangler deploy --dry-run   # from the repo root
 - **`wrangler dev`** (the local Cloudflare runtime) needs `workerd`, whose native build pnpm
   blocks by default — run `pnpm approve-builds` once if you want it. `wrangler deploy` does
   not need it. For day-to-day work, prefer `pnpm dev`.
+
+## Document-parser container (optional)
+
+A Cloudflare **Container** the Worker calls on demand, for two jobs a Workers isolate can't do
+itself:
+
+- **Heavy / large document parsing** — big PDFs, spreadsheet tables, and document outlines,
+  parsed off the isolate (no CPU/memory ceiling).
+- **Reaching a tailnet-only NAS** — a Worker can't be a Tailscale peer, but the container runs a
+  `tsnet` (userspace Tailscale) sidecar and joins your tailnet, so a [Synology](plugin-synology)
+  space backed by a tailnet host works from the edge.
+
+It's the `apps/docworker` service (Hono + the `@canopy/docworker` parser) packaged with the
+sidecar into one `linux/amd64` image, managed by a `DocWorker` **Durable Object**. **It's
+optional:** the Worker parses in-process by default and falls back to in-process if the container
+isn't deployed or is unreachable; the Node target never uses it.
+
+### Per-tenant tailnet (keys live in the DB, not the deploy)
+
+Tailnet auth is **per user**, not a deployment secret. Each user's Tailscale key + host live in
+their **encrypted connector settings** (the DB). On a request, the Worker spins up a **per-user
+container instance** — keyed by the tailnet identity — and passes the key over the internal
+Worker→DO hop; that instance joins *that* user's tailnet and reaches *their* NAS. So one tenant's
+parser can never touch another's tailnet, and **no tailnet key ever lives in `wrangler.jsonc` or
+a `wrangler secret`**. The container **scales to zero** — the first request after idle pays a
+cold start (container boot + tailnet handshake, a few seconds), then stays warm for `sleepAfter`.
+
+Auth on the Worker→container hop is the **DO binding itself** (a container has no public
+ingress), so no shared secret is required. `DOCWORKER_TOKEN` is optional defense-in-depth; a
+global `TS_AUTHKEY` secret is only a single-tenant fallback for a one-NAS homelab.
+
+### Deploying it
+
+`containers` + the `DocWorker` DO are declared in the committed `wrangler.jsonc`, so a normal
+deploy **builds the image** (Docker must be running) and ships it:
+
+```bash
+pnpm deploy:cf              # build portal → wrangler deploy (builds + rolls out the container)
+```
+
+To deploy the Worker **without** the container — a fork with no NAS, or no Docker — skip the
+container build:
+
+```bash
+pnpm deploy:cf:worker-only  # wrangler deploy --containers-rollout=none
+```
+
+The image build context is the **repo root** (so the `@canopy/*` workspace packages resolve).
+For working on the service itself:
+
+```bash
+pnpm docworker:dev          # run the parser service in pure Node (no container, no tailnet)
+pnpm docworker:build        # build the linux/amd64 image locally
+```
+
+See [Synology](plugin-synology) for the Tailscale connection setup that uses this.
 
 ## Node / Docker (single process)
 

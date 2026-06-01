@@ -31,7 +31,6 @@ import {
   listFiles,
   listShared,
   listSpaces,
-  createSpace,
   renameSpace,
   createFolder,
   createFile,
@@ -62,6 +61,7 @@ import {
   type ShareTarget,
 } from "@/lib/api";
 import { SpaceMembersDialog } from "@/components/space-members-dialog";
+import { CreateSpaceDialog } from "@/components/create-space-dialog";
 import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
@@ -228,8 +228,16 @@ function DesktopApp() {
   const online = useOnline();
 
   const [auth, setAuth] = useState<Me>({ user: null, authConfigured: false });
+  // Distinct from `auth.authConfigured`: that stays false in demo mode (auth off),
+  // so it can't distinguish "not loaded yet" from "loaded, no auth". The docs
+  // landing must fire in *both* anonymous-with-auth and demo modes, so gate it on
+  // this resolved flag instead.
+  const [authLoaded, setAuthLoaded] = useState(false);
   useEffect(() => {
-    fetchMe().then(setAuth);
+    fetchMe().then((me) => {
+      setAuth(me);
+      setAuthLoaded(true);
+    });
   }, []);
   const signIn = () => {
     window.location.href = loginUrl(window.location.pathname + window.location.search);
@@ -257,19 +265,20 @@ function DesktopApp() {
     if (canPersist) saveInstalledPlugins(next).catch(() => {});
   }
 
-  // Documentation is the signed-out landing page. Applied once when auth first
-  // resolves; doesn't lock navigation afterwards. (Whether it's *installed* is
-  // server-driven — it ships only for anonymous/demo visitors.)
+  // Documentation is the signed-out landing page — for anonymous-with-auth *and*
+  // demo (auth off) visitors. Applied once when auth first resolves; doesn't lock
+  // navigation afterwards. (Whether it's *installed* is server-driven — it ships
+  // only for anonymous/demo visitors.)
   const initialHadView = useMemo(() => new URLSearchParams(window.location.search).has("view"), []);
   const docsLandingApplied = useRef(false);
   useEffect(() => {
-    if (docsLandingApplied.current || !auth.authConfigured) return;
+    if (docsLandingApplied.current || !authLoaded) return;
     docsLandingApplied.current = true;
     if (!auth.user && !initialHadView) {
       setActive(`plugin:${DOCS_PLUGIN_ID}`);
       setActivePlugin(DOCS_PLUGIN_ID);
     }
-  }, [auth, initialHadView]);
+  }, [authLoaded, auth, initialHadView]);
 
   const [cmdOpen, setCmdOpen] = useState(false);
   // Which Settings tab is shown. The standalone store sheet was retired, so "browse
@@ -299,6 +308,7 @@ function DesktopApp() {
     tab?: "members" | "plugins" | "settings";
   } | null>(null);
   const [settingsPlugin, setSettingsPlugin] = useState<{ id: string; name: string } | null>(null);
+  const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [overview, setOverview] = useState<Overview>({ files: 0, bytes: 0 });
   const [sharedCount, setSharedCount] = useState(0);
@@ -333,6 +343,9 @@ function DesktopApp() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === "j") {
         e.preventDefault();
         setTweak("theme", tweaks.theme === "dark" ? "light" : "dark");
+      } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        navigate("settings"); // matches the ⌘, shown in the avatar menu
       } else if (e.key === "Escape") {
         if (previewFile) return; // the open preview owns Escape (it closes itself)
         setSelection(new Set());
@@ -490,17 +503,8 @@ function DesktopApp() {
     setSelection(new Set());
   }
 
-  async function createSpaceFlow() {
-    const name = window.prompt("Name your shared space (e.g. Family)");
-    if (!name?.trim()) return;
-    try {
-      const s = await createSpace(name.trim());
-      setSpaces(await listSpaces());
-      openSpace(s.id);
-      toast(`Created “${name.trim()}”`, { description: "Share files into it or add members." });
-    } catch (err) {
-      toast("Couldn't create space", { description: (err as Error).message });
-    }
+  function createSpaceFlow() {
+    setCreateSpaceOpen(true);
   }
 
   async function renameSpaceFlow(id: string) {
@@ -883,6 +887,7 @@ function DesktopApp() {
           onCrumbClick={active === "drive" ? onCrumbClick : undefined}
           onOpenCmd={() => setCmdOpen(true)}
           onOpenStore={openPluginsTab}
+          onOpenSettings={() => navigate("settings")}
           theme={tweaks.theme}
           onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
           onUpload={() => uploadInputRef.current?.click()}
@@ -1118,6 +1123,18 @@ function DesktopApp() {
           label={shareTarget.label}
           open={!!shareTarget}
           onOpenChange={(o) => !o && setShareTarget(null)}
+        />
+      )}
+
+      {createSpaceOpen && (
+        <CreateSpaceDialog
+          open={createSpaceOpen}
+          onOpenChange={setCreateSpaceOpen}
+          onCreated={async (s) => {
+            setSpaces(await listSpaces());
+            openSpace(s.id);
+            toast(`Created “${s.name}”`, { description: "Share files into it or add members." });
+          }}
         />
       )}
 

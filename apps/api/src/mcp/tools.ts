@@ -10,10 +10,27 @@ import {
   type Caller,
 } from "@canopy/store";
 import type { DriveDeps } from "./index";
-import { documentTextExtractor } from "../extract";
+import { drainToBytes } from "@canopy/docworker";
 
-/** Cap on the bytes `fetch` returns inline as text (matches the indexer's cap). */
-const MAX_TEXT_BYTES = 512 * 1024;
+/**
+ * Max bytes we read from a blob to build its readable text. A file larger than
+ * this can only be read as a prefix, which `fetch`/`get_outline` flag with
+ * `truncated` so the reported `total` is understood as a lower bound.
+ */
+const MAX_READ_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Default and hard cap on the characters `fetch` returns in a single call. A
+ * file longer than this comes back with `has_more: true`, so paging is explicit
+ * and a truncated read is never silent.
+ */
+const MAX_WINDOW_CHARS = 512 * 1024;
+
+/** Cap on headings returned for a text document (guards a pathological file). */
+const MAX_TEXT_HEADINGS = 1000;
+
+/** Default cap on rows returned per table — the true `row_count` is always reported. */
+const DEFAULT_MAX_TABLE_ROWS = 1000;
 
 /**
  * Whether a file's bytes are worth returning as text. A trimmed copy of the
@@ -26,32 +43,75 @@ function isTextLike(name: string, mime?: string | null): boolean {
   return /\.(md|markdown|txt|text|csv|tsv|json|ya?ml|toml|ini|cfg|log|html?|xml|svg|js|jsx|ts|tsx|css|scss|less|py|rb|go|rs|java|kt|c|h|cc|cpp|hpp|sh|bash|sql|php)$/i.test(name);
 }
 
-/** Read up to `cap` bytes of a stream and decode as UTF-8 (lossy). */
-async function readText(stream: ReadableStream<Uint8Array>, cap: number): Promise<string> {
+/**
+ * Read a blob's bytes (up to `cap`) and decode as UTF-8 (lossy). `truncated` is
+ * true when the stream held more bytes than `cap` — i.e. we only saw a prefix,
+ * so any total derived from this text is a floor, not the real length.
+ */
+async function readReadableText(
+  stream: ReadableStream<Uint8Array>,
+  cap: number,
+): Promise<{ text: string; truncated: boolean }> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let truncated = false;
   try {
-    while (total < cap) {
+    for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (value) {
-        chunks.push(value);
-        total += value.byteLength;
+      if (!value) continue;
+      chunks.push(value);
+      total += value.byteLength;
+      if (total >= cap) {
+        // Peek one more read to tell "exactly cap" from "there's more".
+        const extra = await reader.read();
+        truncated = !extra.done;
+        break;
       }
     }
   } finally {
     await reader.cancel().catch(() => {});
   }
-  const buf = new Uint8Array(Math.min(total, cap));
+  const buf = new Uint8Array(total);
   let off = 0;
   for (const ch of chunks) {
-    if (off >= buf.byteLength) break;
-    const n = Math.min(ch.byteLength, buf.byteLength - off);
-    buf.set(ch.subarray(0, n), off);
-    off += n;
+    buf.set(ch, off);
+    off += ch.byteLength;
   }
-  return new TextDecoder().decode(buf);
+  return { text: new TextDecoder("utf-8", { fatal: false }).decode(buf), truncated };
+}
+
+/**
+ * Pull a heading outline out of plain text. For Markdown we read ATX headings
+ * (`#`..`######`), skipping fenced code blocks; other text types have no
+ * headings, so we just report the line count.
+ */
+function textOutline(
+  text: string,
+  name: string,
+  mime?: string | null,
+): { headings: { level: number; title: string; line: number }[]; lines: number } {
+  const lines = text.split("\n");
+  const isMarkdown = /markdown/i.test(mime ?? "") || /\.(md|markdown|mdown|mkd)$/i.test(name);
+  const headings: { level: number; title: string; line: number }[] = [];
+  if (isMarkdown) {
+    let inFence = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      if (/^\s*(```|~~~)/.test(line)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence) continue;
+      const m = /^(#{1,6})\s+(.*\S)\s*$/.exec(line);
+      if (m && m[1] && m[2]) {
+        headings.push({ level: m[1].length, title: m[2].trim(), line: i + 1 });
+        if (headings.length >= MAX_TEXT_HEADINGS) break;
+      }
+    }
+  }
+  return { headings, lines: lines.length };
 }
 
 function decodeContent(content: string, encoding: "utf8" | "base64"): Uint8Array {
@@ -87,6 +147,7 @@ const guard = async (fn: () => Promise<CallToolResult>): Promise<CallToolResult>
 export function registerTools(server: McpServer, ctx: { caller: Caller; drive: DriveDeps; origin: string }): void {
   const { caller, drive, origin } = ctx;
   const service = drive.service;
+  const docWorker = drive.docWorker;
   const spaceFor = async (space?: string) => space ?? (await service.personalSpace(caller.sub));
   const fileUrl = (id: string) => `${origin}/api/files/${id}/content`;
 
@@ -114,38 +175,203 @@ export function registerTools(server: McpServer, ctx: { caller: Caller; drive: D
     {
       title: "Fetch a file",
       description:
-        "Fetch a file's full text content and metadata by id (ids come from `search` or `list_folder`). PDFs return their extracted text layer; other binary files return metadata and a download `url` with empty text.",
-      inputSchema: { id: z.string().describe("The file id to fetch") },
+        "Fetch a file's text content and metadata by id (ids come from `search` or `list_folder`). " +
+        "PDFs return their extracted text layer; other binary files return metadata and a download `url` with empty text. " +
+        "Use `offset`/`limit` (in characters) to read a window of a large file. The response always reports `total` " +
+        "(the full character count of the readable text), the applied `offset`/`limit`, and `has_more` — so a partial read " +
+        "is never silent: page forward by passing `offset = previous offset + limit` while `has_more` is true. " +
+        "`truncated: true` means the file was too large to read in full, so `total` is a lower bound. PDFs also report " +
+        "`page_count`; call `get_outline` first to decide which range to fetch.",
+      inputSchema: {
+        id: z.string().describe("The file id to fetch"),
+        offset: z.number().int().min(0).optional().describe("Start character offset into the readable text (default 0)."),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`Max characters to return (default and max ${MAX_WINDOW_CHARS}).`),
+      },
     },
-    ({ id }) =>
+    ({ id, offset, limit }) =>
       guard(async () => {
         const file = await service.getFile(caller, id);
         const v = file.version;
+        const reqOffset = Math.max(offset ?? 0, 0);
+        const reqLimit = Math.min(limit ?? MAX_WINDOW_CHARS, MAX_WINDOW_CHARS);
+
         let text = "";
+        let total = 0;
+        let appliedOffset = reqOffset;
+        let hasMore = false;
+        let sourceTruncated = false;
+        let pageCount: number | undefined;
+
         if (v && v.source === "blob" && v.blobKey) {
           const { key } = await service.getContentKey(caller, id);
           if (isTextLike(file.name, v.mime)) {
             const stream = await drive.blobs.get(key);
-            if (stream) text = await readText(stream, MAX_TEXT_BYTES);
-          } else if (documentTextExtractor.supports(file.name, v.mime)) {
-            // PDFs etc.: return the extracted text layer instead of empty text.
+            if (stream) {
+              const r = await readReadableText(stream, MAX_READ_BYTES);
+              total = r.text.length;
+              appliedOffset = Math.min(reqOffset, total);
+              text = r.text.slice(appliedOffset, appliedOffset + reqLimit);
+              hasMore = appliedOffset + text.length < total;
+              sourceTruncated = r.truncated; // capped at MAX_READ_BYTES → total is a floor
+            }
+          } else if (docWorker.supportsText(file.name, v.mime)) {
+            // PDFs etc.: extract the text layer through the (in-process or container) parser.
             const stream = await drive.blobs.get(key);
-            if (stream) text = (await documentTextExtractor.extract(stream, file.name, v.mime)) ?? "";
+            if (stream) {
+              const { bytes, truncated } = await drainToBytes(stream, MAX_READ_BYTES);
+              if (bytes) {
+                const r = await docWorker.extractText(bytes, file.name, v.mime, { offset: reqOffset, limit: reqLimit });
+                if (r) {
+                  text = r.text;
+                  total = r.total;
+                  appliedOffset = Math.min(reqOffset, total);
+                  hasMore = r.truncated;
+                  pageCount = r.pageCount;
+                }
+              } else {
+                // Too large to parse — surface it as truncated rather than silently empty.
+                sourceTruncated = truncated;
+              }
+            }
           }
         }
+
         return ok({
           id: file.id,
           title: file.name,
           text,
           url: fileUrl(file.id),
+          offset: appliedOffset,
+          limit: reqLimit,
+          total,
+          has_more: hasMore,
+          truncated: sourceTruncated,
           metadata: {
             path: (file.metadata?.path as string) ?? "",
             mime: v?.mime ?? null,
             size: v?.size ?? null,
             modifiedAt: file.updatedAt,
+            ...(pageCount != null ? { page_count: pageCount } : {}),
             ...(Array.isArray(file.metadata?.labels) ? { labels: file.metadata.labels } : {}),
           },
         });
+      }),
+  );
+
+  server.registerTool(
+    "get_outline",
+    {
+      title: "Get a document outline",
+      description:
+        "Return a document's structure — page count and headings / table of contents — without its full text, so you can " +
+        "decide what to `fetch`. PDFs return their embedded bookmarks (with page numbers where resolvable) and a `pages` " +
+        "count; Markdown/text returns its heading hierarchy, `lines`, and `total_chars`; other file types return basic " +
+        "metadata only. Headings carry a `level` (1 = top) so you can reconstruct the nesting.",
+      inputSchema: { id: z.string().describe("The file id") },
+    },
+    ({ id }) =>
+      guard(async () => {
+        const file = await service.getFile(caller, id);
+        const v = file.version;
+        const base = { id: file.id, title: file.name, mime: v?.mime ?? null };
+
+        if (v && v.source === "blob" && v.blobKey) {
+          const { key } = await service.getContentKey(caller, id);
+          if (docWorker.supportsText(file.name, v.mime)) {
+            const stream = await drive.blobs.get(key);
+            const { bytes } = stream ? await drainToBytes(stream, MAX_READ_BYTES) : { bytes: null };
+            const outline = bytes ? await docWorker.extractOutline(bytes, file.name, v.mime) : null;
+            if (outline) {
+              return ok({
+                ...base,
+                kind: "pdf",
+                pages: outline.pageCount,
+                ...(outline.documentTitle ? { document_title: outline.documentTitle } : {}),
+                has_outline: outline.entries.length > 0,
+                headings: outline.entries,
+              });
+            }
+          } else if (isTextLike(file.name, v.mime)) {
+            const stream = await drive.blobs.get(key);
+            if (stream) {
+              const { text, truncated } = await readReadableText(stream, MAX_READ_BYTES);
+              const { headings, lines } = textOutline(text, file.name, v.mime);
+              return ok({
+                ...base,
+                kind: "text",
+                lines,
+                total_chars: text.length,
+                truncated,
+                has_outline: headings.length > 0,
+                headings,
+              });
+            }
+          }
+        }
+
+        return ok({ ...base, kind: "other", has_outline: false, headings: [], note: "No outline available for this file type." });
+      }),
+  );
+
+  server.registerTool(
+    "extract_tables",
+    {
+      title: "Extract tables from a spreadsheet",
+      description:
+        "Extract a spreadsheet's data as structured rows/columns (one table per sheet) instead of flattened text — so you " +
+        "can reliably do operations like sum-by-group or top-N. Works on .xlsx/.xls/.csv and similar; other file types " +
+        "return no tables. Each table reports its true `row_count`/`col_count`; rows are capped at `max_rows` per sheet " +
+        "(default " +
+        DEFAULT_MAX_TABLE_ROWS +
+        ") and `truncated: true` flags a table whose rows were cut, so a partial read is never silent.",
+      inputSchema: {
+        id: z.string().describe("The file id (from `search` or `list_folder`)."),
+        sheet: z.string().optional().describe("Limit to one sheet/section by name; omit for all sheets."),
+        max_rows: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`Max rows to return per table (default ${DEFAULT_MAX_TABLE_ROWS}); the full count is in row_count.`),
+      },
+    },
+    ({ id, sheet, max_rows }) =>
+      guard(async () => {
+        const file = await service.getFile(caller, id);
+        const v = file.version;
+        const base = { id: file.id, title: file.name, mime: v?.mime ?? null };
+        const cap = max_rows ?? DEFAULT_MAX_TABLE_ROWS;
+
+        if (v && v.source === "blob" && v.blobKey && docWorker.supportsTables(file.name, v.mime)) {
+          const { key } = await service.getContentKey(caller, id);
+          const stream = await drive.blobs.get(key);
+          const { bytes, truncated } = stream ? await drainToBytes(stream, MAX_READ_BYTES) : { bytes: null, truncated: false };
+          if (bytes) {
+            const out = await docWorker.extractTables(bytes, file.name, v.mime);
+            if (out) {
+              const selected = sheet ? out.tables.filter((t) => t.section === sheet) : out.tables;
+              const tables = selected.map((t) => ({
+                section: t.section,
+                row_count: t.rowCount,
+                col_count: t.colCount,
+                confidence: t.confidence,
+                ...(t.coverage != null ? { coverage: t.coverage } : {}),
+                rows: t.rows.slice(0, cap),
+                truncated: t.rowCount > cap,
+              }));
+              return ok({ ...base, kind: "tables", section_count: out.meta.sectionCount, tables });
+            }
+          } else if (truncated) {
+            return ok({ ...base, kind: "tables", tables: [], truncated: true, note: "File too large to parse." });
+          }
+        }
+
+        return ok({ ...base, kind: "other", tables: [], note: "No tabular data available for this file type." });
       }),
   );
 

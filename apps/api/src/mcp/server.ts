@@ -15,7 +15,10 @@ export function buildMcpServer(ctx: { caller: Caller; drive: DriveDeps; origin: 
     {
       capabilities: { tools: {} },
       instructions:
-        "Canopy Drive: search, read, and manage the signed-in user's files. Use `search` to find files, then `fetch` to read one by id.",
+        "Canopy Drive: search, read, and manage the signed-in user's files. Use `search` to find files, then `fetch` to " +
+        "read one by id. For large files, `get_outline` returns structure (page count, headings/TOC) without the full " +
+        "text, and `fetch` takes `offset`/`limit` to page through content — check `has_more` so you never miss a truncated " +
+        "tail. For spreadsheets, prefer `extract_tables` to get structured rows/columns instead of flattened text.",
     },
   );
   registerTools(server, ctx);

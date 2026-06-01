@@ -62,6 +62,7 @@ import {
   verifyAppPassword as verifyAppPwd,
   type AppPassword,
 } from "./app-passwords";
+import { listMcpClients as listMcpClientRows, recordMcpClient as recordMcpClientRow, type McpClient } from "./mcp-clients";
 import {
   createShare as createShareRow,
   getShare as getShareRow,
@@ -427,8 +428,16 @@ export class FileService {
   }
 
   /** Create a shared group space (e.g. a family); the caller becomes its owner. */
-  createSpace(caller: Caller, name: string): Promise<Space> {
-    return createGroupSpace(this.db, { name, createdBy: caller.sub });
+  createSpace(
+    caller: Caller,
+    input: { name: string; icon?: string | null; color?: string | null },
+  ): Promise<Space> {
+    return createGroupSpace(this.db, {
+      name: input.name,
+      createdBy: caller.sub,
+      icon: input.icon ?? null,
+      color: input.color ?? null,
+    });
   }
 
   /** Rename a group space. Requires owner on the space. */
@@ -1004,6 +1013,14 @@ export class FileService {
   }
   deleteAppPassword(userSub: string, id: string) {
     return deleteAppPwd(this.db, userSub, id);
+  }
+
+  // ── MCP clients (which AI assistants connected over the remote MCP server) ──
+  recordMcpClient(userSub: string, clientId: string, info?: { name?: string | null; version?: string | null }) {
+    return recordMcpClientRow(this.db, userSub, clientId, info);
+  }
+  listMcpClients(userSub: string): Promise<McpClient[]> {
+    return listMcpClientRows(this.db, userSub);
   }
 
   // ── per-user plugin settings (opaque JSON; API encrypts secret fields) ──────

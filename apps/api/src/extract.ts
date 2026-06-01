@@ -1,4 +1,4 @@
-import { extractText, getDocumentProxy } from "unpdf";
+import { drainToBytes, isPdf, pdfText } from "@canopy/docworker";
 import type { DocumentTextExtractor } from "@canopy/store";
 
 /**
@@ -8,64 +8,28 @@ import type { DocumentTextExtractor } from "@canopy/store";
  */
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
 
-/** Cap on the text we return — matches the indexer's body cap. */
+/** Cap on the text the *indexer* keeps — matches the store's body cap. */
 const MAX_OUTPUT_CHARS = 512 * 1024;
 
-function isPdf(name: string, mime?: string | null): boolean {
-  return (mime?.toLowerCase().includes("pdf") ?? false) || /\.pdf$/i.test(name);
-}
-
-/** Read a stream fully into one buffer, or null if it exceeds `cap` (too big to parse). */
-async function drain(stream: ReadableStream<Uint8Array>, cap: number): Promise<Uint8Array | null> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      total += value.byteLength;
-      if (total > cap) return null;
-      chunks.push(value);
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const ch of chunks) {
-    out.set(ch, off);
-    off += ch.byteLength;
-  }
-  return out;
-}
-
 /**
- * Extracts a PDF's embedded text layer so PDFs become full-text searchable and
- * readable through the MCP `fetch` tool — closing the gap where Canopy treated
- * every PDF as opaque bytes.
+ * The search indexer's text extractor: turns a PDF's embedded text layer into
+ * plain text for the FTS index, capped at {@link MAX_OUTPUT_CHARS}. Parsing is
+ * delegated to {@link https://github.com/ | @canopy/docworker}'s in-process
+ * parser — the *same* implementation the MCP read tools use through the injected
+ * `DocWorker` adapter, so there's one PDF code path across indexing, local Node,
+ * and the (optional) container backend.
  *
- * This reads the *text layer*, not OCR: digitally-generated PDFs (the common
- * case) carry selectable text and extract cleanly; scanned/image-only PDFs have
- * no text layer and yield undefined here. Uses `unpdf` (a serverless pdf.js
- * build) so it runs unchanged on both Node and Cloudflare Workers.
+ * This cap is only the index body size: the MCP `fetch`/`get_outline` tools read
+ * the uncapped, *ranged* layer through the adapter so they can page the whole
+ * document and report truncation explicitly.
  */
 export const documentTextExtractor: DocumentTextExtractor = {
   supports: isPdf,
   async extract(stream, name, mime) {
     if (!isPdf(name, mime)) return undefined;
-    try {
-      const bytes = await drain(stream, MAX_INPUT_BYTES);
-      if (!bytes || bytes.byteLength === 0) return undefined;
-      const pdf = await getDocumentProxy(bytes);
-      const { text } = await extractText(pdf, { mergePages: true });
-      const raw = text as string | string[];
-      const merged = (Array.isArray(raw) ? raw.join("\n") : raw).trim();
-      return merged ? merged.slice(0, MAX_OUTPUT_CHARS) : undefined;
-    } catch (err) {
-      console.warn(`[extract] pdf text extraction failed for "${name}": ${(err as Error).message}`);
-      return undefined;
-    }
+    const { bytes } = await drainToBytes(stream, MAX_INPUT_BYTES);
+    if (!bytes) return undefined; // empty, unreadable, or too big to parse
+    const r = await pdfText(bytes, name, mime, { limit: MAX_OUTPUT_CHARS });
+    return r?.text || undefined;
   },
 };
