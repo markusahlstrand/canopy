@@ -18,6 +18,10 @@ import {
 import { createApp, type DataSourceDeps } from "./app";
 import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
 import { parseRepo, synologyConnectorFor } from "./data-sources";
+import { documentTextExtractor } from "./extract";
+import { inProcessDocWorker } from "@canopy/docworker";
+import { containerDocWorker, type ContainerNamespace } from "./extract-container";
+import { createContainerSynologyConnector } from "./synology-container";
 import { createCacheApiCacheStore } from "./cache-api";
 import { createAuthApp } from "./auth/routes";
 import { readAuthConfig, type EnvVars } from "./auth/config";
@@ -42,6 +46,10 @@ interface WorkerEnv {
   APP_BASE_URL?: string;
   SESSION_SECRET?: string;
   SESSION_TTL?: string;
+  /** Durable Object namespace for the document-parser container (optional offload). */
+  DOCWORKER?: ContainerNamespace;
+  /** Shared secret the Worker sends to the container; also injected into the container. */
+  DOCWORKER_TOKEN?: string;
 }
 
 // Apply the schema once per isolate (CREATE TABLE IF NOT EXISTS is idempotent).
@@ -59,7 +67,7 @@ export default {
 
     const blobs = createR2BlobStore(env.BUCKET);
     const search = createSqlSearchIndex(db);
-    const service = new FileService(db, blobs, createSqlBlobRepo(db), { index: search });
+    const service = new FileService(db, blobs, createSqlBlobRepo(db), { index: search, textExtractor: documentTextExtractor });
 
     const readonlyMounts: Record<string, StorageConnector> = {};
     let demoDefaults: Record<string, Record<string, string>> = {};
@@ -93,10 +101,15 @@ export default {
       cache: createCacheApiCacheStore(),
       secret: authConfig?.sessionSecret,
       // Browse a connected backend live as a space: a GitHub repo, or a Synology
-      // NAS over FileStation. From the edge only QuickConnect relay / a public
-      // HTTPS endpoint is reachable — a LAN address or self-signed cert is not.
+      // NAS over FileStation. From the edge a direct LAN/self-signed NAS isn't
+      // reachable — only QuickConnect/public HTTPS, or a tailnet NAS *through the
+      // container* (which joins the user's tailnet with their per-user key).
       connectorFor: (pluginId, config) => {
-        if (pluginId === "synology") return synologyConnectorFor(config);
+        if (pluginId === "synology") {
+          return env.DOCWORKER && config.tailscaleHost && config.tailscaleAuthKey
+            ? createContainerSynologyConnector(env.DOCWORKER, config)
+            : synologyConnectorFor(config);
+        }
         if (pluginId !== "github") return null;
         const p = parseRepo(config.repo ?? "");
         return p
@@ -117,7 +130,16 @@ export default {
       auth: createAuthApp(authConfig, onLogin),
       authConfig,
       readonlyMounts,
-      drive: { service, blobs },
+      // Parse in-process by default (pure-JS unpdf + SheetJS in the isolate). When the
+      // container is bound, offload to it instead — the only path that can reach a
+      // tailnet-only source. The DO binding is the auth boundary (a container has no
+      // public ingress), so no shared secret is required; DOCWORKER_TOKEN is optional
+      // defense-in-depth. Same adapter either way.
+      drive: {
+        service,
+        blobs,
+        docWorker: env.DOCWORKER ? containerDocWorker(env.DOCWORKER, env.DOCWORKER_TOKEN) : inProcessDocWorker(),
+      },
       dataSources,
       // D1 FTS5 search index — the same SQL adapter as libsql on Node.
       search,

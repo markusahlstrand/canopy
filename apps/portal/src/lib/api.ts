@@ -565,6 +565,10 @@ export interface SpaceView {
   mounted: boolean;
   /** A read-only space (e.g. a connected GitHub repo): no uploads, edits, or sharing. */
   readonly?: boolean;
+  /** Optional sidebar icon name (falls back to the people icon). */
+  icon?: string | null;
+  /** Optional accent color — an HSL triplet like "145 33% 36%". */
+  color?: string | null;
 }
 
 /** Spaces the caller can see, with their role + mount preference. */
@@ -591,15 +595,18 @@ export async function testConnector(pluginId: string): Promise<{ ok: boolean; er
   }
 }
 
-/** Create a shared (group) space. */
-export async function createSpace(name: string): Promise<{ id: string; name: string }> {
+/** Create a shared (group) space, optionally with a sidebar icon + accent color. */
+export async function createSpace(
+  name: string,
+  opts: { icon?: string | null; color?: string | null } = {},
+): Promise<{ id: string; name: string; icon: string | null; color: string | null }> {
   const res = await apiFetch("/api/spaces", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, icon: opts.icon ?? null, color: opts.color ?? null }),
   });
   if (!res.ok) throw new Error(`create space failed: ${res.status}`);
-  return (await res.json()) as { id: string; name: string };
+  return (await res.json()) as { id: string; name: string; icon: string | null; color: string | null };
 }
 
 /** Rename a space (owner only). */
@@ -653,6 +660,29 @@ export async function createAppPassword(name: string): Promise<{ id: string; tok
 
 export async function deleteAppPassword(id: string): Promise<void> {
   await apiFetch(`/api/app-passwords/${id}`, { method: "DELETE" });
+}
+
+/** An AI assistant (Claude, ChatGPT, an editor) connected over the MCP server. */
+export interface McpConnection {
+  /** The connecting app's id (token client id, or a slug of its clientInfo name). */
+  clientId: string;
+  /** Friendly name from the MCP handshake (e.g. "Claude"), or null if not learned. */
+  name: string | null;
+  version: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+/** Assistants the signed-in user has connected to their drive, most recent first. */
+export async function listMcpConnections(): Promise<McpConnection[]> {
+  try {
+    const res = await apiFetch("/api/mcp/connections");
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => null);
+    return Array.isArray(data) ? (data as McpConnection[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** A share link (the unguessable secret is never returned after creation). */
@@ -1143,6 +1173,8 @@ export interface PluginConfigField {
   required?: boolean;
   /** Choices for a "select" field (for AI-model fields, filled by the server). */
   options?: { value: string; label: string }[];
+  /** Show this field only when `field` currently holds one of these values. */
+  showWhen?: { field: string; in: string[] };
 }
 
 /** A model the deployment's AI gateway exposes (Cloudflare Workers AI, Gemini, local). */

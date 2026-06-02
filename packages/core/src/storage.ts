@@ -85,4 +85,12 @@ export interface ConnectorConfigField {
    * the settings schema. `"ai-models"` = the models the AI gateway currently exposes.
    */
   optionsFrom?: "ai-models";
+  /**
+   * Show this field only when another field (typically a `"select"` like a
+   * connection "mode") currently holds one of these values — so a multi-mode
+   * connector reveals just the relevant inputs. Fields without `showWhen` always
+   * show. The settings UI also clears a hidden non-secret field on save, so
+   * switching modes doesn't leave a stale value behind.
+   */
+  showWhen?: { field: string; in: string[] };
 }

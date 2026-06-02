@@ -67,10 +67,16 @@ export function mcpAuth(authConfig: AuthConfig | null, drive: DriveDeps | undefi
         email: typeof payload.email === "string" ? payload.email : "",
         emailVerified: payload.email_verified === true || payload.email_verified === "true",
       };
+      // The connecting app's id: `azp` (authorized party) or `client_id`, whichever
+      // the provider mints. Used to attribute the connection in Settings; absent
+      // tokens fall back to the MCP clientInfo name (see ./transport.ts).
+      const clientId =
+        typeof payload.azp === "string" ? payload.azp : typeof payload.client_id === "string" ? payload.client_id : undefined;
       // Backfill the user directory (same as the session path) so sharing and
       // personal-space resolution work for a token-only caller.
       if (drive) await drive.service.ensureUser({ sub: caller.sub, email: caller.email });
       c.set("mcpCaller", caller);
+      c.set("mcpClientId", clientId);
       return next();
     } catch {
       challenge("invalid_token");

@@ -10,12 +10,21 @@
 // so a fork deploys with zero setup. Wrangler writes the new IDs back into your
 // LOCAL copy of this file on deploy — don't commit them; the committed config
 // stays ID-less so the button keeps working for the next person.
+//
+// CONTAINER: this config also declares the DocWorker container (see `containers`
+// below), so a normal `wrangler deploy` / `pnpm deploy:cf` builds its image and
+// therefore needs Docker running. To deploy the Worker WITHOUT the container
+// (no Docker, e.g. a fork with no NAS), use `pnpm deploy:cf:worker-only`
+// (`wrangler deploy --containers-rollout=none`) — the Worker then parses in
+// process, and would also fall back to it at runtime if the container is
+// unreachable.
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "canopy",
 	// Worker entry lives in apps/api; the whole repo is the build context so the
-	// @canopy/* workspace packages resolve (they export ./src directly).
-	"main": "apps/api/src/worker.ts",
+	// @canopy/* workspace packages resolve (they export ./src directly). worker-cf.ts
+	// re-exports the handler plus the DocWorker Durable Object (the container manager).
+	"main": "apps/api/src/worker-cf.ts",
 	"compatibility_date": "2026-05-01",
 	// Serve the built SPA from Static Assets; run the Worker first only for the API.
 	"assets": {
@@ -51,6 +60,47 @@
 	"ai": {
 		"binding": "AI"
 	},
+	// Document-parser container: heavy PDF/spreadsheet parsing off the isolate, and
+	// the only way to reach a tailnet-only Synology source (a tsnet sidecar joins your
+	// tailnet — see apps/docworker). The Worker offloads to it whenever the DOCWORKER
+	// binding is present, and transparently falls back to in-process parsing if the
+	// container is unreachable. Node never uses this. The image's build context is the
+	// repo root so the @canopy/* workspace packages resolve.
+	//
+	// Auth model: the DO binding is the boundary — a container has no public ingress,
+	// so only this Worker can reach it; no shared secret is needed on that hop.
+	// DOCWORKER_TOKEN is optional defense-in-depth: `wrangler secret put DOCWORKER_TOKEN`.
+	//
+	// Tailnet auth is PER-TENANT, not a global secret: each user's Tailscale auth key +
+	// host live in their encrypted plugin_settings (Synology connector config), so the
+	// parser joins THAT user's tailnet to reach THEIR NAS (one container instance per
+	// user). A single global key here is only an optional fallback for a one-tenant /
+	// homelab deploy:  `wrangler secret put TS_AUTHKEY`  (ephemeral, tagged).
+	"containers": [
+		{
+			"class_name": "DocWorker",
+			"image": "./apps/docworker/Dockerfile",
+			"image_build_context": ".",
+			"instance_type": "standard-3",
+			"max_instances": 1
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "DOCWORKER",
+				"class_name": "DocWorker"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"DocWorker"
+			]
+		}
+	],
 	// Non-secret config. A fresh deploy runs as the anonymous demo: docs + a demo
 	// drive are read live from the GitHub repo below (no R2 needed for them).
 	//
@@ -62,7 +112,7 @@
 	"vars": {
 		"GITHUB_REPO": "markusahlstrand/canopy",
 		"GITHUB_BRANCH": "main",
-		"OIDC_ISSUER": "https://token.sesamy.dev",
+		"OIDC_ISSUER": "https://canopy.token.sesamy.dev",
 		"OIDC_CLIENT_ID": "canopy",
 		"OIDC_AUDIENCE": "urn:canopy"
 	},

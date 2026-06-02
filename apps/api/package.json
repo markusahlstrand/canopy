@@ -9,11 +9,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cloudflare/containers": "^0.3.5",
     "@canopy/connector-github": "workspace:*",
     "@canopy/connector-local": "workspace:*",
     "@canopy/connector-r2": "workspace:*",
     "@canopy/connector-synology": "workspace:*",
     "@canopy/core": "workspace:*",
+    "@canopy/docworker": "workspace:*",
     "@canopy/store": "workspace:*",
     "@hono/node-server": "^1.14.4",
     "@modelcontextprotocol/sdk": "^1.29.0",

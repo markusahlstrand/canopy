@@ -229,7 +229,7 @@ describe("FileService over libsql", () => {
   });
 
   it("a different author's save appends rather than coalescing (authorship boundary)", async () => {
-    const fam = await svc.createSpace({ sub: USER }, "Family");
+    const fam = await svc.createSpace({ sub: USER }, { name: "Family" });
     await addMember(db, fam.id, "bob", "editor");
 
     const v1 = enc("v1");
@@ -274,7 +274,7 @@ describe("FileService over libsql", () => {
   });
 
   it("a folder-grant editor (no space membership) can upload via the blob flow", async () => {
-    const fam = await svc.createSpace({ sub: USER }, "Family");
+    const fam = await svc.createSpace({ sub: USER }, { name: "Family" });
     await svc.createFolder(fam.id, USER, "Shared");
     // bob gets editor on the Shared folder only — he is NOT a member of the space.
     await svc.shareFolderGrant({ sub: USER }, fam.id, "Shared", { subjectType: "user", subjectId: "bob", role: "editor" });
@@ -313,7 +313,7 @@ describe("FileService over libsql", () => {
   });
 
   it("deleteSpace removes the space and everything scoped to it, releasing blobs", async () => {
-    const fam = await svc.createSpace({ sub: USER }, "Family");
+    const fam = await svc.createSpace({ sub: USER }, { name: "Family" });
     await addMember(db, fam.id, "bob", "editor");
     await svc.createFolder(fam.id, USER, "Shared");
     await svc.applySpacePlugin({ sub: USER }, fam.id, "notes");
@@ -494,7 +494,7 @@ describe("FileService over libsql", () => {
   });
 
   it("invite link: create → preview → accept grants membership; single-use", async () => {
-    const fam = await svc.createSpace({ sub: USER }, "Family");
+    const fam = await svc.createSpace({ sub: USER }, { name: "Family" });
     const invite = await svc.createSpaceInvite({ sub: USER }, fam.id, "editor");
 
     // Preview works without a caller (the landing page shows it before sign-in).
@@ -514,7 +514,7 @@ describe("FileService over libsql", () => {
   });
 
   it("invite link: only an owner can mint or revoke; revoke kills the link", async () => {
-    const fam = await svc.createSpace({ sub: USER }, "Team");
+    const fam = await svc.createSpace({ sub: USER }, { name: "Team" });
     await expect(svc.createSpaceInvite({ sub: "stranger" }, fam.id, "viewer")).rejects.toBeInstanceOf(PermissionError);
 
     const invite = await svc.createSpaceInvite({ sub: USER }, fam.id, "viewer");

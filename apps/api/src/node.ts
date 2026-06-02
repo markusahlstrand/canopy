@@ -22,6 +22,8 @@ import { createFsBlobStore, createLibsqlDb } from "@canopy/store/node";
 import { createApp, type DataSourceDeps } from "./app";
 import { SERVER_PLUGINS, dataSourcesOf, processorsOf } from "./plugins";
 import { parseRepo, synologyConnectorFor } from "./data-sources";
+import { documentTextExtractor } from "./extract";
+import { inProcessDocWorker } from "@canopy/docworker";
 import { readAuthConfig } from "./auth/config";
 import { createAuthApp } from "./auth/routes";
 
@@ -66,6 +68,7 @@ const search = createSqlSearchIndex(db);
 const service = new FileService(db, blobs, createSqlBlobRepo(db), {
   globalDedup: process.env.CANOPY_GLOBAL_DEDUP === "1",
   index: search,
+  textExtractor: documentTextExtractor,
 });
 // Backfill the full-text index for any files that predate it (idempotent).
 void service
@@ -149,7 +152,7 @@ const app = createApp({
   auth: createAuthApp(authConfig, onLogin),
   authConfig,
   readonlyMounts: { documentation, demo },
-  drive: { service, blobs },
+  drive: { service, blobs, docWorker: inProcessDocWorker() },
   dataSources,
   // libsql FTS5 search index (same SQL adapter as D1 on the edge).
   search,

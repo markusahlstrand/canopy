@@ -470,11 +470,15 @@ export function FilePreview({
     viewer?.plugin === "markdown-editor" ||
     viewer?.plugin === "code-editor" ||
     viewer?.plugin === "univer-office";
+  // Images fill the available area instead of auto-growing the iframe to content
+  // — the host gives them a real box (see layout below) and the viewer fits inside.
+  const fillViewer = viewer?.plugin === "image-viewer";
 
   const viewerNode = viewer ? (
     <PluginViewer
       key={`${file.id}:${contentNonce}`}
       file={{ source: viewer.source, name: file.name, url: contentUrl(file.id) }}
+      fill={fillViewer}
       onSaved={onSaved}
       onSaveContent={editable ? (text) => saveFileVersion(file.id, text) : undefined}
     />
@@ -610,14 +614,16 @@ export function FilePreview({
 
       {full ? (
         <div className="flex min-h-0 flex-1">
-          <div className="min-w-0 flex-1 overflow-auto bg-muted/20 p-6">
-            <div className="mx-auto max-w-[1100px]">{viewerNode}</div>
+          <div className={cn("min-w-0 flex-1 bg-muted/20 p-6", fillViewer ? "flex" : "overflow-auto")}>
+            <div className={cn("mx-auto w-full max-w-[1100px]", fillViewer && "flex min-h-0 flex-1")}>
+              {viewerNode}
+            </div>
           </div>
           <div className="flex w-[360px] shrink-0 flex-col gap-6 overflow-y-auto border-l px-6 py-5">{details}</div>
         </div>
       ) : (
         <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
-          {viewerNode}
+          {fillViewer ? <div className="h-[70vh] min-h-0 shrink-0">{viewerNode}</div> : viewerNode}
           {details}
         </div>
       )}

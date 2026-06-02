@@ -22,6 +22,8 @@ interface TopbarProps {
   onCrumbClick?: (index: number) => void;
   onOpenCmd: () => void;
   onOpenStore: () => void;
+  /** Open the Settings page (avatar menu → Settings, and the ⌘, shortcut). */
+  onOpenSettings: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
   onUpload: () => void;
@@ -42,6 +44,7 @@ export function Topbar({
   onCrumbClick,
   onOpenCmd,
   onOpenStore,
+  onOpenSettings,
   theme,
   onToggleTheme,
   onUpload,
@@ -164,7 +167,7 @@ export function Topbar({
             )}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem>
+          <DropdownMenuItem onClick={onOpenSettings}>
             <Icon name="settings" size={15} /> Settings
             <DropdownMenuShortcut>⌘,</DropdownMenuShortcut>
           </DropdownMenuItem>

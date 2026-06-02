@@ -16,6 +16,29 @@ import {
 } from "@/lib/api";
 
 /**
+ * Seed a `showWhen` controller (e.g. a connection "mode") for an *existing* config
+ * that predates it: if a gated field already has a value but its controller is
+ * unset, default the controller to that field's first matching value so the saved
+ * inputs stay visible. New configs start with the controller unset (the user picks
+ * it, then the relevant fields appear).
+ */
+function withInferredControllers(
+  fields: PluginConfigField[],
+  values: Record<string, string>,
+  secretsSet: string[],
+): Record<string, string> {
+  const out = { ...values };
+  for (const f of fields) {
+    if (!f.showWhen) continue;
+    const controller = f.showWhen.field;
+    if (out[controller]) continue; // already set
+    const hasData = (out[f.key] != null && out[f.key] !== "") || secretsSet.includes(f.key);
+    if (hasData && f.showWhen.in[0]) out[controller] = f.showWhen.in[0];
+  }
+  return out;
+}
+
+/**
  * Generic, schema-driven settings dialog for a plugin. Renders config fields from
  * the server's schema (text / url / secret / boolean; secret values are never sent
  * to the client — a stored secret shows as "set", and leaving it blank keeps the
@@ -57,7 +80,7 @@ export function PluginSettingsDialog({
         if (!alive) return;
         if (s) {
           setFields(s.fields);
-          setValues(s.values);
+          setValues(withInferredControllers(s.fields, s.values, s.secretsSet));
           setSecretsSet(s.secretsSet);
         }
         setPlaces(p);
@@ -87,13 +110,18 @@ export function PluginSettingsDialog({
 
   const setValue = (key: string, v: string) => setValues((prev) => ({ ...prev, [key]: v }));
 
+  /** Whether a field shows given the current values (its `showWhen` controller). */
+  const visible = (f: PluginConfigField) => !f.showWhen || f.showWhen.in.includes(values[f.showWhen.field] ?? "");
+
   async function save() {
     setSaving(true);
     setError(null);
     try {
-      // Send every field; the server treats an empty secret as "keep existing".
+      // Visible fields save their value. A field hidden by its mode is cleared
+      // (send ""), so switching modes never leaves a stale value that would change
+      // behavior; the server keeps an empty secret, so hidden secrets are untouched.
       const payload: Record<string, string> = {};
-      for (const f of fields) payload[f.key] = values[f.key] ?? "";
+      for (const f of fields) payload[f.key] = visible(f) ? (values[f.key] ?? "") : "";
       await savePluginSettings(pluginId, payload);
       onSaved?.();
       onOpenChange(false);
@@ -124,7 +152,7 @@ export function PluginSettingsDialog({
             {fields.length === 0 && places.length === 0 && (
               <p className="text-[13px] text-muted-foreground">This plugin has no settings to configure.</p>
             )}
-            {fields.map((f) => {
+            {fields.filter(visible).map((f) => {
               if (f.type === "boolean") {
                 return (
                   <label key={f.key} className="flex items-center gap-2.5 text-[13.5px]">

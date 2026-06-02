@@ -15,6 +15,7 @@ export * from "./users";
 export * from "./spaces";
 export * from "./invites";
 export * from "./app-passwords";
+export * from "./mcp-clients";
 export * from "./shares";
 export * from "./plugin-settings";
 export * from "./plugin-installs";

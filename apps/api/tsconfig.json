@@ -5,5 +5,10 @@
     "lib": ["ES2023", "DOM"],
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Cloudflare-only entry: the DO subclass pulls in `@cloudflare/containers` and
+  // Cloudflare runtime types (`cloudflare:workers`), which would conflict with the
+  // structural-binding + lib-DOM setup used everywhere else. Wrangler/esbuild
+  // transpiles these at deploy; nothing in the main program imports them.
+  "exclude": ["src/worker-cf.ts", "src/container"]
 }

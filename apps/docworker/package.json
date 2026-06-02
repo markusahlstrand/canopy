@@ -1,0 +1,28 @@
+{
+  "name": "@canopy/docworker-service",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Standalone document-parsing service: wraps @canopy/docworker's in-process parser behind HTTP, and reads tailnet-only sources (Synology) through a Tailscale sidecar. Runs as pure Node locally or as a Cloudflare Container.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@canopy/connector-synology": "workspace:*",
+    "@canopy/core": "workspace:*",
+    "@canopy/docworker": "workspace:*",
+    "@hono/node-server": "^1.14.4",
+    "hono": "^4.10.3",
+    "undici": "^7.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "tsx": "^4.20.6",
+    "typescript": "~6.0.3",
+    "vitest": "^3.2.4"
+  }
+}
