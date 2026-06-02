@@ -207,36 +207,35 @@ export function registerTools(server: McpServer, ctx: { caller: Caller; drive: D
         let sourceTruncated = false;
         let pageCount: number | undefined;
 
-        if (v && v.source === "blob" && v.blobKey) {
-          const { key } = await service.getContentKey(caller, id);
-          if (isTextLike(file.name, v.mime)) {
-            const stream = await drive.blobs.get(key);
-            if (stream) {
-              const r = await readReadableText(stream, MAX_READ_BYTES);
-              total = r.text.length;
-              appliedOffset = Math.min(reqOffset, total);
-              text = r.text.slice(appliedOffset, appliedOffset + reqLimit);
-              hasMore = appliedOffset + text.length < total;
-              sourceTruncated = r.truncated; // capped at MAX_READ_BYTES → total is a floor
-            }
-          } else if (docWorker.supportsText(file.name, v.mime)) {
-            // PDFs etc.: extract the text layer through the (in-process or container) parser.
-            const stream = await drive.blobs.get(key);
-            if (stream) {
-              const { bytes, truncated } = await drainToBytes(stream, MAX_READ_BYTES);
-              if (bytes) {
-                const r = await docWorker.extractText(bytes, file.name, v.mime, { offset: reqOffset, limit: reqLimit });
-                if (r) {
-                  text = r.text;
-                  total = r.total;
-                  appliedOffset = Math.min(reqOffset, total);
-                  hasMore = r.truncated;
-                  pageCount = r.pageCount;
-                }
-              } else {
-                // Too large to parse — surface it as truncated rather than silently empty.
-                sourceTruncated = truncated;
+        // Bytes come from the unified opener — a managed blob or an external
+        // (connector-backed) source — so NAS/GitHub files read like any other.
+        if (v && isTextLike(file.name, v.mime)) {
+          const stream = await service.openContentStream(file);
+          if (stream) {
+            const r = await readReadableText(stream, MAX_READ_BYTES);
+            total = r.text.length;
+            appliedOffset = Math.min(reqOffset, total);
+            text = r.text.slice(appliedOffset, appliedOffset + reqLimit);
+            hasMore = appliedOffset + text.length < total;
+            sourceTruncated = r.truncated; // capped at MAX_READ_BYTES → total is a floor
+          }
+        } else if (v && docWorker.supportsText(file.name, v.mime)) {
+          // PDFs etc.: extract the text layer through the (in-process or container) parser.
+          const stream = await service.openContentStream(file);
+          if (stream) {
+            const { bytes, truncated } = await drainToBytes(stream, MAX_READ_BYTES);
+            if (bytes) {
+              const r = await docWorker.extractText(bytes, file.name, v.mime, { offset: reqOffset, limit: reqLimit });
+              if (r) {
+                text = r.text;
+                total = r.total;
+                appliedOffset = Math.min(reqOffset, total);
+                hasMore = r.truncated;
+                pageCount = r.pageCount;
               }
+            } else {
+              // Too large to parse — surface it as truncated rather than silently empty.
+              sourceTruncated = truncated;
             }
           }
         }
@@ -280,37 +279,34 @@ export function registerTools(server: McpServer, ctx: { caller: Caller; drive: D
         const v = file.version;
         const base = { id: file.id, title: file.name, mime: v?.mime ?? null };
 
-        if (v && v.source === "blob" && v.blobKey) {
-          const { key } = await service.getContentKey(caller, id);
-          if (docWorker.supportsText(file.name, v.mime)) {
-            const stream = await drive.blobs.get(key);
-            const { bytes } = stream ? await drainToBytes(stream, MAX_READ_BYTES) : { bytes: null };
-            const outline = bytes ? await docWorker.extractOutline(bytes, file.name, v.mime) : null;
-            if (outline) {
-              return ok({
-                ...base,
-                kind: "pdf",
-                pages: outline.pageCount,
-                ...(outline.documentTitle ? { document_title: outline.documentTitle } : {}),
-                has_outline: outline.entries.length > 0,
-                headings: outline.entries,
-              });
-            }
-          } else if (isTextLike(file.name, v.mime)) {
-            const stream = await drive.blobs.get(key);
-            if (stream) {
-              const { text, truncated } = await readReadableText(stream, MAX_READ_BYTES);
-              const { headings, lines } = textOutline(text, file.name, v.mime);
-              return ok({
-                ...base,
-                kind: "text",
-                lines,
-                total_chars: text.length,
-                truncated,
-                has_outline: headings.length > 0,
-                headings,
-              });
-            }
+        if (v && docWorker.supportsText(file.name, v.mime)) {
+          const stream = await service.openContentStream(file);
+          const { bytes } = stream ? await drainToBytes(stream, MAX_READ_BYTES) : { bytes: null };
+          const outline = bytes ? await docWorker.extractOutline(bytes, file.name, v.mime) : null;
+          if (outline) {
+            return ok({
+              ...base,
+              kind: "pdf",
+              pages: outline.pageCount,
+              ...(outline.documentTitle ? { document_title: outline.documentTitle } : {}),
+              has_outline: outline.entries.length > 0,
+              headings: outline.entries,
+            });
+          }
+        } else if (v && isTextLike(file.name, v.mime)) {
+          const stream = await service.openContentStream(file);
+          if (stream) {
+            const { text, truncated } = await readReadableText(stream, MAX_READ_BYTES);
+            const { headings, lines } = textOutline(text, file.name, v.mime);
+            return ok({
+              ...base,
+              kind: "text",
+              lines,
+              total_chars: text.length,
+              truncated,
+              has_outline: headings.length > 0,
+              headings,
+            });
           }
         }
 
@@ -347,9 +343,8 @@ export function registerTools(server: McpServer, ctx: { caller: Caller; drive: D
         const base = { id: file.id, title: file.name, mime: v?.mime ?? null };
         const cap = max_rows ?? DEFAULT_MAX_TABLE_ROWS;
 
-        if (v && v.source === "blob" && v.blobKey && docWorker.supportsTables(file.name, v.mime)) {
-          const { key } = await service.getContentKey(caller, id);
-          const stream = await drive.blobs.get(key);
+        if (v && docWorker.supportsTables(file.name, v.mime)) {
+          const stream = await service.openContentStream(file);
           const { bytes, truncated } = stream ? await drainToBytes(stream, MAX_READ_BYTES) : { bytes: null, truncated: false };
           if (bytes) {
             const out = await docWorker.extractTables(bytes, file.name, v.mime);

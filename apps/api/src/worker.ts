@@ -9,10 +9,15 @@ import {
   createSqlBlobRepo,
   createSqlSearchIndex,
   ensurePersonalSpace,
+  getPluginSettings,
   resolveInvites,
   runMigrations,
+  syncAllConnectors,
   upsertUser,
+  type Db,
   type D1Like,
+  type FileRecord,
+  type FileVersion,
   type R2BucketLike,
 } from "@canopy/store";
 import { createApp, type DataSourceDeps } from "./app";
@@ -23,8 +28,9 @@ import { inProcessDocWorker } from "@canopy/docworker";
 import { containerDocWorker, type ContainerNamespace } from "./extract-container";
 import { createContainerSynologyConnector } from "./synology-container";
 import { createCacheApiCacheStore } from "./cache-api";
+import { decryptPluginConfig } from "./crypto";
 import { createAuthApp } from "./auth/routes";
-import { readAuthConfig, type EnvVars } from "./auth/config";
+import { readAuthConfig, type AuthConfig, type EnvVars } from "./auth/config";
 
 /** Cloudflare Worker bindings + vars. */
 interface WorkerEnv {
@@ -56,6 +62,48 @@ interface WorkerEnv {
 let schemaReady: Promise<void> | undefined;
 
 /**
+ * Build the connector plumbing shared by the request path and the background
+ * (scheduled) path: `connectorFor` (config → connector, container path included),
+ * `connectorForUser` (loads + decrypts a user's saved settings, then builds), and
+ * `readExternal` (streams an external version's bytes — injected into FileService
+ * so the download route, the MCP read tools, and the extract queue all reach
+ * connector-backed files). Defined once so the cron and the app never drift.
+ */
+function connectorWiring(env: WorkerEnv, db: Db, authConfig: AuthConfig | null) {
+  const plugins = dataSourcesOf(SERVER_PLUGINS);
+  const connectorFor = (pluginId: string, config: Record<string, string>): StorageConnector | null => {
+    if (pluginId === "synology") {
+      // From the edge a tailnet NAS is only reachable *through the container* (which
+      // joins the user's tailnet with their per-user key); otherwise direct/QuickConnect.
+      return env.DOCWORKER && config.tailscaleHost && config.tailscaleAuthKey
+        ? createContainerSynologyConnector(env.DOCWORKER, config)
+        : synologyConnectorFor(config);
+    }
+    if (pluginId !== "github") return null;
+    const p = parseRepo(config.repo ?? "");
+    return p
+      ? createGithubConnector("connector:github", {
+          owner: p.owner,
+          repo: p.repo,
+          branch: config.branch || undefined,
+          token: config.token || undefined,
+        })
+      : null;
+  };
+  const connectorForUser = async (sub: string, pluginId: string): Promise<StorageConnector | null> => {
+    const fields = plugins.find((p) => p.id === pluginId)?.configFields ?? [];
+    const config = await decryptPluginConfig(authConfig?.sessionSecret, fields, await getPluginSettings(db, sub, pluginId));
+    return connectorFor(pluginId, config);
+  };
+  const readExternal = async (version: FileVersion, file: FileRecord): Promise<ReadableStream<Uint8Array> | null> => {
+    if (!version.connectorId || !version.externalKey) return null;
+    const connector = await connectorForUser(file.ownerId, version.connectorId);
+    return connector ? connector.read(version.externalKey) : null;
+  };
+  return { plugins, connectorFor, connectorForUser, readExternal };
+}
+
+/**
  * Single Cloudflare Worker: serves /api/* (the Hono app); everything else comes
  * from Static Assets. The drive is D1 (metadata) + R2 (content-addressed blobs);
  * documentation/demo are read-only GitHub mounts.
@@ -67,7 +115,13 @@ export default {
 
     const blobs = createR2BlobStore(env.BUCKET);
     const search = createSqlSearchIndex(db);
-    const service = new FileService(db, blobs, createSqlBlobRepo(db), { index: search, textExtractor: documentTextExtractor });
+    const authConfig = readAuthConfig(env as unknown as EnvVars);
+    const { plugins, connectorFor, readExternal } = connectorWiring(env, db, authConfig);
+    const service = new FileService(db, blobs, createSqlBlobRepo(db), {
+      index: search,
+      textExtractor: documentTextExtractor,
+      readExternal,
+    });
 
     const readonlyMounts: Record<string, StorageConnector> = {};
     let demoDefaults: Record<string, Record<string, string>> = {};
@@ -94,33 +148,13 @@ export default {
       await ensurePersonalSpace(db, u.sub);
     };
 
-    const authConfig = readAuthConfig(env as unknown as EnvVars);
     const dataSources: DataSourceDeps = {
-      plugins: dataSourcesOf(SERVER_PLUGINS),
+      plugins,
       demoDefaults,
       cache: createCacheApiCacheStore(),
       secret: authConfig?.sessionSecret,
-      // Browse a connected backend live as a space: a GitHub repo, or a Synology
-      // NAS over FileStation. From the edge a direct LAN/self-signed NAS isn't
-      // reachable — only QuickConnect/public HTTPS, or a tailnet NAS *through the
-      // container* (which joins the user's tailnet with their per-user key).
-      connectorFor: (pluginId, config) => {
-        if (pluginId === "synology") {
-          return env.DOCWORKER && config.tailscaleHost && config.tailscaleAuthKey
-            ? createContainerSynologyConnector(env.DOCWORKER, config)
-            : synologyConnectorFor(config);
-        }
-        if (pluginId !== "github") return null;
-        const p = parseRepo(config.repo ?? "");
-        return p
-          ? createGithubConnector("connector:github", {
-              owner: p.owner,
-              repo: p.repo,
-              branch: config.branch || undefined,
-              token: config.token || undefined,
-            })
-          : null;
-      },
+      // Browse a connected backend live as a space (GitHub repo / Synology NAS).
+      connectorFor,
     };
     // Workers AI (env.AI) is the host AI gateway on Cloudflare — Gemma & co. with no
     // per-user key. Absent (e.g. the binding isn't configured), no host models exist.
@@ -153,14 +187,24 @@ export default {
   },
 
   /**
-   * Cron Trigger (see wrangler.jsonc `triggers.crons`): a periodic sweep that thins
-   * each file's version history down to the tiered retention curve (#11), releasing
-   * the blobs of pruned snapshots. Pinned and current versions are always kept.
+   * Cron Trigger (see wrangler.jsonc `triggers.crons`): thins each file's version
+   * history to the retention curve (#11), then sweeps connected backends — refreshing
+   * each user's persisted NAS/repo index from the connector (incremental via the
+   * change feed when available, else a bounded crawl) and draining text extraction.
    */
   async scheduled(_event: { cron: string }, env: WorkerEnv, _ctx: { waitUntil(p: Promise<unknown>): void }): Promise<void> {
     const db = createD1Db(env.DB);
     await (schemaReady ??= runMigrations(db));
-    const service = new FileService(db, createR2BlobStore(env.BUCKET), createSqlBlobRepo(db));
+    const blobs = createR2BlobStore(env.BUCKET);
+    const search = createSqlSearchIndex(db);
+    const authConfig = readAuthConfig(env as unknown as EnvVars);
+    const { connectorForUser, readExternal } = connectorWiring(env, db, authConfig);
+    const service = new FileService(db, blobs, createSqlBlobRepo(db), {
+      index: search,
+      textExtractor: documentTextExtractor,
+      readExternal,
+    });
     await service.pruneAllVersions();
+    await syncAllConnectors({ db, service, connectorForUser }, "synology");
   },
 };

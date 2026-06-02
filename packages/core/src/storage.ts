@@ -9,6 +9,8 @@ export interface StorageEntry {
   size?: number;
   /** ISO 8601. */
   modifiedAt?: string;
+  /** ISO 8601 — the backend's own creation time, when it exposes one. */
+  createdAt?: string;
   etag?: string;
   contentType?: string;
 }

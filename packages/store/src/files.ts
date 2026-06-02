@@ -26,6 +26,7 @@ import {
 import {
   addMember,
   createSpace as createGroupSpace,
+  ensureConnectorSpace,
   ensurePersonalSpace,
   getSpace,
   listMembers,
@@ -155,6 +156,7 @@ interface VersionRow {
   created_at: string;
   created_by: string;
   keep: number;
+  content_ref: string | null;
 }
 interface CommentRow {
   id: string;
@@ -193,6 +195,7 @@ function toVersion(r: VersionRow): FileVersion {
     createdAt: r.created_at,
     createdBy: r.created_by,
     keep: r.keep === 1,
+    contentRef: r.content_ref,
   };
 }
 function parseMeta(json: string): Record<string, unknown> {
@@ -226,6 +229,7 @@ function joinedToFileWithVersion(r: JoinedRow): FileWithVersion {
           created_at: r.v_created_at ?? r.created_at,
           created_by: r.created_by ?? r.owner_id,
           keep: r.keep ?? 0,
+          content_ref: null, // not joined for listings; only the extract queue reads it
         })
       : null,
   };
@@ -384,6 +388,40 @@ export interface DocumentTextExtractor {
 }
 
 /**
+ * The structural slice of a storage connector that {@link FileService.reconcileConnectorFolder}
+ * reads from — kept here (not imported from `@canopy/core`) so the store stays
+ * core-independent, the same way {@link DocumentTextExtractor} is. The real
+ * `StorageConnector` satisfies it.
+ */
+export interface ConnectorEntry {
+  /** Connector-relative POSIX path, e.g. "photos/2026/img.heic". */
+  path: string;
+  name: string;
+  kind: "file" | "folder";
+  size?: number;
+  modifiedAt?: string;
+  /** The backend's own creation time, when it exposes one (e.g. Synology `crtime`). */
+  createdAt?: string;
+  /** A change signal — for connectors without one, the host synthesizes `${size}:${mtime}`. */
+  etag?: string;
+  contentType?: string;
+}
+export interface ConnectorChange {
+  type: "created" | "updated" | "deleted";
+  path: string;
+  entry?: ConnectorEntry;
+}
+export interface ReconcileConnector {
+  list(path: string, opts?: { cursor?: string; limit?: number }): Promise<{ items: ConnectorEntry[]; cursor?: string }>;
+  /** Optional change feed (e.g. Synology's `SYNO.FileStation.Search` over `mtime`)
+   *  used to keep the index fresh incrementally; the sweep falls back to a crawl. */
+  changes?(cursor?: string): AsyncIterable<ConnectorChange>;
+}
+
+/** Connector entries we never index — Synology's per-folder metadata + recycle/snapshot bins. */
+const CONNECTOR_IGNORE = new Set(["@eaDir", "#recycle", "#snapshot"]);
+
+/**
  * File/version operations over a {@link Db} + {@link BlobStore}, with access
  * enforced by relation tuples (see authz.ts). A file lives in a **space**
  * (stored in `tenant_id`); blobs are content-addressed within their space.
@@ -398,6 +436,15 @@ export class FileService {
       versionCoalesceWindowMs?: number;
       index?: DriveSearchIndex;
       textExtractor?: DocumentTextExtractor;
+      /**
+       * Streams the bytes of an `external` (connector-backed) version — the host
+       * builds the right {@link StorageConnector} for the file's owner + plugin
+       * (the edge container path included) and reads its `external_key`. Injected
+       * so `@canopy/store` stays free of connector/decryption concerns; absent in
+       * pure-blob deployments. Used by {@link openContentStream} and the external
+       * extract queue.
+       */
+      readExternal?: (version: FileVersion, file: FileRecord) => Promise<ReadableStream<Uint8Array> | null>;
     } = {},
   ) {}
 
@@ -1113,6 +1160,22 @@ export class FileService {
   }
 
   /**
+   * Open the bytes of a file's current version as a stream — a managed `blob` from
+   * the blob store, or an `external` source via the injected `readExternal`. Does
+   * NOT re-check access: callers pass a `file` they already authorized (via
+   * {@link getFile}). Returns null when there's no content, the blob is missing, or
+   * no external reader is wired. The unified opener behind the download route and
+   * the MCP read tools, so both reach connector-backed files transparently.
+   */
+  async openContentStream(file: FileWithVersion): Promise<ReadableStream<Uint8Array> | null> {
+    const v = file.version;
+    if (!v) return null;
+    if (v.source === "blob" && v.blobKey) return this.store.get(v.blobKey);
+    if (v.source === "external") return this.opts.readExternal ? this.opts.readExternal(v, file) : null;
+    return null;
+  }
+
+  /**
    * Blob key for a *specific* version's content, for downloading an old version
    * from the history. Requires viewer+. Only managed-blob versions are streamable
    * today (external-source versions read through their connector — not yet wired).
@@ -1761,7 +1824,10 @@ export class FileService {
   // and deletions drop them. All feeding is best-effort — a search hiccup must
   // never fail a file operation — and a no-op when no index is configured.
 
-  /** Re-feed a single file into the index from its current DB state (incl. body text). */
+  /** Re-feed a single file into the index from its current DB state. Blob bodies are
+   *  extracted inline; an external file's body comes from its cached extract
+   *  (`content_ref` in R2), so this never re-reads the connector — the extract queue
+   *  pulls the bytes once. Title + metadata index even before the body is ready. */
   private async reindex(fileId: string): Promise<void> {
     const index = this.opts.index;
     if (!index) return;
@@ -1783,29 +1849,39 @@ export class FileService {
           const stream = await this.store.get(version.blobKey);
           if (stream) body = await extractor.extract(stream, file.name, version.mime);
         }
+      } else if (version?.source === "external" && version.contentRef) {
+        // The extract queue already pulled + cached this file's text in R2.
+        const stream = await this.store.get(version.contentRef);
+        if (stream) body = await readCappedText(stream, INDEX_MAX_TEXT_BYTES);
       }
-      // Fold user-facing metadata (description, AI labels, tags) into the indexed
-      // text so a file is findable by those too, not just its name and body.
-      const meta = [
-        typeof file.metadata.description === "string" ? file.metadata.description : "",
-        ...asStrings(file.metadata.labels),
-        ...asStrings(file.metadata.tags),
-      ]
-        .filter(Boolean)
-        .join(" ");
-      await index.upsert({
-        id: file.id,
-        spaceId: file.tenantId,
-        title: file.name,
-        text: [body, meta].filter(Boolean).join("\n") || undefined,
-        kind: "file",
-        path: typeof file.metadata.path === "string" ? file.metadata.path : "",
-        modifiedAt: file.updatedAt,
-        metadata: file.metadata,
-      });
+      await this.indexFileDoc(file, body);
     } catch (err) {
       console.warn(`[search] reindex failed for ${fileId}: ${(err as Error).message}`);
     }
+  }
+
+  /** Build + upsert the search doc for a file, folding user-facing metadata
+   *  (description, AI labels, tags) into the body so it's findable by those too. */
+  private async indexFileDoc(file: FileRecord, body?: string): Promise<void> {
+    const index = this.opts.index;
+    if (!index) return;
+    const meta = [
+      typeof file.metadata.description === "string" ? file.metadata.description : "",
+      ...asStrings(file.metadata.labels),
+      ...asStrings(file.metadata.tags),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    await index.upsert({
+      id: file.id,
+      spaceId: file.tenantId,
+      title: file.name,
+      text: [body, meta].filter(Boolean).join("\n") || undefined,
+      kind: "file",
+      path: typeof file.metadata.path === "string" ? file.metadata.path : "",
+      modifiedAt: file.updatedAt,
+      metadata: file.metadata,
+    });
   }
 
   /** Drop file(s) from the index. Best-effort. */
@@ -1849,6 +1925,272 @@ export class FileService {
     );
     for (const r of rows) await this.reindex(r.id);
     return { indexed: rows.length };
+  }
+
+  // ── connected-space reconcile (index a connector's tree into files) ──────────
+  // A connected space is a *persisted index* over a user's backend (a NAS, a repo):
+  // its files are `file_versions(source='external')` rows, so they flow through the
+  // same list / search / ACL / download paths as managed files. Reconcile converges
+  // one folder against the connector; the host triggers it lazily on view and from
+  // the scheduled sweep. The bucket is the source of truth — these rows are derived.
+
+  /** Ensure the user's connected space for a plugin exists (idempotent). Returns its id. */
+  ensureConnectorSpace(userSub: string, pluginId: string, name: string): Promise<string> {
+    return ensureConnectorSpace(this.db, userSub, pluginId, name);
+  }
+
+  /**
+   * Reconcile one folder of a connected space against its connector: list the
+   * folder, then upsert new/changed files, rename in place (preserving the file id —
+   * and so its extracted text/search row), tombstone the disappeared, and prune gone
+   * subfolders. New/changed files are enqueued for text extraction
+   * (`extract_state='pending'`). Excludes NAS noise (`@eaDir`, `#recycle`). Returns
+   * counts. The connector list can throw — the caller decides whether to surface it.
+   */
+  async reconcileConnectorFolder(
+    ownerSub: string,
+    spaceId: string,
+    pluginId: string,
+    connector: ReconcileConnector,
+    dir: string,
+  ): Promise<{ upserted: number; tombstoned: number; folders: string[] }> {
+    const path = normPath(dir);
+    const now = new Date().toISOString();
+
+    // 1. List the connector folder (paginated), dropping ignored names.
+    const files: ConnectorEntry[] = [];
+    const folderNames = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const page = await connector.list(path, cursor ? { cursor } : undefined);
+      for (const e of page.items) {
+        if (CONNECTOR_IGNORE.has(e.name)) continue;
+        if (e.kind === "folder") folderNames.add(e.name);
+        else files.push(e);
+      }
+      cursor = page.cursor;
+    } while (cursor);
+
+    // 2. Ensure an explicit folder row per subfolder (so an empty one still shows).
+    for (const name of folderNames) {
+      const childPath = path ? `${path}/${name}` : name;
+      await this.db.run("INSERT OR IGNORE INTO folders (space_id, path, created_at) VALUES (?, ?, ?)", [spaceId, childPath, now]);
+    }
+
+    // 3. Load persisted children (files) of this folder.
+    const existing = await this.db.all<{ id: string; version_id: string; external_key: string | null; etag: string | null }>(
+      `SELECT f.id, f.current_version_id AS version_id, v.external_key, v.etag
+         FROM files f JOIN file_versions v ON v.id = f.current_version_id
+        WHERE f.tenant_id = ? AND f.deleted_at IS NULL AND json_extract(f.metadata, '$.path') = ?`,
+      [spaceId, path],
+    );
+    const byKey = new Map(existing.map((r) => [r.external_key ?? "", r] as const));
+    const seenKeys = new Set<string>();
+    const newEntries: ConnectorEntry[] = [];
+    let upserted = 0;
+
+    // 4. Match by external_key: update changed, leave unchanged, collect the new.
+    for (const e of files) {
+      seenKeys.add(e.path);
+      const prior = byKey.get(e.path);
+      if (!prior) {
+        newEntries.push(e);
+      } else if ((prior.etag ?? null) !== (e.etag ?? null)) {
+        await this.updateExternalVersion(prior.id, prior.version_id, e, now);
+        upserted++;
+      }
+    }
+
+    // 5. Disappeared = persisted children whose key wasn't listed. A new entry with a
+    //    matching etag is a rename (preserve the id); the rest are tombstoned.
+    const disappeared = existing.filter((r) => !seenKeys.has(r.external_key ?? ""));
+    const consumed = new Set<string>();
+    let tombstoned = 0;
+    for (const e of newEntries) {
+      const sig = e.etag ?? null;
+      const match = sig ? disappeared.find((d) => !consumed.has(d.id) && (d.etag ?? null) === sig) : undefined;
+      if (match) {
+        consumed.add(match.id);
+        await this.renameExternalFile(match.id, match.version_id, e, now);
+      } else {
+        await this.insertExternalFile(spaceId, ownerSub, pluginId, e, path, now);
+      }
+      upserted++;
+    }
+    for (const d of disappeared) {
+      if (consumed.has(d.id)) continue; // consumed by a rename above
+      await this.db.run("UPDATE files SET deleted_at = ?, updated_at = ? WHERE id = ?", [now, now, d.id]);
+      await this.deindex(d.id);
+      tombstoned++;
+    }
+
+    // 6. Prune subfolders that disappeared (their files + folder rows).
+    tombstoned += await this.pruneGoneSubfolders(spaceId, path, folderNames, now);
+
+    const folders = [...folderNames].map((name) => (path ? `${path}/${name}` : name));
+    return { upserted, tombstoned, folders };
+  }
+
+  /** Whether an external entry's text should be extracted (queued) or skipped. */
+  private externalExtractState(e: ConnectorEntry): "pending" | "skip" {
+    const extractable = isTextLike(e.name, e.contentType) || (this.opts.textExtractor?.supports(e.name, e.contentType) ?? false);
+    return extractable ? "pending" : "skip";
+  }
+
+  /** Insert a new external file (files row + external version + ACL tuples), then index it by name. */
+  private async insertExternalFile(
+    spaceId: string,
+    ownerSub: string,
+    pluginId: string,
+    e: ConnectorEntry,
+    dir: string,
+    now: string,
+  ): Promise<void> {
+    const fileId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const metadata: Record<string, unknown> = { path: dir };
+    if (e.createdAt) metadata.createdAt = e.createdAt; // the backend's true creation time
+    await this.db.batch([
+      {
+        sql: `INSERT INTO files (id, tenant_id, owner_id, name, current_version_id, metadata, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [fileId, spaceId, ownerSub, e.name, versionId, JSON.stringify(metadata), e.createdAt ?? now, e.modifiedAt ?? now],
+      },
+      {
+        sql: `INSERT INTO file_versions (id, file_id, source, connector_id, external_key, etag, mime, size, extract_state, created_at, created_by)
+              VALUES (?, ?, 'external', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [versionId, fileId, pluginId, e.path, e.etag ?? null, e.contentType ?? null, e.size ?? 0, this.externalExtractState(e), now, ownerSub],
+      },
+      {
+        sql: `INSERT OR IGNORE INTO relation_tuples (object_type, object_id, relation, subject_type, subject_id, subject_relation)
+              VALUES ('file', ?, 'owner', 'user', ?, '')`,
+        params: [fileId, ownerSub],
+      },
+      {
+        sql: `INSERT OR IGNORE INTO relation_tuples (object_type, object_id, relation, subject_type, subject_id, subject_relation)
+              VALUES ('file', ?, 'space', 'space', ?, '')`,
+        params: [fileId, spaceId],
+      },
+    ]);
+    await this.reindex(fileId); // findable by name immediately; body follows from the extract queue
+  }
+
+  /** A changed external file: refresh the version, drop the stale cached text, and
+   *  re-enqueue extraction, then reindex (title-only until the queue re-extracts). */
+  private async updateExternalVersion(fileId: string, versionId: string, e: ConnectorEntry, now: string): Promise<void> {
+    await this.db.run(
+      "UPDATE file_versions SET etag = ?, size = ?, mime = ?, extract_state = ?, extract_attempts = 0, content_ref = NULL WHERE id = ?",
+      [e.etag ?? null, e.size ?? 0, e.contentType ?? null, this.externalExtractState(e), versionId],
+    );
+    await this.db.run("UPDATE files SET updated_at = ? WHERE id = ?", [e.modifiedAt ?? now, fileId]);
+    await this.reindex(fileId);
+  }
+
+  /** A renamed external file: move name + external_key in place (id kept), reindex.
+   *  Content is unchanged (matched by etag), so extraction is NOT re-queued. */
+  private async renameExternalFile(fileId: string, versionId: string, e: ConnectorEntry, now: string): Promise<void> {
+    await this.db.run("UPDATE files SET name = ?, updated_at = ? WHERE id = ?", [e.name, e.modifiedAt ?? now, fileId]);
+    await this.db.run("UPDATE file_versions SET external_key = ? WHERE id = ?", [e.path, versionId]);
+    await this.reindex(fileId);
+  }
+
+  /** Tombstone files + folder rows under any direct subfolder of `dir` that the
+   *  connector no longer lists. Returns the number of files tombstoned. */
+  private async pruneGoneSubfolders(spaceId: string, dir: string, presentNames: Set<string>, now: string): Promise<number> {
+    const filePaths = await this.db.all<{ p: string | null }>(
+      "SELECT DISTINCT json_extract(metadata, '$.path') AS p FROM files WHERE tenant_id = ? AND deleted_at IS NULL",
+      [spaceId],
+    );
+    const folderPaths = await this.db.all<{ path: string }>("SELECT path FROM folders WHERE space_id = ?", [spaceId]);
+    const knownSubs = subfolders(dir, [...filePaths.map((r) => r.p ?? ""), ...folderPaths.map((r) => r.path)]);
+    let removed = 0;
+    for (const name of knownSubs) {
+      if (presentNames.has(name)) continue;
+      const sub = dir ? `${dir}/${name}` : name;
+      const under = `${sub}/%`;
+      const rows = await this.db.all<{ id: string }>(
+        `SELECT id FROM files WHERE tenant_id = ? AND deleted_at IS NULL
+           AND (json_extract(metadata, '$.path') = ? OR json_extract(metadata, '$.path') LIKE ?)`,
+        [spaceId, sub, under],
+      );
+      for (const r of rows) {
+        await this.db.run("UPDATE files SET deleted_at = ?, updated_at = ? WHERE id = ?", [now, now, r.id]);
+        await this.deindex(r.id);
+        removed++;
+      }
+      await this.db.run("DELETE FROM folders WHERE space_id = ? AND (path = ? OR path LIKE ?)", [spaceId, sub, under]);
+    }
+    return removed;
+  }
+
+  /**
+   * Drain a slice of the external-extract queue. For each `extract_state='pending'`
+   * external file: read its bytes through the connector (the injected `readExternal`),
+   * extract text, cache it in R2 (`content_ref`), and reindex with the body — so its
+   * *content*, not just its name, is searchable and reachable by MCP. The state column
+   * is the queue, so this is safe to call opportunistically (lazy-on-view) and from the
+   * scheduled sweep. Best-effort per item: a failure flips it to 'error' (+attempt) for
+   * a later retry, never aborts the batch. No-op without an index + a readExternal.
+   */
+  async drainExternalExtractQueue(limit = 20): Promise<{ extracted: number; failed: number }> {
+    if (!this.opts.index || !this.opts.readExternal) return { extracted: 0, failed: 0 };
+    const pending = await this.db.all<{ vid: string; file_id: string }>(
+      `SELECT v.id AS vid, v.file_id FROM file_versions v JOIN files f ON f.id = v.file_id
+        WHERE v.source = 'external' AND v.extract_state = 'pending' AND f.deleted_at IS NULL
+        ORDER BY v.created_at LIMIT ?`,
+      [limit],
+    );
+    let extracted = 0;
+    let failed = 0;
+    for (const row of pending) {
+      try {
+        const file = await this.loadFile(row.file_id);
+        const version = file?.currentVersionId ? await this.loadVersion(file.currentVersionId) : null;
+        // Skip if it moved on under us (current version changed / file trashed).
+        if (!file || !version || version.id !== row.vid || version.source !== "external") {
+          await this.db.run("UPDATE file_versions SET extract_state = 'skip' WHERE id = ? AND extract_state = 'pending'", [row.vid]);
+          continue;
+        }
+        const text = await this.extractExternalText(file, version);
+        let contentRef: string | null = null;
+        if (text) {
+          contentRef = `extract/${file.id}.txt`;
+          await this.store.put(contentRef, new TextEncoder().encode(text));
+        }
+        // Only land if still 'pending' — a concurrent change may have re-queued it.
+        await this.db.run(
+          "UPDATE file_versions SET extract_state = 'done', content_ref = ? WHERE id = ? AND extract_state = 'pending'",
+          [contentRef, row.vid],
+        );
+        await this.indexFileDoc(file, text ?? undefined);
+        extracted++;
+      } catch (err) {
+        await this.db.run(
+          "UPDATE file_versions SET extract_state = 'error', extract_attempts = extract_attempts + 1 WHERE id = ?",
+          [row.vid],
+        );
+        failed++;
+        console.warn(`[extract] external ${row.file_id} failed: ${(err as Error).message}`);
+      }
+    }
+    return { extracted, failed };
+  }
+
+  /** Read + extract an external file's text through the connector (capped). Null when
+   *  it isn't extractable or holds no usable text. */
+  private async extractExternalText(file: FileRecord, version: FileVersion): Promise<string | null> {
+    const readExternal = this.opts.readExternal;
+    if (!readExternal) return null;
+    if (isTextLike(file.name, version.mime)) {
+      const stream = await readExternal(version, file);
+      return stream ? readCappedText(stream, INDEX_MAX_TEXT_BYTES) : null;
+    }
+    const extractor = this.opts.textExtractor;
+    if (extractor?.supports(file.name, version.mime)) {
+      const stream = await readExternal(version, file);
+      return stream ? (await extractor.extract(stream, file.name, version.mime)) ?? null : null;
+    }
+    return null;
   }
 
   // ── authorization ──────────────────────────────────────────────────────────

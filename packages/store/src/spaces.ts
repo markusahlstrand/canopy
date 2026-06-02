@@ -1,6 +1,7 @@
 import type { Db } from "./db";
 import type { Role, Space } from "./types";
 import { deleteTuple, memberSpaceIds, spaceRole, writeTuple } from "./authz";
+import { ensureConnection } from "./connections";
 
 interface SpaceRow {
   id: string;
@@ -14,7 +15,7 @@ interface SpaceRow {
 const toSpace = (r: SpaceRow): Space => ({
   id: r.id,
   name: r.name,
-  kind: r.kind === "group" ? "group" : "personal",
+  kind: r.kind === "group" ? "group" : r.kind === "connected" ? "connected" : "personal",
   createdBy: r.created_by,
   createdAt: r.created_at,
   icon: r.icon ?? null,
@@ -32,6 +33,26 @@ export async function ensurePersonalSpace(db: Db, userSub: string): Promise<stri
     [id, userSub, new Date().toISOString()],
   );
   await writeTuple(db, { objectType: "space", objectId: id, relation: "owner", subjectType: "user", subjectId: userSub });
+  return id;
+}
+
+/** Deterministic per-user connected-space id for a plugin's connector. */
+export const connectorSpaceId = (userSub: string, pluginId: string): string => `connector:${pluginId}:${userSub}`;
+
+/**
+ * Ensure the user's connected space for a plugin exists (idempotent). Returns its
+ * id. The space is owned by the user — so it joins the ACL scope and search reaches
+ * its files — but read-only to user writes (only the reconciler writes its rows).
+ * Backed by a {@link Connection} row so a crawl can checkpoint against it.
+ */
+export async function ensureConnectorSpace(db: Db, userSub: string, pluginId: string, name: string): Promise<string> {
+  const id = connectorSpaceId(userSub, pluginId);
+  await db.run(
+    `INSERT OR IGNORE INTO spaces (id, name, kind, created_by, created_at) VALUES (?, ?, 'connected', ?, ?)`,
+    [id, name, userSub, new Date().toISOString()],
+  );
+  await writeTuple(db, { objectType: "space", objectId: id, relation: "owner", subjectType: "user", subjectId: userSub });
+  await ensureConnection(db, { id, tenantId: id, ownerId: userSub, type: pluginId, name });
   return id;
 }
 
@@ -110,12 +131,21 @@ export async function renameSpace(db: Db, id: string, name: string): Promise<Spa
   return getSpace(db, id);
 }
 
-/** Spaces the user can see (personal + any group they belong to). */
+/**
+ * Spaces the user can see in the switcher (personal + any group they belong to).
+ * Excludes `connected` spaces: those are the persisted index over a connector and
+ * are presented separately (derived live from the plugin's config, with a stable
+ * public id), so they'd otherwise show twice. They remain in `memberSpaceIds`, so
+ * search still reaches their files.
+ */
 export async function listSpaces(db: Db, userSub: string): Promise<Space[]> {
   const ids = await memberSpaceIds(db, userSub);
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => "?").join(",");
-  const rows = await db.all<SpaceRow>(`SELECT * FROM spaces WHERE id IN (${placeholders}) ORDER BY kind, name`, ids);
+  const rows = await db.all<SpaceRow>(
+    `SELECT * FROM spaces WHERE id IN (${placeholders}) AND kind <> 'connected' ORDER BY kind, name`,
+    ids,
+  );
   return rows.map(toSpace);
 }
 

@@ -13,6 +13,8 @@ export * from "./repo";
 export * from "./authz";
 export * from "./users";
 export * from "./spaces";
+export * from "./connections";
+export * from "./connector-sync";
 export * from "./invites";
 export * from "./app-passwords";
 export * from "./mcp-clients";

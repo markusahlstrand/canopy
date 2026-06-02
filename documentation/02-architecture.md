@@ -146,18 +146,22 @@ resolves it with **two kinds of version**:
 
 - **Managed (`blob`).** Canopy owns the bytes: content-addressed in R2/fs by SHA-256, stored
   once, reference-counted, with the database as the source of truth. This is the default drive.
-- **Connected (`external`) — in progress.** You point Canopy at a filesystem / S3 / R2 you own;
-  it **indexes** the objects (by key + etag) into the same `files`/`file_versions` tables as
-  references. There the bucket is the source of truth and the DB is a cache, kept fresh by the
-  connector's `changes()` feed where available, else a periodic crawl. The crawl is a long-running
-  job — a **Cloudflare Workflow** on the edge, an in-process runner on Node.
+- **Connected (`external`).** You point Canopy at a filesystem / S3 / R2 / NAS you own; it
+  **indexes** the objects (by key + etag) into the same `files`/`file_versions` tables as
+  references, in a per-user read-only `connected` space. There the bucket is the source of truth
+  and the DB is a cache, kept fresh by the connector's `changes()` feed where available, else a
+  bounded crawl. The reconcile runs in the **scheduled sweep** — the existing Cron Trigger on the
+  edge, an in-process interval on Node (the same parity pattern as version pruning) — plus lazily
+  when a folder is viewed. A version reads through its connector either way.
 
 Full-text search is a core `SearchIndex` interface with swappable adapters — a SQLite/D1 **FTS5**
 adapter is built (Vectorize / semantic search is a later one), fed in-process and queried by
-plugins, not a monolithic plugin. The index is fed on every managed-drive change and queried
-through the host's ACL-scoped `GET /api/search`, surfaced in a **⌘K command palette**; still being
-wired are the connected-space `changes()` feed and the scoped `queryIndex` grant that lets
-sandboxed plugins query. See [What belongs in the core → search](what-belongs-in-the-core).
+plugins, not a monolithic plugin. The index is fed on every managed-drive change **and from the
+connected-space reconcile** (a connector file's text is pulled through the connector, cached, and
+indexed so it's searchable and reachable by assistants over MCP). Queries go through the host's
+ACL-scoped `GET /api/search`, surfaced in a **⌘K command palette**; still being wired is the scoped
+`queryIndex` grant that lets sandboxed plugins query. See
+[What belongs in the core → search](what-belongs-in-the-core).
 
 ## Real-time editing (planned)
 

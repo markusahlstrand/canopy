@@ -73,9 +73,13 @@
 	//
 	// Tailnet auth is PER-TENANT, not a global secret: each user's Tailscale auth key +
 	// host live in their encrypted plugin_settings (Synology connector config), so the
-	// parser joins THAT user's tailnet to reach THEIR NAS (one container instance per
-	// user). A single global key here is only an optional fallback for a one-tenant /
-	// homelab deploy:  `wrangler secret put TS_AUTHKEY`  (ephemeral, tagged).
+	// parser joins THAT user's tailnet to reach THEIR NAS. The DO keys an instance per
+	// tailnet identity (`ts-<hash(authKey)>`), but `max_instances: 1` below caps the
+	// committed config to ONE running instance at a time — a cost-safe default that keeps
+	// the zero-setup "Deploy to Cloudflare" path within a fork's limits (fine for a single
+	// tenant / homelab). Raise `max_instances` to run multiple tenants' parsers concurrently.
+	// A single global key here is only an optional fallback:  `wrangler secret put TS_AUTHKEY`
+	// (ephemeral, tagged).
 	"containers": [
 		{
 			"class_name": "DocWorker",

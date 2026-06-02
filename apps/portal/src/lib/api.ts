@@ -595,6 +595,22 @@ export async function testConnector(pluginId: string): Promise<{ ok: boolean; er
   }
 }
 
+/**
+ * Force a full reconcile of a connector-backed space (the "Sync now" action):
+ * crawl the whole tree + (re)index its text, bypassing the lazy-view debounce. The
+ * work runs in the background on the server; this just kicks it off.
+ */
+export async function syncConnector(pluginId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await apiFetch(`/api/connector/${encodeURIComponent(pluginId)}/sync`, { method: "POST" });
+    if (res.status === 401) return { ok: false, error: "Sign in to sync." };
+    if (!res.ok) return { ok: false, error: `sync failed: ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 /** Create a shared (group) space, optionally with a sidebar icon + accent color. */
 export async function createSpace(
   name: string,

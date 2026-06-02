@@ -5,7 +5,7 @@ import { BUNDLED_MANIFEST_BY_ID } from "./bundled-manifests";
 /** Rich contributions for first-party plugins that ship real UI. */
 const RICH_CONTRIBUTIONS: Record<string, Contributions> = {
   documentation: {
-    detailView: { id: "documentation-detail", title: "Documentation" },
+    detailView: { id: "documentation-detail", title: "Documentation", nav: { section: "Apps" } },
   },
   calendar: {
     railPanel: { id: "calendar-rail", title: "Calendar", icon: "calendar" },

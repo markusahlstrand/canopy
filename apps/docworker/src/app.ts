@@ -138,7 +138,18 @@ async function body(c: Context): Promise<Uint8Array> {
 
 /** File name + mime carried alongside an inline body. */
 function docMeta(c: Context): { name: string; mime: string | null } {
-  return { name: c.req.header("x-doc-name") || "file", mime: c.req.header("x-doc-mime") || null };
+  return { name: decodeDocName(c.req.header("x-doc-name")), mime: c.req.header("x-doc-mime") || null };
+}
+
+/** Decode the percent-encoded `X-Doc-Name` header (the container client encodes it so a
+ *  non-Latin1 name can't break the header). Falls back to the raw value if it isn't encoded. */
+function decodeDocName(raw: string | undefined): string {
+  if (!raw) return "file";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 /** Parse a non-negative integer query param, or undefined. */
@@ -146,5 +157,7 @@ function intQuery(c: Context, key: string): number | undefined {
   const raw = c.req.query(key);
   if (raw == null) return undefined;
   const n = Number(raw);
-  return Number.isFinite(n) ? n : undefined;
+  if (!Number.isFinite(n)) return undefined;
+  const i = Math.trunc(n);
+  return i >= 0 ? i : undefined;
 }

@@ -19,12 +19,16 @@ A version's content is **polymorphic** — it's one of:
 
 - **Managed (`blob`).** Canopy owns the bytes: content-addressed, de-duplicated, reference-
   counted, with the database as the source of truth. This is the default drive.
-- **Connected (`external`) — in progress.** A pointer into a filesystem / S3 / R2 you own,
-  indexed by object key + etag. There the bucket is the source of truth and the DB is an
-  index over it.
+- **Connected (`external`).** A pointer into a filesystem / S3 / R2 / NAS you own, indexed by
+  object key + etag in a per-user read-only `connected` space. There the bucket is the source of
+  truth and the DB is an index over it, reconciled from the connector — lazily when you browse a
+  folder, and by a scheduled sweep (incremental via the connector's `changes()` feed where it has
+  one, e.g. Synology's FileStation search, else a bounded crawl). Renames are matched by content
+  signature so a moved file keeps its id (and its extracted text).
 
 Reads dispatch on the source: a managed blob streams from the blob store; an external
-version is read through its connector.
+version is read through its connector — so an indexed NAS/repo file downloads, previews, and is
+fetchable over MCP like any managed file.
 
 ## Metadata & virtual folders
 
@@ -46,12 +50,14 @@ merged into the derived tree.
 
 ## Full-text search
 
-Every managed file is mirrored into a **full-text index** — an FTS5 virtual table (`search_index`)
-behind the core `SearchIndex` interface, backed by libsql on Node and D1 on Cloudflare. The index
-is **kept in sync on change**: creating, editing, moving, or trashing a file reindexes (or drops)
-it, folding the file name, extracted body text, and metadata (description, AI labels, tags) into
-one searchable document. A boot-time backfill (`reindexAll`) covers anything created before the
-index existed.
+Every file — managed **and connected** — is mirrored into a **full-text index**: an FTS5 virtual
+table (`search_index`) behind the core `SearchIndex` interface, backed by libsql on Node and D1 on
+Cloudflare. The index is **kept in sync on change**: creating, editing, moving, or trashing a file
+reindexes (or drops) it, folding the file name, extracted body text, and metadata (description, AI
+labels, tags) into one searchable document. For a connected (`external`) file the body is pulled
+through the connector by a background extract queue, cached, and folded in the same way — so a NAS
+or repo file is findable by its contents, not just its name. A boot-time backfill (`reindexAll`)
+covers anything created before the index existed.
 
 Queries go through the host's `GET /api/search`, **scoped to the caller's spaces** — you never see
 hits for items you can't read. The portal's ⌘K command palette is the first consumer. See

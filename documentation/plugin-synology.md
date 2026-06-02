@@ -5,15 +5,23 @@ FileStation Web API — reachable directly, over **Tailscale**, or via QuickConn
 
 ## What it does
 
-Point it at a NAS and a read-only **Synology** space appears in the sidebar, listing files
-live from the box. The connector role runs trusted, server-side (it's the I/O boundary),
-backed by `@canopy/connector-synology`. It logs in to DSM lazily for a session id,
-re-authenticating if the session expires, and discovers the FileStation API paths so it
-works across DSM versions. Files stream straight from the NAS — there are no drive rows —
-the same passthrough model as a [connected GitHub repo](plugin-github).
+Point it at a NAS and a read-only **Synology** space appears in the sidebar. The connector role
+runs trusted, server-side (it's the I/O boundary), backed by `@canopy/connector-synology`. It logs
+in to DSM lazily for a session id, re-authenticating if the session expires, and discovers the
+FileStation API paths so it works across DSM versions.
 
-> Read-write (upload / new folder / delete straight onto the NAS) is the next milestone;
-> today the connected space is read-only.
+Unlike a pure live mount, the NAS tree is **indexed** into Canopy's `files`/`file_versions` tables
+as `external` references (the bucket stays the source of truth — see
+[Storage and files](storage-and-files)). Browsing a folder reconciles it against the box; a
+background sweep keeps the rest fresh — **incrementally** via `SYNO.FileStation.Search` over
+`mtime` (a delete/rename bumps its folder, so the affected folders are revisited), falling back to
+a bounded crawl. So NAS files turn up in **search** and are reachable by connected assistants over
+**MCP**, downloads/previews stream through the connector, and out-of-band changes (e.g. a direct
+SMB write) converge on the next sweep. A **Sync now** button on the plugin's card forces a full
+reconcile. `@eaDir` / `#recycle` are never indexed.
+
+> The space is **read-only** to Canopy (only the reconciler writes its rows). Read-write
+> (upload / new folder / delete straight onto the NAS) is the next milestone.
 
 ## Configuration
 

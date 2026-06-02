@@ -396,6 +396,26 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
       `ALTER TABLE spaces ADD COLUMN color TEXT`,
     ],
   },
+  {
+    // External-source sync state (#22). A connected backend (a Synology NAS, a
+    // GitHub repo) is now *persisted* as `file_versions(source='external')` rows in
+    // a per-user "connected" space, kept fresh by a reconcile pass over the
+    // connector. Two additive columns drive the deferred text-extraction queue: an
+    // external version lands `extract_state='pending'` and a background drainer reads
+    // its bytes through the connector, extracts text, and feeds the search index —
+    // so the columns themselves are the work queue (no separate queue infra). Blob
+    // versions default to `'done'`: they're already indexed inline on write, so this
+    // run-once ALTER leaves them untouched. `extract_attempts` bounds retries.
+    version: 19,
+    statements: [
+      `ALTER TABLE file_versions ADD COLUMN extract_state TEXT NOT NULL DEFAULT 'done'`,
+      `ALTER TABLE file_versions ADD COLUMN extract_attempts INTEGER NOT NULL DEFAULT 0`,
+      // R2 key of the extracted text, so a title-only reindex (rename, star) can
+      // re-attach the body without re-reading the connector. Cleared when content changes.
+      `ALTER TABLE file_versions ADD COLUMN content_ref TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_versions_extract ON file_versions (extract_state) WHERE source = 'external'`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

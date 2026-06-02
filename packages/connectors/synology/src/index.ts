@@ -1,4 +1,5 @@
 import type {
+  ChangeEvent,
   ConnectorConfigField,
   Page,
   StorageConnector,
@@ -64,6 +65,13 @@ export interface SynologyConfig {
 const SID_EXPIRED = 119;
 const NO_SUCH_FILE = 408;
 
+/** `SYNO.FileStation.Search` polling: page size, max `list` calls, and the back-off
+ *  between empty polls while the background scan is still running. */
+const SEARCH_PAGE = 1000;
+const SEARCH_POLL_LIMIT = 120;
+const SEARCH_POLL_MS = 300;
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /** Preferred API versions, capped to what `SYNO.API.Info` reports the box supports. */
 const PREFERRED_VERSION: Record<string, number> = {
   "SYNO.API.Auth": 6,
@@ -72,6 +80,7 @@ const PREFERRED_VERSION: Record<string, number> = {
   "SYNO.FileStation.Upload": 2,
   "SYNO.FileStation.Delete": 2,
   "SYNO.FileStation.CreateFolder": 2,
+  "SYNO.FileStation.Search": 2,
 };
 
 const DEFAULT_PATH: Record<string, string> = {
@@ -98,7 +107,7 @@ interface SynoFile {
   name: string;
   path: string;
   isdir: boolean;
-  additional?: { size?: number; time?: { mtime?: number } };
+  additional?: { size?: number; time?: { mtime?: number; crtime?: number; ctime?: number; atime?: number } };
 }
 
 function posixDirname(p: string): string {
@@ -270,13 +279,21 @@ export function createSynologyConnector(id: string, config: SynologyConfig): Sto
   }
 
   function toEntry(f: SynoFile): StorageEntry {
-    const mtime = f.additional?.time?.mtime;
+    const time = f.additional?.time;
+    const mtime = time?.mtime;
+    const size = f.isdir ? undefined : f.additional?.size;
     return {
       path: toRelative(f.path),
       name: f.name,
       kind: f.isdir ? "folder" : "file",
-      size: f.isdir ? undefined : f.additional?.size,
+      size,
       modifiedAt: mtime ? new Date(mtime * 1000).toISOString() : undefined,
+      // FileStation's `crtime` is the file's real creation time on the NAS — far
+      // more useful than the crawl time the index would otherwise record.
+      createdAt: time?.crtime ? new Date(time.crtime * 1000).toISOString() : undefined,
+      // DSM has no etag; synthesize a change signal from (size, mtime). A rename
+      // preserves both, so the reconciler matches it as a move, not a delete+add.
+      etag: f.isdir || mtime == null ? undefined : `${size ?? 0}:${mtime}`,
     };
   }
 
@@ -368,6 +385,52 @@ export function createSynologyConnector(id: string, config: SynologyConfig): Sto
         name: posixBasename(fsPath),
         force_parent: "true",
       });
+    },
+
+    /**
+     * Change feed via `SYNO.FileStation.Search`: a server-side recursive scan of the
+     * rooted tree for entries whose `mtime` is at/after `cursor` (the last sweep's
+     * high-water mtime, unix seconds). Yields the changed files *and folders* — a
+     * delete/rename inside a folder bumps that folder's mtime, so the host reconciles
+     * exactly those folders and the per-folder diff converges adds, deletes, and
+     * renames. Far cheaper than walking the whole tree. The search task runs in the
+     * background on DSM; we poll `list` until it reports `finished`, then `stop` it.
+     */
+    async *changes(cursor?: string): AsyncIterable<ChangeEvent> {
+      const since = cursor ? Math.max(0, Math.floor(Number(cursor) || 0)) : 0;
+      const start = await call<{ taskid?: string }>("SYNO.FileStation.Search", "start", {
+        folder_path: JSON.stringify([toFsPath("")]),
+        recursive: "true",
+        filetype: "all",
+        mtime_from: String(since),
+        additional: ADDITIONAL,
+      });
+      const taskid = start?.taskid;
+      if (!taskid) return;
+      try {
+        let offset = 0;
+        for (let i = 0; i < SEARCH_POLL_LIMIT; i++) {
+          const page = await call<{ total?: number; finished?: boolean; files?: SynoFile[] }>(
+            "SYNO.FileStation.Search",
+            "list",
+            { taskid, offset: String(offset), limit: String(SEARCH_PAGE), additional: ADDITIONAL },
+          );
+          const files = page?.files ?? [];
+          for (const f of files) {
+            if (f.name === "@eaDir" || f.name === "#recycle") continue;
+            yield { type: "updated", path: toRelative(f.path), entry: toEntry(f) };
+          }
+          offset += files.length;
+          const total = page?.total ?? offset;
+          if (page?.finished && offset >= total) break;
+          if (!files.length) {
+            if (page?.finished) break;
+            await delay(SEARCH_POLL_MS); // still scanning — back off rather than spin
+          }
+        }
+      } finally {
+        await call("SYNO.FileStation.Search", "stop", { taskid }).catch(() => {});
+      }
     },
   };
 }

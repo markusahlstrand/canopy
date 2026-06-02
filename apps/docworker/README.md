@@ -93,7 +93,7 @@ single-tenant fallback.
 
 ## Architecture
 
-```
+```text
 Worker (isolate)                         Container instance per tailnet identity
   DocWorker adapter ───HTTP via DO───▶   /extract*  ─▶ @canopy/docworker (unpdf + SheetJS)
   edge Synology connector ──per-user──▶  /synology/* ─▶ connector ──tsnet (user's key)──▶ NAS

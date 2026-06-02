@@ -20,6 +20,7 @@ import {
   BlobMissingError,
   NotFoundError,
   PermissionError,
+  crawlConnector,
   type BlobStore,
   type Caller,
   type FileService,
@@ -31,7 +32,7 @@ import { registerWebdav } from "./webdav";
 import { registerMcp } from "./mcp";
 import type { ProcessingEntry } from "./processors";
 import { AI_CONFIG_ID } from "./ai/user-config";
-import { decryptString, encryptString } from "./crypto";
+import { decryptPluginConfig, decryptString, encryptString } from "./crypto";
 
 const MIME: Record<string, string> = {
   pdf: "application/pdf",
@@ -126,6 +127,11 @@ async function readCapped(stream: ReadableStream<Uint8Array>, cap: number): Prom
 const PROCESSOR_MAX_BYTES = 8 * 1024 * 1024;
 // Keep a file's processing log bounded — newest entries win.
 const PROCESSING_LOG_MAX = 20;
+// How long a lazy-on-view reconcile of a connected folder stays "fresh" — repeat
+// views inside this window serve straight from the index without re-hitting the NAS.
+const RECONCILE_DEBOUNCE_MS = 60_000;
+// Files whose text we pull + index per opportunistic (lazy-on-view) drain slice.
+const EXTRACT_DRAIN_LIMIT = 10;
 
 /** The DB-backed drive: a file service plus the blob store for streaming downloads. */
 export interface DriveDeps {
@@ -309,20 +315,7 @@ export function createApp(deps: AppDeps) {
   ): Promise<Record<string, string>> {
     if (!drive) return {};
     const raw = await drive.service.getPluginSettings(sub, plugin.id);
-    if (!raw) return {};
-    const stored = JSON.parse(raw) as Record<string, string>;
-    const out: Record<string, string> = {};
-    for (const f of plugin.configFields) {
-      const v = stored[f.key];
-      if (v == null) continue;
-      if (f.type === "secret") {
-        const dec = dataSources?.secret ? await decryptString(dataSources.secret, v) : null;
-        if (dec != null) out[f.key] = dec;
-      } else {
-        out[f.key] = v;
-      }
-    }
-    return out;
+    return decryptPluginConfig(dataSources?.secret, plugin.configFields, raw);
   }
 
   // Best-effort: run configured document processors over a freshly-added file and
@@ -426,27 +419,30 @@ export function createApp(deps: AppDeps) {
         if (!connector) return c.json({ error: "unknown mount" }, 404);
         return c.json(await connector.list(c.req.query("path") ?? ""));
       }
-      // A connected space (e.g. a GitHub repo): list the folder live from its
-      // connector, mapped into the same listing shape the drive returns so the UI
-      // renders it like any space. No drive rows — the file ids encode the path.
+      // A connected space (a Synology NAS, a GitHub repo): a persisted index over
+      // the connector. We converge the viewed folder against the backend, then list
+      // it from the drive — so its files have real ids and flow through search / MCP
+      // / download like any space. Debounced so rapid repeat views skip the NAS.
       const connectorTarget = c.req.query("space");
       if (isConnectorSpace(connectorTarget)) {
+        if (!drive) return c.json({ error: "no drive configured" }, 404);
+        const caller = await callerOf(c);
+        if (!caller) return c.json({ error: "unauthorized" }, 401);
         const cs = await connectorSpace(c, connectorTarget);
         if (!cs) return c.json({ error: "not connected" }, 404);
         const dir = c.req.query("path") ?? "";
-        const page = await cs.connector.list(dir);
-        const folders = page.items.filter((e) => e.kind === "folder").map((e) => e.name);
-        const files = page.items
-          .filter((e) => e.kind !== "folder")
-          .map((e) => ({
-            id: `${connectorTarget}:${e.path}`,
-            name: e.name,
-            metadata: { path: dir },
-            updatedAt: e.modifiedAt ?? "",
-            ownerLabel: cs.name,
-            version: { size: e.size ?? 0, mime: e.contentType ?? null },
-          }));
-        return c.json({ path: dir, spaceName: cs.name, files, folders });
+        const pluginId = connectorTarget.slice(CONNECTOR_SPACE.length);
+        const spaceId = await drive.service.ensureConnectorSpace(caller.sub, pluginId, cs.name);
+        const debounceKey = `reconcile:${spaceId}:${dir}`;
+        const fresh = dataSources?.cache ? await dataSources.cache.get<string>(debounceKey) : null;
+        if (!fresh) {
+          await drive.service.reconcileConnectorFolder(caller.sub, spaceId, pluginId, cs.connector, dir);
+          if (dataSources?.cache) await dataSources.cache.set(debounceKey, "1", RECONCILE_DEBOUNCE_MS);
+          // Pull + index a slice of any newly-seen files' text, off the response path.
+          runBackground(drive.service.drainExternalExtractQueue(EXTRACT_DRAIN_LIMIT).catch(() => {}));
+        }
+        const result = await drive.service.list(caller.sub, spaceId, dir);
+        return c.json({ ...result, spaceName: cs.name });
       }
       if (!drive) return c.json({ error: "no drive configured" }, 404);
       const caller = await callerOf(c);
@@ -473,6 +469,27 @@ export function createApp(deps: AppDeps) {
     return c.json(await drive!.service.search(caller.sub, { text: q, limit, cursor }));
   }));
 
+  // Force a full reconcile of a connected space (the "Sync now" button): crawl the
+  // whole tree + drain extraction, ignoring the lazy-view debounce. Runs in the
+  // background so the request returns immediately.
+  app.post("/api/connector/:pluginId/sync", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs) return c.json({ error: "not connected" }, 404);
+    const spaceId = await drive!.service.ensureConnectorSpace(caller.sub, pluginId, cs.name);
+    runBackground(
+      (async () => {
+        try {
+          await crawlConnector(drive!.service, { ownerSub: caller.sub, spaceId, pluginId }, cs.connector);
+          await drive!.service.drainExternalExtractQueue(EXTRACT_DRAIN_LIMIT);
+        } catch (err) {
+          console.warn(`[sync] force-sync ${pluginId} failed: ${(err as Error).message}`);
+        }
+      })(),
+    );
+    return c.json({ started: true });
+  }));
+
   // Spaces the caller can see (for the space switcher). Real drive spaces, plus a
   // read-only "connected" space for each source plugin the caller has a connector
   // configured for (e.g. their GitHub repo) — derived from the plugin's settings,
@@ -484,9 +501,13 @@ export function createApp(deps: AppDeps) {
         const resolved = await resolveConfig(c, p.id);
         const connector = resolved ? dataSources.connectorFor(p.id, resolved.config) : null;
         if (!connector) continue;
+        const name = resolved!.config.repo ?? p.id;
+        // Persist the connected space so search reaches its files even before the
+        // user browses it; its public id stays `connector:<plugin>` for the UI.
+        await drive!.service.ensureConnectorSpace(caller.sub, p.id, name);
         spaces.push({
           id: `${CONNECTOR_SPACE}${p.id}`,
-          name: resolved!.config.repo ?? p.id,
+          name,
           kind: "connected",
           role: "viewer",
           mounted: false,
@@ -659,13 +680,10 @@ export function createApp(deps: AppDeps) {
   app.get("/api/files/:id/content", driveRoute(async (c, caller) => {
     const file = await drive!.service.getFile(caller, c.req.param("id")!);
     if (!file.version) return c.json({ error: "no content" }, 404);
-    // Managed blobs stream from the blob store; external (indexed) sources are
-    // read through their connector — wired with the connections API.
-    if (file.version.source !== "blob" || !file.version.blobKey) {
-      return c.json({ error: "external content read not yet wired" }, 501);
-    }
-    const stream = await drive!.blobs.get(file.version.blobKey);
-    if (!stream) return c.json({ error: "blob missing" }, 404);
+    // Managed blobs stream from the blob store; external (indexed) sources stream
+    // through their connector — both behind one opener.
+    const stream = await drive!.service.openContentStream(file);
+    if (!stream) return c.json({ error: "content unavailable" }, 404);
     c.header("Content-Type", file.version.mime ?? mimeFor(file.name));
     c.header("Content-Disposition", `inline; filename="${encodeURIComponent(file.name)}"`);
     return c.body(stream);

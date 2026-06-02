@@ -50,3 +50,36 @@ export async function decryptString(secret: string, token: string): Promise<stri
     return null;
   }
 }
+
+/**
+ * Resolve a plugin's stored settings JSON into a usable config: secret fields are
+ * decrypted with `secret`, everything else passes through. Shared by the request
+ * path (the app's per-caller settings) and the background path (the connector the
+ * scheduler builds outside any request) so the two never drift. A `secret` field
+ * that won't decrypt is dropped rather than surfaced as ciphertext.
+ */
+export async function decryptPluginConfig(
+  secret: string | undefined,
+  configFields: { key: string; type: string }[],
+  storedJson: string | null,
+): Promise<Record<string, string>> {
+  if (!storedJson) return {};
+  let stored: Record<string, string>;
+  try {
+    stored = JSON.parse(storedJson) as Record<string, string>;
+  } catch {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const f of configFields) {
+    const v = stored[f.key];
+    if (v == null) continue;
+    if (f.type === "secret") {
+      const dec = secret ? await decryptString(secret, v) : null;
+      if (dec != null) out[f.key] = dec;
+    } else {
+      out[f.key] = v;
+    }
+  }
+  return out;
+}

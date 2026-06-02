@@ -165,6 +165,21 @@ function fakeNas(opts: { expireSidOnce?: boolean } = {}) {
     }
     if (api === "SYNO.FileStation.Delete") return json({ success: true, data: {} });
     if (api === "SYNO.FileStation.CreateFolder") return json({ success: true, data: {} });
+    if (api === "SYNO.FileStation.Search" && method === "start") return json({ success: true, data: { taskid: "task-1" } });
+    if (api === "SYNO.FileStation.Search" && method === "list") {
+      return json({
+        success: true,
+        data: {
+          offset: 0,
+          total: 1,
+          finished: true,
+          files: [
+            { name: "changed.txt", path: "/home/sub/changed.txt", isdir: false, additional: { size: 5, time: { mtime: 1700000100, crtime: 1690000000 } } },
+          ],
+        },
+      });
+    }
+    if (api === "SYNO.FileStation.Search" && method === "stop") return json({ success: true, data: {} });
 
     // Upload is a multipart POST; api/method/filename arrive in the form body.
     if (init?.method === "POST" && init.body instanceof FormData) {
@@ -256,6 +271,20 @@ describe("createSynologyConnector", () => {
     const c = createSynologyConnector("syn", { ...base, fetchImpl });
     await expect(c.list("")).rejects.toThrow(/error code: 1003/);
     await expect(c.list("")).rejects.not.toThrow(/Unexpected token/);
+  });
+
+  it("emits changed entries via SYNO.FileStation.Search (the change feed)", async () => {
+    const nas = fakeNas();
+    const c = createSynologyConnector("syn", { ...base, fetchImpl: nas.fetchImpl });
+    const events = [];
+    for await (const ev of c.changes!("1699999999")) events.push(ev);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "updated", path: "sub/changed.txt" });
+    expect(events[0]!.entry?.createdAt).toBe(new Date(1690000000 * 1000).toISOString());
+    // Searched from the cursor's mtime, then cleaned up the task.
+    const startCall = nas.calls.find((u) => u.includes("method=start"));
+    expect(startCall && decodeURIComponent(startCall)).toContain("mtime_from=1699999999");
+    expect(nas.calls.some((u) => u.includes("method=stop"))).toBe(true);
   });
 
   it("enumerates shares at the root when no shareRoot is set", async () => {
