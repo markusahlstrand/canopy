@@ -15,6 +15,8 @@ export * from "./users";
 export * from "./spaces";
 export * from "./connections";
 export * from "./connector-sync";
+export * from "./index-jobs";
+export * from "./index-jobs-local";
 export * from "./invites";
 export * from "./app-passwords";
 export * from "./mcp-clients";

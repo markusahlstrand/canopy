@@ -23,6 +23,9 @@ export interface FileItem {
   size: string;
   sharedWith?: string[];
   starred?: boolean;
+  /** Kept available offline on this device — the file is pinned, or it lives under a pinned
+   *  folder. Local/per-device (distinct from `starred`); set when a listing is annotated. */
+  offline?: boolean;
   /** For folders: the navigate-to virtual path. For files: the folder they live in. */
   path?: string;
   /** Display owner (resolved name/email) and location (space name), for the preview. */

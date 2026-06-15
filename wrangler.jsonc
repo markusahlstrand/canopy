@@ -89,11 +89,20 @@
 			"max_instances": 1
 		}
 	],
+	// DOCWORKER: the parser container (above). SPACE_CHANNEL: the per-space live-sync
+	// SSE channel — one instance per space holds its open EventSource connections and
+	// broadcasts a "bump" when a write advances the space's seq, so offline-mirror
+	// clients pull the delta promptly. It holds no storage (plain `new_classes`), and
+	// the offline mirror works without it (polling); it's purely a latency upgrade.
 	"durable_objects": {
 		"bindings": [
 			{
 				"name": "DOCWORKER",
 				"class_name": "DocWorker"
+			},
+			{
+				"name": "SPACE_CHANNEL",
+				"class_name": "SpaceChannel"
 			}
 		]
 	},
@@ -103,6 +112,23 @@
 			"new_sqlite_classes": [
 				"DocWorker"
 			]
+		},
+		{
+			"tag": "v2",
+			"new_classes": [
+				"SpaceChannel"
+			]
+		}
+	],
+	// Durable connector-index crawl: a Workflow runs the (resumable, per-step-budgeted)
+	// tree crawl + text-extract drain when a connector is connected or "Sync / Re-index"
+	// is hit, so a large NAS/repo indexes without blowing a single request's limits.
+	// Absent on Node — the in-process loop runs there instead (see worker.ts).
+	"workflows": [
+		{
+			"name": "connector-index",
+			"binding": "CONNECTOR_INDEX",
+			"class_name": "ConnectorIndexWorkflow"
 		}
 	],
 	// Non-secret config. A fresh deploy runs as the anonymous demo: docs + a demo

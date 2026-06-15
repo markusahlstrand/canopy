@@ -7,7 +7,11 @@
       "Bash(pnpm --filter @canopy/store exec vitest run search-feed)",
       "Bash(pnpm -r lint)",
       "Bash(pnpm install *)",
-      "Bash(npm test *)"
+      "Bash(npm test *)",
+      "Bash(npx wrangler *)",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "WebSearch",
+      "Bash(grep -n \"plugins/:id/test\\\\|connectorSpace\\\\|CONNECTOR_SPACE =\\\\|ensureConnectorSpace\\\\|connectionId\\\\|connector:\\\\${\" apps/api/src/app.ts)"
     ],
     "additionalDirectories": []
   }

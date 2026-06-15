@@ -17,6 +17,32 @@ function initialsOf(s: string): string {
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "U";
 }
 
+// Keep the first crumb + last two; anything deeper collapses behind a `…` menu so
+// a deep path can't squeeze the search box or wrap the topbar onto a second row.
+const HEAD = 1;
+const TAIL = 2;
+type Crumb = { label: string; index: number };
+type CrumbItem =
+  | { kind: "crumb"; label: string; index: number }
+  | { kind: "ellipsis"; hidden: Crumb[] };
+
+function crumbModel(breadcrumb: string[]): CrumbItem[] {
+  // Only worth collapsing once the `…` would hide more than one segment.
+  if (breadcrumb.length <= HEAD + TAIL + 1) {
+    return breadcrumb.map((label, index) => ({ kind: "crumb", label, index }));
+  }
+  const hidden: Crumb[] = breadcrumb
+    .slice(HEAD, breadcrumb.length - TAIL)
+    .map((label, i) => ({ label, index: HEAD + i }));
+  return [
+    ...breadcrumb.slice(0, HEAD).map((label, index): CrumbItem => ({ kind: "crumb", label, index })),
+    { kind: "ellipsis", hidden },
+    ...breadcrumb
+      .slice(breadcrumb.length - TAIL)
+      .map((label, i): CrumbItem => ({ kind: "crumb", label, index: breadcrumb.length - TAIL + i })),
+  ];
+}
+
 interface TopbarProps {
   breadcrumb: string[];
   onCrumbClick?: (index: number) => void;
@@ -37,6 +63,10 @@ interface TopbarProps {
   onSignOut: () => void;
   /** Backend unreachable — the app is view-only, so disable uploads. */
   offline?: boolean;
+  /** Force a re-fetch of the current view (re-syncs the offline mirror + reloads). */
+  onRefresh?: () => void;
+  /** True while a background sync is in flight — spins the refresh icon. */
+  syncing?: boolean;
 }
 
 export function Topbar({
@@ -56,6 +86,8 @@ export function Topbar({
   onSignIn,
   onSignOut,
   offline,
+  onRefresh,
+  syncing,
 }: TopbarProps) {
   const realUser = auth.user;
   // Logged out whenever there's no real authenticated user. Never fall back to a
@@ -72,17 +104,52 @@ export function Topbar({
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-1.5 text-[14px]">
-        {breadcrumb.map((crumb, i) => {
-          const last = i === breadcrumb.length - 1;
+      <div className="flex min-w-0 items-center gap-1.5 text-[14px]">
+        {crumbModel(breadcrumb).map((item) => {
+          if (item.kind === "ellipsis") {
+            return (
+              <span key="ellipsis" className="flex items-center gap-1.5">
+                {onCrumbClick ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        aria-label="Show hidden folders"
+                        className="rounded px-1 leading-none text-muted-foreground hover:text-foreground"
+                      >
+                        …
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {item.hidden.map((h) => (
+                        <DropdownMenuItem key={h.index} onClick={() => onCrumbClick(h.index)}>
+                          {h.label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
+                  <span className="px-1 text-muted-foreground" title={item.hidden.map((h) => h.label).join(" / ")}>
+                    …
+                  </span>
+                )}
+                <span className="text-muted-foreground/60">›</span>
+              </span>
+            );
+          }
+          const last = item.index === breadcrumb.length - 1;
           return (
-            <span key={i} className="flex items-center gap-1.5">
+            <span key={item.index} className="flex items-center gap-1.5">
               {onCrumbClick && !last ? (
-                <button onClick={() => onCrumbClick(i)} className="text-muted-foreground hover:text-foreground">
-                  {crumb}
+                <button
+                  onClick={() => onCrumbClick(item.index)}
+                  className="max-w-[200px] truncate text-muted-foreground hover:text-foreground"
+                >
+                  {item.label}
                 </button>
               ) : (
-                <span className={last ? "font-semibold" : "text-muted-foreground"}>{crumb}</span>
+                <span className={cn("max-w-[200px] truncate", last ? "font-semibold" : "text-muted-foreground")}>
+                  {item.label}
+                </span>
               )}
               {!last && <span className="text-muted-foreground/60">›</span>}
             </span>
@@ -108,6 +175,19 @@ export function Topbar({
         <Icon name="bell" size={18} />
         <span className="absolute right-2 top-2 size-[7px] rounded-full bg-primary ring-2 ring-background" />
       </button>
+
+      {/* Refresh — force a re-sync + reload of the current view */}
+      {onRefresh && (
+        <button
+          onClick={onRefresh}
+          disabled={offline}
+          title={offline ? "Unavailable while offline" : "Refresh"}
+          aria-label="Refresh"
+          className="grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-accent disabled:opacity-50"
+        >
+          <Icon name="refresh" size={18} className={cn(syncing && "animate-spin")} />
+        </button>
+      )}
 
       {/* Theme toggle */}
       <button onClick={onToggleTheme} className="grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-accent">

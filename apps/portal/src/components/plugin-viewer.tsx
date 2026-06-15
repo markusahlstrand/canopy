@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchContent } from "@/lib/api";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 /**
@@ -106,6 +107,9 @@ export interface ViewerFile {
   name: string;
   /** URL to fetch the file's bytes from (host-privileged). */
   url: string;
+  /** The space token the file belongs to, so its cached bytes count against that
+   *  space's offline budget. Optional — connector URLs carry it intrinsically. */
+  spaceId?: string;
 }
 
 type Status = "loading" | "ready" | "error";
@@ -163,7 +167,7 @@ export function PluginViewer({
       };
       if (msg?.type === "canopy:viewer-ready") {
         try {
-          const { bytes, mime } = await fetchContent(file.url);
+          const { bytes, mime } = await fetchContent(file.url, file.spaceId);
           if (cancelled) return;
           iframe?.contentWindow?.postMessage(
             { type: "canopy:init", code: file.source, file: { name: file.name, mime, bytes, writable }, fill },
@@ -205,7 +209,7 @@ export function PluginViewer({
       cancelled = true;
       window.removeEventListener("message", onMessage);
     };
-  }, [file.url, file.source, file.name, writable, fill]);
+  }, [file.url, file.source, file.name, file.spaceId, writable, fill]);
 
   if (status === "error") {
     return (
@@ -221,7 +225,17 @@ export function PluginViewer({
   }
 
   return (
-    <div className={cn(className, fill && "h-full w-full min-h-0")}>
+    <div className={cn(className, "relative", fill && "h-full w-full min-h-0")}>
+      {/* The iframe stays mounted (it drives the load over postMessage); the skeleton
+          just covers its blank phase until the plugin reports `rendered`. */}
+      {status === "loading" && (
+        <div
+          className={cn("absolute inset-0 z-10 overflow-hidden rounded-lg border bg-background p-4")}
+          aria-hidden
+        >
+          <ViewerSkeleton fill={fill} />
+        </div>
+      )}
       <iframe
         ref={iframeRef}
         title="File preview"
@@ -231,6 +245,23 @@ export function PluginViewer({
         className={cn("w-full rounded-lg border bg-background", fill && "h-full")}
         style={fill ? undefined : { height, transition: "height 120ms ease" }}
       />
+    </div>
+  );
+}
+
+/** Placeholder shown while a viewer loads: a page shape (title + paragraphs) for
+ *  text-ish viewers, or one filling block for `fill` viewers (images, media). */
+function ViewerSkeleton({ fill }: { fill?: boolean }) {
+  if (fill) return <Skeleton className="h-full w-full rounded-md" />;
+  return (
+    <div className="flex flex-col gap-3">
+      <Skeleton className="h-5 w-1/3" />
+      <div className="mt-1 flex flex-col gap-2.5">
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-[92%]" />
+        <Skeleton className="h-3 w-[97%]" />
+        <Skeleton className="h-3 w-[78%]" />
+      </div>
     </div>
   );
 }

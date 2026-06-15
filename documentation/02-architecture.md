@@ -9,6 +9,7 @@ own publishable npm packages alongside the core.
 packages/
   core/                 @canopy/core             interfaces only, zero runtime deps   [built]
   store/                @canopy/store            DB-backed drive: blobs+dedup, files, versions  [built]
+  mirror/               @canopy/mirror           offline metadata-mirror read logic (shared client+server)  [built]
   plugin-sources/       @canopy/plugin-sources   resolve github / npm / zip plugins   [built]
   runtimes/
     node/               @canopy/runtime-node     isolated-vm sandbox adapter          [planned]
@@ -17,6 +18,7 @@ packages/
     local/              @canopy/connector-local  local filesystem connector           [built]
     r2/                 @canopy/connector-r2     Cloudflare R2 connector               [built]
     github/             @canopy/connector-github read-only repo connector (documentation+demo)  [built]
+    synology/           @canopy/connector-synology Synology FileStation connector (NAS)  [built]
 apps/
   api/                  @canopy/api              portable Hono server                 [built]
   portal/               @canopy/portal           Vite + React SPA                     [built]
@@ -92,43 +94,60 @@ data-source endpoints `GET /api/tasks`, `GET /api/calendar`, `GET /api/integrati
 AI through the host **AI gateway** — a swappable provider abstraction over Workers AI, Gemini, or
 a local model). See [How plugins work](how-plugins-work) for the contract behind these.
 
-## Offline & reachability
+## Offline & sync
 
-The portal is a PWA, and it stays useful — **read-only** — when the API can't be reached. Two
-pieces make that work: a reachability signal and an IndexedDB cache of what you've already seen.
+The portal is a PWA, and it stays useful — **read-only** — when the API can't be reached. It does
+this not with a passive "cache what you saw" layer but with a **synced metadata mirror**: a scoped
+local replica of the file metadata you can see, kept current by a diff from the server. D1 remains
+the source of truth and authorization stays server-side; the browser just holds a copy of the
+subset you're allowed to read.
 
 **Reachability, not just `navigator.onLine`.** Every API call goes through one `apiFetch` wrapper
 that marks the backend *reachable* on any HTTP response and *unreachable* when the request throws
 (DNS failure, connection refused, a stopped dev server). `navigator.onLine` only knows the network
 interface is up — commonly true while the API is down — so the UI trusts the wrapper instead:
-"online" means **`navigator.onLine` && backend reachable**. The moment a call fails, an offline
-banner appears and writes are gated; the next successful call clears it. There's no background
-ping — recovery rides on the next real request (a navigation or window refocus).
+"online" means **`navigator.onLine` && backend reachable**. A failed call raises an offline banner
+and gates writes; the next successful call clears it. Recovery rides on the next real request (a
+navigation, a window refocus, or the live channel reconnecting) — no background ping.
 
 This also closes a subtle auth trap. `/api/auth/me` returning `authConfigured:false` means *auth is
 switched off* (demo mode) — a very different thing from *the server is unreachable*. The client
 keeps them apart: a network failure never collapses into demo mode; it falls back to the last-known
 signed-in identity (flagged offline), so reloading while offline doesn't appear to sign you out.
 
-**The offline cache (IndexedDB).** As you browse online, the client writes through to IndexedDB:
+**The metadata mirror (IndexedDB ← a cursor-based delta).** Every mutation bumps a per-space
+monotonic `seq` (see [Storage & files](storage-and-files)), so the client can ask "give me
+everything in my spaces since cursor N." `GET /api/changes` answers that delta — scoped to exactly
+the spaces you can read (never widened by the client) — and the browser folds it into an IndexedDB
+mirror of file rows (one per space, personal **and** group **and** connected/NAS). Folder reads are
+then **mirror-first**: served locally and instantly (so navigating folders never waits on the
+network, online or off), with a background delta refresh. The read logic lives in a dependency-free
+`@canopy/mirror` package — `folderView`/`applyDelta` run the *same* code over D1 rows on the server
+and over the mirror in the browser. Freshness is kept up out of band: a pull on reconnect/focus, a
+slow safety-net interval, and a live **`SpaceChannel`** Durable Object that pushes an SSE "this
+space advanced, go pull" nudge (it carries no file data, so the ACL surface stays in the delta
+endpoint). The whole client path is behind a build flag, on by default (`VITE_SYNC_MIRROR=0` to
+disable); the server side is additive and harmless when it's off.
 
-- **Listings** — the file rows of every folder/view you open, keyed by space + path, so Starred,
-  Recent, and browsed folders still populate offline.
-- **Content bytes** — the bytes of files you **open** (your *recent* set) and of **starred** files
-  (warmed proactively as their listings load), so their viewers render offline. Per-file
-  size-capped and LRU-evicted.
-- **Last-known identity** — so the account UI shows the real you offline, not a signed-out state.
+**Content bytes (cache-first, stale-while-revalidate).** Metadata is small and syncs eagerly; file
+*bytes* are large, so they're cached separately and lazily — the bytes of files you **open** and of
+**starred** files (warmed as listings load). A previously-opened file then opens **instantly**,
+online or offline: the cached copy is served first, and when online the client revalidates in the
+background with a conditional request (`If-None-Match` → a cheap **`304`**, since Canopy is the
+single point of entry and content rarely changes underneath you). Only a real change re-downloads
+and refreshes the open viewer. Bytes live under a **per-space cache budget** — a per-device
+preference (Off / 250 MB / 1 GB / 5 GB / Unlimited, default 1 GB) set from a space's "Offline
+files…" menu — and the oldest in a space are evicted when it's exceeded.
 
-Reads fall back to the cache only when the network throws; a live response always wins and refreshes
-it. The cache is **best-effort** — a blocked, full, or absent IndexedDB just means "no offline copy",
-never an error. Writes (upload, create, rename, share) are disabled while offline; the app is
-strictly view-only until the backend returns.
+The mirror and cache are **best-effort** — a blocked, full, or absent IndexedDB just means "no
+offline copy", never an error. Writes (upload, create, rename, share) still require connectivity:
+the app is **read + live, with no offline write queue** (deliberately deferred). The last-known
+identity is also cached, so the account UI shows the real you offline.
 
 **App shell + service worker.** A Workbox service worker (via `vite-plugin-pwa`) precaches the built
-SPA and serves it for navigations, and runtime-caches `GET /api/file(s)` so already-fetched
-listings/contents survive a reload. The SW ships only in the **production build** — dev runs plain
-Vite with no SW, so in development the IndexedDB layer is what provides offline. The read-only
-mounts and the public share landing are excluded from the SPA navigation fallback.
+SPA and serves it for navigations. The SW ships only in the **production build** — dev runs plain
+Vite with no SW, so in development the IndexedDB mirror + content cache are what provide offline.
+The read-only mounts and the public share landing are excluded from the SPA navigation fallback.
 
 ## Deployment
 
@@ -150,9 +169,20 @@ resolves it with **two kinds of version**:
   **indexes** the objects (by key + etag) into the same `files`/`file_versions` tables as
   references, in a per-user read-only `connected` space. There the bucket is the source of truth
   and the DB is a cache, kept fresh by the connector's `changes()` feed where available, else a
-  bounded crawl. The reconcile runs in the **scheduled sweep** — the existing Cron Trigger on the
-  edge, an in-process interval on Node (the same parity pattern as version pruning) — plus lazily
-  when a folder is viewed. A version reads through its connector either way.
+  bounded crawl. A version reads through its connector either way. Because those rows live in D1,
+  a connected space is **mirrored to the client like any other** — once indexed, browsing your NAS
+  is offline/instant too (the bytes still stream through the connector, so opening a file needs the
+  connector, or a cached copy).
+
+  Indexing runs behind an **`IndexJobs` adapter** so the same trigger code works on both runtimes:
+  a full crawl can far exceed a single Worker's subrequest/CPU budget, so on Cloudflare it's a
+  durable **Workflow** (`ConnectorIndexWorkflow`) that reconciles **one folder per step** — each
+  step gets a fresh budget and the engine resumes after a crash — while on Node it's an in-process
+  loop over the same `reconcileConnectorFolder` primitive. It fires **on connect** (saving a
+  connector's settings kicks a background index) and from a **"Sync / Re-index"** action in a
+  connected space's context menu; the **scheduled sweep** (Cron on the edge, an interval on Node)
+  and a lazy reconcile-on-view remain the safety net. Reconcile bumps the change `seq` in bulk, so
+  the client's mirror picks up newly-indexed files through the same delta.
 
 Full-text search is a core `SearchIndex` interface with swappable adapters — a SQLite/D1 **FTS5**
 adapter is built (Vectorize / semantic search is a later one), fed in-process and queried by

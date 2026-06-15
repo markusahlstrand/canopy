@@ -48,6 +48,22 @@ set of paths. Storage stays flat; the tree is computed. You can also create an *
 — it's recorded explicitly (a row in `folders`) so it shows up before it has any files, and is
 merged into the derived tree.
 
+## Change sequence & the offline mirror
+
+Each space carries a **monotonic change counter** (`space_seq`), and every file row records the
+`seq` it was last touched at. Any mutation — create, version, star/move/rename, trash, or a
+connector reconcile — advances the counter and stamps the changed rows (a hard delete writes a
+`tombstones` row instead, since no row survives). `updated_at` is a wall-clock display value and is
+deliberately *not* used for this: it isn't monotonic and ties within a batch, whereas a dense `seq`
+is a true total order.
+
+That order is what powers offline. `GET /api/changes?since=<{spaceId: seq}>` returns every change
+in the caller's spaces past their cursors — scoped server-side to the spaces they can read, never
+widened by the client — and the portal folds it into an IndexedDB mirror it serves folder views
+from. So the sync is a **diff, not a re-list**: the client only ever pulls what changed. See
+[Architecture → Offline & sync](architecture) for the client side (the live `SpaceChannel` nudge,
+cache-first content, per-space cache budgets).
+
 ## Full-text search
 
 Every file — managed **and connected** — is mirrored into a **full-text index**: an FTS5 virtual

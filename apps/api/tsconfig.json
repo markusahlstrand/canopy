@@ -2,6 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    // This is an application/worker, not a published library — it never emits .d.ts,
+    // so don't run the declaration-emit checks the base config turns on (they'd flag
+    // exported helpers like `buildDeps` whose inferred return types aren't nameable here).
+    "declaration": false,
+    "declarationMap": false,
     "lib": ["ES2023", "DOM"],
     "types": ["node"]
   },

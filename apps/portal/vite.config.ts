@@ -33,6 +33,13 @@ export default defineConfig({
         // SPA: serve the cached app shell for navigations (but never for the API).
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
+        // A newly-built worker takes over immediately and purges the previous
+        // build's precache, so a deploy (e.g. a newly-bundled plugin) can't be
+        // masked by a stale cached shell. Paired with the update polling in
+        // main.tsx, an open tab refreshes to the new version on its own.
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
         // Offline browsing of already-seen file listings/contents (reads only).
         runtimeCaching: [
           {

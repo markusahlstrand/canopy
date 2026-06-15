@@ -10,14 +10,17 @@ import {
   createSqlSearchIndex,
   ensurePersonalSpace,
   getPluginSettings,
+  inProcessIndexJobs,
   resolveInvites,
   runMigrations,
   syncAllConnectors,
   upsertUser,
+  type CrawlTarget,
   type Db,
   type D1Like,
   type FileRecord,
   type FileVersion,
+  type IndexJobs,
   type R2BucketLike,
 } from "@canopy/store";
 import { createApp, type DataSourceDeps } from "./app";
@@ -56,6 +59,25 @@ interface WorkerEnv {
   DOCWORKER?: ContainerNamespace;
   /** Shared secret the Worker sends to the container; also injected into the container. */
   DOCWORKER_TOKEN?: string;
+  /** Durable Object namespace for the per-space live-sync (SSE) channel. Optional —
+   *  absent (e.g. Node) means the offline mirror relies on polling alone. Duck-typed
+   *  so `apps/api` stays free of `@cloudflare/workers-types` (the real binding satisfies it). */
+  SPACE_CHANNEL?: SpaceChannelNamespace;
+  /** Workflow binding for the durable connector-index crawl (the {@link IndexJobs} CF
+   *  impl). Optional — absent (e.g. Node, or before the Workflow is provisioned) → the
+   *  in-process loop runs instead. Duck-typed, like the DO bindings above. */
+  CONNECTOR_INDEX?: IndexWorkflowBinding;
+}
+
+/** The slice of the connector-index Workflow binding we use (duck-typed). */
+interface IndexWorkflowBinding {
+  create(options?: { id?: string; params?: CrawlTarget }): Promise<{ id: string }>;
+}
+
+/** The slice of a Durable Object namespace we use to reach a per-space SSE channel. */
+interface SpaceChannelNamespace {
+  idFromName(name: string): unknown;
+  get(id: unknown): { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
 }
 
 // Apply the schema once per isolate (CREATE TABLE IF NOT EXISTS is idempotent).
@@ -104,24 +126,88 @@ function connectorWiring(env: WorkerEnv, db: Db, authConfig: AuthConfig | null) 
 }
 
 /**
+ * Build the shared drive plumbing — DB (migrated), blobs, search, the connector
+ * wiring, and the {@link FileService} (with the live-sync nudge) — once, so the
+ * request handler, the cron, and the connector-index Workflow all run against the
+ * identical service and can't drift. `waitUntil` (when given) keeps the SSE nudge
+ * alive past a response; in the cron/Workflow it's fire-and-forget.
+ */
+export async function buildDeps(env: WorkerEnv, waitUntil?: (p: Promise<unknown>) => void) {
+  const db = createD1Db(env.DB);
+  await (schemaReady ??= runMigrations(db));
+  const blobs = createR2BlobStore(env.BUCKET);
+  const search = createSqlSearchIndex(db);
+  const authConfig = readAuthConfig(env as unknown as EnvVars);
+  const { plugins, connectorFor, connectorForUser, readExternal } = connectorWiring(env, db, authConfig);
+  const channel = env.SPACE_CHANNEL;
+  const fire = waitUntil ?? ((p: Promise<unknown>) => void p);
+  const onSpaceChanged = channel
+    ? (spaceId: string, seq: number) =>
+        fire(
+          channel
+            .get(channel.idFromName(spaceId))
+            .fetch(`https://space-channel/notify?space=${encodeURIComponent(spaceId)}&seq=${seq}`)
+            .then(() => undefined)
+            .catch(() => undefined),
+        )
+    : undefined;
+  // Stream one indexing progress line to the space's live channel (a no-op without the
+  // DO, e.g. Node — the log is live-only, never persisted). Posted to the SAME DO key
+  // the `/logs/stream` endpoint subscribes to (the real connector space id), so the
+  // workflow's lines reach the open dialog. Awaitable + best-effort: the workflow calls
+  // it inside a `step.do` so a line fires when the step runs, not on cache-replay.
+  const indexLog: IndexLog = channel
+    ? async (spaceId, message, level = "info") => {
+        try {
+          await channel
+            .get(channel.idFromName(spaceId))
+            .fetch(`https://space-channel/log?space=${encodeURIComponent(spaceId)}`, {
+              method: "POST",
+              body: JSON.stringify({ message, level, ts: Date.now() }),
+            });
+        } catch {
+          /* best-effort: a dropped progress line never fails an index run */
+        }
+      }
+    : async () => {};
+  const service = new FileService(db, blobs, createSqlBlobRepo(db), {
+    index: search,
+    textExtractor: documentTextExtractor,
+    readExternal,
+    onSpaceChanged,
+  });
+  return { db, blobs, search, authConfig, plugins, connectorFor, connectorForUser, service, indexLog };
+}
+
+/** Emit one indexing progress line to a space's live channel. Best-effort, never throws. */
+export type IndexLog = (spaceId: string, message: string, level?: "info" | "error") => Promise<void>;
+
+/**
+ * The Cloudflare {@link IndexJobs} impl: a durable Workflow runs the connector crawl
+ * + extraction. Returns null when the Workflow isn't bound (so the caller falls back
+ * to the in-process loop). A fresh instance per call (auto id) — reconcile is
+ * idempotent, so a double-run is harmless and "Sync / Re-index" works repeatedly.
+ */
+function cfIndexJobs(env: WorkerEnv): IndexJobs | null {
+  const wf = env.CONNECTOR_INDEX;
+  if (!wf) return null;
+  return {
+    async startConnectorIndex(target) {
+      await wf.create({ params: target });
+    },
+  };
+}
+
+/**
  * Single Cloudflare Worker: serves /api/* (the Hono app); everything else comes
  * from Static Assets. The drive is D1 (metadata) + R2 (content-addressed blobs);
  * documentation/demo are read-only GitHub mounts.
  */
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
-    const db = createD1Db(env.DB);
-    await (schemaReady ??= runMigrations(db));
-
-    const blobs = createR2BlobStore(env.BUCKET);
-    const search = createSqlSearchIndex(db);
-    const authConfig = readAuthConfig(env as unknown as EnvVars);
-    const { plugins, connectorFor, readExternal } = connectorWiring(env, db, authConfig);
-    const service = new FileService(db, blobs, createSqlBlobRepo(db), {
-      index: search,
-      textExtractor: documentTextExtractor,
-      readExternal,
-    });
+    const { db, blobs, search, authConfig, plugins, connectorFor, connectorForUser, service } = await buildDeps(env, (p) =>
+      ctx.waitUntil(p),
+    );
 
     const readonlyMounts: Record<string, StorageConnector> = {};
     let demoDefaults: Record<string, Record<string, string>> = {};
@@ -182,6 +268,9 @@ export default {
       // Let users add their own Gemini / OpenAI-compatible keys in Settings → AI models.
       aiUserConfig: { fields: AI_PROVIDER_FIELDS, build: providersFromUserConfig },
       waitUntil: (p) => ctx.waitUntil(p), // keep AI labeling alive after the response
+      // Background connector indexing: the durable CF Workflow when bound, else the
+      // in-process loop (run under waitUntil) — same selection idiom as DocWorker.
+      indexJobs: cfIndexJobs(env) ?? inProcessIndexJobs({ db, service, connectorForUser }),
     });
     return app.fetch(request, env);
   },
@@ -193,18 +282,9 @@ export default {
    * change feed when available, else a bounded crawl) and draining text extraction.
    */
   async scheduled(_event: { cron: string }, env: WorkerEnv, _ctx: { waitUntil(p: Promise<unknown>): void }): Promise<void> {
-    const db = createD1Db(env.DB);
-    await (schemaReady ??= runMigrations(db));
-    const blobs = createR2BlobStore(env.BUCKET);
-    const search = createSqlSearchIndex(db);
-    const authConfig = readAuthConfig(env as unknown as EnvVars);
-    const { connectorForUser, readExternal } = connectorWiring(env, db, authConfig);
-    const service = new FileService(db, blobs, createSqlBlobRepo(db), {
-      index: search,
-      textExtractor: documentTextExtractor,
-      readExternal,
-    });
+    const { db, service, connectorForUser } = await buildDeps(env);
     await service.pruneAllVersions();
+    await service.pruneTombstones(); // GC offline-sync tombstones past the bootstrap horizon
     await syncAllConnectors({ db, service, connectorForUser }, "synology");
   },
 };

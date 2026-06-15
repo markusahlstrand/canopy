@@ -54,10 +54,12 @@ planned.
 - `@canopy/portal` — the Vite + React SPA (desktop + mobile), with first-party Calendar, Tasks,
   and Documentation plugins, **sandboxed file viewers** (image, PDF, a Markdown editor), and `@canopy/plugin-sources`
   for resolving plugins from GitHub/npm/zip.
-- **Offline & PWA** — the portal installs as a PWA and stays **read-only-usable** when the API is
-  unreachable: an IndexedDB cache of the listings you've browsed plus the bytes of starred and
-  recently-opened files, behind a reachability signal that raises an offline banner and gates
-  writes. See [Architecture → Offline & reachability](architecture).
+- **Offline & sync** — the portal installs as a PWA and stays **read-only-usable** offline by
+  keeping a **synced local mirror** of your file metadata: a cursor-based *diff* from the server
+  (not a re-list), refreshed on reconnect/focus and nudged live, so every space — including
+  connected NAS/repos — browses instantly whether you're online or off. Opened and starred file
+  bytes are cached too (cache-first, revalidated in the background). Writes still need connectivity.
+  See [Architecture → Offline & sync](architecture).
 - **Full-text search** — an ACL-scoped FTS index (a core `SearchIndex` interface + a SQLite/D1
   **FTS5** adapter), reindexed on every file change and queried via `GET /api/search` behind a
   **⌘K command palette**. See [What belongs in the core → search](what-belongs-in-the-core).

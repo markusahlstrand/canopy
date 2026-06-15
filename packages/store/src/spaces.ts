@@ -1,5 +1,5 @@
 import type { Db } from "./db";
-import type { Role, Space } from "./types";
+import type { Role, Space, VersionPolicyKind } from "./types";
 import { deleteTuple, memberSpaceIds, spaceRole, writeTuple } from "./authz";
 import { ensureConnection } from "./connections";
 
@@ -11,7 +11,12 @@ interface SpaceRow {
   created_at: string;
   icon: string | null;
   color: string | null;
+  version_policy: string | null;
+  version_days: number | null;
 }
+/** Coerce the stored column (NULL on pre-migration-21 rows) to a known policy. */
+const toPolicy = (v: string | null): VersionPolicyKind =>
+  v === "all" || v === "days" ? v : "smart";
 const toSpace = (r: SpaceRow): Space => ({
   id: r.id,
   name: r.name,
@@ -20,6 +25,8 @@ const toSpace = (r: SpaceRow): Space => ({
   createdAt: r.created_at,
   icon: r.icon ?? null,
   color: r.color ?? null,
+  versionPolicy: toPolicy(r.version_policy),
+  versionDays: r.version_days ?? null,
 });
 
 /** Deterministic personal-space id for a user. */
@@ -70,7 +77,17 @@ export async function createSpace(
     [id, input.name, input.createdBy, now, icon, color],
   );
   await writeTuple(db, { objectType: "space", objectId: id, relation: "owner", subjectType: "user", subjectId: input.createdBy });
-  return { id, name: input.name, kind: "group", createdBy: input.createdBy, createdAt: now, icon, color };
+  return {
+    id,
+    name: input.name,
+    kind: "group",
+    createdBy: input.createdBy,
+    createdAt: now,
+    icon,
+    color,
+    versionPolicy: "smart",
+    versionDays: null,
+  };
 }
 
 /** Grant a user a role in a space (a tuple `space:<id>#<role>@user:<sub>`). */
@@ -129,6 +146,35 @@ export async function getSpace(db: Db, id: string): Promise<Space | null> {
 export async function renameSpace(db: Db, id: string, name: string): Promise<Space | null> {
   await db.run("UPDATE spaces SET name = ? WHERE id = ?", [name, id]);
   return getSpace(db, id);
+}
+
+/** This space's version-retention policy (defaults to `'smart'` for unknown/older rows). */
+export async function getVersionPolicy(
+  db: Db,
+  id: string,
+): Promise<{ policy: VersionPolicyKind; days: number | null }> {
+  const row = await db.first<{ version_policy: string | null; version_days: number | null }>(
+    "SELECT version_policy, version_days FROM spaces WHERE id = ?",
+    [id],
+  );
+  return { policy: toPolicy(row?.version_policy ?? null), days: row?.version_days ?? null };
+}
+
+/**
+ * Set a space's version-retention policy. `days` is only meaningful for `'days'`
+ * (cleared to NULL otherwise, so a later switch back can't inherit a stale window).
+ */
+export async function setVersionPolicy(
+  db: Db,
+  id: string,
+  policy: VersionPolicyKind,
+  days: number | null,
+): Promise<void> {
+  await db.run("UPDATE spaces SET version_policy = ?, version_days = ? WHERE id = ?", [
+    policy,
+    policy === "days" ? days : null,
+    id,
+  ]);
 }
 
 /**

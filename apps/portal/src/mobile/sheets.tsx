@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { ShareDialog } from "@/components/share-dialog";
 import { Icon } from "@/lib/icons";
@@ -9,7 +9,7 @@ import { VersionHistory } from "@/components/file-preview";
 import { findViewer } from "@/plugins/viewers";
 import { cn } from "@/lib/utils";
 import { FILE_KIND_COLOR, STORAGE, type FileItem } from "@/lib/mock-data";
-import { contentUrl, saveFileVersion } from "@/lib/api";
+import { contentUrl, downloadFile, saveFileVersion, setItemOffline } from "@/lib/api";
 
 function Handle() {
   return <div className="mx-auto mt-2 mb-1 h-1.5 w-9 shrink-0 rounded-full bg-border" />;
@@ -119,6 +119,19 @@ export function FileDetailSheet({
   // Bumped after a restore to remount the viewer so it refetches the now-current
   // content (parity with the desktop preview's contentNonce).
   const [contentNonce, setContentNonce] = useState(0);
+  // "Available offline" toggle — seeded from the listing's annotation, optimistic on tap.
+  const [offline, setOffline] = useState(false);
+  useEffect(() => setOffline(!!file?.offline), [file?.id, file?.offline]);
+  async function toggleOffline() {
+    if (!file || file.kind === "folder") return;
+    const next = !offline;
+    setOffline(next);
+    try {
+      await setItemOffline(file, undefined, next);
+    } catch {
+      setOffline(!next);
+    }
+  }
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="bottom" className="h-[92dvh] gap-0 rounded-t-[20px] p-0">
@@ -171,9 +184,15 @@ export function FileDetailSheet({
               <ActionTile
                 icon="download"
                 label="Save"
-                onClick={() => file.kind !== "folder" && window.open(contentUrl(file.id), "_blank")}
+                onClick={() => file.kind !== "folder" && downloadFile(file.id, file.name)}
               />
               <ActionTile icon="star" label={file.starred ? "Starred" : "Star"} active={file.starred} />
+              <ActionTile
+                icon={offline ? "circle-check" : "cloud"}
+                label="Offline"
+                active={offline}
+                onClick={() => file.kind !== "folder" && void toggleOffline()}
+              />
               <ActionTile icon="more" label="More" />
             </div>
 
@@ -221,7 +240,12 @@ export function FileDetailSheet({
 
             {/* version history (hidden when there's none, e.g. folders / read-only mounts) */}
             {file.kind !== "folder" && (
-              <VersionHistory fileId={file.id} onRestored={() => setContentNonce((n) => n + 1)} className="mt-4" />
+              <VersionHistory
+                fileId={file.id}
+                fileName={file.name}
+                onRestored={() => setContentNonce((n) => n + 1)}
+                className="mt-4"
+              />
             )}
 
             {/* comments */}

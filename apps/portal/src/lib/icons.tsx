@@ -64,6 +64,7 @@ import {
   Gamepad2,
   Timer,
   Calculator,
+  Workflow,
   type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties } from "react";
@@ -138,6 +139,7 @@ const MAP: Record<string, LucideIcon> = {
   gamepad: Gamepad2,
   timer: Timer,
   calculator: Calculator,
+  model: Workflow,
 };
 
 export function Icon({

@@ -15,6 +15,7 @@ import {
   createSqlBlobRepo,
   ensurePersonalSpace,
   getPluginSettings,
+  inProcessIndexJobs,
   resolveInvites,
   runMigrations,
   syncAllConnectors,
@@ -179,6 +180,9 @@ const app = createApp({
   readonlyMounts: { documentation, demo },
   drive: { service, blobs, docWorker: inProcessDocWorker() },
   dataSources,
+  // In-process connector indexing (full crawl + extract drain) for the "Sync now" /
+  // on-connect triggers; the periodic sweep below stays the safety net.
+  indexJobs: inProcessIndexJobs({ db, service, connectorForUser }),
   // libsql FTS5 search index (same SQL adapter as D1 on the edge).
   search,
   processors: processorsOf(SERVER_PLUGINS),
@@ -213,6 +217,7 @@ serve({ fetch: app.fetch, port }, (info) => {
 const PRUNE_INTERVAL_MS = 6 * 60 * 60_000; // every 6 hours
 setInterval(() => {
   void service.pruneAllVersions().catch((err) => console.warn("  ⚠ version prune failed:", err));
+  void service.pruneTombstones().catch((err) => console.warn("  ⚠ tombstone prune failed:", err));
 }, PRUNE_INTERVAL_MS).unref();
 
 // Periodic connected-backend sweep: refresh each user's persisted NAS/repo index

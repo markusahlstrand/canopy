@@ -1,0 +1,34 @@
+{
+  "id": "model-editor",
+  "name": "Model Editor",
+  "version": "0.1.0",
+  "description": "Design data models visually — drag entities, draw relations, and edit Prisma schemas on a canvas. Opens .prisma files and exports JSON Schema, SQL DDL, Mermaid and more.",
+  "icon": "model",
+  "color": "265 70% 58%",
+  "capabilities": [{ "kind": "item:read" }, { "kind": "item:write" }],
+  "contributes": {
+    "viewers": [
+      {
+        "id": "prisma",
+        "title": "Model Editor",
+        "match": [".prisma", "text/x-prisma"]
+      }
+    ],
+    "creators": [
+      {
+        "id": "prisma",
+        "label": "Prisma schema",
+        "icon": "model",
+        "defaultName": "schema",
+        "extension": ".prisma",
+        "mime": "text/x-prisma",
+        "template": "// Prisma schema — edit visually in the Model Editor\n\ndatasource db {\n  provider = \"postgresql\"\n  url      = env(\"DATABASE_URL\")\n}\n\ngenerator client {\n  provider = \"prisma-client-js\"\n}\n\nmodel Example {\n  id   String @id @default(cuid())\n  name String\n}\n"
+      }
+    ],
+    "store": {
+      "category": "Productivity",
+      "tagline": "Visual data-model & Prisma schema editor.",
+      "popular": true
+    }
+  }
+}

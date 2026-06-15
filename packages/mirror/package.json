@@ -1,0 +1,21 @@
+{
+  "name": "@canopy/mirror",
+  "version": "0.0.0",
+  "description": "Shared, dependency-free read logic for Canopy's offline metadata mirror — the MirrorFile row shape, virtual-folder path helpers, the folder-view derivation, and delta application. Runs identically over D1 rows on the server and the IndexedDB mirror in the browser.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3",
+    "vitest": "^3.2.4"
+  }
+}

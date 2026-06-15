@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ShareDialog } from "@/components/share-dialog";
@@ -8,18 +8,27 @@ import { FileIcon } from "@/components/file-icon";
 import { AvatarGroup, PersonAvatar } from "@/components/person-avatar";
 import { PluginViewer } from "@/components/plugin-viewer";
 import { findViewer } from "@/plugins/viewers";
+// Model Editor is a trusted first-party view (React Flow); lazy-load it so its
+// heavy deps stay out of the main bundle until a .prisma file is opened.
+const ModelEditorFileViewer = lazy(() =>
+  import("@/components/model-editor/file-viewer").then((m) => ({ default: m.ModelEditorFileViewer })),
+);
 import {
   addComment,
   contentUrl,
   deleteComment,
+  downloadFile,
+  downloadVersion,
   fetchMe,
   humanSize,
+  isItemOffline,
+  setItemOffline,
   listComments,
   listVersions,
   restoreVersion,
   saveFileVersion,
   setVersionKeep,
-  versionContentUrl,
+  subscribeContentUpdate,
   setDescription as apiSetDescription,
   setTags as apiSetTags,
   type Comment,
@@ -43,10 +52,12 @@ function fmtWhen(iso: string): string {
 /** A file's saved versions, newest first. Older entries can be restored or downloaded. */
 export function VersionHistory({
   fileId,
+  fileName,
   onRestored,
   className,
 }: {
   fileId: string;
+  fileName: string;
   onRestored: () => void;
   className?: string;
 }) {
@@ -134,7 +145,7 @@ export function VersionHistory({
                     variant="ghost"
                     size="sm"
                     title="Download this version"
-                    onClick={() => window.open(versionContentUrl(fileId, v.id), "_blank")}
+                    onClick={() => downloadVersion(fileId, v.id, fileName)}
                   >
                     <Icon name="download" size={14} />
                   </Button>
@@ -429,20 +440,54 @@ function ProcessingLog({ entries }: { entries: ProcessingEntry[] }) {
 
 export type PreviewMode = "split" | "full";
 
+/** True when focus is in a text field, so the preview's arrow-key navigation yields
+ *  to the caret (editing a description, tags, or a comment). */
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
+}
+
+/** Lightbox-style prev/next control overlaid on the full-screen viewer. */
+function NavArrow({ side, onClick }: { side: "left" | "right"; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={side === "left" ? "Previous file" : "Next file"}
+      className={cn(
+        "absolute top-1/2 z-10 grid size-10 -translate-y-1/2 place-items-center rounded-full border bg-background/80 text-foreground shadow-md backdrop-blur transition hover:bg-background",
+        side === "left" ? "left-4" : "right-4",
+      )}
+    >
+      <Icon name={side === "left" ? "chevron-left" : "chevron-right"} size={20} />
+    </button>
+  );
+}
+
 export function FilePreview({
   file,
+  space,
   mode,
   onToggleMode,
   onClose,
   onSaved,
+  onPrev,
+  onNext,
   installedPluginIds,
 }: {
   file: FileItem | null;
+  /** The current view's space token, so opened bytes count against its offline cache budget. */
+  space?: string;
   /** "split" docks beside the (still-interactive) file list; "full" covers the viewport. */
   mode: PreviewMode;
   onToggleMode: () => void;
   onClose: () => void;
   onSaved?: () => void;
+  /** Step to the previous / next previewable file in the list (arrow keys + the on-screen
+   *  arrows). Undefined when there's no neighbour in that direction. */
+  onPrev?: () => void;
+  onNext?: () => void;
   /** Plugins active for this user — gates store-listed viewers (e.g. code-editor). */
   installedPluginIds?: string[];
 }) {
@@ -450,34 +495,102 @@ export function FilePreview({
   // Bumped after a restore to remount the viewer so it refetches the current content.
   const [contentNonce, setContentNonce] = useState(0);
 
-  // The panel isn't a modal (in split mode the list stays usable), so it owns its
-  // own Escape-to-close. Skipped while a share dialog is layered on top of it.
+  // Stale-while-revalidate: if a background check finds this file's bytes changed
+  // upstream, remount the viewer so it reloads the now-fresh cached content. Rare
+  // (Canopy is the single point of entry), so this almost never fires.
   useEffect(() => {
-    if (!file || shareOpen) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+    if (!file || file.kind === "folder") return;
+    return subscribeContentUpdate(contentUrl(file.id), () => setContentNonce((n) => n + 1));
+  }, [file?.id, file?.kind]);
+
+  // "Available offline" toggle: a per-device pin that guarantees this file's bytes are kept
+  // and never evicted (distinct from star). Loaded from the local pin set when the file changes.
+  const [offline, setOffline] = useState(false);
+  const [offlineBusy, setOfflineBusy] = useState(false);
+  useEffect(() => {
+    if (!file || file.kind === "folder") {
+      setOffline(false);
+      return;
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [file, shareOpen, onClose]);
+    let live = true;
+    void isItemOffline(file, space).then((v) => live && setOffline(v));
+    return () => {
+      live = false;
+    };
+  }, [file?.id, file?.kind, space]);
 
-  if (!file) return null;
+  async function toggleOffline() {
+    if (!file) return;
+    const next = !offline;
+    setOffline(next); // optimistic
+    setOfflineBusy(true);
+    try {
+      await setItemOffline(file, space, next);
+    } catch {
+      setOffline(!next); // rollback
+    } finally {
+      setOfflineBusy(false);
+    }
+  }
 
-  const isFolder = file.kind === "folder";
+  const isFolder = file?.kind === "folder";
   const full = mode === "full";
-  const viewer = !isFolder ? findViewer(file.name, undefined, installedPluginIds) : undefined;
+  const viewer = file && !isFolder ? findViewer(file.name, undefined, installedPluginIds) : undefined;
   const editable =
     viewer?.plugin === "markdown-editor" ||
     viewer?.plugin === "code-editor" ||
     viewer?.plugin === "univer-office";
-  // Images fill the available area instead of auto-growing the iframe to content
-  // — the host gives them a real box (see layout below) and the viewer fits inside.
-  const fillViewer = viewer?.plugin === "image-viewer";
+  // Images and the Model Editor fill the available area instead of auto-growing
+  // the iframe to content — the host gives them a real box (see layout below).
+  const isModelEditor = viewer?.plugin === "model-editor";
+  const fillViewer = viewer?.plugin === "image-viewer" || isModelEditor;
+  // Full-screen Model Editor is a focused workspace: it owns the whole viewport,
+  // so we drop the metadata sidebar, the prev/next nav arrows and the centred
+  // max-width cap and let the canvas bleed to every edge.
+  const fullBleed = full && isModelEditor;
 
-  const viewerNode = viewer ? (
+  // The panel isn't a modal (in split mode the list stays usable), so it owns its own
+  // keyboard shortcuts: Escape closes it, and the arrow keys step to the previous/next
+  // file in the list (up/down while docked, left/right in full screen — both axes work
+  // either way). Skipped while a share dialog is layered on top, and while typing in a
+  // field (description, tags, comments) so arrows still move the caret there.
+  useEffect(() => {
+    if (!file || shareOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
+      // The full-screen Model Editor owns its arrow keys (canvas nudging), and its
+      // on-screen nav arrows are hidden, so don't steal them for file navigation.
+      if (fullBleed) return;
+      if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+        if (!onPrev) return;
+        e.preventDefault();
+        onPrev();
+      } else if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+        if (!onNext) return;
+        e.preventDefault();
+        onNext();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [file, shareOpen, onClose, onPrev, onNext, fullBleed]);
+
+  if (!file) return null;
+
+  const viewerNode = isModelEditor ? (
+    <Suspense
+      fallback={<div className="grid h-full min-h-[200px] place-items-center text-sm text-muted-foreground">Loading…</div>}
+    >
+      <ModelEditorFileViewer key={`${file.id}:${contentNonce}`} fileId={file.id} fileName={file.name} onSaved={onSaved} />
+    </Suspense>
+  ) : viewer ? (
     <PluginViewer
       key={`${file.id}:${contentNonce}`}
-      file={{ source: viewer.source, name: file.name, url: contentUrl(file.id) }}
+      file={{ source: viewer.source, name: file.name, url: contentUrl(file.id), spaceId: space }}
       fill={fillViewer}
       onSaved={onSaved}
       onSaveContent={editable ? (text) => saveFileVersion(file.id, text) : undefined}
@@ -550,6 +663,7 @@ export function FilePreview({
       {!isFolder && (
         <VersionHistory
           fileId={file.id}
+          fileName={file.name}
           onRestored={() => {
             setContentNonce((n) => n + 1);
             onSaved?.();
@@ -589,9 +703,19 @@ export function FilePreview({
               variant="outline"
               size="sm"
               className="gap-1.5"
-              onClick={() => window.open(contentUrl(file.id), "_blank")}
+              onClick={() => downloadFile(file.id, file.name)}
             >
               <Icon name="download" size={14} /> Download
+            </Button>
+            <Button
+              variant={offline ? "secondary" : "outline"}
+              size="sm"
+              className="gap-1.5"
+              onClick={toggleOffline}
+              disabled={offlineBusy}
+              title={offline ? "Kept on this device — click to remove" : "Make available offline on this device"}
+            >
+              <Icon name={offline ? "circle-check" : "cloud"} size={14} /> Offline
             </Button>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setShareOpen(true)}>
               <Icon name="share" size={14} /> Share
@@ -614,12 +738,22 @@ export function FilePreview({
 
       {full ? (
         <div className="flex min-h-0 flex-1">
-          <div className={cn("min-w-0 flex-1 bg-muted/20 p-6", fillViewer ? "flex" : "overflow-auto")}>
-            <div className={cn("mx-auto w-full max-w-[1100px]", fillViewer && "flex min-h-0 flex-1")}>
+          <div
+            className={cn(
+              "relative min-w-0 flex-1 bg-muted/20",
+              fullBleed ? "p-0" : "p-6",
+              fillViewer ? "flex" : "overflow-auto",
+            )}
+          >
+            {!fullBleed && onPrev && <NavArrow side="left" onClick={onPrev} />}
+            {!fullBleed && onNext && <NavArrow side="right" onClick={onNext} />}
+            <div className={cn("mx-auto w-full", !fullBleed && "max-w-[1100px]", fillViewer && "flex min-h-0 flex-1")}>
               {viewerNode}
             </div>
           </div>
-          <div className="flex w-[360px] shrink-0 flex-col gap-6 overflow-y-auto border-l px-6 py-5">{details}</div>
+          {!fullBleed && (
+            <div className="flex w-[360px] shrink-0 flex-col gap-6 overflow-y-auto border-l px-6 py-5">{details}</div>
+          )}
         </div>
       ) : (
         <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">

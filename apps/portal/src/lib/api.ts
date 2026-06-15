@@ -1,16 +1,35 @@
 import type { AiMessage, Page, PluginManifest, StorageEntry } from "@canopy/core";
+import type { MirrorFile } from "@canopy/mirror";
 import type { FileItem, FileKind, ProcessingEntry } from "@/lib/mock-data";
-import { apiFetch } from "@/lib/connectivity";
+import { apiFetch, isBackendReachable } from "@/lib/connectivity";
+import { MIRROR_ENABLED, mirrorFilesUnder, mirrorFolder } from "@/lib/sync";
 import {
   cacheContent,
   cacheListing,
   cacheMe,
   hasContent,
   listingKey,
+  markContentPinned,
   readContent,
   readListing,
   readMe,
+  readPins,
   rememberRecent,
+  setFilePinned,
+  setFolderPinned,
+  unpinContentExcept,
+  type Pins,
+} from "@/lib/offline-cache";
+
+// Per-space offline cache controls — surfaced in a space's "Offline files" settings.
+export {
+  CACHE_PRESETS,
+  CACHE_UNLIMITED,
+  DEFAULT_CACHE_LIMIT,
+  cacheUsage,
+  clearSpaceContent,
+  readCacheLimit,
+  setCacheLimit,
 } from "@/lib/offline-cache";
 
 const EXT_KIND: Record<string, FileKind> = {
@@ -106,6 +125,25 @@ interface DriveListing {
   folders: string[];
 }
 
+function toFileItem(f: ApiFile, dir: string, spaceName?: string): FileItem {
+  return {
+    id: f.id,
+    name: f.name,
+    kind: kindForName(f.name),
+    modified: fmtDate(f.updatedAt),
+    size: humanSize(f.version?.size),
+    path: dir,
+    sharedWith: f.sharedWith,
+    owner: f.ownerLabel,
+    location: spaceName,
+    starred: !!f.metadata?.starred,
+    labels: Array.isArray(f.metadata?.labels) ? (f.metadata.labels as string[]) : undefined,
+    tags: Array.isArray(f.metadata?.tags) ? (f.metadata.tags as string[]) : undefined,
+    description: typeof f.metadata?.description === "string" ? (f.metadata.description as string) : undefined,
+    processing: Array.isArray(f.metadata?.processing) ? (f.metadata.processing as ProcessingEntry[]) : undefined,
+  };
+}
+
 function toFileItems(data: DriveListing, dir: string): FileItem[] {
   const folders: FileItem[] = data.folders.map((name) => ({
     id: `folder:${join(dir, name)}`,
@@ -115,23 +153,56 @@ function toFileItems(data: DriveListing, dir: string): FileItem[] {
     size: "—",
     path: join(dir, name),
   }));
-  const files: FileItem[] = data.files.map((f) => ({
-    id: f.id,
-    name: f.name,
-    kind: kindForName(f.name),
-    modified: fmtDate(f.updatedAt),
-    size: humanSize(f.version?.size),
-    path: dir,
-    sharedWith: f.sharedWith,
-    owner: f.ownerLabel,
-    location: data.spaceName,
-    starred: !!f.metadata?.starred,
-    labels: Array.isArray(f.metadata?.labels) ? (f.metadata.labels as string[]) : undefined,
-    tags: Array.isArray(f.metadata?.tags) ? (f.metadata.tags as string[]) : undefined,
-    description: typeof f.metadata?.description === "string" ? (f.metadata.description as string) : undefined,
-    processing: Array.isArray(f.metadata?.processing) ? (f.metadata.processing as ProcessingEntry[]) : undefined,
-  }));
+  const files: FileItem[] = data.files.map((f) => toFileItem(f, dir, data.spaceName));
   return [...folders, ...files];
+}
+
+/** A mirror row is the same shape as an `ApiFile` minus the nested version — flatten
+ *  it back so the existing `toFileItem` mapping renders it identically. */
+function mirrorToFileItem(m: MirrorFile, dir: string): FileItem {
+  return toFileItem(
+    {
+      id: m.id,
+      name: m.name,
+      metadata: m.metadata,
+      updatedAt: m.updatedAt,
+      ownerLabel: m.ownerLabel,
+      sharedWith: m.sharedWith,
+      version: m.size != null || m.mime != null ? { size: m.size ?? 0, mime: m.mime } : null,
+    },
+    dir,
+  );
+}
+
+/** Build a folder's `FileItem[]` (folders first, then files) from a mirror folder view. */
+function mirrorViewToItems(view: { files: MirrorFile[]; folders: string[] }, dir: string): FileItem[] {
+  const folders: FileItem[] = view.folders.map((name) => ({
+    id: `folder:${join(dir, name)}`,
+    name,
+    kind: "folder",
+    modified: "—",
+    size: "—",
+    path: join(dir, name),
+  }));
+  return [...folders, ...view.files.map((f) => mirrorToFileItem(f, dir))];
+}
+
+/**
+ * Fetch one file's metadata by id, as a `FileItem` (the same shape a listing
+ * yields). Used to restore an open document from a `?file=` deep link when the
+ * file isn't in the currently-loaded folder. Returns null if it's gone or the
+ * caller can't read it (404/403) — callers treat that as "nothing to restore".
+ */
+export async function getFile(id: string): Promise<FileItem | null> {
+  try {
+    const res = await apiFetch(`/api/files/${encodeURIComponent(id)}`);
+    if (!res.ok) return null;
+    const f = (await res.json()) as ApiFile;
+    const dir = typeof f.metadata?.path === "string" ? (f.metadata.path as string) : "";
+    return toFileItem(f, dir);
+  } catch {
+    return null; // backend unreachable — the preview just won't restore
+  }
 }
 
 /** One full-text search hit: the file (as a `FileItem`, openable in the preview) + a matched snippet. */
@@ -184,14 +255,38 @@ export async function searchFiles(q: string, limit = 8): Promise<SearchResult[]>
 /** List a virtual folder of a space (default: personal). Folders first, then files. */
 export async function listFiles(dir = "", spaceId?: string): Promise<FileItem[]> {
   const key = listingKey(spaceId, dir);
+  const isConnector = String(spaceId ?? "").startsWith("connector:");
+  // Mirror-first for EVERY space — personal, group, and connected (NAS/repo). Serve the
+  // synced local replica instantly (works offline); the mirror diffs in the background.
+  // Falls through to a one-off live fetch only when this space isn't synced yet.
+  if (MIRROR_ENABLED) {
+    try {
+      const view = await mirrorFolder(dir, spaceId);
+      if (view) {
+        // A connected folder served from the mirror: kick a background reconcile so the
+        // NAS/repo index stays fresh; its changes flow back into the mirror via the delta
+        // (we ignore the response here).
+        if (isConnector) {
+          void apiFetch(`/api/files?path=${encodeURIComponent(dir)}&space=${encodeURIComponent(spaceId!)}`).catch(() => {});
+        }
+        const items = mirrorViewToItems(view, dir);
+        await annotateOffline(items, spaceId); // mark pinned (available-offline) items
+        void warmStarred(items, spaceId); // keep starred bytes available offline
+        return items;
+      }
+    } catch {
+      // fall through to the legacy network + listing-cache path
+    }
+  }
   const sp = spaceId ? `&space=${encodeURIComponent(spaceId)}` : "";
   try {
     const res = await apiFetch(`/api/files?path=${encodeURIComponent(dir)}${sp}`);
     if (res.status === 401) return []; // not signed in → empty drive
     if (!res.ok) throw await apiError(res, "list failed");
     const items = toFileItems(await res.json(), dir);
-    void cacheListing(key, items); // for offline browsing
-    void warmStarred(items); // pre-fetch starred bytes so they open offline
+    await annotateOffline(items, spaceId); // mark pinned (available-offline) items
+    void cacheListing(key, items); // for offline browsing (with their offline flags)
+    void warmStarred(items, spaceId); // pre-fetch starred bytes so they open offline
     return items;
   } catch (err) {
     // Backend unreachable (or errored): serve the last-known copy if we have one.
@@ -208,6 +303,7 @@ export async function listShared(): Promise<FileItem[]> {
     const res = await apiFetch("/api/files?shared=1");
     if (!res.ok) return [];
     const items = toFileItems(await res.json(), "");
+    await annotateOffline(items, "shared"); // mark pinned (available-offline) items
     void cacheListing(key, items);
     return items;
   } catch {
@@ -216,6 +312,13 @@ export async function listShared(): Promise<FileItem[]> {
 }
 
 /** URL to stream a file's current version. */
+/** Fetch a file's current content as UTF-8 text (authenticated, connector-aware). */
+export async function fetchFileText(id: string): Promise<string> {
+  const res = await apiFetch(contentUrl(id));
+  if (!res.ok) throw new Error(`load failed: ${res.status}`);
+  return res.text();
+}
+
 export function contentUrl(id: string): string {
   // A connected space's file id is "connector:<plugin>:<repo-path>"; its bytes are
   // streamed live through the connector via the path-keyed /api/file route.
@@ -230,25 +333,111 @@ export function contentUrl(id: string): string {
 }
 
 /**
+ * Trigger a real download (save dialog) rather than an in-tab preview.
+ *
+ * `window.open` lets the browser render previewable types (PDF, images, text)
+ * inline, so it never saves them. We instead hit the content URL with
+ * `?download` — the server replies `Content-Disposition: attachment` — and click
+ * a hidden same-origin anchor whose `download` attribute names the file.
+ */
+export function downloadFile(id: string, name: string): void {
+  const base = contentUrl(id);
+  const url = base.includes("?") ? `${base}&download=1` : `${base}?download=1`;
+  saveAs(url, name);
+}
+
+/** Trigger a download of a specific past version's bytes. */
+export function downloadVersion(id: string, versionId: string, name: string): void {
+  saveAs(versionContentUrl(id, versionId), name);
+}
+
+function saveAs(url: string, name: string): void {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/**
  * Fetch a file's bytes for a viewer, transparently using the offline cache.
  * Online: streams from the API and stores a copy (this is what makes a viewed
  * file "recent" and available offline). Offline: serves the cached copy, or
  * re-throws if we never cached it. Keyed by the content URL.
  */
-export async function fetchContent(url: string): Promise<{ bytes: ArrayBuffer; mime: string }> {
+export async function fetchContent(url: string, space?: string): Promise<{ bytes: ArrayBuffer; mime: string }> {
+  const spaceId = spaceForContentUrl(url, space);
+  // Cache-FIRST (stale-while-revalidate): a previously-opened file opens instantly from
+  // the cache — online or offline — instead of waiting on the network. When online and
+  // reachable, we revalidate in the background with a conditional request (If-None-Match):
+  // almost always a cheap 304 (Canopy is the single point of entry, so content rarely
+  // changes underneath us), and on the rare real change we refresh the cache and notify
+  // any open viewer to reload (see subscribeContentUpdate).
+  const cached = await readContent(url);
+  if (cached) {
+    const online = typeof navigator === "undefined" || navigator.onLine;
+    if (online && isBackendReachable()) void revalidateContent(url, spaceId, cached.etag);
+    return { bytes: cached.bytes, mime: cached.mime };
+  }
+  // Not cached → must fetch (and store). Offline with no cached copy still throws.
+  const res = await apiFetch(url);
+  if (!res.ok) throw await apiError(res, "fetch failed");
+  const bytes = await res.arrayBuffer();
+  const mime = res.headers.get("content-type") ?? "application/octet-stream";
+  const etag = res.headers.get("etag") ?? undefined;
+  // Cache a copy — the original may be transferred to a sandboxed viewer. Tagged with its
+  // space so the per-space cache budget can account for and evict it.
+  void cacheContent(url, { bytes: bytes.slice(0), mime, name: "", size: bytes.byteLength, at: Date.now(), spaceId, etag });
+  return { bytes, mime };
+}
+
+/** Background freshness check for a cached file: a conditional GET (If-None-Match). On
+ *  304 nothing changed; on 200 the bytes changed — update the cache and notify open
+ *  viewers. Best-effort: a failure (offline, NAS down) leaves the cached copy in place. */
+async function revalidateContent(url: string, spaceId: string, etag?: string): Promise<void> {
   try {
-    const res = await apiFetch(url);
-    if (!res.ok) throw await apiError(res, "fetch failed");
+    const res = await apiFetch(url, etag ? { headers: { "If-None-Match": etag } } : undefined);
+    if (res.status === 304 || !res.ok) return; // unchanged, or transient error → keep cache
     const bytes = await res.arrayBuffer();
     const mime = res.headers.get("content-type") ?? "application/octet-stream";
-    // Cache a copy — the original may be transferred to a sandboxed viewer.
-    void cacheContent(url, { bytes: bytes.slice(0), mime, name: "", size: bytes.byteLength, at: Date.now() });
-    return { bytes, mime };
-  } catch (err) {
-    const cached = await readContent(url);
-    if (cached) return { bytes: cached.bytes, mime: cached.mime };
-    throw err;
+    const newEtag = res.headers.get("etag") ?? undefined;
+    if (newEtag && newEtag === etag) return; // same content (no validator change) — don't churn
+    await cacheContent(url, { bytes, mime, name: "", size: bytes.byteLength, at: Date.now(), spaceId, etag: newEtag });
+    publishContentUpdate(url); // an open viewer can now reload the fresh bytes
+  } catch {
+    // offline / backend unreachable — the cached copy stands
   }
+}
+
+// Content-update notifications: fetchContent's background revalidation fires these when a
+// file's bytes change underneath an open viewer, so it can reload (the cache is already
+// fresh by then). Keyed by content URL.
+const contentListeners = new Map<string, Set<() => void>>();
+
+/** Subscribe to "this file's cached content was refreshed" for a content URL. */
+export function subscribeContentUpdate(url: string, cb: () => void): () => void {
+  const set = contentListeners.get(url) ?? new Set<() => void>();
+  set.add(cb);
+  contentListeners.set(url, set);
+  return () => {
+    set.delete(cb);
+    if (set.size === 0) contentListeners.delete(url);
+  };
+}
+
+function publishContentUpdate(url: string): void {
+  contentListeners.get(url)?.forEach((cb) => cb());
+}
+
+/** The space a content URL belongs to, for cache accounting. A connected space's URL
+ *  embeds `space=connector:<plugin>` (authoritative); everything else falls back to the
+ *  caller's current view space ("" = personal drive). */
+function spaceForContentUrl(url: string, fallback?: string): string {
+  const m = /[?&]space=([^&]+)/.exec(url);
+  if (m) return decodeURIComponent(m[1]);
+  return fallback ?? "";
 }
 
 /** Record an opened file as "recent" so its content is kept for offline use. */
@@ -258,7 +447,7 @@ export function rememberOpened(file: FileItem): void {
 }
 
 /** Best-effort: pre-cache the bytes of starred files we just listed, for offline viewing. */
-async function warmStarred(items: FileItem[]): Promise<void> {
+async function warmStarred(items: FileItem[], space?: string): Promise<void> {
   for (const f of items) {
     if (!f.starred || f.kind === "folder") continue;
     const url = contentUrl(f.id);
@@ -268,11 +457,114 @@ async function warmStarred(items: FileItem[]): Promise<void> {
       if (!res.ok) continue;
       const bytes = await res.arrayBuffer();
       const mime = res.headers.get("content-type") ?? "application/octet-stream";
-      await cacheContent(url, { bytes, mime, name: f.name, size: bytes.byteLength, at: Date.now() });
+      const spaceId = spaceForContentUrl(url, space);
+      await cacheContent(url, { bytes, mime, name: f.name, size: bytes.byteLength, at: Date.now(), spaceId });
     } catch {
       break; // network died mid-warm — stop trying
     }
   }
+}
+
+// ── available offline (per-device pins) ───────────────────────────────────────
+// "Available offline" is a guarantee distinct from star (a synced bookmark) and from the
+// per-space cache budget (an opportunistic LRU cap): a pinned file/folder is proactively
+// downloaded and never evicted. The pin set lives client-side (see offline-cache.ts); these
+// helpers annotate listings with the resulting state, toggle pins, and reconcile the cache.
+
+/** Whether an item is currently kept offline: explicitly pinned, or under a pinned folder
+ *  (a folder item is "offline" only when it is itself the pinned folder). `space` is the
+ *  UI space token the listing was loaded for. */
+function isOffline(pins: Pins, item: FileItem, space: string): boolean {
+  const dir = item.path ?? "";
+  if (item.kind === "folder") return pins.folders.some((f) => f.space === space && f.path === dir);
+  if (pins.files.includes(item.id)) return true;
+  return pins.folders.some(
+    (f) => f.space === space && (f.path === "" || dir === f.path || dir.startsWith(f.path + "/")),
+  );
+}
+
+/** Tag each item with its offline state for the current space (one pin-set read). */
+async function annotateOffline(items: FileItem[], space?: string): Promise<FileItem[]> {
+  const pins = await readPins();
+  const sp = space ?? "";
+  for (const it of items) it.offline = isOffline(pins, it, sp);
+  return items;
+}
+
+/** Is this single item kept available offline? (For a viewer's own toggle.) */
+export async function isItemOffline(item: FileItem, space?: string): Promise<boolean> {
+  return isOffline(await readPins(), item, space ?? "");
+}
+
+/**
+ * Pin or unpin a file/folder for offline use, then reconcile the cache. Folder pins are
+ * recursive. Per-device and best-effort: the toggle persists immediately; the byte
+ * download happens in `reconcilePins` and silently retries on the next trigger if offline.
+ */
+export async function setItemOffline(item: FileItem, space: string | undefined, on: boolean): Promise<void> {
+  if (item.kind === "folder") await setFolderPinned(space, item.path ?? "", on);
+  else await setFilePinned(item.id, on);
+  // The pin (intent) is now persisted — that's what the badge reflects. Sync the actual
+  // bytes in the background so the toggle returns immediately even for large files/folders.
+  void reconcilePins();
+}
+
+/**
+ * Make the content cache match the pin set: download + protect (flag `pinned`) the bytes of
+ * every pinned file — expanding folder pins through the local mirror — and release anything
+ * no longer pinned so the budget can reclaim it. Idempotent; safe to call on every sync.
+ * Best-effort: a fetch failure leaves that file to warm on the next pass (or next open).
+ */
+export async function reconcilePins(): Promise<void> {
+  const pins = await readPins();
+  // Resolve every pinned target to its content URL (the cache key), with the space + name
+  // we know, deduped (a file pinned directly and via its folder is one entry).
+  const wanted = new Map<string, { space: string; name: string }>();
+  for (const id of pins.files) {
+    const url = contentUrl(id);
+    wanted.set(url, { space: spaceForContentUrl(url), name: "" });
+  }
+  let folderRows = 0;
+  for (const f of pins.folders) {
+    const rows = await mirrorFilesUnder(f.space, f.path);
+    folderRows += rows.length;
+    for (const row of rows) {
+      const url = contentUrl(row.id);
+      wanted.set(url, { space: f.space || spaceForContentUrl(url), name: row.name });
+    }
+  }
+  // Mirror not ready yet (folder pins exist but resolved to nothing): protect what we can
+  // but skip the release pass, so already-pinned bytes aren't unprotected in the window
+  // before the post-sync reconcile re-expands the folders.
+  const mirrorPending = pins.folders.length > 0 && folderRows === 0;
+  // Protect what's pinned: keep already-cached bytes (just flag them), fetch the rest.
+  for (const [url, info] of wanted) {
+    try {
+      if (await hasContent(url)) {
+        await markContentPinned(url, true);
+        continue;
+      }
+      const res = await apiFetch(url);
+      if (!res.ok) continue;
+      const bytes = await res.arrayBuffer();
+      const mime = res.headers.get("content-type") ?? "application/octet-stream";
+      const etag = res.headers.get("etag") ?? undefined;
+      await cacheContent(url, {
+        bytes,
+        mime,
+        name: info.name,
+        size: bytes.byteLength,
+        at: Date.now(),
+        spaceId: info.space,
+        etag,
+        pinned: true,
+      });
+    } catch {
+      break; // offline mid-reconcile — stop; the next trigger retries
+    }
+  }
+  // Release everything else that was pinned (it becomes evictable again).
+  if (!mirrorPending) await unpinContentExcept(new Set(wanted.keys()));
 }
 
 /** Store bytes content-addressed in a space, skipping the upload if it already exists. Returns the hash. */
@@ -609,6 +901,69 @@ export async function syncConnector(pluginId: string): Promise<{ ok: boolean; er
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
+}
+
+export interface ConnectorStatus {
+  /** A crawl is running, or extraction is still draining — the space is "still loading". */
+  indexing: boolean;
+  /** Files still awaiting text extraction; ticks down as indexing progresses. */
+  pending: number;
+  /** ISO time of the last completed crawl, or null if never indexed. */
+  lastIndexedAt: string | null;
+}
+
+const NOT_INDEXING: ConnectorStatus = { indexing: false, pending: 0, lastIndexedAt: null };
+
+/**
+ * Indexing state of a connector-backed space. DB-only on the server (no NAS/repo
+ * round-trip), so the sidebar can poll it cheaply. Any failure resolves to
+ * "not indexing" rather than throwing — a status hint must never wedge the sidebar.
+ */
+export async function connectorStatus(pluginId: string): Promise<ConnectorStatus> {
+  try {
+    const res = await apiFetch(`/api/connector/${encodeURIComponent(pluginId)}/status`);
+    if (!res.ok) return NOT_INDEXING;
+    return (await res.json()) as ConnectorStatus;
+  } catch {
+    return NOT_INDEXING;
+  }
+}
+
+/** Version-retention policy of a connected space (matches the store's `VersionPolicyKind`). */
+export type VersionPolicy = "all" | "smart" | "days";
+export interface ConnectorSettings {
+  versionPolicy: VersionPolicy;
+  /** Day window when `versionPolicy === "days"` (else null). The server names it `days`. */
+  versionDays: number | null;
+}
+
+/** Same-origin URL of a connector's live indexing-log SSE stream (for `EventSource`). */
+export function connectorLogStreamUrl(pluginId: string): string {
+  return `/api/connector/${encodeURIComponent(pluginId)}/logs/stream`;
+}
+
+/** Read a connected space's version-retention policy. */
+export async function getConnectorSettings(pluginId: string): Promise<ConnectorSettings> {
+  const res = await apiFetch(`/api/connector/${encodeURIComponent(pluginId)}/settings`);
+  if (!res.ok) throw new Error(`load settings failed: ${res.status}`);
+  const raw = (await res.json()) as { policy: VersionPolicy; days: number | null };
+  return { versionPolicy: raw.policy, versionDays: raw.days };
+}
+
+/** Set a connected space's version-retention policy (owner only on the server). */
+export async function setConnectorSettings(
+  pluginId: string,
+  versionPolicy: VersionPolicy,
+  versionDays: number | null,
+): Promise<ConnectorSettings> {
+  const res = await apiFetch(`/api/connector/${encodeURIComponent(pluginId)}/settings`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ versionPolicy, versionDays }),
+  });
+  if (!res.ok) throw new Error(`save settings failed: ${res.status}`);
+  const raw = (await res.json()) as { policy: VersionPolicy; days: number | null };
+  return { versionPolicy: raw.policy, versionDays: raw.days };
 }
 
 /** Create a shared (group) space, optionally with a sidebar icon + accent color. */

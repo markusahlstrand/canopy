@@ -454,6 +454,20 @@ describe("FileService over libsql", () => {
     expect(item.sharedWith).not.toContain("Me"); // owner's own grant is excluded
   });
 
+  it("getFileForDisplay returns a single file enriched like a listing item", async () => {
+    await upsertUser(db, { sub: USER, email: "me@x.com", name: "Me" });
+    const f = await upload("doc.md", "hi");
+    await svc.shareGrant({ sub: USER }, f.id, { subjectType: "email", subjectId: "friend@x.com", role: "viewer" });
+
+    const item = await svc.getFileForDisplay({ sub: USER }, f.id);
+    expect(item.name).toBe("doc.md");
+    expect(item.ownerLabel).toBe("Me");
+    expect(item.sharedWith).toContain("friend@x.com");
+    expect(item.version?.size).toBe(2);
+    // same access control as getFile — a stranger is refused
+    await expect(svc.getFileForDisplay({ sub: "intruder" }, f.id)).rejects.toBeInstanceOf(PermissionError);
+  });
+
   it("getByPath resolves a file by its virtual path (for WebDAV)", async () => {
     await upload("lease.pdf", "x", { path: "Documents" });
     expect((await svc.getByPath(USER, space, "Documents/lease.pdf"))?.name).toBe("lease.pdf");

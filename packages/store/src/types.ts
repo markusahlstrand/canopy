@@ -79,7 +79,18 @@ export interface Space {
   icon: string | null;
   /** Optional accent color — an HSL triplet like "145 33% 36%". */
   color: string | null;
+  /**
+   * Version-retention policy for this space's files. `"smart"` (the default) thins the
+   * history on the tiered curve; `"all"` keeps every version; `"days"` keeps only the
+   * last {@link versionDays} days. The current + pinned versions survive any policy.
+   */
+  versionPolicy: VersionPolicyKind;
+  /** Retained-day window when {@link versionPolicy} is `"days"` (else null). */
+  versionDays: number | null;
 }
+
+/** The retention policy a space applies to its files' version history. */
+export type VersionPolicyKind = "all" | "smart" | "days";
 
 /** Directory entry, upserted on login so files can be shared by email. */
 export interface User {

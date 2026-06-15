@@ -30,6 +30,12 @@ The key bits:
   refcounts, permissions). The schema is applied by a migration runner on first request.
 - `r2_buckets` — the `BUCKET` binding holds the content-addressed **blobs**. Workers have no
   filesystem, so on Cloudflare the drive is always D1 + R2 (the libsql/fs adapters are Node-only).
+- `durable_objects` — `DOCWORKER` (the document-parser container, below) and `SPACE_CHANNEL`, a
+  tiny per-space Durable Object that pushes the offline mirror's live "go pull" SSE nudges.
+- `workflows` — `CONNECTOR_INDEX` (`ConnectorIndexWorkflow`), the durable crawl that indexes a
+  connected NAS/repo one folder per step. Absent on Node, which uses an in-process runner instead.
+  Each is provisioned on first deploy like the bindings above; the DO + Workflow classes are
+  exported from `worker-cf.ts`. (Node needs none of these — it runs the same logic in-process.)
 
 ### Config: committed and ID-less (resource provisioning)
 

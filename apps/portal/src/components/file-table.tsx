@@ -18,6 +18,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import type { FileKind } from "@/lib/mock-data";
@@ -46,6 +47,79 @@ interface FileTableProps {
   /** Drop a dragged file into a folder. Both items come from this table. */
   onMove?: (file: FileItem, folder: FileItem) => void;
   pluginMenuItems: (kind: FileKind) => PluginMenuItem[];
+  /** When a preview is docked open beside the list, a plain click swaps it to the
+   *  clicked file (Drive/Finder-style) instead of waiting for a double-click. */
+  previewOpen?: boolean;
+  /** A cold load is in flight. With nothing cached to show yet, render skeleton
+   *  placeholders instead of an empty table (gated on `files.length === 0`, so a
+   *  background re-sync over already-listed files never flashes the skeleton). */
+  loading?: boolean;
+}
+
+// Varied bar widths so skeleton rows/cards read as real names, not a grid of equals.
+const SKELETON_NAME_W = ["w-40", "w-56", "w-32", "w-48", "w-64", "w-36", "w-52", "w-44"];
+
+function FileTableSkeleton({ view }: { view: "list" | "grid" }) {
+  if (view === "grid") {
+    return (
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3" aria-hidden>
+        {Array.from({ length: 12 }).map((_, i) => (
+          <div key={i} className="flex flex-col gap-2.5 rounded-lg border p-3.5">
+            <Skeleton className="size-[38px] rounded-lg" />
+            <Skeleton className={cn("h-3.5", SKELETON_NAME_W[i % SKELETON_NAME_W.length])} />
+            <div className="flex items-center justify-between">
+              <Skeleton className="h-3 w-12" />
+              <Skeleton className="size-5 rounded-full" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-hidden rounded-lg border" aria-hidden>
+      <table className="w-full border-collapse text-[14px]">
+        <thead>
+          <tr className="border-b bg-muted/40">
+            <th className="w-9 px-3 py-2.5" />
+            {COLUMNS.map((col) => (
+              <th key={col.key} className={cn("px-3 py-2.5", col.className)}>
+                <span className="text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {col.label}
+                </span>
+              </th>
+            ))}
+            <th className="w-10" />
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <tr key={i} className="border-t" style={{ height: "var(--row-h)" }}>
+              <td className="px-3">
+                <Skeleton className="size-4 rounded" />
+              </td>
+              <td className="px-3">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="size-7 rounded" />
+                  <Skeleton className={cn("h-3.5", SKELETON_NAME_W[i % SKELETON_NAME_W.length])} />
+                </div>
+              </td>
+              <td className="px-3">
+                <Skeleton className="h-3.5 w-16" />
+              </td>
+              <td className="px-3">
+                <Skeleton className="h-3 w-14" />
+              </td>
+              <td className="px-3">
+                <Skeleton className="ml-auto h-3 w-10" />
+              </td>
+              <td className="px-2" />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 /** A real file the user can pick up (folders and synthetic rows aren't draggable). */
@@ -84,6 +158,10 @@ function RowActions({ file, onAction }: { file: FileItem; onAction: (action: str
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => onAction("Rename", file)}>Rename</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onAction("Star", file)}>Star</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onAction("Offline", file)}>
+          <Icon name={file.offline ? "circle-check" : "cloud"} size={15} />
+          {file.offline ? "Remove download" : "Available offline"}
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onAction("Move", file)}>Move</DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onSelect={() => onAction("Delete", file)}>
@@ -105,6 +183,8 @@ export function FileTable({
   onAction,
   onMove,
   pluginMenuItems,
+  previewOpen = false,
+  loading = false,
 }: FileTableProps) {
   const lastIndex = useRef<number | null>(null);
   // Internal file→folder drag-and-drop. The dragged file is held in a ref;
@@ -160,6 +240,7 @@ export function FileTable({
 
   function handleRowClick(e: React.MouseEvent, index: number, id: string) {
     const next = new Set(selection);
+    const plain = !e.shiftKey && !e.metaKey && !e.ctrlKey;
     if (e.shiftKey && lastIndex.current != null) {
       const [a, b] = [lastIndex.current, index].sort((x, y) => x - y);
       for (let i = a; i <= b; i++) next.add(files[i]!.id);
@@ -173,9 +254,17 @@ export function FileTable({
       lastIndex.current = index;
     }
     onSelectionChange(next);
+    // With the preview docked open, a plain click swaps it to the clicked file so
+    // browsing (e.g. flipping through images) is one click each. Modifier-clicks build
+    // a selection, and folders still need a double-click to navigate, so leave those be.
+    if (plain && previewOpen && files[index]!.kind !== "folder") onOpen(files[index]!);
   }
 
   const allSelected = files.length > 0 && files.every((f) => selection.has(f.id));
+
+  // Cold load: nothing cached to show yet. (Navigating between cached folders keeps
+  // the previous list visible until the new one resolves, so no skeleton there.)
+  if (loading && files.length === 0) return <FileTableSkeleton view={view} />;
 
   if (view === "grid") {
     return (
@@ -198,7 +287,10 @@ export function FileTable({
           >
             <div className="flex items-start justify-between">
               <FileIcon kind={f.kind} size={38} />
-              {f.starred && <Star size={14} className="fill-warning text-warning" />}
+              <div className="flex items-center gap-1">
+                {f.offline && <Icon name="circle-check" size={14} className="text-primary" />}
+                {f.starred && <Star size={14} className="fill-warning text-warning" />}
+              </div>
             </div>
             <div className="truncate text-[13.5px] font-medium">{f.name}</div>
             <div className="flex items-center justify-between">
@@ -283,6 +375,7 @@ export function FileTable({
                         <FileIcon kind={f.kind} />
                         <span className="truncate font-medium">{f.name}</span>
                         {f.starred && <Star size={13} className="shrink-0 fill-warning text-warning" />}
+                        {f.offline && <Icon name="circle-check" size={13} className="shrink-0 text-primary" />}
                         {f.labels?.slice(0, 2).map((l) => (
                           <span
                             key={l}
@@ -314,6 +407,10 @@ export function FileTable({
                   <ContextMenuSeparator />
                   <ContextMenuItem onSelect={() => onAction("Rename", f)}>Rename</ContextMenuItem>
                   <ContextMenuItem onSelect={() => onAction("Star", f)}>Star</ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onAction("Offline", f)}>
+                    <Icon name={f.offline ? "circle-check" : "cloud"} size={15} />
+                    {f.offline ? "Remove download" : "Available offline"}
+                  </ContextMenuItem>
                   <ContextMenuItem onSelect={() => onAction("Move", f)}>Move</ContextMenuItem>
                   {pluginItems.length > 0 && <ContextMenuSeparator />}
                   {pluginItems.map((item) => (

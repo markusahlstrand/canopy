@@ -71,7 +71,14 @@ export const DOCS_PLUGIN_ID = "documentation";
  * viewers (image/pdf/markdown) so common file types preview out of the box;
  * other viewers (code, univer) are installed from the store on demand.
  */
-export const DEFAULT_INSTALLED = ["calendar", "tasks", "image-viewer", "pdf-viewer", "markdown-editor"];
+export const DEFAULT_INSTALLED = [
+  "calendar",
+  "tasks",
+  "image-viewer",
+  "pdf-viewer",
+  "markdown-editor",
+  "model-editor",
+];
 
 /**
  * Signed-out / anonymous visitors also get Documentation, which doubles as the
