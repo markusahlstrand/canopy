@@ -42,12 +42,21 @@ export function setCustomViewers(viewers: InstalledViewer[]): void {
  * the box.
  */
 export function findViewer(name: string, mime?: string, installedIds?: string[]): InstalledViewer | undefined {
+  const candidates = [...CUSTOM_VIEWERS, ...VIEWERS].filter((v) => !installedIds || installedIds.includes(v.plugin));
+  // A multi-part suffix pattern (e.g. `.arazzo.yaml`) is more specific than a bare
+  // extension, so it wins over a generic viewer that also claims `.yaml`.
+  // `viewerMatches` only sees the final extension, so check these against the whole
+  // name here, before falling back to extension/MIME matching.
+  const lname = name.toLowerCase();
+  const specific = candidates.find((v) =>
+    v.match.some((raw) => {
+      const pat = raw.toLowerCase().trim();
+      return pat.startsWith(".") && pat.indexOf(".", 1) > 0 && lname.endsWith(pat);
+    }),
+  );
+  if (specific) return specific;
   const ext = name.split(".").pop();
-  return [...CUSTOM_VIEWERS, ...VIEWERS].find((v) => {
-    if (!viewerMatches(v.match, { mime, ext })) return false;
-    if (installedIds && !installedIds.includes(v.plugin)) return false;
-    return true;
-  });
+  return candidates.find((v) => viewerMatches(v.match, { mime, ext }));
 }
 
 /** A new-file type the host's "New" menu can offer: a contribution + its owning plugin. */

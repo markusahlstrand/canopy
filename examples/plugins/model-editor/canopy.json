@@ -20,6 +20,20 @@
         "match": [".prisma", "text/x-prisma"],
         "fill": true,
         "immersive": true
+      },
+      {
+        "id": "typespec",
+        "title": "Spec Editor",
+        "match": [".tsp", "text/x-typespec"],
+        "fill": true,
+        "immersive": true
+      },
+      {
+        "id": "arazzo",
+        "title": "Spec Editor",
+        "match": [".arazzo", ".arazzo.yaml", ".arazzo.yml", ".arazzo.json"],
+        "fill": true,
+        "immersive": true
       }
     ],
     "creators": [
@@ -31,6 +45,15 @@
         "extension": ".prisma",
         "mime": "text/x-prisma",
         "template": "// Prisma schema — edit visually in the Model Editor\n\ndatasource db {\n  provider = \"postgresql\"\n  url      = env(\"DATABASE_URL\")\n}\n\ngenerator client {\n  provider = \"prisma-client-js\"\n}\n\nmodel Example {\n  id   String @id @default(cuid())\n  name String\n}\n"
+      },
+      {
+        "id": "typespec",
+        "label": "TypeSpec API",
+        "icon": "file-code",
+        "defaultName": "main",
+        "extension": ".tsp",
+        "mime": "text/x-typespec",
+        "template": "import \"@typespec/http\";\n\nusing TypeSpec.Http;\n\n@service(#{ title: \"My API\" })\nnamespace MyApi;\n\nmodel Item {\n  @key id: string;\n  name: string;\n}\n\n@route(\"/items\")\ninterface Items {\n  @get\n  @operationId(\"listItems\")\n  list(): Item[];\n}\n"
       }
     ],
     "store": {

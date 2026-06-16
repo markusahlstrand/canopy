@@ -1,0 +1,779 @@
+openapi: 3.0.0
+info:
+  title: Canopy Drive
+  description: |-
+    Canopy — an extensible, plugin-driven portal. This contract covers the
+    fundamentals of the drive HTTP API: spaces, files (with versions), the
+    content-addressed upload flow, and full-text search. It is intentionally
+    partial — connectors, sharing, comments, plugins, MCP and AI endpoints are
+    out of scope here.
+
+    All endpoints are bearer-authenticated unless noted; the personal space is
+    implied when no `space` query is given.
+  version: 0.0.0
+tags: []
+paths:
+  /api/files:
+    get:
+      operationId: listFiles
+      description: |-
+        List one folder of a space. Defaults to the personal space root; pass
+        `space` and/or `path` to target a folder, or `trash`/`shared` to switch view.
+      parameters:
+        - name: space
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: trash
+          in: query
+          required: false
+          schema:
+            type: boolean
+          explode: false
+        - name: shared
+          in: query
+          required: false
+          schema:
+            type: boolean
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Listing'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createFile
+      description: |-
+        Create a file record plus its first version. The blob must already be
+        prepared and uploaded (see `prepareUpload` / `commitUpload`).
+      parameters:
+        - name: space
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFile'
+  /api/files/{id}:
+    get:
+      operationId: getFile
+      description: Fetch a single file (joined with its current version) for display.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      operationId: deleteFile
+      description: Move a file to the trash (soft delete).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/files/{id}/content:
+    get:
+      operationId: getFileContent
+      description: Download the current version's bytes.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/files/{id}/metadata:
+    patch:
+      operationId: updateFileMetadata
+      description: Patch a file's freeform metadata (e.g. move it by changing `path`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: {}
+  /api/files/{id}/restore:
+    post:
+      operationId: restoreFile
+      description: Restore a trashed file.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/files/{id}/versions:
+    get:
+      operationId: listVersions
+      description: List a file's version history.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileVersion'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/overview:
+    get:
+      operationId: getOverview
+      description: Lightweight stats (file count + bytes used) for a space.
+      parameters:
+        - name: space
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Overview'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/search:
+    get:
+      operationId: search
+      description: Full-text search across the files the caller can read. Empty `q` → no hits.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+          explode: false
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResults'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/spaces:
+    get:
+      operationId: listSpaces
+      description: List the spaces the caller can read (personal, group, and connected).
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Space'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createSpace
+      description: Create a shared (group) space.
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Space'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSpace'
+  /api/spaces/{id}:
+    patch:
+      operationId: renameSpace
+      description: Rename a space. Owner only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Space'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+    delete:
+      operationId: deleteSpace
+      description: Delete a space. Owner only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/uploads/prepare:
+    post:
+      operationId: prepareUpload
+      description: |-
+        Reserve an upload for content-addressed bytes. If a blob with this hash
+        already exists, the response says so and the PUT can be skipped.
+      parameters:
+        - name: space
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadTicket'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrepareUpload'
+  /api/uploads/{token}:
+    put:
+      operationId: commitUpload
+      description: |-
+        Stream the bytes for a prepared upload. `token` is the claimed SHA-256,
+        re-verified server-side.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommittedBlob'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+security:
+  - BearerAuth: []
+components:
+  schemas:
+    CommittedBlob:
+      type: object
+      required:
+        - hash
+        - size
+      properties:
+        hash:
+          type: string
+        size:
+          type: integer
+          format: int64
+      description: Result of streaming bytes to an upload ticket.
+    ContentSource:
+      type: string
+      enum:
+        - blob
+        - external
+      description: "Where a version's bytes live: a blob Canopy owns, or a pointer into a connected store."
+    CreateFile:
+      type: object
+      required:
+        - name
+        - hash
+      properties:
+        name:
+          type: string
+        hash:
+          type: string
+          description: SHA-256 of the uploaded bytes — ties the record to its prepared blob.
+        mime:
+          type: string
+        path:
+          type: string
+          description: Virtual-folder location within the space.
+        metadata:
+          type: object
+          additionalProperties: {}
+      description: Fields needed to create a file record once its blob has been uploaded.
+    CreateSpace:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        icon:
+          type: string
+          nullable: true
+        color:
+          type: string
+          nullable: true
+      description: Fields accepted when creating a shared (group) space.
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+          format: int32
+          description: HTTP-aligned error code.
+        message:
+          type: string
+    File:
+      type: object
+      required:
+        - id
+        - ownerId
+        - name
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        ownerId:
+          type: string
+        name:
+          type: string
+        currentVersionId:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: {}
+          description: Freeform JSON. `path` holds the virtual-folder location (e.g. "Documents/2026").
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        deletedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set when the file is in the trash.
+        version:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/FileVersion'
+          nullable: true
+          description: The current version, joined in.
+        sharedWith:
+          type: array
+          items:
+            type: string
+          description: Labels (emails / names) the file is shared with, beyond its owner.
+        ownerLabel:
+          type: string
+      description: 'A file: a mutable record that points at its current version, joined with that version.'
+    FileVersion:
+      type: object
+      required:
+        - id
+        - fileId
+        - source
+        - size
+        - createdAt
+        - createdBy
+        - keep
+      properties:
+        id:
+          type: string
+        fileId:
+          type: string
+        source:
+          $ref: '#/components/schemas/ContentSource'
+        connectorId:
+          type: string
+          nullable: true
+          description: Connection id when `source` is `external`, else null.
+        mime:
+          type: string
+          nullable: true
+        size:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        keep:
+          type: boolean
+          description: 'Pinned: retention never prunes a kept version.'
+      description: Binds a file to its content at a point in time.
+    Folder:
+      type: object
+      required:
+        - name
+        - path
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+      description: A folder entry within a space.
+    Listing:
+      type: object
+      required:
+        - path
+        - files
+        - folders
+      properties:
+        path:
+          type: string
+          description: The folder path that was listed (root = "").
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/File'
+        folders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Folder'
+        spaceName:
+          type: string
+          description: Present for connected spaces.
+      description: "One folder's listing within a space: the files and subfolders at `path`."
+    Overview:
+      type: object
+      required:
+        - files
+        - bytes
+      properties:
+        files:
+          type: integer
+          format: int64
+        bytes:
+          type: integer
+          format: int64
+      description: Lightweight per-space stats for the dashboard.
+    PrepareUpload:
+      type: object
+      required:
+        - hash
+      properties:
+        hash:
+          type: string
+          description: SHA-256 of the bytes to upload.
+        size:
+          type: integer
+          format: int64
+      description: Request to reserve an upload slot for content with the given hash.
+    Role:
+      type: string
+      enum:
+        - owner
+        - editor
+        - viewer
+      description: Resource-level role. owner ⊃ editor ⊃ viewer.
+    SearchHit:
+      type: object
+      required:
+        - id
+        - spaceId
+        - score
+        - title
+      properties:
+        id:
+          type: string
+        spaceId:
+          type: string
+        score:
+          type: number
+          format: double
+        title:
+          type: string
+        snippet:
+          type: string
+        kind:
+          type: string
+        path:
+          type: string
+        modifiedAt:
+          type: string
+          format: date-time
+      description: One full-text search hit, scored and scoped to the caller's readable spaces.
+    SearchResults:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchHit'
+        cursor:
+          type: string
+          description: Present when more results are available.
+      description: A page of search hits.
+    Space:
+      type: object
+      required:
+        - id
+        - name
+        - kind
+        - role
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/SpaceKind'
+        role:
+          allOf:
+            - $ref: '#/components/schemas/Role'
+          description: The caller's role in this space.
+        mounted:
+          type: boolean
+          description: Show inline in "My Drive" (always true for the personal space).
+        readonly:
+          type: boolean
+          description: Read-only spaces (an indexed repo) refuse writes.
+        icon:
+          type: string
+          nullable: true
+          description: Optional sidebar icon name.
+        color:
+          type: string
+          nullable: true
+          description: Optional accent color — an HSL triplet like "145 33% 36%".
+      description: A space as returned to the caller, including their role in it.
+    SpaceKind:
+      type: string
+      enum:
+        - personal
+        - group
+        - connected
+      description: |-
+        A drive: one `personal` space per user, shared `group` spaces (e.g. a family),
+        and read-only `connected` spaces — a persisted index over a user's connected
+        backend (a Synology NAS, a GitHub repo).
+    UploadTicket:
+      type: object
+      required:
+        - exists
+      properties:
+        exists:
+          type: boolean
+          description: True when the content-addressed blob already exists — skip the PUT.
+        upload:
+          type: object
+          properties:
+            method:
+              type: string
+              enum:
+                - PUT
+            url:
+              type: string
+          required:
+            - method
+            - url
+      description: Where (and whether) to upload. When `exists` is true the blob is already stored.
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: Bearer
+servers:
+  - url: /
+    description: The Canopy API, mounted under /api by the worker.
+    variables: {}

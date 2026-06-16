@@ -1,0 +1,154 @@
+# Generated build artifact — do not hand-edit. Emitted from main.tsp by @typespec/openapi3.
+openapi: 3.0.0
+info:
+  title: Pet Store
+  version: "0.0.0"
+tags: []
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      parameters:
+        - name: species
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Species"
+      responses:
+        "200":
+          description: The list of pets.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Pet"
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: createPet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Pet"
+      responses:
+        "200":
+          description: The created pet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The pet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /owners/{ownerId}:
+    get:
+      operationId: getOwner
+      parameters:
+        - name: ownerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The owner.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Owner"
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /owners/{ownerId}/adopt:
+    post:
+      operationId: adoptPet
+      parameters:
+        - name: ownerId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: The owner with the adopted pet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Owner"
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  schemas:
+    Species:
+      type: string
+      enum: [dog, cat, bird]
+    Pet:
+      type: object
+      required: [id, name, species]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        species: { $ref: "#/components/schemas/Species" }
+        age: { type: integer, format: int32 }
+        owner: { $ref: "#/components/schemas/Owner" }
+    Owner:
+      type: object
+      required: [id, fullName, email, pets]
+      properties:
+        id: { type: string }
+        fullName: { type: string }
+        email: { type: string }
+        pets:
+          type: array
+          items: { $ref: "#/components/schemas/Pet" }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: integer, format: int32 }
+        message: { type: string }
