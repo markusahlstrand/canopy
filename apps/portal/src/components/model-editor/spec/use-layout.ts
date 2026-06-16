@@ -16,8 +16,15 @@ export type CommitLayoutFn = (text: string, fileId: string | undefined) => Promi
 export interface LayoutController {
   views: LayoutView[];
   activeViewId: string;
+  /** Entity (ER) positions for the active view. */
   positions: Record<string, XY>;
   hasOverrides: boolean;
+  /** Flow-step positions for the active view. */
+  stepPositions: Record<string, XY>;
+  hasStepOverrides: boolean;
+  /** Active tag include-filter for this view (empty ⇒ show all). */
+  tagFilter: string[];
+  setTagFilter: (tags: string[]) => void;
   dirty: boolean;
   committing: boolean;
   canCommit: boolean;
@@ -27,6 +34,8 @@ export interface LayoutController {
   deleteView: () => void;
   move: (id: string, xy: XY) => void;
   resetActive: () => void;
+  moveStep: (id: string, xy: XY) => void;
+  resetSteps: () => void;
   commit: () => void;
 }
 
@@ -82,6 +91,8 @@ export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: Co
 
   const activeView = working.views.find((v) => v.id === activeViewId) ?? working.views[0];
   const positions = activeView?.entities ?? {};
+  const stepPositions = activeView?.steps ?? {};
+  const tagFilter = activeView?.tagFilter ?? [];
 
   const mutateActive = useCallback(
     (fn: (v: LayoutView) => void) => {
@@ -97,6 +108,10 @@ export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: Co
 
   const move = useCallback((id: string, xy: XY) => mutateActive((v) => void (v.entities[id] = xy)), [mutateActive]);
   const resetActive = useCallback(() => mutateActive((v) => void (v.entities = {})), [mutateActive]);
+  // Older drafts/views may predate `steps`; default the map before writing into it.
+  const moveStep = useCallback((id: string, xy: XY) => mutateActive((v) => void ((v.steps ??= {})[id] = xy)), [mutateActive]);
+  const resetSteps = useCallback(() => mutateActive((v) => void (v.steps = {})), [mutateActive]);
+  const setTagFilter = useCallback((tags: string[]) => mutateActive((v) => void (v.tagFilter = tags)), [mutateActive]);
 
   const switchView = useCallback((id: string) => setActiveViewId(id), []);
 
@@ -147,6 +162,10 @@ export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: Co
     activeViewId: activeView?.id ?? activeViewId,
     positions,
     hasOverrides: Object.keys(positions).length > 0,
+    stepPositions,
+    hasStepOverrides: Object.keys(stepPositions).length > 0,
+    tagFilter,
+    setTagFilter,
     dirty,
     committing,
     canCommit: !!onCommit,
@@ -156,6 +175,8 @@ export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: Co
     deleteView,
     move,
     resetActive,
+    moveStep,
+    resetSteps,
     commit,
   };
 }

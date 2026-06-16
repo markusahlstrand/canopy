@@ -9,14 +9,16 @@ export const SIDECAR_NAME = "canopy.layout.json";
 const isPos = (v: unknown): v is { x: number; y: number } =>
   !!v && typeof v === "object" && typeof (v as any).x === "number" && typeof (v as any).y === "number";
 
-function coerceEntities(raw: unknown): Record<string, { x: number; y: number }> {
+function coercePositions(raw: unknown): Record<string, { x: number; y: number }> {
   const out: Record<string, { x: number; y: number }> = {};
   if (raw && typeof raw === "object") for (const [k, v] of Object.entries(raw)) if (isPos(v)) out[k] = { x: v.x, y: v.y };
   return out;
 }
 
+const coerceTags = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((t): t is string => typeof t === "string") : []);
+
 export function emptySidecar(): LayoutSidecar {
-  return { version: 1, views: [{ id: "default", name: "Default", entities: {} }] };
+  return { version: 1, views: [{ id: "default", name: "Default", entities: {}, steps: {}, tagFilter: [] }] };
 }
 
 /** Parse sidecar JSON, migrating a bare positions map or single-view shape to views[]. */
@@ -29,20 +31,22 @@ export function parseSidecar(text: string): LayoutSidecar {
   }
   if (!doc || typeof doc !== "object") return emptySidecar();
 
-  // Current shape: { version, views: [{ id, name, entities }] }
+  // Current shape: { version, views: [{ id, name, entities, steps, tagFilter }] }
   if (Array.isArray(doc.views) && doc.views.length) {
     const views: LayoutView[] = doc.views.map((v: any, i: number) => ({
       id: typeof v?.id === "string" ? v.id : uid("view"),
       name: typeof v?.name === "string" && v.name.trim() ? v.name : `View ${i + 1}`,
-      entities: coerceEntities(v?.entities),
+      entities: coercePositions(v?.entities),
+      steps: coercePositions(v?.steps),
+      tagFilter: coerceTags(v?.tagFilter),
     }));
     return { version: 1, views };
   }
-  // Single-view: { entities: {...} }
-  if (doc.entities) return { version: 1, views: [{ id: "default", name: "Default", entities: coerceEntities(doc.entities) }] };
-  // Flat map: { "Model.Id": {x,y}, ... }
-  const flat = coerceEntities(doc);
-  if (Object.keys(flat).length) return { version: 1, views: [{ id: "default", name: "Default", entities: flat }] };
+  // Single-view: { entities: {...}, steps: {...} }
+  if (doc.entities || doc.steps) return { version: 1, views: [{ id: "default", name: "Default", entities: coercePositions(doc.entities), steps: coercePositions(doc.steps), tagFilter: coerceTags(doc.tagFilter) }] };
+  // Flat map: { "Model.Id": {x,y}, ... } — pre-views files only ever held entity positions.
+  const flat = coercePositions(doc);
+  if (Object.keys(flat).length) return { version: 1, views: [{ id: "default", name: "Default", entities: flat, steps: {}, tagFilter: [] }] };
   return emptySidecar();
 }
 
@@ -50,4 +54,4 @@ export function serializeSidecar(sidecar: LayoutSidecar): string {
   return JSON.stringify(sidecar, null, 2) + "\n";
 }
 
-export const newView = (name: string): LayoutView => ({ id: uid("view"), name, entities: {} });
+export const newView = (name: string): LayoutView => ({ id: uid("view"), name, entities: {}, steps: {}, tagFilter: [] });

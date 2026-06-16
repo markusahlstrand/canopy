@@ -789,7 +789,7 @@ export function createApp(deps: AppDeps) {
     return c.json(await drive!.service.addSpaceMember(caller, c.req.param("id")!, email, role), 201);
   }));
 
-  app.delete("/api/spaces/:id/members", driveRoute(async (c, caller) => {
+  app.post("/api/spaces/:id/members/remove", driveRoute(async (c, caller) => {
     const { sub } = await c.req.json<{ sub: string }>();
     if (!sub) return c.json({ error: "sub required" }, 400);
     await drive!.service.removeSpaceMember(caller, c.req.param("id")!, sub);
@@ -1097,7 +1097,7 @@ export function createApp(deps: AppDeps) {
     return c.json({ ok: true }, 201);
   }));
 
-  app.delete("/api/files/:id/grants", driveRoute(async (c, caller) => {
+  app.post("/api/files/:id/grants/unshare", driveRoute(async (c, caller) => {
     const body = await c.req.json<{ subjectType: "user" | "space" | "email"; subjectId: string; role: "owner" | "editor" | "viewer" }>();
     await drive!.service.unshareGrant(caller, c.req.param("id")!, body);
     return c.json({ ok: true });
@@ -1123,7 +1123,7 @@ export function createApp(deps: AppDeps) {
     return c.json({ ok: true }, 201);
   }));
 
-  app.delete("/api/spaces/:id/folder-grants", driveRoute(async (c, caller) => {
+  app.post("/api/spaces/:id/folder-grants/unshare", driveRoute(async (c, caller) => {
     const body = await c.req.json<{ path: string; subjectType: "user" | "space" | "email"; subjectId: string; role: "owner" | "editor" | "viewer" }>();
     await drive!.service.unshareFolderGrant(caller, c.req.param("id")!, body.path, body);
     return c.json({ ok: true });

@@ -52,6 +52,8 @@ export interface SpecModel {
   enumValues?: string[];
   /** `@error`-decorated models render distinctly and are treated as error shapes. */
   isError?: boolean;
+  /** Tags from `@tag("…")` or `@extension("x-tags", #[…])`, for view filtering. */
+  tags?: string[];
   /** File the declaration came from. */
   file?: string;
 }
@@ -91,6 +93,8 @@ export interface SpecEndpoint {
   responses: SpecResponse[];
   /** De-duplicated set of model names this op references (params + responses). */
   refModels: string[];
+  /** Tags from `@tag("…")` (the OpenAPI-standard operation grouping). */
+  tags?: string[];
   file?: string;
 }
 
@@ -136,6 +140,8 @@ export interface SpecFlow {
   inputs: string[];
   outputs: string[];
   steps: SpecStep[];
+  /** Tags from the workflow's `x-tags`/`tags` extension, for view filtering. */
+  tags?: string[];
   file?: string;
 }
 
@@ -189,6 +195,13 @@ export interface LayoutView {
   name: string;
   /** model id → position. Missing entities fall back to auto-layout. */
   entities: Record<string, { x: number; y: number }>;
+  /** step id (`${workflowId}::${stepId}`) → position. Missing steps auto-layout. */
+  steps: Record<string, { x: number; y: number }>;
+  /**
+   * Active tag filter for this view: an OR include-list. Empty ⇒ show everything;
+   * otherwise only entities/flows carrying at least one of these tags are shown.
+   */
+  tagFilter: string[];
 }
 
 export interface LayoutSidecar {
@@ -222,6 +235,6 @@ export const emptyGraph = (): ProjectGraph => ({
   diagnostics: [],
   files: { tsp: [], openapi: [], arazzo: [] },
   sourceFiles: [],
-  layout: { version: 1, views: [{ id: "default", name: "Default", entities: {} }] },
+  layout: { version: 1, views: [{ id: "default", name: "Default", entities: {}, steps: {}, tagFilter: [] }] },
   empty: true,
 });

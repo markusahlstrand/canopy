@@ -32,6 +32,8 @@ export interface EntitiesTabProps extends SpecViewProps {
   hasOverrides: boolean;
   /** Include transient DTO models (request/response payloads), not just entities. */
   showDtos: boolean;
+  /** Active tag include-filter (empty ⇒ show all). */
+  tagFilter: string[];
 }
 
 interface EntityNodeData extends Record<string, unknown> {
@@ -71,6 +73,13 @@ function SpecEntityNodeImpl({ data, selected }: NodeProps) {
         {m.kind === "enum" && <span className="rounded bg-muted px-1 py-0.5 font-mono text-[9px] text-muted-foreground">enum</span>}
         {d.isDto && m.kind !== "enum" && <span className="rounded bg-muted px-1 py-0.5 font-mono text-[9px] text-muted-foreground">dto</span>}
       </div>
+      {!!m.tags?.length && (
+        <div className="flex flex-wrap gap-1 border-b px-3 py-1.5">
+          {m.tags.map((t) => (
+            <span key={t} className="rounded-full bg-accent px-1.5 py-0.5 font-mono text-[9px] text-accent-foreground">#{t}</span>
+          ))}
+        </div>
+      )}
       {m.kind === "enum" ? (
         <div className="flex flex-wrap gap-1 px-3 py-2">
           {(m.enumValues ?? []).map((v) => <span key={v} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{v}</span>)}
@@ -93,14 +102,15 @@ function SpecEntityNodeImpl({ data, selected }: NodeProps) {
 const SpecEntityNode = memo(SpecEntityNodeImpl);
 const nodeTypes = { specEntity: SpecEntityNode };
 
-function Graph({ graph, selection, related, onSelect, positions, onMove, onResetLayout, hasOverrides, showDtos }: EntitiesTabProps) {
+function Graph({ graph, selection, related, onSelect, positions, onMove, onResetLayout, hasOverrides, showDtos, tagFilter }: EntitiesTabProps) {
   const { fitView } = useReactFlow();
   // Entities are the default view; DTOs (request/response payloads) are opt-in so the
-  // canvas reads as a data model, not a wire-format dump.
-  const models = useMemo(
-    () => (showDtos ? graph.models : graph.models.filter((m) => m.role !== "dto")),
-    [graph.models, showDtos],
-  );
+  // canvas reads as a data model, not a wire-format dump. An active tag filter then
+  // narrows to models carrying at least one selected tag.
+  const models = useMemo(() => {
+    const base = showDtos ? graph.models : graph.models.filter((m) => m.role !== "dto");
+    return tagFilter.length ? base.filter((m) => m.tags?.some((t) => tagFilter.includes(t))) : base;
+  }, [graph.models, showDtos, tagFilter]);
   const visibleIds = useMemo(() => new Set(models.map((m) => m.id)), [models]);
   const errored = useMemo(
     () => new Set(graph.diagnostics.filter((d) => d.target?.kind === "entity").map((d) => d.target!.id)),

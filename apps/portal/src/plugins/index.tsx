@@ -8,13 +8,9 @@ import { DocumentAiView } from "./document-ai-view";
 
 // Lazy-loaded: pulls react-markdown + remark-gfm into a separate chunk.
 const DocumentationView = lazy(() => import("./documentation-view").then((m) => ({ default: m.DocumentationView })));
-// Model Editor is a trusted first-party React app (React Flow) that is both a
-// standalone view and a `.prisma` file viewer. Lazy so its heavy deps stay out of
-// the main bundle until it's opened. Its `immersive` manifest flags tell the host
-// to give both surfaces the full screen (see file-preview / App).
-const ModelEditorView = lazy(() =>
-  import("@/components/model-editor/model-editor-view").then((m) => ({ default: m.ModelEditorView })),
-);
+// Model Editor is a trusted first-party React app (React Flow) bound to file types
+// only — it's a viewer/editor for `.prisma`/`.tsp`/`.arazzo`, not a standalone app.
+// Lazy so its heavy deps stay out of the main bundle until a matching file opens.
 // Routes a matched file to the right canvas: `.prisma` → the Prisma model editor,
 // `.tsp`/`.arazzo` → the spec editor (TypeSpec + Arazzo, with cross-layer links).
 const ModelEditorFileView = lazy(() =>
@@ -59,7 +55,7 @@ export const PLUGIN_UI: Record<string, PluginUI> = {
   github: { DetailView: GithubView },
   synology: { DetailView: SynologyView },
   "document-ai": { DetailView: DocumentAiView },
-  "model-editor": { DetailView: ModelEditorView, FileView: ModelEditorFileView },
+  "model-editor": { FileView: ModelEditorFileView },
 };
 
 /**

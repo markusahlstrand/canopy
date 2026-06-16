@@ -46,7 +46,6 @@ import { Inspector } from "./inspector";
 import { toPrisma } from "./export";
 import { coerceModel, layout } from "./model-io";
 import { fromPrisma } from "./prisma-parse";
-import { sampleModel } from "./sample";
 import { loadLibrary, saveLibrary, type StoredModel } from "./storage";
 import { useHostApi } from "@/plugins/host";
 import {
@@ -155,18 +154,18 @@ function useColorMode(): "light" | "dark" {
   return dark ? "dark" : "light";
 }
 
-/** Load the saved library, seeding a sample model on first run. */
+const emptyModel = (): DomainModel => ({ name: "Untitled model", version: 1, entities: [], relations: [] });
+
+/** Load the saved library, seeding a blank model on first run. */
 function bootstrap(): { models: StoredModel[]; current: StoredModel } {
   const lib = loadLibrary();
   if (lib.models.length) {
     const current = lib.models.find((m) => m.id === lib.currentId) ?? lib.models[0]!;
     return { models: lib.models, current };
   }
-  const current: StoredModel = { id: uid("mdl"), model: sampleModel(), updatedAt: Date.now() };
+  const current: StoredModel = { id: uid("mdl"), model: emptyModel(), updatedAt: Date.now() };
   return { models: [current], current };
 }
-
-const emptyModel = (): DomainModel => ({ name: "Untitled model", version: 1, entities: [], relations: [] });
 
 /** A .prisma file the editor is bound to (file-viewer mode). */
 export interface FileBinding {

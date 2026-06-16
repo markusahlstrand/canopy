@@ -1,24 +1,37 @@
-import { memo, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo } from "react";
 import {
   Background,
   BackgroundVariant,
   Controls,
   Handle,
   MarkerType,
+  Panel,
   Position,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
   type Edge,
   type Node,
+  type NodeChange,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
-import { layeredPositions } from "./layout";
+import { layeredPositions, type XY } from "./layout";
 import type { SpecStep } from "./graph-types";
 import type { SpecViewProps } from "./view-types";
+
+/** The Flows tab is layout-controlled by the shell, mirroring the Entities tab. */
+export interface FlowsTabProps extends SpecViewProps {
+  /** Saved positions for the active view, by step id. Missing ⇒ auto-layout. */
+  stepPositions: Record<string, XY>;
+  onMoveStep: (id: string, xy: XY) => void;
+  onResetSteps: () => void;
+  hasStepOverrides: boolean;
+  /** Active tag include-filter (empty ⇒ show all workflows). */
+  tagFilter: string[];
+}
 
 interface StepNodeData extends Record<string, unknown> {
   step: SpecStep;
@@ -60,29 +73,37 @@ function StepNodeImpl({ data, selected }: NodeProps) {
 const StepNode = memo(StepNodeImpl);
 
 function FlowLabelImpl({ data }: NodeProps) {
-  const d = data as { label: string };
+  const d = data as { label: string; tags?: string[] };
   return (
-    <div className="rounded-md bg-foreground/5 px-2.5 py-1 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
-      <Icon name="board" size={13} className="mr-1 inline" />
+    <div className="flex items-center gap-1.5 rounded-md bg-foreground/5 px-2.5 py-1 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <Icon name="board" size={13} className="inline" />
       {d.label}
+      {d.tags?.map((t) => (
+        <span key={t} className="rounded-full bg-accent px-1.5 py-0.5 font-mono text-[9px] normal-case tracking-normal text-accent-foreground">#{t}</span>
+      ))}
     </div>
   );
 }
 const FlowLabel = memo(FlowLabelImpl);
 const nodeTypes = { step: StepNode, flowLabel: FlowLabel };
 
-function Graph({ graph, index, selection, related, onSelect }: SpecViewProps) {
+function Graph({ graph, index, selection, related, onSelect, stepPositions, onMoveStep, onResetSteps, hasStepOverrides, tagFilter }: FlowsTabProps) {
   const { fitView } = useReactFlow();
   const errored = useMemo(
     () => new Set(graph.diagnostics.filter((d) => d.target?.kind === "step").map((d) => d.target!.id)),
     [graph.diagnostics],
+  );
+  // Tag filtering is whole-workflow here: a flow shows if it carries a selected tag.
+  const flows = useMemo(
+    () => (tagFilter.length ? graph.flows.filter((f) => f.tags?.some((t) => tagFilter.includes(t))) : graph.flows),
+    [graph.flows, tagFilter],
   );
 
   const { nodes, edges } = useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
     let yOffset = 0;
-    for (const flow of graph.flows) {
+    for (const flow of flows) {
       const pos = layeredPositions(flow.steps.map((s) => ({ id: s.id, deps: s.dependsOn })), { dx: 290, dy: 150 });
       const ys = [...pos.values()].map((p) => p.y);
       const minY = ys.length ? Math.min(...ys) : 0;
@@ -91,7 +112,7 @@ function Graph({ graph, index, selection, related, onSelect }: SpecViewProps) {
         id: `label:${flow.id}`,
         type: "flowLabel",
         position: { x: -200, y: yOffset },
-        data: { label: flow.workflowId },
+        data: { label: flow.workflowId, tags: flow.tags },
         draggable: false,
         selectable: false,
       });
@@ -100,7 +121,7 @@ function Graph({ graph, index, selection, related, onSelect }: SpecViewProps) {
         nodes.push({
           id: s.id,
           type: "step",
-          position: { x: p.x, y: p.y - minY + yOffset },
+          position: stepPositions[s.id] ?? { x: p.x, y: p.y - minY + yOffset },
           data: {
             step: s,
             resolvedOp: !s.operationId || !!index.endpointForStep(s),
@@ -145,33 +166,63 @@ function Graph({ graph, index, selection, related, onSelect }: SpecViewProps) {
       yOffset += maxY - minY + 260;
     }
     return { nodes, edges };
-  }, [graph.flows, index, related, errored, selection, onSelect]);
+  }, [flows, index, related, errored, selection, onSelect, stepPositions]);
+
+  // Drags are reported up to the shell, which stages them (same loop as the ER tab).
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      for (const c of changes) if (c.type === "position" && c.position) onMoveStep(c.id, c.position);
+    },
+    [onMoveStep],
+  );
+
+  const resetLayout = useCallback(() => {
+    onResetSteps();
+    setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 40);
+  }, [onResetSteps, fitView]);
 
   useEffect(() => {
     const t = setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 80);
     return () => clearTimeout(t);
-  }, [graph.flows, fitView]);
+  }, [flows, fitView]);
 
-  if (!graph.flows.length) {
-    return <div className="grid h-full place-items-center text-sm text-muted-foreground">No Arazzo workflows found in this project.</div>;
+  if (!flows.length) {
+    return (
+      <div className="grid h-full place-items-center text-sm text-muted-foreground">
+        {graph.flows.length ? "No workflows match the active tag filter." : "No Arazzo workflows found in this project."}
+      </div>
+    );
   }
   return (
     <ReactFlow
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      onNodesChange={onNodesChange}
       onPaneClick={() => onSelect(null)}
       fitView
       minZoom={0.2}
+      nodesDraggable
       proOptions={{ hideAttribution: true }}
     >
       <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
       <Controls showInteractive={false} />
+      {hasStepOverrides && (
+        <Panel position="top-right">
+          <button
+            onClick={resetLayout}
+            title="Discard this view's manual step positions and re-run auto-layout"
+            className="flex items-center gap-1.5 rounded-md border bg-card px-2.5 py-1.5 text-[12px] font-medium shadow-sm transition hover:bg-accent"
+          >
+            <Icon name="grid" size={13} /> Auto-layout
+          </button>
+        </Panel>
+      )}
     </ReactFlow>
   );
 }
 
-export function FlowsTab(props: SpecViewProps) {
+export function FlowsTab(props: FlowsTabProps) {
   return (
     <ReactFlowProvider>
       <Graph {...props} />

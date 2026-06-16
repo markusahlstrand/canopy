@@ -12,8 +12,14 @@ const VERB_TONE: Record<string, string> = {
   DELETE: "bg-rose-500/10 text-rose-600",
 };
 
+/** The Endpoints list shares the view's tag filter with the graph tabs. */
+export interface EndpointsTabProps extends SpecViewProps {
+  /** Active tag include-filter (empty ⇒ show all). */
+  tagFilter: string[];
+}
+
 /** Endpoints (TypeSpec operations) as a list grouped by their interface/namespace. */
-export function EndpointsTab({ graph, index, selection, related, onSelect, onNavigate }: SpecViewProps) {
+export function EndpointsTab({ graph, index, selection, related, onSelect, onNavigate, tagFilter }: EndpointsTabProps) {
   const errored = useMemo(
     () => new Set(graph.diagnostics.filter((d) => d.target?.kind === "endpoint").map((d) => d.target!.id)),
     [graph.diagnostics],
@@ -21,15 +27,19 @@ export function EndpointsTab({ graph, index, selection, related, onSelect, onNav
   const groups = useMemo(() => {
     const map = new Map<string, SpecEndpoint[]>();
     for (const e of graph.endpoints) {
+      if (tagFilter.length && !e.tags?.some((t) => tagFilter.includes(t))) continue;
       const key = e.group ?? e.namespace ?? "Operations";
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(e);
     }
     return [...map.entries()];
-  }, [graph.endpoints]);
+  }, [graph.endpoints, tagFilter]);
 
   if (!graph.endpoints.length) {
     return <div className="grid h-full place-items-center text-sm text-muted-foreground">No TypeSpec operations found in this project.</div>;
+  }
+  if (!groups.length) {
+    return <div className="grid h-full place-items-center text-sm text-muted-foreground">No operations match the active tag filter.</div>;
   }
 
   return (
@@ -54,6 +64,9 @@ export function EndpointsTab({ graph, index, selection, related, onSelect, onNav
                     </span>
                     <span className="shrink-0 font-mono text-[13px] font-semibold">{e.operationId}</span>
                     {e.route && <span className="truncate font-mono text-[11px] text-muted-foreground">{e.route}</span>}
+                    {e.tags?.map((t) => (
+                      <span key={t} className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 font-mono text-[9px] text-accent-foreground">#{t}</span>
+                    ))}
                     {errored.has(e.id) && <Icon name="alert-triangle" size={13} className="ml-auto shrink-0 text-destructive" />}
                     {!errored.has(e.id) && !!flows.length && (
                       <span className="ml-auto flex shrink-0 items-center gap-1 font-mono text-[10px] text-muted-foreground" title="Called by flows">

@@ -64,6 +64,14 @@ export function SpecEditorView({
   const [showDtos, setShowDtos] = useState(() => !graph.models.some((m) => m.role === "entity"));
   const entityCount = useMemo(() => graph.models.filter((m) => m.role !== "dto").length, [graph.models]);
   const dtoCount = graph.models.length - entityCount;
+  // Every tag declared across the contract + workflows, for the filter picker.
+  const allTags = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of graph.models) m.tags?.forEach((t) => s.add(t));
+    for (const f of graph.flows) f.tags?.forEach((t) => s.add(t));
+    for (const e of graph.endpoints) e.tags?.forEach((t) => s.add(t));
+    return [...s].sort();
+  }, [graph.models, graph.flows, graph.endpoints]);
 
   const index = useMemo(() => new SpecIndex(graph), [graph]);
   const related = useMemo(() => index.related(selection), [index, selection]);
@@ -80,6 +88,8 @@ export function SpecEditorView({
     setReveal((r) => ({ file, line, nonce: (r?.nonce ?? 0) + 1 }));
     setTab("source");
   };
+  const toggleTag = (t: string) =>
+    layout.setTagFilter(layout.tagFilter.includes(t) ? layout.tagFilter.filter((x) => x !== t) : [...layout.tagFilter, t]);
 
   const shared: SpecViewProps = { graph, index, projectKey, selection, related, onSelect, onNavigate, onOpenSource };
 
@@ -114,7 +124,33 @@ export function SpecEditorView({
               <span className="font-mono text-[10px] text-muted-foreground">{dtoCount}</span>
             </Button>
           )}
-          {tab === "entities" && graph.models.length > 0 && (
+          {tab !== "source" && allTags.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant={layout.tagFilter.length ? "secondary" : "outline"} size="sm" className="h-8 gap-1.5" title="Filter this view by tag">
+                  <Icon name="tag" size={14} />
+                  {layout.tagFilter.length ? `${layout.tagFilter.length} tag${layout.tagFilter.length > 1 ? "s" : ""}` : "Tags"}
+                  <Icon name="chevron-down" size={12} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuLabel>Filter by tag</DropdownMenuLabel>
+                {allTags.map((t) => (
+                  <DropdownMenuItem key={t} onSelect={(e) => { e.preventDefault(); toggleTag(t); }} className="gap-2">
+                    <Icon name="circle-check" size={13} className={cn(layout.tagFilter.includes(t) ? "text-primary" : "opacity-0")} />
+                    <span className="flex-1 truncate font-mono text-[12px]">#{t}</span>
+                  </DropdownMenuItem>
+                ))}
+                {layout.tagFilter.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => layout.setTagFilter([])} className="gap-2"><Icon name="restore" size={13} /> Clear filter</DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {((tab === "entities" && graph.models.length > 0) || (tab === "flows" && graph.flows.length > 0)) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="h-8 gap-1.5" title="Saved layout views">
@@ -129,7 +165,7 @@ export function SpecEditorView({
                   <DropdownMenuItem key={v.id} onClick={() => layout.switchView(v.id)} className="gap-2">
                     <Icon name="circle-check" size={13} className={cn(v.id === layout.activeViewId ? "text-primary" : "opacity-0")} />
                     <span className="flex-1 truncate">{v.name}</span>
-                    <span className="font-mono text-[10px] text-muted-foreground">{Object.keys(v.entities).length}</span>
+                    <span className="font-mono text-[10px] text-muted-foreground">{Object.keys(v.entities).length + Object.keys(v.steps ?? {}).length}</span>
                   </DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
@@ -169,10 +205,12 @@ export function SpecEditorView({
               Flows is a separate artifact referencing it. Mount only the active tab so
               each React Flow canvas measures correctly. */}
           {tab === "entities" && (
-            <EntitiesTab {...shared} positions={layout.positions} onMove={layout.move} onResetLayout={layout.resetActive} hasOverrides={layout.hasOverrides} showDtos={showDtos} />
+            <EntitiesTab {...shared} positions={layout.positions} onMove={layout.move} onResetLayout={layout.resetActive} hasOverrides={layout.hasOverrides} showDtos={showDtos} tagFilter={layout.tagFilter} />
           )}
-          {tab === "endpoints" && <EndpointsTab {...shared} />}
-          {tab === "flows" && <FlowsTab {...shared} />}
+          {tab === "endpoints" && <EndpointsTab {...shared} tagFilter={layout.tagFilter} />}
+          {tab === "flows" && (
+            <FlowsTab {...shared} stepPositions={layout.stepPositions} onMoveStep={layout.moveStep} onResetSteps={layout.resetSteps} hasStepOverrides={layout.hasStepOverrides} tagFilter={layout.tagFilter} />
+          )}
           {tab === "source" && <SourceTab {...shared} reveal={reveal} />}
         </div>
         {panelOpen && tab !== "source" && (

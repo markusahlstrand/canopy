@@ -59,8 +59,12 @@ interface TopbarProps {
   /** When the current view is a connected space, its connector plugin id — enables the
    *  branch picker (it self-hides for connectors without a branch concept, e.g. a NAS). */
   connectorPluginId?: string | null;
-  /** A branch switch landed — host should reload the view (re-fetch + re-sync). */
-  onBranchSwitched?: () => void;
+  /** The active branch of the connected space, mirrored in the host's URL ("" until probed). */
+  branch?: string;
+  /** The user picked a branch — host persists + re-indexes + updates the URL. */
+  onBranchSwitch?: (name: string) => Promise<void>;
+  /** The picker probed the connector's current branch — host reconciles it with the URL. */
+  onBranchDiscover?: (current: string) => void;
   railAvailable: boolean;
   railOpen: boolean;
   onToggleRail: () => void;
@@ -86,7 +90,9 @@ export function Topbar({
   onUpload,
   readonly,
   connectorPluginId,
-  onBranchSwitched,
+  branch,
+  onBranchSwitch,
+  onBranchDiscover,
   railAvailable,
   railOpen,
   onToggleRail,
@@ -170,7 +176,9 @@ export function Topbar({
         <BranchPicker
           key={connectorPluginId}
           pluginId={connectorPluginId}
-          onSwitched={() => onBranchSwitched?.()}
+          branch={branch ?? ""}
+          onSwitch={onBranchSwitch ?? (async () => {})}
+          onDiscover={onBranchDiscover ?? (() => {})}
         />
       )}
 

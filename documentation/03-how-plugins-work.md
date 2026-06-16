@@ -47,8 +47,64 @@ interface StorageConnectorPlugin {
 
 Connectors are trusted code that runs **in the API process** (Node today, a Worker later).
 They are not sandboxed, because they _are_ the I/O boundary. `@canopy/connector-local`,
-`@canopy/connector-r2`, and the read-only `@canopy/connector-github` all implement this exact
-same interface.
+`@canopy/connector-r2`, `@canopy/connector-synology`, and the read-only
+`@canopy/connector-github` all implement this exact same interface.
+
+### What a connector can do
+
+A connector advertises its abilities **structurally** — by which methods it implements. The
+host feature-detects each optional method and lights up (or hides) the matching affordance;
+nothing is keyed off a connector's id or type in the UI. The surface:
+
+| Ability | Member | Required | Notes |
+|---|---|---|---|
+| Browse | `list(path, opts?)` | ✅ | Paginated (`cursor`/`limit`) listing of a folder. |
+| Stat | `stat(path)` | ✅ | One entry's metadata, or `null` if it's gone. |
+| Read bytes | `read(path)` | ✅ | Streams the file. The bucket is the source of truth. |
+| Write bytes | `write(path, body)` | ✅ | A read-only backend (GitHub today) throws here; that's what makes its space read-only. |
+| Delete | `remove(path)` | ✅ | — |
+| Make folder | `mkdir?(path)` | optional | Real directory backends (NAS, filesystem) implement it; flat key stores (R2) omit it — folders there are implicit prefixes. |
+| Direct transfer | `signedUrl?(path, op, ttl?)` | optional | Presigned URL so the client streams bytes straight from the backend, bypassing the API. |
+| Change feed | `changes?(cursor?)` | optional | Incremental sync. Connectors that can't emit changes (plain R2) omit it; the host falls back to crawl + lazy reconcile on read. |
+| Branches | `branch` + `branches?` | optional | A connector rooted at a versioned ref (GitHub). See below. |
+
+Whether a connector's space is **writable** is therefore not a flag it sets — it's whether
+`write`/`remove` succeed. A separate `writable: true` on the _source plugin_ (data-source
+registration) is what tells the host to *route* folder-creates and uploads through the
+connector at all; see [Storage & files](07-storage-and-files.md).
+
+#### Branches — a versioned connector
+
+A backend with a branch concept (today: GitHub) sets `readonly branch` to the ref it's rooted
+at and exposes `BranchOps`:
+
+```ts
+interface BranchOps {
+  list(): Promise<BranchInfo[]>;          // every ref, with default/current/protected + tip sha
+  create(name: string, from?: string): Promise<void>;
+  remove(name: string): Promise<void>;
+}
+```
+
+The connector instance is rooted at **one** branch; `list()` reports the rest. Switching is a
+**config change the host persists** (the per-user `branch` setting) and then **re-indexes**
+against — not a connector method. `create`/`remove` are real writes against the backend and
+need a token with write access; their errors bubble up verbatim. A connector with no branch
+concept (a NAS, R2) omits all of this and the host shows no branch UI.
+
+The active branch is **URL state** (`?space=connector:<plugin>&path=…&branch=<ref>`), so a
+switch updates the address bar and the link is shareable/bookmarkable; opening a `branch=` link
+selects (and, if it differs from the persisted ref, switches to) that branch. The host writes
+the param only for connector spaces.
+
+> **Known wart — the branch picker is hardcoded host chrome.** The topbar renders a GitHub
+> `BranchPicker` gated on the current space being a connector space; there is no _topbar slot_
+> contribution today (see [Contribution points](#contribution-points) — `railPanel` and
+> `detailView` exist, a topbar/space-controls slot does not). The right shape is a generic
+> "space control" extension point that a connector with `BranchOps` populates with a ref
+> picker, composed into the URL by the host — so the connector capability drives the UI instead
+> of the UI special-casing the connector. Until that lands, treat the picker as a host-side
+> rendering of the `BranchOps` capability, not a GitHub-specific feature.
 
 ## 2. The data-source role — trusted, typed records
 
