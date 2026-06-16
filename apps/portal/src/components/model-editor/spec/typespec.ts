@@ -203,9 +203,9 @@ class Reader {
         this.i++;
         continue;
       }
+      if (depth === 0 && stops.includes(c)) break;
       if ("([{<".includes(c)) depth++;
       else if (")]}>".includes(c)) depth--;
-      else if (depth === 0 && stops.includes(c)) break;
       this.i++;
     }
     return this.s.slice(start, this.i);
@@ -414,6 +414,12 @@ function makeEndpoint(
 interface FileResult {
   models: RawModel[];
   endpoints: (SpecEndpoint & { _retRaw?: string })[];
+  /**
+   * Fully-qualified names of `alias`/`union` declarations. They aren't entities, but a
+   * field/operation may reference one — so we record them to avoid flagging a valid
+   * reference as a dangling (unknown) type.
+   */
+  typeNames: string[];
 }
 
 function parseInterfaceBody(decos: Deco[], body: string, ifaceName: string, scope: Scope, file: string): SpecEndpoint[] {
@@ -518,10 +524,20 @@ function parseScope(src: string, scope: Scope, file: string, sink: FileResult): 
         r.ws();
         const body = r.balanced("{", "}");
         if (kw === "enum") sink.models.push(parseEnumBody(name, decos, body, scope, file));
+        else sink.typeNames.push(joinNs(scope.ns, name)); // named union — referenceable, not an entity
+        break;
+      }
+      case "alias":
+      case "scalar": {
+        const name = r.ident();
+        sink.typeNames.push(joinNs(scope.ns, name)); // referenceable, not an entity
+        r.until(["{", ";"]);
+        if (r.peek() === "{") r.balanced("{", "}");
+        else if (r.peek() === ";") r.i++;
         break;
       }
       default:
-        // alias / scalar / const / unknown — skip a `{…}` block or to `;`
+        // const / unknown — skip a `{…}` block or to `;`
         r.until(["{", ";"]);
         if (r.peek() === "{") r.balanced("{", "}");
         else if (r.peek() === ";") r.i++;
@@ -537,7 +553,7 @@ function parseScope(src: string, scope: Scope, file: string, sink: FileResult): 
 export async function compileTypeSpec(
   files: TextFile[],
 ): Promise<{ models: SpecModel[]; endpoints: SpecEndpoint[]; diagnostics: Diagnostic[] }> {
-  const sink: FileResult = { models: [], endpoints: [] };
+  const sink: FileResult = { models: [], endpoints: [], typeNames: [] };
   const diagnostics: Diagnostic[] = [];
   for (const f of files) {
     try {
@@ -570,11 +586,20 @@ export async function compileTypeSpec(
     }
     return undefined;
   };
+  // Names that are valid type references but not entities (aliases, named unions,
+  // custom scalars). Referencing one is fine; it just produces no entity edge.
+  const declaredTypes = new Set<string>();
+  for (const id of sink.typeNames) {
+    declaredTypes.add(id);
+    declaredTypes.add(id.split(".").pop()!);
+  }
   // A user-defined type (PascalCase) in a type expression that doesn't resolve to a
   // known model is a dangling reference — e.g. a model that was deleted/renamed.
   const danglingType = (type: string): string | undefined => {
     if (resolve(type)) return undefined;
-    return typeIdents(type).find((id) => /^[A-Z]/.test(id.split(".").pop()!));
+    return typeIdents(type).find(
+      (id) => /^[A-Z]/.test(id.split(".").pop()!) && !declaredTypes.has(id) && !declaredTypes.has(id.split(".").pop()!),
+    );
   };
 
   const models: SpecModel[] = sink.models.map((m) => ({

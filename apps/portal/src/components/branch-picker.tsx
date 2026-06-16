@@ -1,25 +1,37 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
-import { createBranch, deleteBranch, listBranches, switchBranch, type BranchInfo } from "@/lib/api";
+import { createBranch, deleteBranch, listBranches, type BranchInfo } from "@/lib/api";
 
 /**
  * Git-style branch picker for a connected (GitHub) space, shown in the topbar while
- * that space is open. Lists the repo's branches and lets the user switch (persisted +
- * re-indexed server-side), create a branch off the current one, and delete a branch.
+ * that space is open. Lists the repo's branches and lets the user switch, create a
+ * branch off the current one, and delete a branch.
  *
- * Self-contained: it probes `listBranches`, and renders nothing when the connector
- * has no branch concept (a NAS) or the repo isn't reachable — so the topbar simply
- * shows no picker. A successful switch calls `onSwitched` so the host reloads the view.
+ * Controlled by the host: the active branch comes in as `branch` (the host mirrors it
+ * in the URL) and a user switch calls `onSwitch`, which persists + re-indexes and
+ * updates the URL. On each probe it reports the connector's persisted branch via
+ * `onDiscover` so the host can fill in (or reconcile) the URL. It renders nothing when
+ * the connector has no branch concept (a NAS) or the repo isn't reachable.
  */
-export function BranchPicker({ pluginId, onSwitched }: { pluginId: string; onSwitched: () => void }) {
+export function BranchPicker({
+  pluginId,
+  branch,
+  onSwitch,
+  onDiscover,
+}: {
+  pluginId: string;
+  branch: string;
+  onSwitch: (name: string) => Promise<void>;
+  onDiscover: (current: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [supported, setSupported] = useState(false);
   const [canSwitch, setCanSwitch] = useState(false);
-  const [current, setCurrent] = useState<string | null>(null);
+  const [discovered, setDiscovered] = useState<string | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,15 +39,24 @@ export function BranchPicker({ pluginId, onSwitched }: { pluginId: string; onSwi
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
 
+  // The active branch: the host's URL-derived value wins; fall back to what we probed.
+  const current = branch || discovered;
+
+  // Keep onDiscover out of `load`'s deps (the host passes a fresh closure each render)
+  // so the mount/open probes don't re-fire on every render.
+  const onDiscoverRef = useRef(onDiscover);
+  onDiscoverRef.current = onDiscover;
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     const res = await listBranches(pluginId);
     setSupported(res.supported);
     setCanSwitch(res.canSwitch);
-    setCurrent(res.current);
+    setDiscovered(res.current);
     setBranches(res.branches);
     setLoading(false);
+    if (res.current) onDiscoverRef.current(res.current);
   }, [pluginId]);
 
   // Probe once on mount (and whenever the space changes) so the trigger can show the
@@ -58,7 +79,7 @@ export function BranchPicker({ pluginId, onSwitched }: { pluginId: string; onSwi
 
   if (!supported) return null;
 
-  async function onSwitch(name: string) {
+  async function onSwitchClick(name: string) {
     if (name === current) {
       setOpen(false);
       return;
@@ -66,10 +87,8 @@ export function BranchPicker({ pluginId, onSwitched }: { pluginId: string; onSwi
     setBusy(name);
     setError(null);
     try {
-      await switchBranch(pluginId, name);
-      setCurrent(name);
+      await onSwitch(name); // host persists + re-indexes + updates the URL
       setOpen(false);
-      onSwitched();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -96,7 +115,7 @@ export function BranchPicker({ pluginId, onSwitched }: { pluginId: string; onSwi
     setBusy("__create__");
     setError(null);
     try {
-      await createBranch(pluginId, name, current ?? undefined);
+      await createBranch(pluginId, name, current || undefined);
       setNewName("");
       setCreating(false);
       await load();
@@ -165,7 +184,7 @@ export function BranchPicker({ pluginId, onSwitched }: { pluginId: string; onSwi
                     "group flex items-center gap-2 px-3 py-1.5 text-[13px]",
                     canSwitch && !isCurrent && "cursor-pointer hover:bg-accent/60",
                   )}
-                  onClick={() => canSwitch && !rowBusy && void onSwitch(b.name)}
+                  onClick={() => canSwitch && !rowBusy && void onSwitchClick(b.name)}
                 >
                   <span className="flex w-4 shrink-0 justify-center">
                     {isCurrent ? (

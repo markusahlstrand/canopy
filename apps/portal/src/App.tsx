@@ -49,6 +49,7 @@ import {
   setSpaceMounted,
   syncConnector,
   clearSpaceContent,
+  switchBranch,
   fetchMe,
   rememberOpened,
   fetchInstalledPlugins,
@@ -88,21 +89,26 @@ import { InviteBanner } from "@/components/invite-banner";
 import { OfflineBanner } from "@/components/offline-banner";
 import { ErrorBoundary } from "@/components/error-boundary";
 
-function readUrlState(): { active: string; path: string; space: string; file: string } {
+function readUrlState(): { active: string; path: string; space: string; file: string; branch: string } {
   const p = new URLSearchParams(window.location.search);
   return {
     active: p.get("view") ?? "drive",
     path: p.get("path") ?? "",
     space: p.get("space") ?? "",
     file: p.get("file") ?? "",
+    branch: p.get("branch") ?? "",
   };
 }
 
-function urlForState(active: string, path: string, space: string, file: string): string {
+function urlForState(active: string, path: string, space: string, file: string, branch: string): string {
   const params = new URLSearchParams();
   if (active !== "drive") params.set("view", active);
   if (space) params.set("space", space);
   if (path) params.set("path", path);
+  // A connected space's active branch (GitHub) — so a switch updates the URL and the
+  // link is shareable/bookmarkable to that branch. Only meaningful for connector spaces,
+  // so it's never written elsewhere (the personal drive has no branch concept).
+  if (branch && space.startsWith("connector:")) params.set("branch", branch);
   // The opened file's id, so an open document survives refresh and the back button
   // closes it (popstate clears the preview when this param goes away).
   if (file) params.set("file", file);
@@ -236,6 +242,9 @@ function DesktopApp() {
   const [path, setPath] = useState(() => readUrlState().path);
   // "" = personal space, "shared" = files shared with me, else a group space id.
   const [space, setSpace] = useState(() => readUrlState().space);
+  // The active branch of a connected (GitHub) space, mirrored in the URL. "" until the
+  // branch picker probes the connector's current branch (or a deep link supplies one).
+  const [branch, setBranch] = useState(() => readUrlState().branch);
   const [spaces, setSpaces] = useState<SpaceView[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -402,11 +411,11 @@ function DesktopApp() {
   // back-forward work. Opening a file pushes a new entry whose only delta is `?file=`,
   // so the back button drops it and the popstate handler below closes the preview.
   useEffect(() => {
-    const url = urlForState(active, path, space, previewFile?.id ?? "");
+    const url = urlForState(active, path, space, previewFile?.id ?? "", branch);
     if (url !== window.location.pathname + window.location.search) {
       window.history.pushState(null, "", url);
     }
-  }, [active, path, space, previewFile]);
+  }, [active, path, space, previewFile, branch]);
 
   useEffect(() => {
     function onPop() {
@@ -414,6 +423,7 @@ function DesktopApp() {
       setActive(s.active);
       setPath(s.path);
       setSpace(s.space);
+      setBranch(s.branch);
       setSelection(new Set());
       if (s.active.startsWith("plugin:")) setActivePlugin(s.active.slice(7));
       // Restore (or close) the open document. We only have its id from the URL, so
@@ -977,6 +987,31 @@ function DesktopApp() {
     setSelection(new Set([f.id])); // track the list highlight to the file being viewed
   }
 
+  // The connector plugin id of the current connected space (GitHub), or null. Drives the
+  // topbar branch picker and the branch handlers below.
+  const connectorPluginId =
+    active === "drive" && space.startsWith("connector:") ? space.slice("connector:".length) : null;
+
+  // Persist + apply a branch switch: reflect it in the URL, tell the server (persists the
+  // setting and re-indexes the connected space against the new branch), then evict this
+  // space's branch-less cached file bytes and re-pull so reads return the new branch.
+  async function applyBranch(name: string) {
+    if (!connectorPluginId) return;
+    setBranch(name);
+    await switchBranch(connectorPluginId, name);
+    await clearSpaceContent(space);
+    void forceSync();
+    reload();
+  }
+
+  // The picker probed the connector's persisted ("current") branch. With no branch in the
+  // URL, make it explicit so the link is shareable; if the URL asks for a *different*
+  // branch (a deep link / shared link), switch the server to it.
+  function onBranchDiscovered(serverCurrent: string) {
+    if (!branch) setBranch(serverCurrent);
+    else if (branch !== serverCurrent) void applyBranch(branch);
+  }
+
   return (
     <PluginDataProvider githubInstalled={activeIds.includes("github")}>
     <HostApiProvider value={hostApi}>
@@ -1063,19 +1098,10 @@ function DesktopApp() {
           }}
           syncing={sync.syncing}
           readonly={active === "drive" && readonly}
-          connectorPluginId={
-            active === "drive" && space.startsWith("connector:") ? space.slice("connector:".length) : null
-          }
-          onBranchSwitched={() => {
-            // Connector file bytes are cached client-side keyed by a branch-less content
-            // URL, so a switch must evict this space's cached content or reads keep
-            // returning the old branch's bytes. Clear first, then re-pull the offline
-            // mirror and re-read the current folder against the new branch.
-            void clearSpaceContent(space).finally(() => {
-              void forceSync();
-              reload();
-            });
-          }}
+          connectorPluginId={connectorPluginId}
+          branch={branch}
+          onBranchSwitch={applyBranch}
+          onBranchDiscover={onBranchDiscovered}
           offline={!online}
           railAvailable={railAvailable}
           railOpen={tweaks.showRail}

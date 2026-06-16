@@ -214,7 +214,7 @@ model VersionEntry extends FileVersion {
 model File {
   @key id: string;
   /** The owning space id (the tenant); equals the space the file lives in. */
-  tenantId?: string;
+  tenantId: string;
   ownerId: string;
   name: string;
   currentVersionId?: string | null;
