@@ -108,9 +108,13 @@ interface Spaces {
     @body member: SpaceMember;
   } | Error;
 
-  /** Remove a member. Owner only. */
-  @delete
-  @route("/{id}/members")
+  /**
+   * Remove a member. Owner only. Modeled as POST (`/remove`) rather than DELETE
+   * because the principal travels in the body and OpenAPI 3.0 can't describe a
+   * DELETE request body.
+   */
+  @post
+  @route("/{id}/members/remove")
   @operationId("removeMember")
   removeMember(@path id: string, @body body: RemoveSpaceMember): Ok | Error;
 
@@ -174,9 +178,9 @@ interface Spaces {
     @body ok: Ok;
   } | Error;
 
-  /** Remove a folder grant. */
-  @delete
-  @route("/{id}/folder-grants")
+  /** Remove a folder grant. POST (`/unshare`), not DELETE: the grant to drop is in the body. */
+  @post
+  @route("/{id}/folder-grants/unshare")
   @operationId("unshareFolderGrant")
   unshareFolderGrant(@path id: string, @body body: FolderGrantInput): Ok | Error;
 
@@ -383,9 +387,9 @@ interface Files {
     @body ok: Ok;
   } | Error;
 
-  /** Remove a grant on a file. */
-  @delete
-  @route("/{id}/grants")
+  /** Remove a grant on a file. POST (`/unshare`), not DELETE: the grant to drop is in the body. */
+  @post
+  @route("/{id}/grants/unshare")
   @operationId("unshareGrant")
   unshareGrant(@path id: string, @body body: GrantInput): Ok | Error;
 

@@ -1232,8 +1232,8 @@ export async function addMember(spaceId: string, email: string, role: Role): Pro
 
 /** Remove a member or pending invite by principal (a user sub or an invited email). */
 export async function removeMember(spaceId: string, principal: string): Promise<void> {
-  const res = await apiFetch(`/api/spaces/${spaceId}/members`, {
-    method: "DELETE",
+  const res = await apiFetch(`/api/spaces/${spaceId}/members/remove`, {
+    method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sub: principal }),
   });
@@ -1378,8 +1378,8 @@ export async function shareFile(
 
 /** Revoke a grant. */
 export async function unshareFile(fileId: string, grant: Grant): Promise<void> {
-  const res = await apiFetch(`/api/files/${fileId}/grants`, {
-    method: "DELETE",
+  const res = await apiFetch(`/api/files/${fileId}/grants/unshare`, {
+    method: "POST",
     headers: { "content-type": "application/json" },
     // The backend expects `role` (matching the POST shape); a Grant names it `relation`.
     body: JSON.stringify({
@@ -1414,8 +1414,8 @@ export async function shareFolder(
 }
 
 export async function unshareFolder(spaceId: string, path: string, grant: Grant): Promise<void> {
-  const res = await apiFetch(`/api/spaces/${spaceId}/folder-grants`, {
-    method: "DELETE",
+  const res = await apiFetch(`/api/spaces/${spaceId}/folder-grants/unshare`, {
+    method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       path,

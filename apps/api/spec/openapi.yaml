@@ -875,9 +875,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/GrantInput'
-    delete:
+  /api/files/{id}/grants/unshare:
+    post:
       operationId: unshareGrant
-      description: Remove a grant on a file.
+      description: 'Remove a grant on a file. POST (`/unshare`), not DELETE: the grant to drop is in the body.'
       parameters:
         - name: id
           in: path
@@ -1947,9 +1948,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/FolderGrantInput'
-    delete:
+  /api/spaces/{id}/folder-grants/unshare:
+    post:
       operationId: unshareFolderGrant
-      description: Remove a folder grant.
+      description: 'Remove a folder grant. POST (`/unshare`), not DELETE: the grant to drop is in the body.'
       parameters:
         - name: id
           in: path
@@ -2109,9 +2111,13 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/AddSpaceMember'
-    delete:
+  /api/spaces/{id}/members/remove:
+    post:
       operationId: removeMember
-      description: Remove a member. Owner only.
+      description: |-
+        Remove a member. Owner only. Modeled as POST (`/remove`) rather than DELETE
+        because the principal travels in the body and OpenAPI 3.0 can't describe a
+        DELETE request body.
       parameters:
         - name: id
           in: path
@@ -3173,6 +3179,7 @@ components:
       type: object
       required:
         - id
+        - tenantId
         - ownerId
         - name
         - createdAt
