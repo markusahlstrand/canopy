@@ -8,6 +8,7 @@ import { SpecIndex } from "./links";
 import { EntitiesTab } from "./entities-tab";
 import { EndpointsTab } from "./endpoints-tab";
 import { FlowsTab } from "./flows-tab";
+import { SourceTab } from "./source-tab";
 import { SpecInspector } from "./spec-inspector";
 import { DiagnosticsBar } from "./diagnostics-bar";
 import { tabForKind, type SpecTab, type SpecViewProps } from "./view-types";
@@ -66,6 +67,7 @@ export function SpecEditorView({
             <TabsTrigger value="entities" className="gap-1.5"><Icon name="database" size={14} /> Entities <span className="font-mono text-[10px] text-muted-foreground">{graph.models.length}</span></TabsTrigger>
             <TabsTrigger value="endpoints" className="gap-1.5"><Icon name="globe" size={14} /> Endpoints <span className="font-mono text-[10px] text-muted-foreground">{graph.endpoints.length}</span></TabsTrigger>
             <TabsTrigger value="flows" className="gap-1.5"><Icon name="board" size={14} /> Flows <span className="font-mono text-[10px] text-muted-foreground">{graph.flows.length}</span></TabsTrigger>
+            <TabsTrigger value="source" className="gap-1.5"><Icon name="file-code" size={14} /> Source <span className="font-mono text-[10px] text-muted-foreground">{graph.sourceFiles.length}</span></TabsTrigger>
           </TabsList>
         </Tabs>
         <FileChips graph={graph} />
@@ -90,8 +92,9 @@ export function SpecEditorView({
           {tab === "entities" && <EntitiesTab {...shared} />}
           {tab === "endpoints" && <EndpointsTab {...shared} />}
           {tab === "flows" && <FlowsTab {...shared} />}
+          {tab === "source" && <SourceTab {...shared} />}
         </div>
-        {panelOpen && (
+        {panelOpen && tab !== "source" && (
           <div className={cn("w-[340px] shrink-0 border-l bg-background", tab === "flows" ? "border-l-emerald-500/20" : "")}>
             <SpecInspector {...shared} />
           </div>

@@ -8,7 +8,7 @@ import { parseArazzo } from "./arazzo";
 import type { DiscoveredFiles } from "./discover";
 import { parseOpenApi } from "./openapi";
 import { compileTypeSpec } from "./typespec";
-import { type Diagnostic, type ProjectGraph, type SpecFlow, type SpecSource } from "./graph-types";
+import { type Diagnostic, type ProjectGraph, type SourceFile, type SpecFlow, type SpecSource } from "./graph-types";
 
 const basename = (p: string) => p.replace(/[#?].*$/, "").split("/").pop()!.trim();
 
@@ -69,6 +69,12 @@ export async function buildProjectGraph(files: DiscoveredFiles): Promise<Project
     }
   }
 
+  const sourceFiles: SourceFile[] = [
+    ...files.tsp.map((f) => ({ id: f.id, name: f.name, kind: "tsp" as const, text: f.text })),
+    ...files.openapi.map((f) => ({ id: f.id, name: f.name, kind: "openapi" as const, text: f.text })),
+    ...files.arazzo.map((f) => ({ id: f.id, name: f.name, kind: "arazzo" as const, text: f.text })),
+  ];
+
   const empty = models.length === 0 && endpoints.length === 0 && flows.length === 0;
   return {
     models,
@@ -81,6 +87,7 @@ export async function buildProjectGraph(files: DiscoveredFiles): Promise<Project
       openapi: files.openapi.map((f) => f.name),
       arazzo: files.arazzo.map((f) => f.name),
     },
+    sourceFiles,
     empty,
   };
 }

@@ -162,6 +162,14 @@ export interface SelectionRef {
   id: string;
 }
 
+/** A discovered file kept with its raw text, for the Source tab. */
+export interface SourceFile {
+  id?: string;
+  name: string;
+  kind: "tsp" | "openapi" | "arazzo";
+  text: string;
+}
+
 export interface ProjectGraph {
   models: SpecModel[];
   endpoints: SpecEndpoint[];
@@ -170,6 +178,8 @@ export interface ProjectGraph {
   diagnostics: Diagnostic[];
   /** Names of the files that fed the graph, grouped by kind (for the header). */
   files: { tsp: string[]; openapi: string[]; arazzo: string[] };
+  /** Every discovered file with its raw text — the canonical source of truth. */
+  sourceFiles: SourceFile[];
   /** True when no contract/workflow content was found at all. */
   empty: boolean;
 }
@@ -181,5 +191,6 @@ export const emptyGraph = (): ProjectGraph => ({
   sources: [],
   diagnostics: [],
   files: { tsp: [], openapi: [], arazzo: [] },
+  sourceFiles: [],
   empty: true,
 });

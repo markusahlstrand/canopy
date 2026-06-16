@@ -253,9 +253,12 @@ export async function searchFiles(q: string, limit = 8): Promise<SearchResult[]>
 }
 
 /** List a virtual folder of a space (default: personal). Folders first, then files. */
-export async function listFiles(dir = "", spaceId?: string): Promise<FileItem[]> {
+export async function listFiles(dir = "", spaceId?: string, opts?: { fresh?: boolean }): Promise<FileItem[]> {
   const key = listingKey(spaceId, dir);
   const isConnector = String(spaceId ?? "").startsWith("connector:");
+  // `fresh` (an explicit user refresh) tells the backend to skip its reconcile debounce
+  // so a connector folder re-converges now instead of within the debounce window.
+  const freshParam = opts?.fresh ? "&fresh=1" : "";
   // Mirror-first for EVERY space — personal, group, and connected (NAS/repo). Serve the
   // synced local replica instantly (works offline); the mirror diffs in the background.
   // Falls through to a one-off live fetch only when this space isn't synced yet.
@@ -267,7 +270,7 @@ export async function listFiles(dir = "", spaceId?: string): Promise<FileItem[]>
         // NAS/repo index stays fresh; its changes flow back into the mirror via the delta
         // (we ignore the response here).
         if (isConnector) {
-          void apiFetch(`/api/files?path=${encodeURIComponent(dir)}&space=${encodeURIComponent(spaceId!)}`).catch(() => {});
+          void apiFetch(`/api/files?path=${encodeURIComponent(dir)}&space=${encodeURIComponent(spaceId!)}${freshParam}`).catch(() => {});
         }
         const items = mirrorViewToItems(view, dir);
         await annotateOffline(items, spaceId); // mark pinned (available-offline) items
@@ -280,7 +283,7 @@ export async function listFiles(dir = "", spaceId?: string): Promise<FileItem[]>
   }
   const sp = spaceId ? `&space=${encodeURIComponent(spaceId)}` : "";
   try {
-    const res = await apiFetch(`/api/files?path=${encodeURIComponent(dir)}${sp}`);
+    const res = await apiFetch(`/api/files?path=${encodeURIComponent(dir)}${sp}${freshParam}`);
     if (res.status === 401) return []; // not signed in → empty drive
     if (!res.ok) throw await apiError(res, "list failed");
     const items = toFileItems(await res.json(), dir);

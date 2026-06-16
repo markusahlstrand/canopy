@@ -13,7 +13,7 @@ export interface SpecViewProps {
   onNavigate: (ref: SelectionRef) => void;
 }
 
-export type SpecTab = "entities" | "endpoints" | "flows";
+export type SpecTab = "entities" | "endpoints" | "flows" | "source";
 
 export const tabForKind = (kind: SelectionRef["kind"]): SpecTab =>
   kind === "entity" ? "entities" : kind === "endpoint" ? "endpoints" : "flows";

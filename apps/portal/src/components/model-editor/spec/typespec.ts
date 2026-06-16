@@ -230,7 +230,10 @@ const isArray = (type: string) => /\[\s*\]\s*$/.test(type) || /^Array\s*</.test(
 
 /** Identifiers in a type expression that could name a model, most-specific first. */
 function typeIdents(type: string): string[] {
-  const ids = type.match(/[A-Za-z_$][A-Za-z0-9_$.]*/g) ?? [];
+  // Drop string literals first so values like `"PUT"` in `method: "PUT"` (or string
+  // unions like `"a" | "b"`) aren't mistaken for type references.
+  const cleaned = type.replace(/"(?:[^"\\]|\\.)*"/g, "").replace(/'(?:[^'\\]|\\.)*'/g, "");
+  const ids = cleaned.match(/[A-Za-z_$][A-Za-z0-9_$.]*/g) ?? [];
   return ids.filter((id) => !SCALARS.has(id) && !SCALARS.has(id.split(".").pop()!));
 }
 
