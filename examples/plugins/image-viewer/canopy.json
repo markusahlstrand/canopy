@@ -12,7 +12,8 @@
       {
         "id": "image",
         "title": "Image",
-        "match": ["image/*", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic", ".avif"]
+        "match": ["image/*", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic", ".avif"],
+        "fill": true
       }
     ],
     "store": {

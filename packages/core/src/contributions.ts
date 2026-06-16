@@ -33,6 +33,12 @@ export interface DetailViewContribution {
    * Omit to keep the detail view reachable from Home / the plugin list only.
    */
   nav?: { section: string };
+  /**
+   * Render this view edge-to-edge: the host drops its page header/chrome and the
+   * centred max-width column, letting a canvas-style app own the whole content
+   * area. Omit for the standard padded, headed page used by most app plugins.
+   */
+  immersive?: boolean;
 }
 
 /** A field the plugin adds to the file preview details grid. */
@@ -80,6 +86,18 @@ export interface ViewerContribution {
    * previewed file's MIME and extension.
    */
   match: string[];
+  /**
+   * Fill the available preview box instead of auto-growing the viewer to its
+   * content. For media/canvas viewers (an image, a model canvas) that should
+   * occupy a real box the host sizes, rather than a document that flows.
+   */
+  fill?: boolean;
+  /**
+   * When expanded full screen, take over the whole surface: the host hides the
+   * metadata sidebar, the prev/next nav arrows and the centred max-width cap, and
+   * yields the arrow keys to the viewer. For immersive editor/canvas viewers.
+   */
+  immersive?: boolean;
 }
 
 /** How the plugin appears in the plugin store. */

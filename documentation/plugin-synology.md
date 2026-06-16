@@ -5,15 +5,29 @@ FileStation Web API — reachable directly, over **Tailscale**, or via QuickConn
 
 ## What it does
 
-Point it at a NAS and a read-only **Synology** space appears in the sidebar, listing files
-live from the box. The connector role runs trusted, server-side (it's the I/O boundary),
-backed by `@canopy/connector-synology`. It logs in to DSM lazily for a session id,
-re-authenticating if the session expires, and discovers the FileStation API paths so it
-works across DSM versions. Files stream straight from the NAS — there are no drive rows —
-the same passthrough model as a [connected GitHub repo](plugin-github).
+Point it at a NAS and a read-only **Synology** space appears in the sidebar. The connector role
+runs trusted, server-side (it's the I/O boundary), backed by `@canopy/connector-synology`. It logs
+in to DSM lazily for a session id, re-authenticating if the session expires, and discovers the
+FileStation API paths so it works across DSM versions.
 
-> Read-write (upload / new folder / delete straight onto the NAS) is the next milestone;
-> today the connected space is read-only.
+Unlike a pure live mount, the NAS tree is **indexed** into Canopy's `files`/`file_versions` tables
+as `external` references (the bucket stays the source of truth — see
+[Storage and files](storage-and-files)). The index is built and refreshed by a **background job**:
+on Cloudflare a durable **Workflow** that crawls one folder per step (so a big NAS can't blow a
+single request's budget and a crash resumes where it left off), and an in-process runner on Node.
+It fires **when you connect** (saving your settings kicks a full index), from a **"Sync / Re-index"**
+action in the connected space's sidebar menu, and from a periodic **sweep** — **incrementally** via
+`SYNO.FileStation.Search` over `mtime` (a delete/rename bumps its folder, so the affected folders
+are revisited), falling back to a bounded crawl. Browsing a folder also reconciles it lazily.
+
+Because the indexed rows live in Canopy's DB, the NAS turns up in **search**, is reachable by
+connected assistants over **MCP**, and is **mirrored to your browser like any other space** — so
+once indexed it browses **offline and instantly** (the bytes still stream through the connector when
+you open a file, or come from the per-space content cache). Out-of-band changes (e.g. a direct SMB
+write) converge on the next sweep. `@eaDir` / `#recycle` are never indexed.
+
+> The space is **read-only** to Canopy (only the reconciler writes its rows). Read-write
+> (upload / new folder / delete straight onto the NAS) is the next milestone.
 
 ## Configuration
 

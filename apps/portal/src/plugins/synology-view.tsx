@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/lib/icons";
 import { Button } from "@/components/ui/button";
 import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
-import { listSpaces, testConnector } from "@/lib/api";
+import { listSpaces, syncConnector, testConnector } from "@/lib/api";
 
 interface ConnState {
   /** Config is saved, so the space exists — independent of whether the NAS answers. */
@@ -30,6 +30,19 @@ interface ConnState {
 export function SynologyView() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [state, setState] = useState<ConnState>({ connected: false, name: null, loading: true, error: null });
+  const [syncing, setSyncing] = useState(false);
+  const [synced, setSynced] = useState(false);
+
+  const onSync = useCallback(async () => {
+    setSyncing(true);
+    setSynced(false);
+    const res = await syncConnector("synology");
+    setSyncing(false);
+    if (res.ok) {
+      setSynced(true);
+      setTimeout(() => setSynced(false), 4000);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setState((s) => ({ ...s, loading: true }));
@@ -93,7 +106,11 @@ export function SynologyView() {
         <div className="flex items-center gap-2 rounded-lg border bg-card px-3.5 py-2.5 text-[13px]">
           <Icon name="hard-drive" size={15} className="text-muted-foreground" />
           <span className="font-mono">{state.name}</span>
-          <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11.5px] text-muted-foreground">read-only</span>
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11.5px] text-muted-foreground">read-only</span>
+          <Button size="sm" variant="outline" className="ml-auto h-7 gap-1.5" disabled={syncing} onClick={() => void onSync()}>
+            <Icon name="refresh" size={13} className={syncing ? "animate-spin" : undefined} />
+            {syncing ? "Syncing…" : synced ? "Sync started" : "Sync now"}
+          </Button>
         </div>
       ) : (
         <div className="rounded-lg border border-dashed p-5 text-[13px] text-muted-foreground">
@@ -104,8 +121,9 @@ export function SynologyView() {
       )}
 
       <div className="rounded-lg bg-muted/60 p-3 text-[12.5px] leading-relaxed text-muted-foreground">
-        Once connected, a <span className="font-medium text-foreground">Synology</span> space appears in the sidebar and lists
-        files live from the NAS. From a cloud deployment, only a QuickConnect relay or a public HTTPS address is reachable. A
+        Once connected, a <span className="font-medium text-foreground">Synology</span> space appears in the sidebar. Browsing
+        indexes the NAS as you go, so its files turn up in search and are reachable by connected assistants; out-of-band changes
+        converge on the next sync. From a cloud deployment, only a QuickConnect relay or a public HTTPS address is reachable. A
         self-hosted server reaches a LAN address directly, or a Tailscale host (<span className="font-mono">100.x</span> or a
         MagicDNS name) when that server is on the same tailnet — the NAS can join via the Synology Tailscale package or a
         subnet router.

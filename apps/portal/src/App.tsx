@@ -29,21 +29,25 @@ import { type FileItem, type FileKind, PLUGIN_CATALOG } from "@/lib/mock-data";
 import type { InstalledCreator } from "@/plugins/viewers";
 import {
   listFiles,
+  getFile,
   listShared,
   listSpaces,
   renameSpace,
   createFolder,
   createFile,
   getOverview,
-  contentUrl,
+  downloadFile,
   uploadFiles,
   deleteFile,
   listTrash,
   restoreFile,
   purgeFile,
   setStarred,
+  setItemOffline,
+  reconcilePins,
   moveFile,
   setSpaceMounted,
+  syncConnector,
   fetchMe,
   rememberOpened,
   fetchInstalledPlugins,
@@ -61,11 +65,14 @@ import {
   type ShareTarget,
 } from "@/lib/api";
 import { SpaceMembersDialog } from "@/components/space-members-dialog";
+import { SpaceCacheDialog } from "@/components/space-cache-dialog";
+import { ConnectorSettingsDialog } from "@/components/connector-settings-dialog";
 import { CreateSpaceDialog } from "@/components/create-space-dialog";
 import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
 import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
+import { HostApiProvider, type HostApi } from "@/plugins/host";
 import { setCustomViewers, type InstalledViewer } from "@/plugins/viewers";
 import { sandboxedSlot, setCustomSlots } from "@/plugins/ui";
 import { PluginSlot } from "@/components/plugin-slot";
@@ -73,21 +80,31 @@ import { PluginDataProvider, usePluginCapabilities } from "@/plugins/data";
 import { ACCENT_HSL, ACCENT_HSL_DARK, DEFAULT_TWEAKS, FONT_STACK, type Tweaks } from "@/lib/tweaks";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useOnline } from "@/hooks/use-online";
+import { useMirrorVersion, useSync } from "@/hooks/use-sync";
+import { forceSync, startSync } from "@/lib/sync";
 import { DemoBanner } from "@/components/demo-banner";
 import { InviteBanner } from "@/components/invite-banner";
 import { OfflineBanner } from "@/components/offline-banner";
 import { ErrorBoundary } from "@/components/error-boundary";
 
-function readUrlState(): { active: string; path: string; space: string } {
+function readUrlState(): { active: string; path: string; space: string; file: string } {
   const p = new URLSearchParams(window.location.search);
-  return { active: p.get("view") ?? "drive", path: p.get("path") ?? "", space: p.get("space") ?? "" };
+  return {
+    active: p.get("view") ?? "drive",
+    path: p.get("path") ?? "",
+    space: p.get("space") ?? "",
+    file: p.get("file") ?? "",
+  };
 }
 
-function urlForState(active: string, path: string, space: string): string {
+function urlForState(active: string, path: string, space: string, file: string): string {
   const params = new URLSearchParams();
   if (active !== "drive") params.set("view", active);
   if (space) params.set("space", space);
   if (path) params.set("path", path);
+  // The opened file's id, so an open document survives refresh and the back button
+  // closes it (popstate clears the preview when this param goes away).
+  if (file) params.set("file", file);
   // The Documentation view owns a `?doc=` page param. Preserve it while that view
   // is open so deep links survive the app's own URL writes (it's naturally dropped
   // when you navigate elsewhere, since active is no longer the docs plugin).
@@ -220,12 +237,26 @@ function DesktopApp() {
   const [space, setSpace] = useState(() => readUrlState().space);
   const [spaces, setSpaces] = useState<SpaceView[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const reload = () => setRefreshKey((k) => k + 1);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   // False when the backend is unreachable (or the browser is offline): the app
   // goes view-only — writes are blocked and served from the offline cache.
   const online = useOnline();
+  // Bumps when a background sync applies a delta — re-runs the folder load below so
+  // another device's change appears without a manual refresh. No-op when the mirror
+  // is disabled (it stays 0). Start the mirror's refresh triggers once, on mount.
+  const mirrorVersion = useMirrorVersion();
+  const sync = useSync();
+  useEffect(() => {
+    startSync();
+  }, []);
+  // Keep the available-offline downloads in step with the pin set: on mount and whenever a
+  // background sync lands new rows (a pinned folder may have gained files). Best-effort.
+  useEffect(() => {
+    void reconcilePins();
+  }, [mirrorVersion]);
 
   const [auth, setAuth] = useState<Me>({ user: null, authConfigured: false });
   // Distinct from `auth.authConfigured`: that stays false in demo mode (auth off),
@@ -285,6 +316,10 @@ function DesktopApp() {
   // plugins" entry points now deep-link to Settings → Plugins via openPluginsTab().
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  // A file id pulled from the URL (deep link / back-forward) still to be resolved to a
+  // FileItem so the preview can reopen. Resolved from the loaded listing when possible,
+  // else fetched by id (see the effect below).
+  const [pendingPreviewId, setPendingPreviewId] = useState<string | null>(() => readUrlState().file || null);
   // How an opened file is shown: "split" docks beside the (still-usable) list,
   // "full" covers the viewport. Remembered across files and reloads.
   const [previewMode, setPreviewMode] = useState<"split" | "full">(() =>
@@ -308,6 +343,10 @@ function DesktopApp() {
     tab?: "members" | "plugins" | "settings";
   } | null>(null);
   const [settingsPlugin, setSettingsPlugin] = useState<{ id: string; name: string } | null>(null);
+  // The space whose offline-cache settings are open (token "" = personal drive), or null.
+  const [cacheSpace, setCacheSpace] = useState<{ space: string; name: string } | null>(null);
+  // The connected space whose settings (indexing log + retention) are open, or null.
+  const [connectorSettings, setConnectorSettings] = useState<{ pluginId: string; name: string } | null>(null);
   const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [overview, setOverview] = useState<Overview>({ files: 0, bytes: 0 });
@@ -355,13 +394,15 @@ function DesktopApp() {
     return () => document.removeEventListener("keydown", onKey);
   }, [tweaks.theme, previewFile]);
 
-  // Reflect the current view + space + folder in the URL so refresh / back-forward work.
+  // Reflect the current view + space + folder + open file in the URL so refresh /
+  // back-forward work. Opening a file pushes a new entry whose only delta is `?file=`,
+  // so the back button drops it and the popstate handler below closes the preview.
   useEffect(() => {
-    const url = urlForState(active, path, space);
+    const url = urlForState(active, path, space, previewFile?.id ?? "");
     if (url !== window.location.pathname + window.location.search) {
       window.history.pushState(null, "", url);
     }
-  }, [active, path, space]);
+  }, [active, path, space, previewFile]);
 
   useEffect(() => {
     function onPop() {
@@ -371,10 +412,39 @@ function DesktopApp() {
       setSpace(s.space);
       setSelection(new Set());
       if (s.active.startsWith("plugin:")) setActivePlugin(s.active.slice(7));
+      // Restore (or close) the open document. We only have its id from the URL, so
+      // hand it to the resolver below; the FileItem lands once it's resolved.
+      if (s.file) setPendingPreviewId(s.file);
+      else {
+        setPreviewFile(null);
+        setPendingPreviewId(null);
+      }
     }
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  // Resolve a URL-supplied file id (deep link / back-forward) to its FileItem and open
+  // the preview. Prefer the already-loaded folder listing; otherwise fetch it by id so
+  // the document restores even when it lives in a folder we're not currently viewing.
+  // Snapshot of `files` is intentional — a miss just falls through to the by-id fetch.
+  useEffect(() => {
+    if (!pendingPreviewId) return;
+    let cancelled = false;
+    const local = files.find((x) => x.id === pendingPreviewId);
+    void (local ? Promise.resolve(local) : getFile(pendingPreviewId)).then((f) => {
+      if (cancelled) return;
+      if (f) {
+        rememberOpened(f);
+        setPreviewFile(f);
+      }
+      setPendingPreviewId(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per id; `files` is a snapshot
+  }, [pendingPreviewId]);
 
   // The spaces the user can see (personal + groups), for mounting + the switcher.
   useEffect(() => {
@@ -432,6 +502,7 @@ function DesktopApp() {
     if (active !== "drive") return;
     let cancelled = false;
     setLoadError(null);
+    setLoading(true);
     const load = space === "shared" ? listShared() : listFiles(path, space || undefined);
     load
       .then((items) => {
@@ -454,11 +525,14 @@ function DesktopApp() {
         if (cancelled) return;
         setFiles([]);
         setLoadError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [active, space, path, refreshKey, spaces]);
+  }, [active, space, path, refreshKey, spaces, mirrorVersion]);
 
   // Load Trash when the Trash view is open (and on refresh after restore/purge).
   useEffect(() => {
@@ -569,6 +643,33 @@ function DesktopApp() {
       toast("Couldn't create file", { description: (err as Error).message });
     }
   }
+
+  // Generic host bridge handed to trusted, first-party plugin UI (the Model Editor
+  // and any future canvas-style app). Creating-and-opening a drive file is the one
+  // thing those views can't do alone, so it's offered here — without the host
+  // knowing which plugin is asking.
+  const hostApi = useMemo<HostApi>(
+    () => ({
+      online,
+      createAndOpenFile: async ({ name, content, mime }) => {
+        if (!online) {
+          toast("You're offline", { description: "You can't create documents until you're back online." });
+          return null;
+        }
+        try {
+          const file = await createFile("", name, content, mime, undefined);
+          reload();
+          setPreviewMode("full"); // take over the screen with the editor
+          setPreviewFile(file);
+          return file;
+        } catch (err) {
+          toast("Couldn't create document", { description: (err as Error).message });
+          return null;
+        }
+      },
+    }),
+    [online, reload],
+  );
 
   async function upload(fileList: FileList | null) {
     const files = fileList ? Array.from(fileList) : [];
@@ -732,6 +833,18 @@ function DesktopApp() {
         setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, starred: !next } : x))); // rollback
         toast("Couldn't update star", { description: (err as Error).message });
       }
+    } else if (action === "Offline") {
+      const next = !f.offline;
+      setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, offline: next } : x))); // optimistic
+      try {
+        await setItemOffline(f, space, next);
+        // A folder pin changes its children's state too — reload so they pick up the badge.
+        if (f.kind === "folder") reload();
+        toast(next ? "Available offline" : "Download removed", { description: f.name });
+      } catch (err) {
+        setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, offline: !next } : x))); // rollback
+        toast("Couldn't update offline", { description: (err as Error).message });
+      }
     } else if (action === "Share") {
       // One Share dialog for files, folders, and group spaces: people/places +
       // links (web + WebDAV), each showing current shares with revoke.
@@ -742,7 +855,7 @@ function DesktopApp() {
       }
       setShareTarget({ target, label: f.name });
     } else if (action === "Download" && f.kind !== "folder") {
-      window.open(contentUrl(f.id), "_blank");
+      downloadFile(f.id, f.name);
     } else {
       toast(action, { description: f.name });
     }
@@ -774,16 +887,20 @@ function DesktopApp() {
         ? sortedFiles.filter((f) => (f.sharedWith?.length ?? 0) > 1)
         : sortedFiles;
 
+  const spaceName = space && space !== "shared" ? (spaces.find((s) => s.id === space)?.name ?? "Space") : null;
+
+  // At a folder we show the folder name; at a space/drive root we show the
+  // space name ("Shared with me" / the connected space / "My Drive"), not a
+  // stale "Recent" fallback.
+  const rootTitle = space === "shared" ? "Shared with me" : (spaceName ?? "My Drive");
   const title =
     active === "family"
       ? "Shared with family"
       : active === "starred"
         ? "Starred"
         : path
-          ? (path.split("/").filter(Boolean).pop() ?? "Recent")
-          : "Recent";
-
-  const spaceName = space && space !== "shared" ? (spaces.find((s) => s.id === space)?.name ?? "Space") : null;
+          ? (path.split("/").filter(Boolean).pop() ?? rootTitle)
+          : rootTitle;
   // A connected (read-only) space — e.g. a GitHub repo browsed live: no uploads,
   // edits, sharing, or WebDAV mount.
   const readonly = !!spaces.find((s) => s.id === space)?.readonly;
@@ -821,14 +938,42 @@ function DesktopApp() {
               ? [installed.find((p) => `plugin:${p.id}` === active)?.name ?? "Plugin"]
               : driveCrumb;
 
+  // An "app" plugin whose detail view declares itself immersive (e.g. a canvas
+  // editor) takes over the whole content area — no page header, no max-width column.
+  // Derived from the manifest, so the host special-cases no plugin by id.
+  const immersiveDetailId =
+    active.startsWith("plugin:") && installed.find((p) => p.id === active.slice(7))?.contributes?.detailView?.immersive
+      ? active.slice(7)
+      : null;
+
   const railAvailable = active !== "home" && installed.some((p) => p.contributes?.railPanel);
   // A docked preview claims the right side, so the plugin rail steps aside while
   // it's open (the full-screen preview covers everything, rail included).
   const previewDocked = !!previewFile && previewMode === "split";
   const showRail = tweaks.showRail && railAvailable && !previewDocked;
 
+  // Prev/next neighbours for browsing files straight from the open preview (arrow keys,
+  // and the on-screen arrows in full screen). Folders aren't previewable so we step over
+  // them; if the open file isn't in the current listing (e.g. opened from Home or a deep
+  // link into another folder) there are simply no neighbours and the arrows stay hidden.
+  const previewNeighbors = useMemo(() => {
+    const empty = { prev: null as FileItem | null, next: null as FileItem | null };
+    if (!previewFile) return empty;
+    const items = visibleFiles.filter((f) => f.kind !== "folder");
+    const i = items.findIndex((f) => f.id === previewFile.id);
+    if (i === -1) return empty;
+    return { prev: i > 0 ? items[i - 1]! : null, next: i < items.length - 1 ? items[i + 1]! : null };
+  }, [previewFile, visibleFiles]);
+
+  function openPreviewAt(f: FileItem) {
+    rememberOpened(f); // keep it (and its bytes) available offline, same as opening from the list
+    setPreviewFile(f);
+    setSelection(new Set([f.id])); // track the list highlight to the file being viewed
+  }
+
   return (
     <PluginDataProvider githubInstalled={activeIds.includes("github")}>
+    <HostApiProvider value={hostApi}>
     <div className="flex h-screen flex-col">
       <OfflineBanner />
       <DemoBanner auth={auth} onSignIn={signIn} />
@@ -871,6 +1016,17 @@ function DesktopApp() {
           const s = spaces.find((sp) => sp.id === id);
           if (s) setMembersSpace({ id, name: s.name, role: s.role, tab: "settings" });
         }}
+        onCacheSettings={(s, name) => setCacheSpace({ space: s, name })}
+        onSyncSpace={(id) => {
+          // The connected-space token is `connector:<plugin>`; the per-user `:sub` suffix
+          // is server-side only. Kick a background (re-)index and confirm it started.
+          const pluginId = id.startsWith("connector:") ? id.slice("connector:".length).split(":")[0]! : id;
+          void syncConnector(pluginId).then((r) => toast(r.ok ? "Re-indexing started" : (r.error ?? "Sync failed")));
+        }}
+        onConnectorSettings={(id, name) => {
+          const pluginId = id.startsWith("connector:") ? id.slice("connector:".length).split(":")[0]! : id;
+          setConnectorSettings({ pluginId, name });
+        }}
         onToggleMount={togglePin}
         onNewFolder={createFolderFlow}
         onNewFile={createFileFlow}
@@ -891,7 +1047,19 @@ function DesktopApp() {
           theme={tweaks.theme}
           onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
           onUpload={() => uploadInputRef.current?.click()}
+          onRefresh={() => {
+            void forceSync(); // re-pull the offline mirror now (no-op if disabled)
+            reload(); // re-fetch spaces/overview/shared + re-read the current folder
+          }}
+          syncing={sync.syncing}
           readonly={active === "drive" && readonly}
+          connectorPluginId={
+            active === "drive" && space.startsWith("connector:") ? space.slice("connector:".length) : null
+          }
+          onBranchSwitched={() => {
+            void forceSync();
+            reload();
+          }}
           offline={!online}
           railAvailable={railAvailable}
           railOpen={tweaks.showRail}
@@ -902,6 +1070,9 @@ function DesktopApp() {
         />
 
         <main className="relative flex-1 overflow-auto">
+          {immersiveDetailId ? (
+            <PluginDetail id={immersiveDetailId} installed={installed} immersive />
+          ) : (
           <div className="mx-auto max-w-[1280px] px-8 pb-8 pt-[22px]">
             {active === "home" ? (
               <HomeView
@@ -1067,11 +1238,14 @@ function DesktopApp() {
                     sort={sort}
                     onSort={onSort}
                     view={view}
+                    previewOpen={previewDocked}
+                    loading={loading && active === "drive"}
                   />
                 )}
               </>
             ) : null}
           </div>
+          )}
 
           {dragOver && (
             <div className="pointer-events-none absolute inset-3 z-40 grid place-items-center rounded-lg border-2 border-dashed border-primary bg-primary/[0.06]">
@@ -1110,10 +1284,13 @@ function DesktopApp() {
 
       <FilePreview
         file={previewFile}
+        space={space}
         mode={previewMode}
         onToggleMode={togglePreviewMode}
         onClose={() => setPreviewFile(null)}
         onSaved={reload}
+        onPrev={previewNeighbors.prev ? () => openPreviewAt(previewNeighbors.prev!) : undefined}
+        onNext={previewNeighbors.next ? () => openPreviewAt(previewNeighbors.next!) : undefined}
         installedPluginIds={activeIds}
       />
 
@@ -1167,6 +1344,25 @@ function DesktopApp() {
         />
       )}
 
+      {cacheSpace && (
+        <SpaceCacheDialog
+          space={cacheSpace.space}
+          spaceName={cacheSpace.name}
+          open={!!cacheSpace}
+          onOpenChange={(o) => !o && setCacheSpace(null)}
+        />
+      )}
+
+      {connectorSettings && (
+        <ConnectorSettingsDialog
+          key={connectorSettings.pluginId}
+          pluginId={connectorSettings.pluginId}
+          spaceName={connectorSettings.name}
+          open={!!connectorSettings}
+          onOpenChange={(o) => !o && setConnectorSettings(null)}
+        />
+      )}
+
       <ConnectDeviceDialog
         open={connectOpen}
         onOpenChange={setConnectOpen}
@@ -1190,6 +1386,7 @@ function DesktopApp() {
       <Toaster position="bottom-right" />
       </div>
     </div>
+    </HostApiProvider>
     </PluginDataProvider>
   );
 }
@@ -1273,6 +1470,7 @@ function TrashView({
 function PluginDetail({
   id,
   installed,
+  immersive,
 }: {
   id: string;
   installed: {
@@ -1287,12 +1485,31 @@ function PluginDetail({
       creators?: { label: string; extension: string }[];
     };
   }[];
+  /** Render edge-to-edge with no page header/chrome (manifest detailView.immersive). */
+  immersive?: boolean;
 }) {
   const manifest = installed.find((p) => p.id === id);
   const sandboxed = sandboxedSlot(id, "detailView");
   const DetailView = PLUGIN_UI[id]?.DetailView;
   const capabilities = usePluginCapabilities();
   if (!manifest) return null;
+
+  // Immersive app: hand the whole content area to the plugin's view — no header,
+  // no max-width column (the host already skips the centred wrapper for these).
+  if (immersive && (sandboxed || DetailView)) {
+    return (
+      <div className="h-full">
+        {sandboxed ? (
+          <PluginSlot plugin={id} slot="detailView" source={sandboxed.source} capabilities={capabilities} />
+        ) : (
+          <Suspense fallback={<div className="grid h-full place-items-center text-sm text-muted-foreground">Loading…</div>}>
+            {DetailView ? <DetailView /> : null}
+          </Suspense>
+        )}
+      </div>
+    );
+  }
+
   // Viewer plugins have no detail view; instead of an empty page, show what file
   // types they handle and create — derived straight from the manifest.
   const fileTypes = [...new Set(manifest.contributes?.viewers?.flatMap((v) => v.match) ?? [])];

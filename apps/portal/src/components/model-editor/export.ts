@@ -1,0 +1,430 @@
+import yaml from "js-yaml";
+import type { DomainModel, Entity, Property, PropertyType } from "./types";
+
+/** Turn an entity/property name into a safe identifier for code/DDL output. */
+function ident(name: string): string {
+  const cleaned = name.trim().replace(/[^a-zA-Z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned || "field";
+}
+
+function snake(name: string): string {
+  return ident(name)
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/__+/g, "_")
+    .toLowerCase();
+}
+
+function pascal(name: string): string {
+  return ident(name)
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join("");
+}
+
+// ── Native (round-trippable) ──────────────────────────────────────────────────
+
+/** The canonical Canopy shape. Re-importing this restores the canvas exactly. */
+export function toNativeObject(model: DomainModel): unknown {
+  return {
+    name: model.name,
+    version: model.version,
+    entities: model.entities.map((e) => ({
+      id: e.id,
+      name: e.name,
+      description: e.description || undefined,
+      color: e.color,
+      position: e.position,
+      properties: e.properties.map((p) => ({
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        required: p.required || undefined,
+        unique: p.unique || undefined,
+        primaryKey: p.primaryKey || undefined,
+        enumValues: p.type === "enum" ? p.enumValues : undefined,
+        refEntityId: p.type === "ref" ? p.refEntityId : undefined,
+        description: p.description || undefined,
+      })),
+    })),
+    relations: model.relations.map((r) => ({
+      id: r.id,
+      name: r.name || undefined,
+      from: r.fromEntityId,
+      to: r.toEntityId,
+      cardinality: r.cardinality,
+      fromLabel: r.fromLabel || undefined,
+      toLabel: r.toLabel || undefined,
+    })),
+  };
+}
+
+// ── JSON Schema (draft 2020-12) ─────────────────────────────────────────────────
+
+const JSON_SCHEMA_TYPE: Record<PropertyType, object> = {
+  string: { type: "string" },
+  text: { type: "string" },
+  integer: { type: "integer" },
+  float: { type: "number" },
+  decimal: { type: "number" },
+  boolean: { type: "boolean" },
+  date: { type: "string", format: "date" },
+  datetime: { type: "string", format: "date-time" },
+  uuid: { type: "string", format: "uuid" },
+  json: { type: "object" },
+  enum: { type: "string" },
+  ref: { type: "string" },
+};
+
+function jsonSchemaProperty(p: Property, byId: Map<string, Entity>): object {
+  if (p.type === "enum") {
+    return { type: "string", enum: p.enumValues?.length ? p.enumValues : ["TODO"], ...desc(p) };
+  }
+  if (p.type === "ref") {
+    const target = p.refEntityId ? byId.get(p.refEntityId) : undefined;
+    return {
+      type: "string",
+      description: [p.description, target ? `Reference to ${target.name}` : undefined]
+        .filter(Boolean)
+        .join(" — ") || undefined,
+    };
+  }
+  return { ...JSON_SCHEMA_TYPE[p.type], ...desc(p) };
+}
+
+function desc(p: Property): object {
+  return p.description ? { description: p.description } : {};
+}
+
+export function toJsonSchemaObject(model: DomainModel): unknown {
+  const byId = new Map(model.entities.map((e) => [e.id, e]));
+  const defs: Record<string, unknown> = {};
+  for (const e of model.entities) {
+    const properties: Record<string, unknown> = {};
+    const required: string[] = [];
+    for (const p of e.properties) {
+      properties[p.name] = jsonSchemaProperty(p, byId);
+      if (p.required || p.primaryKey) required.push(p.name);
+    }
+    defs[pascal(e.name)] = {
+      type: "object",
+      title: e.name,
+      ...(e.description ? { description: e.description } : {}),
+      properties,
+      ...(required.length ? { required } : {}),
+      additionalProperties: false,
+    };
+  }
+  return {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: `https://canopy.local/${snake(model.name || "model")}.schema.json`,
+    title: model.name || "Domain model",
+    $defs: defs,
+  };
+}
+
+// ── Prisma schema ───────────────────────────────────────────────────────────────
+
+const PRISMA_TYPE: Record<PropertyType, string> = {
+  string: "String",
+  text: "String",
+  integer: "Int",
+  float: "Float",
+  decimal: "Decimal",
+  boolean: "Boolean",
+  date: "DateTime",
+  datetime: "DateTime",
+  uuid: "String",
+  json: "Json",
+  enum: "String",
+  ref: "String",
+};
+
+/**
+ * Serialise to a Prisma schema. With `opts.metadata`, prepend a `// @canopy-model`
+ * comment holding the exact native model (positions, colours, precise types) so
+ * the editor re-opens the document losslessly — see `fromPrisma`.
+ */
+export function toPrisma(model: DomainModel, opts: { metadata?: boolean } = {}): string {
+  const byId = new Map(model.entities.map((e) => [e.id, e]));
+  const out: string[] = [];
+  if (opts.metadata) {
+    out.push(`// @canopy-model ${JSON.stringify(toNativeObject(model))}`, "");
+  }
+  out.push(
+    "// Generated by Canopy Model Editor",
+    "// Prisma schema — review datasource/generator blocks before use.",
+    "",
+    "datasource db {",
+    '  provider = "postgresql"',
+    '  url      = env("DATABASE_URL")',
+    "}",
+    "",
+    "generator client {",
+    '  provider = "prisma-client-js"',
+    "}",
+    "",
+  );
+
+  // Emit a named enum per enum-typed property so its values survive round-trips.
+  const enumNameByProp = new Map<string, string>();
+  for (const e of model.entities) {
+    for (const p of e.properties) {
+      if (p.type !== "enum" || !p.enumValues?.length) continue;
+      const enumName = pascal(e.name) + pascal(p.name);
+      enumNameByProp.set(`${e.id}:${p.id}`, enumName);
+      out.push(`enum ${enumName} {`, ...p.enumValues.map((v) => `  ${ident(v)}`), "}", "");
+    }
+  }
+
+  // Collect relation fields per entity so we can emit Prisma relation sugar.
+  for (const e of model.entities) {
+    const model_ = pascal(e.name);
+    out.push(`model ${model_} {`);
+    // A single primary key is a field-level `@id`; two or more is a composite key,
+    // which Prisma expresses as one model-level `@@id([...])` (multiple `@id` is invalid).
+    const pkProps = e.properties.filter((p) => p.primaryKey);
+    const composite = pkProps.length > 1;
+    if (!pkProps.length) out.push("  id        String   @id @default(cuid())");
+    for (const p of e.properties) {
+      const base = p.type === "enum" ? (enumNameByProp.get(`${e.id}:${p.id}`) ?? "String") : PRISMA_TYPE[p.type];
+      const optional = p.required || p.primaryKey ? "" : "?";
+      const attrs: string[] = [];
+      if (p.primaryKey && !composite) attrs.push("@id");
+      if (p.unique && !p.primaryKey) attrs.push("@unique");
+      if (p.type === "ref" && p.refEntityId) {
+        const target = byId.get(p.refEntityId);
+        if (target) attrs.push(`// → ${pascal(target.name)}`);
+      }
+      out.push(
+        `  ${ident(p.name).padEnd(9)} ${base}${optional}${attrs.length ? "   " + attrs.join(" ") : ""}`,
+      );
+    }
+    // Relation fields (foreign keys + back-references).
+    for (const r of model.relations) {
+      if (r.fromEntityId === e.id) {
+        const target = byId.get(r.toEntityId);
+        if (!target) continue;
+        const many = r.cardinality === "1-N" || r.cardinality === "N-M";
+        const field = camel(target.name) + (many ? "s" : "");
+        out.push(`  ${field.padEnd(9)} ${pascal(target.name)}${many ? "[]" : "?"}`);
+      } else if (r.toEntityId === e.id) {
+        const source = byId.get(r.fromEntityId);
+        if (!source) continue;
+        const many = r.cardinality === "N-1" || r.cardinality === "N-M";
+        const field = camel(source.name) + (many ? "s" : "");
+        out.push(`  ${field.padEnd(9)} ${pascal(source.name)}${many ? "[]" : "?"}`);
+      }
+    }
+    if (composite) out.push(`  @@id([${pkProps.map((p) => ident(p.name)).join(", ")}])`);
+    out.push("}", "");
+  }
+  return out.join("\n");
+}
+
+function camel(name: string): string {
+  const p = pascal(name);
+  return p.charAt(0).toLowerCase() + p.slice(1);
+}
+
+// ── SQL DDL (PostgreSQL) ─────────────────────────────────────────────────────────
+
+const SQL_TYPE: Record<PropertyType, string> = {
+  string: "VARCHAR(255)",
+  text: "TEXT",
+  integer: "INTEGER",
+  float: "REAL",
+  decimal: "NUMERIC",
+  boolean: "BOOLEAN",
+  date: "DATE",
+  datetime: "TIMESTAMPTZ",
+  uuid: "UUID",
+  json: "JSONB",
+  enum: "TEXT",
+  ref: "TEXT",
+};
+
+export function toSqlDdl(model: DomainModel): string {
+  const byId = new Map(model.entities.map((e) => [e.id, e]));
+  const out: string[] = ["-- Generated by Canopy Model Editor", "-- PostgreSQL dialect", ""];
+  for (const e of model.entities) {
+    const table = snake(e.name);
+    const lines: string[] = [];
+    const pks: string[] = [];
+    const hasPk = e.properties.some((p) => p.primaryKey);
+    if (!hasPk) {
+      lines.push(`  id UUID PRIMARY KEY DEFAULT gen_random_uuid()`);
+    }
+    for (const p of e.properties) {
+      const col = snake(p.name);
+      let sqlType = SQL_TYPE[p.type];
+      if (p.type === "enum" && p.enumValues?.length) {
+        const allowed = p.enumValues.map((v) => `'${v.replace(/'/g, "''")}'`).join(", ");
+        sqlType = `TEXT CHECK (${col} IN (${allowed}))`;
+      }
+      const parts = [`  ${col} ${sqlType}`];
+      if (p.required || p.primaryKey) parts.push("NOT NULL");
+      if (p.unique && !p.primaryKey) parts.push("UNIQUE");
+      lines.push(parts.join(" "));
+      if (p.primaryKey) pks.push(col);
+    }
+    if (pks.length) lines.push(`  PRIMARY KEY (${pks.join(", ")})`);
+    out.push(`CREATE TABLE ${table} (`);
+    out.push(lines.join(",\n"));
+    out.push(`);`, "");
+  }
+  // Foreign keys from explicit relations (best-effort, *-to-one ends). Skip when
+  // the table already has a column of that name (e.g. a hand-modelled ref property).
+  const hasColumn = (e: Entity, col: string) => e.properties.some((p) => snake(p.name) === col);
+  // The referenced table's primary key column + its type, so a FK points at the real
+  // key (not an assumed `id`) and the column types line up. A table with no explicit PK
+  // got the synthesized `id UUID`; a composite PK can't be a single-column FK target → null.
+  const refTarget = (e: Entity): { col: string; type: string } | null => {
+    const pks = e.properties.filter((p) => p.primaryKey);
+    if (pks.length === 0) return { col: "id", type: "UUID" };
+    if (pks.length > 1) return null;
+    const pk = pks[0]!;
+    return { col: snake(pk.name), type: SQL_TYPE[pk.type] };
+  };
+  for (const r of model.relations) {
+    const from = byId.get(r.fromEntityId);
+    const to = byId.get(r.toEntityId);
+    if (!from || !to) continue;
+    if (r.cardinality === "N-1") {
+      const ref = refTarget(to);
+      const col = `${snake(to.name)}_id`;
+      if (ref && !hasColumn(from, col))
+        out.push(`ALTER TABLE ${snake(from.name)} ADD COLUMN ${col} ${ref.type} REFERENCES ${snake(to.name)}(${ref.col});`);
+    } else if (r.cardinality === "1-N") {
+      const ref = refTarget(from);
+      const col = `${snake(from.name)}_id`;
+      if (ref && !hasColumn(to, col))
+        out.push(`ALTER TABLE ${snake(to.name)} ADD COLUMN ${col} ${ref.type} REFERENCES ${snake(from.name)}(${ref.col});`);
+    } else if (r.cardinality === "N-M") {
+      const ra = refTarget(from);
+      const rb = refTarget(to);
+      const a = snake(from.name);
+      const b = snake(to.name);
+      if (ra && rb)
+        out.push(
+          `CREATE TABLE ${a}_${b} (`,
+          `  ${a}_id ${ra.type} REFERENCES ${a}(${ra.col}),`,
+          `  ${b}_id ${rb.type} REFERENCES ${b}(${rb.col}),`,
+          `  PRIMARY KEY (${a}_id, ${b}_id)`,
+          `);`,
+        );
+    }
+  }
+  return out.join("\n").trim() + "\n";
+}
+
+// ── Mermaid ER diagram ───────────────────────────────────────────────────────────
+
+const MERMAID_CARD: Record<string, string> = {
+  "1-1": "||--||",
+  "1-N": "||--o{",
+  "N-1": "}o--||",
+  "N-M": "}o--o{",
+};
+
+export function toMermaid(model: DomainModel): string {
+  const byId = new Map(model.entities.map((e) => [e.id, e]));
+  const nameOf = (e: Entity) => ident(e.name);
+  const out: string[] = ["erDiagram"];
+  for (const e of model.entities) {
+    out.push(`    ${nameOf(e)} {`);
+    if (e.properties.length === 0) out.push(`        string id PK`);
+    for (const p of e.properties) {
+      const keys = [
+        p.primaryKey && "PK",
+        p.type === "ref" && "FK",
+        p.unique && !p.primaryKey && "UK",
+      ]
+        .filter(Boolean)
+        .join(",");
+      out.push(`        ${p.type} ${ident(p.name)}${keys ? " " + keys : ""}`);
+    }
+    out.push(`    }`);
+  }
+  for (const r of model.relations) {
+    const from = byId.get(r.fromEntityId);
+    const to = byId.get(r.toEntityId);
+    if (!from || !to) continue;
+    const label = (r.name || r.fromLabel || "relates").replace(/"/g, "'");
+    out.push(`    ${nameOf(from)} ${MERMAID_CARD[r.cardinality]} ${nameOf(to)} : "${label}"`);
+  }
+  return out.join("\n") + "\n";
+}
+
+// ── Dispatch ─────────────────────────────────────────────────────────────────────
+
+export type ExportFormat =
+  | "json"
+  | "yaml"
+  | "jsonschema"
+  | "jsonschema-yaml"
+  | "prisma"
+  | "sql"
+  | "mermaid";
+
+export interface ExportTarget {
+  id: ExportFormat;
+  label: string;
+  language: string;
+  filename: (modelName: string) => string;
+  render: (model: DomainModel) => string;
+}
+
+const yamlDump = (obj: unknown) => yaml.dump(obj, { noRefs: true, lineWidth: 100, sortKeys: false });
+
+export const EXPORT_TARGETS: ExportTarget[] = [
+  {
+    id: "json",
+    label: "Native JSON",
+    language: "json",
+    filename: (n) => `${snake(n || "model")}.json`,
+    render: (m) => JSON.stringify(toNativeObject(m), null, 2),
+  },
+  {
+    id: "yaml",
+    label: "Native YAML",
+    language: "yaml",
+    filename: (n) => `${snake(n || "model")}.yaml`,
+    render: (m) => yamlDump(toNativeObject(m)),
+  },
+  {
+    id: "jsonschema",
+    label: "JSON Schema",
+    language: "json",
+    filename: (n) => `${snake(n || "model")}.schema.json`,
+    render: (m) => JSON.stringify(toJsonSchemaObject(m), null, 2),
+  },
+  {
+    id: "jsonschema-yaml",
+    label: "JSON Schema (YAML)",
+    language: "yaml",
+    filename: (n) => `${snake(n || "model")}.schema.yaml`,
+    render: (m) => yamlDump(toJsonSchemaObject(m)),
+  },
+  {
+    id: "prisma",
+    label: "Prisma",
+    language: "prisma",
+    filename: () => `schema.prisma`,
+    render: (m) => toPrisma(m),
+  },
+  {
+    id: "sql",
+    label: "SQL DDL",
+    language: "sql",
+    filename: (n) => `${snake(n || "model")}.sql`,
+    render: (m) => toSqlDdl(m),
+  },
+  {
+    id: "mermaid",
+    label: "Mermaid ER",
+    language: "mermaid",
+    filename: (n) => `${snake(n || "model")}.mmd`,
+    render: (m) => toMermaid(m),
+  },
+];

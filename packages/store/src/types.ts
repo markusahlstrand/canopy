@@ -48,6 +48,8 @@ export interface FileVersion {
   createdBy: string;
   /** Pinned: retention/pruning never removes a kept version (#11). */
   keep: boolean;
+  /** R2 key of cached extracted text (external sources). Null until the extract queue runs. */
+  contentRef: string | null;
 }
 
 /** A connected backend (filesystem / S3 / R2) whose objects are indexed into the file table. */
@@ -61,18 +63,34 @@ export interface Connection {
   createdAt: string;
 }
 
-/** A drive: one personal space per user, plus shared "group" spaces (e.g. a family). */
+/**
+ * A drive: one personal space per user, shared "group" spaces (e.g. a family),
+ * and read-only "connected" spaces — a persisted index over a user's connected
+ * backend (a Synology NAS, a GitHub repo). A connected space is owned by the user
+ * but never written to directly; its rows are reconciled from the connector.
+ */
 export interface Space {
   id: string;
   name: string;
-  kind: "personal" | "group";
+  kind: "personal" | "group" | "connected";
   createdBy: string;
   createdAt: string;
   /** Optional sidebar icon name (defaults to the people icon when null). */
   icon: string | null;
   /** Optional accent color — an HSL triplet like "145 33% 36%". */
   color: string | null;
+  /**
+   * Version-retention policy for this space's files. `"smart"` (the default) thins the
+   * history on the tiered curve; `"all"` keeps every version; `"days"` keeps only the
+   * last {@link versionDays} days. The current + pinned versions survive any policy.
+   */
+  versionPolicy: VersionPolicyKind;
+  /** Retained-day window when {@link versionPolicy} is `"days"` (else null). */
+  versionDays: number | null;
 }
+
+/** The retention policy a space applies to its files' version history. */
+export type VersionPolicyKind = "all" | "smart" | "days";
 
 /** Directory entry, upserted on login so files can be shared by email. */
 export interface User {

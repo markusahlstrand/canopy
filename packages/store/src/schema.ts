@@ -396,6 +396,81 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
       `ALTER TABLE spaces ADD COLUMN color TEXT`,
     ],
   },
+  {
+    // External-source sync state (#22). A connected backend (a Synology NAS, a
+    // GitHub repo) is now *persisted* as `file_versions(source='external')` rows in
+    // a per-user "connected" space, kept fresh by a reconcile pass over the
+    // connector. Two additive columns drive the deferred text-extraction queue: an
+    // external version lands `extract_state='pending'` and a background drainer reads
+    // its bytes through the connector, extracts text, and feeds the search index —
+    // so the columns themselves are the work queue (no separate queue infra). Blob
+    // versions default to `'done'`: they're already indexed inline on write, so this
+    // run-once ALTER leaves them untouched. `extract_attempts` bounds retries.
+    version: 19,
+    statements: [
+      `ALTER TABLE file_versions ADD COLUMN extract_state TEXT NOT NULL DEFAULT 'done'`,
+      `ALTER TABLE file_versions ADD COLUMN extract_attempts INTEGER NOT NULL DEFAULT 0`,
+      // R2 key of the extracted text, so a title-only reindex (rename, star) can
+      // re-attach the body without re-reading the connector. Cleared when content changes.
+      `ALTER TABLE file_versions ADD COLUMN content_ref TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_versions_extract ON file_versions (extract_state) WHERE source = 'external'`,
+    ],
+  },
+  {
+    // Offline sync (#23). A per-space monotonic change sequence powers the browser
+    // metadata mirror's delta endpoint (`GET /api/changes?since=<seq>`). `updated_at`
+    // is wall-clock and non-monotonic (NTP steps, same-millisecond batch writes), so
+    // it can't be a sync cursor; instead every mutation bumps `space_seq` and stamps
+    // the new value on the changed file row(s) — see `FileService.bumpSeq`. The cursor
+    // is then "give me every row in the space with seq > N", which never loses or
+    // double-orders a change. Soft-deletes flow as normal rows (deleted_at set, seq
+    // bumped); hard deletes (purge) leave no row, so they're recorded in `tombstones`
+    // with a bumped seq. A row never touched keeps seq=0 — harmless, since the client
+    // receives it in the initial bootstrap (which returns every live row) and only
+    // pulls deltas thereafter, so no backfill is needed.
+    version: 20,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS space_seq (
+         space_id TEXT PRIMARY KEY,
+         seq      INTEGER NOT NULL DEFAULT 0
+       )`,
+      `ALTER TABLE files ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`,
+      // Backfill a dense, unique seq per space (1..N, ordered by updated_at) so the
+      // delta cursor is a true total order from day one — pagination can resume inside
+      // a page without the ambiguity that tied seq=0 rows would cause. Runs here, in the
+      // same transaction as the ADD COLUMN, while every row is still seq=0 (no collisions).
+      `UPDATE files AS f
+          SET seq = sub.rn
+         FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY tenant_id ORDER BY updated_at, id) AS rn FROM files) AS sub
+        WHERE f.id = sub.id`,
+      // Seed each space's counter to its high-water seq so the next mutation continues the sequence.
+      `INSERT INTO space_seq (space_id, seq)
+         SELECT tenant_id, MAX(seq) FROM files GROUP BY tenant_id
+         ON CONFLICT(space_id) DO UPDATE SET seq = excluded.seq`,
+      `CREATE INDEX IF NOT EXISTS idx_files_space_seq ON files (tenant_id, seq)`,
+      `CREATE TABLE IF NOT EXISTS tombstones (
+         space_id   TEXT NOT NULL,
+         file_id    TEXT NOT NULL,
+         seq        INTEGER NOT NULL,
+         deleted_at TEXT NOT NULL,
+         PRIMARY KEY (space_id, file_id)
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_tombstones_space_seq ON tombstones (space_id, seq)`,
+    ],
+  },
+  {
+    // Per-space version-retention policy. By default the scheduler thins a file's
+    // version history on a coarsening tiered curve (see retention.ts) — that's the
+    // implicit `'smart'` policy a NULL column means, so this additive ALTER changes
+    // nothing for existing spaces. An owner can override per space to `'all'` (keep
+    // every version) or `'days'` (keep only the last `version_days` days, plus the
+    // current + pinned versions, which are never pruned under any policy).
+    version: 21,
+    statements: [
+      `ALTER TABLE spaces ADD COLUMN version_policy TEXT`, // NULL | 'all' | 'smart' | 'days'
+      `ALTER TABLE spaces ADD COLUMN version_days INTEGER`, // retained-day window when policy = 'days'
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

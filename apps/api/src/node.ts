@@ -14,9 +14,14 @@ import {
   createSqlSearchIndex,
   createSqlBlobRepo,
   ensurePersonalSpace,
+  getPluginSettings,
+  inProcessIndexJobs,
   resolveInvites,
   runMigrations,
+  syncAllConnectors,
   upsertUser,
+  type FileRecord,
+  type FileVersion,
 } from "@canopy/store";
 import { createFsBlobStore, createLibsqlDb } from "@canopy/store/node";
 import { createApp, type DataSourceDeps } from "./app";
@@ -26,6 +31,7 @@ import { documentTextExtractor } from "./extract";
 import { inProcessDocWorker } from "@canopy/docworker";
 import { readAuthConfig } from "./auth/config";
 import { createAuthApp } from "./auth/routes";
+import { decryptPluginConfig } from "./crypto";
 
 // Load local secrets from the repo-root .dev.vars if present (Node 20.12+) —
 // the same file `wrangler dev` reads, alongside wrangler.jsonc.
@@ -65,22 +71,55 @@ const db = createLibsqlDb(`file:${dbPath}`);
 await runMigrations(db);
 const blobs = createFsBlobStore(blobsRoot);
 const search = createSqlSearchIndex(db);
-const service = new FileService(db, blobs, createSqlBlobRepo(db), {
-  globalDedup: process.env.CANOPY_GLOBAL_DEDUP === "1",
-  index: search,
-  textExtractor: documentTextExtractor,
-});
-// Backfill the full-text index for any files that predate it (idempotent).
-void service
-  .reindexAll()
-  .then((r) => r.indexed && console.log(`  ↻ search: indexed ${r.indexed} existing file(s)`))
-  .catch((err) => console.warn(`  ⚠ search backfill failed: ${(err as Error).message}`));
 
 const authConfig = readAuthConfig();
 if (authConfig && !authConfig.sessionSecret) {
   authConfig.sessionSecret = crypto.randomUUID() + crypto.randomUUID();
   console.warn("  ⚠ SESSION_SECRET not set — using an ephemeral key (sessions reset on restart)");
 }
+
+// Connector plumbing shared by the request path and the background sweep:
+// `connectorFor` builds from a config; `connectorForUser` loads + decrypts a
+// user's saved settings first; `readExternal` streams an external version's bytes
+// (injected into FileService so downloads, the MCP read tools, and the extract
+// queue all reach connector-backed files).
+const sourcePlugins = dataSourcesOf(SERVER_PLUGINS);
+const settingsSecret = authConfig?.sessionSecret ?? process.env.SESSION_SECRET;
+const connectorFor = (pluginId: string, config: Record<string, string>): StorageConnector | null => {
+  if (pluginId === "synology") return synologyConnectorFor(config);
+  if (pluginId !== "github") return null;
+  const p = parseRepo(config.repo ?? "");
+  return p
+    ? createGithubConnector("connector:github", {
+        owner: p.owner,
+        repo: p.repo,
+        branch: config.branch || undefined,
+        token: config.token || undefined,
+      })
+    : null;
+};
+const connectorForUser = async (sub: string, pluginId: string): Promise<StorageConnector | null> => {
+  const fields = sourcePlugins.find((p) => p.id === pluginId)?.configFields ?? [];
+  const config = await decryptPluginConfig(settingsSecret, fields, await getPluginSettings(db, sub, pluginId));
+  return connectorFor(pluginId, config);
+};
+const readExternal = async (version: FileVersion, file: FileRecord): Promise<ReadableStream<Uint8Array> | null> => {
+  if (!version.connectorId || !version.externalKey) return null;
+  const connector = await connectorForUser(file.ownerId, version.connectorId);
+  return connector ? connector.read(version.externalKey) : null;
+};
+
+const service = new FileService(db, blobs, createSqlBlobRepo(db), {
+  globalDedup: process.env.CANOPY_GLOBAL_DEDUP === "1",
+  index: search,
+  textExtractor: documentTextExtractor,
+  readExternal,
+});
+// Backfill the full-text index for any files that predate it (idempotent).
+void service
+  .reindexAll()
+  .then((r) => r.indexed && console.log(`  ↻ search: indexed ${r.indexed} existing file(s)`))
+  .catch((err) => console.warn(`  ⚠ search backfill failed: ${(err as Error).message}`));
 
 // On login: record the user in the directory, resolve pending email invites,
 // and ensure their personal space exists.
@@ -93,7 +132,7 @@ const onLogin = async (u: { sub: string; email?: string; name?: string; picture?
 };
 
 const dataSources: DataSourceDeps = {
-  plugins: dataSourcesOf(SERVER_PLUGINS),
+  plugins: sourcePlugins,
   // Env GITHUB_REPO/TOKEN = the public demo default (shown to everyone until a
   // user connects their own repo in the GitHub plugin's settings).
   demoDefaults: githubCfg
@@ -108,22 +147,9 @@ const dataSources: DataSourceDeps = {
   cache: createSqlCacheStore(db),
   // Encrypts stored secrets (provider keys, tokens) at rest. Falls back to a bare
   // SESSION_SECRET so the UI can save keys in dev even with auth/OIDC switched off.
-  secret: authConfig?.sessionSecret ?? process.env.SESSION_SECRET,
-  // Browse a connected backend live as a space: a GitHub repo, or a Synology NAS
-  // over FileStation (direct or via QuickConnect).
-  connectorFor: (pluginId, config) => {
-    if (pluginId === "synology") return synologyConnectorFor(config);
-    if (pluginId !== "github") return null;
-    const p = parseRepo(config.repo ?? "");
-    return p
-      ? createGithubConnector("connector:github", {
-          owner: p.owner,
-          repo: p.repo,
-          branch: config.branch || undefined,
-          token: config.token || undefined,
-        })
-      : null;
-  },
+  secret: settingsSecret,
+  // Browse a connected backend live as a space (GitHub repo / Synology NAS).
+  connectorFor,
 };
 
 // AI providers off Node env (no Workers AI binding here): a Gemini key, and/or any
@@ -154,6 +180,9 @@ const app = createApp({
   readonlyMounts: { documentation, demo },
   drive: { service, blobs, docWorker: inProcessDocWorker() },
   dataSources,
+  // In-process connector indexing (full crawl + extract drain) for the "Sync now" /
+  // on-connect triggers; the periodic sweep below stays the safety net.
+  indexJobs: inProcessIndexJobs({ db, service, connectorForUser }),
   // libsql FTS5 search index (same SQL adapter as D1 on the edge).
   search,
   processors: processorsOf(SERVER_PLUGINS),
@@ -188,4 +217,17 @@ serve({ fetch: app.fetch, port }, (info) => {
 const PRUNE_INTERVAL_MS = 6 * 60 * 60_000; // every 6 hours
 setInterval(() => {
   void service.pruneAllVersions().catch((err) => console.warn("  ⚠ version prune failed:", err));
+  void service.pruneTombstones().catch((err) => console.warn("  ⚠ tombstone prune failed:", err));
 }, PRUNE_INTERVAL_MS).unref();
+
+// Periodic connected-backend sweep: refresh each user's persisted NAS/repo index
+// from the connector (incremental via its change feed, else a crawl) + drain text
+// extraction. The edge runs the same sweep from `scheduled` (worker.ts). A short
+// initial run after boot warms the index without blocking startup.
+const SYNC_INTERVAL_MS = 30 * 60_000; // every 30 minutes
+const sweep = () =>
+  void syncAllConnectors({ db, service, connectorForUser }).catch((err) =>
+    console.warn("  ⚠ connector sweep failed:", err),
+  );
+setTimeout(sweep, 15_000).unref();
+setInterval(sweep, SYNC_INTERVAL_MS).unref();

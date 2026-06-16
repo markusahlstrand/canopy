@@ -48,7 +48,10 @@ export function containerDocWorker(ns: ContainerNamespace, token?: string, insta
         method: "POST",
         headers: {
           ...(token ? { "x-docworker-token": token } : {}),
-          "x-doc-name": name,
+          // Percent-encode so a non-Latin1 name (CJK, emoji, …) can't throw when
+          // set as a header value and spuriously trigger the in-process fallback.
+          // `docMeta` in apps/docworker/src/app.ts decodes the matching pair.
+          "x-doc-name": encodeURIComponent(name),
           ...(mime ? { "x-doc-mime": mime } : {}),
           "content-type": "application/octet-stream",
         },

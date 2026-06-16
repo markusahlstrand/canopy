@@ -1,6 +1,16 @@
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 
 /**
+ * Resolve the tailnet egress proxy from the environment, in precedence order.
+ * Shared by {@link createTailnetFetch} and {@link ensureTailnetReady} so they
+ * agree on which proxy (if any) is in play — otherwise readiness could no-op
+ * while requests still route through a proxy set via `ALL_PROXY`/`HTTPS_PROXY`.
+ */
+function getTailnetProxy(): string | undefined {
+  return process.env.TAILNET_PROXY_URL || process.env.ALL_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy;
+}
+
+/**
  * A `fetch` that egresses over the tailnet, used to reach a Synology NAS that is
  * only reachable on the tailnet.
  *
@@ -16,8 +26,7 @@ import { fetch as undiciFetch, ProxyAgent } from "undici";
  * (here, or your laptop) can.
  */
 export function createTailnetFetch(): typeof fetch {
-  const proxy =
-    process.env.TAILNET_PROXY_URL || process.env.ALL_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy;
+  const proxy = getTailnetProxy();
   if (!proxy) return fetch; // host is already on the tailnet (local dev)
   const dispatcher = new ProxyAgent(proxy);
   return ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
@@ -35,12 +44,15 @@ export function createTailnetFetch(): typeof fetch {
  * where there's no proxy and the host is already on the tailnet.
  */
 export async function ensureTailnetReady(timeoutMs = 25_000): Promise<void> {
-  const proxy = process.env.TAILNET_PROXY_URL;
+  const proxy = getTailnetProxy();
   if (!proxy) return;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    // Bound each probe (capped at 5s, never past the deadline) so a stuck
+    // connection can't hang a single attempt forever and outlast the timeout.
+    const perAttempt = Math.max(0, Math.min(deadline - Date.now(), 5_000));
     try {
-      await fetch(proxy, { method: "GET" }); // any HTTP response ⇒ listening ⇒ tailnet up
+      await fetch(proxy, { method: "GET", signal: AbortSignal.timeout(perAttempt) }); // any HTTP response ⇒ listening ⇒ tailnet up
       return;
     } catch (err) {
       if (Date.now() > deadline) throw new Error(`tailnet sidecar not ready after ${timeoutMs}ms: ${(err as Error).message}`);

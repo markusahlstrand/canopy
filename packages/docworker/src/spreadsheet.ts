@@ -3,7 +3,7 @@ import type { DocTables, Table } from "./types";
 
 export function isSpreadsheet(name: string, mime?: string | null): boolean {
   return (
-    /(spreadsheetml|ms-excel|excel|^text\/csv$|^application\/csv$|opendocument\.spreadsheet)/i.test(mime ?? "") ||
+    /(spreadsheetml|ms-excel|excel|text\/csv|application\/csv|opendocument\.spreadsheet)/i.test(mime ?? "") ||
     /\.(xlsx|xlsm|xlsb|xls|csv|tsv|ods)$/i.test(name)
   );
 }

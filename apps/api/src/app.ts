@@ -20,9 +20,13 @@ import {
   BlobMissingError,
   NotFoundError,
   PermissionError,
+  connectorSpaceId,
+  crawlConnector,
   type BlobStore,
   type Caller,
   type FileService,
+  type IndexJobs,
+  type VersionPolicyKind,
 } from "@canopy/store";
 import type { DocWorker } from "@canopy/docworker";
 import type { AuthConfig } from "./auth/config";
@@ -31,7 +35,7 @@ import { registerWebdav } from "./webdav";
 import { registerMcp } from "./mcp";
 import type { ProcessingEntry } from "./processors";
 import { AI_CONFIG_ID } from "./ai/user-config";
-import { decryptString, encryptString } from "./crypto";
+import { decryptPluginConfig, decryptString, encryptString } from "./crypto";
 
 const MIME: Record<string, string> = {
   pdf: "application/pdf",
@@ -49,6 +53,13 @@ const MIME: Record<string, string> = {
 function mimeFor(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   return MIME[ext] ?? "application/octet-stream";
+}
+
+/** The slice of the per-space SSE Durable Object namespace the stream route uses
+ *  (duck-typed so `apps/api` stays free of `@cloudflare/workers-types`). */
+interface SpaceChannelNamespace {
+  idFromName(name: string): unknown;
+  get(id: unknown): { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
 }
 
 /** Output token ceiling for /api/ai/generate, so a runaway generation can't rack up cost.
@@ -126,6 +137,11 @@ async function readCapped(stream: ReadableStream<Uint8Array>, cap: number): Prom
 const PROCESSOR_MAX_BYTES = 8 * 1024 * 1024;
 // Keep a file's processing log bounded — newest entries win.
 const PROCESSING_LOG_MAX = 20;
+// How long a lazy-on-view reconcile of a connected folder stays "fresh" — repeat
+// views inside this window serve straight from the index without re-hitting the NAS.
+const RECONCILE_DEBOUNCE_MS = 60_000;
+// Files whose text we pull + index per opportunistic (lazy-on-view) drain slice.
+const EXTRACT_DRAIN_LIMIT = 10;
 
 /** The DB-backed drive: a file service plus the blob store for streaming downloads. */
 export interface DriveDeps {
@@ -199,6 +215,12 @@ export interface AppDeps {
   search?: SearchIndex;
   /** Keep background work (e.g. labeling) alive after the response — `ctx.waitUntil` on a Worker. */
   waitUntil?: (p: Promise<unknown>) => void;
+  /**
+   * Background connector-indexing runner (the {@link IndexJobs} port). On Cloudflare a
+   * Workflow + Queue; on Node an in-process loop. When present, "Sync now" and on-connect
+   * enqueue through it instead of the inline crawl. Absent → the inline fallback runs.
+   */
+  indexJobs?: IndexJobs;
 }
 
 /**
@@ -268,6 +290,36 @@ export function createApp(deps: AppDeps) {
     return connector ? { connector, name: resolved!.config.repo ?? pluginId } : null;
   }
 
+  // The live connector for a *writable* connected space (a NAS), or null when the
+  // space isn't a configured, writable connector space. A writable source plugin
+  // (`writable: true`) is served read-write — its connected space accepts folder
+  // creates and uploads, routed through the connector. Gates every connector write.
+  async function writableConnectorSpace(
+    c: Context,
+    spaceId?: string | null,
+  ): Promise<{ connector: StorageConnector; name: string; pluginId: string } | null> {
+    if (!isConnectorSpace(spaceId)) return null;
+    const pluginId = spaceId.slice(CONNECTOR_SPACE.length);
+    if (!sourcePlugins.find((p) => p.id === pluginId)?.writable) return null;
+    const cs = await connectorSpace(c, spaceId);
+    return cs ? { ...cs, pluginId } : null;
+  }
+
+  // After a connector write, converge the affected folder so the new file/folder
+  // gets a real index row (and a stable id) like any space. Returns the space id.
+  async function reconcileConnectorWrite(
+    sub: string,
+    cw: { connector: StorageConnector; name: string; pluginId: string },
+    dir: string,
+  ): Promise<string> {
+    const spaceId = await drive!.service.ensureConnectorSpace(sub, cw.pluginId, cw.name);
+    await drive!.service.reconcileConnectorFolder(sub, spaceId, cw.pluginId, cw.connector, dir);
+    return spaceId;
+  }
+
+  // The parent folder of a space-relative path ("docs/a.txt" → "docs", "a.txt" → "").
+  const parentDir = (p: string) => p.split("/").slice(0, -1).join("/");
+
   // Map domain errors to HTTP. Anything else bubbles as a 500.
   async function handle(c: Context, fn: () => Promise<Response>): Promise<Response> {
     try {
@@ -298,7 +350,8 @@ export function createApp(deps: AppDeps) {
     const entry = await connector.stat(path);
     if (!entry || entry.kind === "folder") return c.json({ error: "not found" }, 404);
     c.header("Content-Type", mimeFor(entry.name));
-    c.header("Content-Disposition", `inline; filename="${encodeURIComponent(entry.name)}"`);
+    const disposition = c.req.query("download") != null ? "attachment" : "inline";
+    c.header("Content-Disposition", `${disposition}; filename="${encodeURIComponent(entry.name)}"`);
     return c.body(await connector.read(path));
   });
 
@@ -309,20 +362,7 @@ export function createApp(deps: AppDeps) {
   ): Promise<Record<string, string>> {
     if (!drive) return {};
     const raw = await drive.service.getPluginSettings(sub, plugin.id);
-    if (!raw) return {};
-    const stored = JSON.parse(raw) as Record<string, string>;
-    const out: Record<string, string> = {};
-    for (const f of plugin.configFields) {
-      const v = stored[f.key];
-      if (v == null) continue;
-      if (f.type === "secret") {
-        const dec = dataSources?.secret ? await decryptString(dataSources.secret, v) : null;
-        if (dec != null) out[f.key] = dec;
-      } else {
-        out[f.key] = v;
-      }
-    }
-    return out;
+    return decryptPluginConfig(dataSources?.secret, plugin.configFields, raw);
   }
 
   // Best-effort: run configured document processors over a freshly-added file and
@@ -426,27 +466,30 @@ export function createApp(deps: AppDeps) {
         if (!connector) return c.json({ error: "unknown mount" }, 404);
         return c.json(await connector.list(c.req.query("path") ?? ""));
       }
-      // A connected space (e.g. a GitHub repo): list the folder live from its
-      // connector, mapped into the same listing shape the drive returns so the UI
-      // renders it like any space. No drive rows — the file ids encode the path.
+      // A connected space (a Synology NAS, a GitHub repo): a persisted index over
+      // the connector. We converge the viewed folder against the backend, then list
+      // it from the drive — so its files have real ids and flow through search / MCP
+      // / download like any space. Debounced so rapid repeat views skip the NAS.
       const connectorTarget = c.req.query("space");
       if (isConnectorSpace(connectorTarget)) {
+        if (!drive) return c.json({ error: "no drive configured" }, 404);
+        const caller = await callerOf(c);
+        if (!caller) return c.json({ error: "unauthorized" }, 401);
         const cs = await connectorSpace(c, connectorTarget);
         if (!cs) return c.json({ error: "not connected" }, 404);
         const dir = c.req.query("path") ?? "";
-        const page = await cs.connector.list(dir);
-        const folders = page.items.filter((e) => e.kind === "folder").map((e) => e.name);
-        const files = page.items
-          .filter((e) => e.kind !== "folder")
-          .map((e) => ({
-            id: `${connectorTarget}:${e.path}`,
-            name: e.name,
-            metadata: { path: dir },
-            updatedAt: e.modifiedAt ?? "",
-            ownerLabel: cs.name,
-            version: { size: e.size ?? 0, mime: e.contentType ?? null },
-          }));
-        return c.json({ path: dir, spaceName: cs.name, files, folders });
+        const pluginId = connectorTarget.slice(CONNECTOR_SPACE.length);
+        const spaceId = await drive.service.ensureConnectorSpace(caller.sub, pluginId, cs.name);
+        const debounceKey = `reconcile:${spaceId}:${dir}`;
+        const fresh = dataSources?.cache ? await dataSources.cache.get<string>(debounceKey) : null;
+        if (!fresh) {
+          await drive.service.reconcileConnectorFolder(caller.sub, spaceId, pluginId, cs.connector, dir);
+          if (dataSources?.cache) await dataSources.cache.set(debounceKey, "1", RECONCILE_DEBOUNCE_MS);
+          // Pull + index a slice of any newly-seen files' text, off the response path.
+          runBackground(drive.service.drainExternalExtractQueue(EXTRACT_DRAIN_LIMIT).catch(() => {}));
+        }
+        const result = await drive.service.list(caller.sub, spaceId, dir);
+        return c.json({ ...result, spaceName: cs.name });
       }
       if (!drive) return c.json({ error: "no drive configured" }, 404);
       const caller = await callerOf(c);
@@ -473,6 +516,209 @@ export function createApp(deps: AppDeps) {
     return c.json(await drive!.service.search(caller.sub, { text: q, limit, cursor }));
   }));
 
+  // Offline-mirror delta: every file-metadata change in the caller's spaces since
+  // their last cursor. `?since=` is a URL-encoded JSON `{spaceId: seq}` map (absent →
+  // bootstrap every space). The ACL scope is resolved server-side (the cursor only
+  // carries seqs, never widens it), so this can't reach a space the caller can't read.
+  // `limit` caps the page; `hasMore` tells the client to pull again. See @canopy/mirror.
+  app.get("/api/changes", driveRoute(async (c, caller) => {
+    let since: Record<string, number> = {};
+    const raw = c.req.query("since");
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === "object") {
+          for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+            if (typeof v === "number" && Number.isFinite(v)) since[k] = v;
+          }
+        }
+      } catch {
+        // Malformed cursor → treat as bootstrap (return everything) rather than 400;
+        // a corrupt client cursor should self-heal, not wedge the drive offline.
+        since = {};
+      }
+    }
+    const limit = Number(c.req.query("limit")) || undefined;
+    return c.json(await drive!.service.changesSince(caller.sub, since, limit));
+  }));
+
+  // Live nudge: an SSE stream that emits a `bump` whenever the given space advances,
+  // so a connected client pulls the delta promptly. One stream per space (`?space=`,
+  // default = the caller's personal space). The stream carries no file data — only
+  // "go pull" — so access here just needs to gate WHICH space you can listen to.
+  // Backed by the per-space `SpaceChannel` Durable Object; without that binding (Node)
+  // we 204 and the client falls back to polling. See lib/sync.ts on the client.
+  app.get("/api/changes/stream", driveRoute(async (c, caller) => {
+    const channel = (c.env as { SPACE_CHANNEL?: SpaceChannelNamespace } | undefined)?.SPACE_CHANNEL;
+    if (!channel) return c.body(null, 204); // no live channel (e.g. Node) — poll instead
+    const space = c.req.query("space") || (await drive!.service.personalSpace(caller.sub));
+    // Gate the subscription to a space the caller can actually read.
+    const spaces = await drive!.service.spaces(caller.sub);
+    if (!spaces.some((s) => s.id === space)) return c.json({ error: "forbidden" }, 403);
+    const stub = channel.get(channel.idFromName(space));
+    return stub.fetch(`https://space-channel/stream?space=${encodeURIComponent(space)}`);
+  }));
+
+  // Force a (re-)index of a connected space (the "Sync now" / context-menu action):
+  // crawl the whole tree + drain extraction, ignoring the lazy-view debounce. Routed
+  // through the IndexJobs port when wired (a durable CF Workflow / the Node loop); else
+  // the inline crawl fallback. Either way it's backgrounded so the request returns at once.
+  app.post("/api/connector/:pluginId/sync", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs) return c.json({ error: "not connected" }, 404);
+    const spaceId = await drive!.service.ensureConnectorSpace(caller.sub, pluginId, cs.name);
+    const target = { ownerSub: caller.sub, spaceId, pluginId };
+    if (deps.indexJobs) {
+      runBackground(deps.indexJobs.startConnectorIndex(target));
+    } else {
+      runBackground(
+        (async () => {
+          try {
+            await crawlConnector(drive!.service, target, cs.connector);
+            await drive!.service.drainExternalExtractQueue(EXTRACT_DRAIN_LIMIT);
+          } catch (err) {
+            console.warn(`[sync] force-sync ${pluginId} failed: ${(err as Error).message}`);
+          }
+        })(),
+      );
+    }
+    return c.json({ started: true });
+  }));
+
+  // Indexing state of a connected space (the sidebar polls this to show an "Indexing…"
+  // hint). DB-only — no connector round-trip — so it's cheap to hit on a short interval.
+  app.get("/api/connector/:pluginId/status", driveRoute(async (c, caller) =>
+    c.json(await drive!.service.connectorIndexStatus(caller.sub, c.req.param("pluginId")!)),
+  ));
+
+  // Live indexing log: an SSE stream of the connector crawl's progress lines, for the
+  // space-settings dialog. Keyed by the caller's OWN connector space id (the same id the
+  // index Workflow posts `/log` lines to), so no extra ACL beyond auth — you can only
+  // ever reach your own connector's channel. Lines are transient (never stored): the DO
+  // fans out `index` events live; without the binding (Node) we 204 and the dialog shows
+  // status only. Mirrors `/api/changes/stream`.
+  app.get("/api/connector/:pluginId/logs/stream", driveRoute(async (c, caller) => {
+    const channel = (c.env as { SPACE_CHANNEL?: SpaceChannelNamespace } | undefined)?.SPACE_CHANNEL;
+    if (!channel) return c.body(null, 204); // no live channel (e.g. Node) — poll status instead
+    const spaceId = connectorSpaceId(caller.sub, c.req.param("pluginId")!);
+    const stub = channel.get(channel.idFromName(spaceId));
+    return stub.fetch(`https://space-channel/stream?space=${encodeURIComponent(spaceId)}`);
+  }));
+
+  // Read/write the connected space's version-retention policy (Keep all / Smart / Keep N
+  // days). The connector space is owned by the caller, so they can configure their own
+  // NAS/repo even though it's read-only to writes. `ensureConnectorSpace` makes the read
+  // valid before the user has ever browsed the space.
+  app.get("/api/connector/:pluginId/settings", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs) return c.json({ error: "not connected" }, 404);
+    const spaceId = await drive!.service.ensureConnectorSpace(caller.sub, pluginId, cs.name);
+    return c.json(await drive!.service.spaceVersionPolicy(caller, spaceId));
+  }));
+
+  app.put("/api/connector/:pluginId/settings", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs) return c.json({ error: "not connected" }, 404);
+    const body = await c.req.json<{ versionPolicy?: string; versionDays?: number | null }>();
+    const policy = body.versionPolicy;
+    if (policy !== "all" && policy !== "smart" && policy !== "days") return c.json({ error: "invalid policy" }, 400);
+    const days = policy === "days" ? Math.floor(Number(body.versionDays)) : null;
+    if (policy === "days" && (!Number.isFinite(days) || (days as number) < 1)) {
+      return c.json({ error: "versionDays must be a positive integer" }, 400);
+    }
+    const spaceId = await drive!.service.ensureConnectorSpace(caller.sub, pluginId, cs.name);
+    return c.json(await drive!.service.setSpaceVersionPolicy(caller, spaceId, policy as VersionPolicyKind, days));
+  }));
+
+  // ── connected-space branches (a GitHub repo's refs) ─────────────────────────
+  // A connector may expose branch management (StorageConnector.branches). The repo
+  // is rooted at one branch; switching is a config change we persist + re-index,
+  // while create/delete are live writes against the backend (need a write token).
+
+  // List the connected space's branches. `supported:false` when this connector has
+  // no branch concept (a NAS) — the UI then shows no picker.
+  app.get("/api/connector/:pluginId/branches", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs) return c.json({ error: "not connected" }, 404);
+    if (!cs.connector.branches) return c.json({ supported: false, current: null, branches: [] });
+    const resolved = await resolveConfig(c, pluginId);
+    try {
+      const branches = await cs.connector.branches.list();
+      return c.json({
+        supported: true,
+        current: cs.connector.branch ?? null,
+        // Only the owner of the config can persist a switch; the demo default can't.
+        canSwitch: !!resolved?.own,
+        branches,
+      });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 502);
+    }
+  }));
+
+  // Create a branch on the backend (from another ref, default = the current branch).
+  app.post("/api/connector/:pluginId/branches", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs?.connector.branches) return c.json({ error: "branches not supported" }, 400);
+    const body = await c.req.json<{ name?: string; from?: string }>();
+    const name = body.name?.trim();
+    if (!name) return c.json({ error: "branch name required" }, 400);
+    try {
+      await cs.connector.branches.create(name, body.from?.trim() || undefined);
+      return c.json({ ok: true }, 201);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 502);
+    }
+  }));
+
+  // Delete a branch on the backend. The name is a query param (`?name=`) so a branch
+  // with a "/" — e.g. "feature/x" — doesn't fight the path router.
+  app.delete("/api/connector/:pluginId/branches", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const name = (c.req.query("name") ?? "").trim();
+    if (!name) return c.json({ error: "branch name required" }, 400);
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs?.connector.branches) return c.json({ error: "branches not supported" }, 400);
+    if (name === cs.connector.branch) return c.json({ error: "can't delete the branch you're viewing" }, 400);
+    try {
+      await cs.connector.branches.remove(name);
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 502);
+    }
+  }));
+
+  // Switch the branch the connected space is rooted at: persist `branch` into the
+  // caller's plugin settings, then re-index so the space reflects the new ref. Needs
+  // the caller's own config (the demo default has nothing to persist into).
+  app.put("/api/connector/:pluginId/branch", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const src = findSource(pluginId);
+    if (!src) return c.json({ error: "unknown plugin" }, 404);
+    const body = await c.req.json<{ branch?: string }>();
+    const branch = body.branch?.trim();
+    if (!branch) return c.json({ error: "branch required" }, 400);
+    const resolved = await resolveConfig(c, pluginId);
+    if (!resolved?.own) {
+      return c.json({ error: "Connect your own repository in the plugin settings to switch branches." }, 400);
+    }
+    const raw = await drive!.service.getPluginSettings(caller.sub, pluginId);
+    const stored = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    stored.branch = branch;
+    await drive!.service.setPluginSettings(caller.sub, pluginId, JSON.stringify(stored));
+    // Re-index against the new branch so the connected space's files/search converge.
+    if (deps.indexJobs && dataSources?.connectorFor) {
+      const spaceId = await drive!.service.ensureConnectorSpace(caller.sub, pluginId, resolved.config.repo ?? pluginId);
+      runBackground(deps.indexJobs.startConnectorIndex({ ownerSub: caller.sub, spaceId, pluginId }));
+    }
+    return c.json({ ok: true, branch });
+  }));
+
   // Spaces the caller can see (for the space switcher). Real drive spaces, plus a
   // read-only "connected" space for each source plugin the caller has a connector
   // configured for (e.g. their GitHub repo) — derived from the plugin's settings,
@@ -484,13 +730,18 @@ export function createApp(deps: AppDeps) {
         const resolved = await resolveConfig(c, p.id);
         const connector = resolved ? dataSources.connectorFor(p.id, resolved.config) : null;
         if (!connector) continue;
+        const name = resolved!.config.repo ?? p.id;
+        // Persist the connected space so search reaches its files even before the
+        // user browses it; its public id stays `connector:<plugin>` for the UI.
+        await drive!.service.ensureConnectorSpace(caller.sub, p.id, name);
         spaces.push({
           id: `${CONNECTOR_SPACE}${p.id}`,
-          name: resolved!.config.repo ?? p.id,
+          name,
           kind: "connected",
-          role: "viewer",
+          role: p.writable ? "editor" : "viewer",
           mounted: false,
-          readonly: true,
+          // A writable source (a NAS) is served read-write; an indexed repo stays read-only.
+          readonly: !p.writable,
         });
       }
     }
@@ -639,8 +890,36 @@ export function createApp(deps: AppDeps) {
   app.post("/api/folders", driveRoute(async (c, caller) => {
     const { path } = await c.req.json<{ path: string }>();
     if (!path) return c.json({ error: "path required" }, 400);
+    // A writable connected space (a NAS): create the folder on the connector, then
+    // reconcile so it appears in the index. (resolveSpace would refuse it below.)
+    const cw = await writableConnectorSpace(c, c.req.query("space"));
+    if (cw) {
+      if (!cw.connector.mkdir) throw new PermissionError("connector cannot create folders");
+      await cw.connector.mkdir(path);
+      await reconcileConnectorWrite(caller.sub, cw, parentDir(path));
+      return c.json({ ok: true }, 201);
+    }
     const space = await resolveSpace(c, caller.sub);
     return c.json(await drive!.service.createFolder(space, caller.sub, path), 201);
+  }));
+
+  // Upload bytes straight into a writable connected space (a NAS): write through the
+  // connector, reconcile the folder, and return the resulting indexed file (so the UI
+  // gets a real id to open). The managed blob-store flow (/api/uploads/* → /api/files)
+  // doesn't apply here — the NAS is the source of truth, not the blob store.
+  // `?space=connector:<plugin>` + `?path=<space-relative file path>`; body = raw bytes.
+  app.put("/api/connector-files", driveRoute(async (c, caller) => {
+    const cw = await writableConnectorSpace(c, c.req.query("space"));
+    if (!cw) throw new PermissionError("space is read-only");
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "path required" }, 400);
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    await cw.connector.write(path, bytes);
+    const spaceId = await reconcileConnectorWrite(caller.sub, cw, parentDir(path));
+    const name = path.split("/").pop()!;
+    const listing = await drive!.service.list(caller.sub, spaceId, parentDir(path));
+    const file = listing.files.find((f: { name: string }) => f.name === name);
+    return c.json(file ?? { ok: true }, 201);
   }));
 
   // Lightweight stats for the dashboard (file count + bytes used in a space).
@@ -651,7 +930,7 @@ export function createApp(deps: AppDeps) {
   }));
 
   app.get("/api/files/:id", driveRoute(async (c, caller) =>
-    c.json(await drive!.service.getFile(caller, c.req.param("id")!)),
+    c.json(await drive!.service.getFileForDisplay(caller, c.req.param("id")!)),
   ));
 
   // Download bytes. `?embed=true` would project metadata into the file where the
@@ -659,15 +938,24 @@ export function createApp(deps: AppDeps) {
   app.get("/api/files/:id/content", driveRoute(async (c, caller) => {
     const file = await drive!.service.getFile(caller, c.req.param("id")!);
     if (!file.version) return c.json({ error: "no content" }, 404);
-    // Managed blobs stream from the blob store; external (indexed) sources are
-    // read through their connector — wired with the connections API.
-    if (file.version.source !== "blob" || !file.version.blobKey) {
-      return c.json({ error: "external content read not yet wired" }, 501);
-    }
-    const stream = await drive!.blobs.get(file.version.blobKey);
-    if (!stream) return c.json({ error: "blob missing" }, 404);
+    // A content identity that changes iff the bytes change: the blob hash (managed), the
+    // connector etag (external), else the version id. Lets the client serve a cached copy
+    // instantly and revalidate in the background with If-None-Match → 304 — and a 304 is
+    // metadata-only (no blob/NAS read), so the freshness check stays cheap even for a
+    // connector file whose backend is slow.
+    const tag = `"${file.version.blobKey ?? file.version.etag ?? file.version.id}"`;
+    c.header("ETag", tag);
+    c.header("Cache-Control", "no-cache"); // always revalidate; never serve stale without checking
+    // Strip a weak-validator prefix some clients/proxies add (`W/"…"`) so the 304 still fires.
+    if (c.req.header("if-none-match")?.replace(/^W\//, "") === tag) return c.body(null, 304);
+    // Managed blobs stream from the blob store; external (indexed) sources stream
+    // through their connector — both behind one opener.
+    const stream = await drive!.service.openContentStream(file);
+    if (!stream) return c.json({ error: "content unavailable" }, 404);
     c.header("Content-Type", file.version.mime ?? mimeFor(file.name));
-    c.header("Content-Disposition", `inline; filename="${encodeURIComponent(file.name)}"`);
+    // ?download forces a save dialog; the default inline lets previewable types render in-page.
+    const disposition = c.req.query("download") != null ? "attachment" : "inline";
+    c.header("Content-Disposition", `${disposition}; filename="${encodeURIComponent(file.name)}"`);
     return c.body(stream);
   }));
 
@@ -1135,6 +1423,17 @@ export function createApp(deps: AppDeps) {
       }
     }
     await drive!.service.setPluginSettings(caller.sub, src.id, JSON.stringify(stored));
+    // On connect: if this is a connector-backed source that now resolves, kick a
+    // background full index so the connected space populates without the user waiting.
+    // Idempotent — re-saving settings just re-indexes (reconcile is an etag diff).
+    if (deps.indexJobs && dataSources?.connectorFor && findSource(src.id)) {
+      const resolved = await resolveConfig(c, src.id);
+      const connector = resolved ? dataSources.connectorFor(src.id, resolved.config) : null;
+      if (connector) {
+        const spaceId = await drive!.service.ensureConnectorSpace(caller.sub, src.id, resolved!.config.repo ?? src.id);
+        runBackground(deps.indexJobs.startConnectorIndex({ ownerSub: caller.sub, spaceId, pluginId: src.id }));
+      }
+    }
     return c.json({ ok: true });
   }));
 

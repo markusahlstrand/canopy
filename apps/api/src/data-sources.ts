@@ -60,6 +60,9 @@ export const githubDataSource: ServerDataSource = {
 export const synologyDataSource: ServerDataSource = {
   id: "synology",
   configFields: synologyConnectorPlugin.configFields,
+  // The NAS connector is read-write (write / mkdir / remove), so its connected
+  // space is served read-write — folders, uploads, and the New menu all work.
+  writable: true,
   build: () => ({}),
 };
 

@@ -5,7 +5,7 @@ import { BUNDLED_MANIFEST_BY_ID } from "./bundled-manifests";
 /** Rich contributions for first-party plugins that ship real UI. */
 const RICH_CONTRIBUTIONS: Record<string, Contributions> = {
   documentation: {
-    detailView: { id: "documentation-detail", title: "Documentation" },
+    detailView: { id: "documentation-detail", title: "Documentation", nav: { section: "Apps" } },
   },
   calendar: {
     railPanel: { id: "calendar-rail", title: "Calendar", icon: "calendar" },
@@ -71,7 +71,14 @@ export const DOCS_PLUGIN_ID = "documentation";
  * viewers (image/pdf/markdown) so common file types preview out of the box;
  * other viewers (code, univer) are installed from the store on demand.
  */
-export const DEFAULT_INSTALLED = ["calendar", "tasks", "image-viewer", "pdf-viewer", "markdown-editor"];
+export const DEFAULT_INSTALLED = [
+  "calendar",
+  "tasks",
+  "image-viewer",
+  "pdf-viewer",
+  "markdown-editor",
+  "model-editor",
+];
 
 /**
  * Signed-out / anonymous visitors also get Documentation, which doubles as the

@@ -15,7 +15,16 @@ const SW_UPDATE_INTERVAL_MS = 60_000
 registerSW({
   immediate: true,
   onRegisteredSW(_swUrl, registration) {
-    if (registration) setInterval(() => void registration.update(), SW_UPDATE_INTERVAL_MS)
+    if (!registration) return
+    // Swallow transient SW/network rejections so repeated checks don't log unhandled rejections.
+    const check = () => void registration.update().catch(() => {})
+    setInterval(check, SW_UPDATE_INTERVAL_MS)
+    // Also check the instant the tab regains focus, so coming back to a
+    // long-open tab picks up a fresh deploy without waiting out the interval.
+    window.addEventListener('focus', check)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') check()
+    })
   },
 })
 

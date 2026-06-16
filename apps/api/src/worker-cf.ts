@@ -6,3 +6,5 @@
 // this.
 export { default } from "./worker";
 export { DocWorker } from "./container/docworker-do";
+export { SpaceChannel } from "./container/space-channel";
+export { ConnectorIndexWorkflow } from "./container/connector-index-workflow";

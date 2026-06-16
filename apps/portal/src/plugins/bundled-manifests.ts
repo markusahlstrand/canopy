@@ -9,6 +9,12 @@ import pdfManifest from "../../../../examples/plugins/pdf-viewer/canopy.json?raw
 import markdownManifest from "../../../../examples/plugins/markdown-editor/canopy.json?raw";
 import codeManifest from "../../../../examples/plugins/code-editor/canopy.json?raw";
 import univerManifest from "../../../../examples/plugins/univer-office/canopy.json?raw";
+// Model Editor is a trusted first-party React view, not a sandboxed ESM plugin:
+// it ships a manifest (catalog listing + standalone app + .prisma viewer/creator)
+// but no index.js source, so its sandbox source resolves to "". The host renders
+// its React components through the trusted PLUGIN_UI registry (DetailView + FileView,
+// keyed by plugin id), the same path as tasks/documentation — no per-plugin host code.
+import modelManifest from "../../../../examples/plugins/model-editor/canopy.json?raw";
 
 /**
  * Manifests for the plugins compiled into this build. Order here is the order
@@ -22,6 +28,7 @@ export const BUNDLED_MANIFESTS: PluginManifest[] = [
   markdownManifest,
   codeManifest,
   univerManifest,
+  modelManifest,
 ].map((raw) => JSON.parse(raw) as PluginManifest);
 
 export const BUNDLED_MANIFEST_BY_ID = new Map(BUNDLED_MANIFESTS.map((m) => [m.id, m]));

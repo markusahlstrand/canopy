@@ -19,12 +19,16 @@ A version's content is **polymorphic** — it's one of:
 
 - **Managed (`blob`).** Canopy owns the bytes: content-addressed, de-duplicated, reference-
   counted, with the database as the source of truth. This is the default drive.
-- **Connected (`external`) — in progress.** A pointer into a filesystem / S3 / R2 you own,
-  indexed by object key + etag. There the bucket is the source of truth and the DB is an
-  index over it.
+- **Connected (`external`).** A pointer into a filesystem / S3 / R2 / NAS you own, indexed by
+  object key + etag in a per-user read-only `connected` space. There the bucket is the source of
+  truth and the DB is an index over it, reconciled from the connector — lazily when you browse a
+  folder, and by a scheduled sweep (incremental via the connector's `changes()` feed where it has
+  one, e.g. Synology's FileStation search, else a bounded crawl). Renames are matched by content
+  signature so a moved file keeps its id (and its extracted text).
 
 Reads dispatch on the source: a managed blob streams from the blob store; an external
-version is read through its connector.
+version is read through its connector — so an indexed NAS/repo file downloads, previews, and is
+fetchable over MCP like any managed file.
 
 ## Metadata & virtual folders
 
@@ -44,14 +48,32 @@ set of paths. Storage stays flat; the tree is computed. You can also create an *
 — it's recorded explicitly (a row in `folders`) so it shows up before it has any files, and is
 merged into the derived tree.
 
+## Change sequence & the offline mirror
+
+Each space carries a **monotonic change counter** (`space_seq`), and every file row records the
+`seq` it was last touched at. Any mutation — create, version, star/move/rename, trash, or a
+connector reconcile — advances the counter and stamps the changed rows (a hard delete writes a
+`tombstones` row instead, since no row survives). `updated_at` is a wall-clock display value and is
+deliberately *not* used for this: it isn't monotonic and ties within a batch, whereas a dense `seq`
+is a true total order.
+
+That order is what powers offline. `GET /api/changes?since=<{spaceId: seq}>` returns every change
+in the caller's spaces past their cursors — scoped server-side to the spaces they can read, never
+widened by the client — and the portal folds it into an IndexedDB mirror it serves folder views
+from. So the sync is a **diff, not a re-list**: the client only ever pulls what changed. See
+[Architecture → Offline & sync](architecture) for the client side (the live `SpaceChannel` nudge,
+cache-first content, per-space cache budgets).
+
 ## Full-text search
 
-Every managed file is mirrored into a **full-text index** — an FTS5 virtual table (`search_index`)
-behind the core `SearchIndex` interface, backed by libsql on Node and D1 on Cloudflare. The index
-is **kept in sync on change**: creating, editing, moving, or trashing a file reindexes (or drops)
-it, folding the file name, extracted body text, and metadata (description, AI labels, tags) into
-one searchable document. A boot-time backfill (`reindexAll`) covers anything created before the
-index existed.
+Every file — managed **and connected** — is mirrored into a **full-text index**: an FTS5 virtual
+table (`search_index`) behind the core `SearchIndex` interface, backed by libsql on Node and D1 on
+Cloudflare. The index is **kept in sync on change**: creating, editing, moving, or trashing a file
+reindexes (or drops) it, folding the file name, extracted body text, and metadata (description, AI
+labels, tags) into one searchable document. For a connected (`external`) file the body is pulled
+through the connector by a background extract queue, cached, and folded in the same way — so a NAS
+or repo file is findable by its contents, not just its name. A boot-time backfill (`reindexAll`)
+covers anything created before the index existed.
 
 Queries go through the host's `GET /api/search`, **scoped to the caller's spaces** — you never see
 hits for items you can't read. The portal's ⌘K command palette is the first consumer. See

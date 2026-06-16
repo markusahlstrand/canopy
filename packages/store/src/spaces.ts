@@ -1,6 +1,7 @@
 import type { Db } from "./db";
-import type { Role, Space } from "./types";
+import type { Role, Space, VersionPolicyKind } from "./types";
 import { deleteTuple, memberSpaceIds, spaceRole, writeTuple } from "./authz";
+import { ensureConnection } from "./connections";
 
 interface SpaceRow {
   id: string;
@@ -10,15 +11,22 @@ interface SpaceRow {
   created_at: string;
   icon: string | null;
   color: string | null;
+  version_policy: string | null;
+  version_days: number | null;
 }
+/** Coerce the stored column (NULL on pre-migration-21 rows) to a known policy. */
+const toPolicy = (v: string | null): VersionPolicyKind =>
+  v === "all" || v === "days" ? v : "smart";
 const toSpace = (r: SpaceRow): Space => ({
   id: r.id,
   name: r.name,
-  kind: r.kind === "group" ? "group" : "personal",
+  kind: r.kind === "group" ? "group" : r.kind === "connected" ? "connected" : "personal",
   createdBy: r.created_by,
   createdAt: r.created_at,
   icon: r.icon ?? null,
   color: r.color ?? null,
+  versionPolicy: toPolicy(r.version_policy),
+  versionDays: r.version_days ?? null,
 });
 
 /** Deterministic personal-space id for a user. */
@@ -32,6 +40,26 @@ export async function ensurePersonalSpace(db: Db, userSub: string): Promise<stri
     [id, userSub, new Date().toISOString()],
   );
   await writeTuple(db, { objectType: "space", objectId: id, relation: "owner", subjectType: "user", subjectId: userSub });
+  return id;
+}
+
+/** Deterministic per-user connected-space id for a plugin's connector. */
+export const connectorSpaceId = (userSub: string, pluginId: string): string => `connector:${pluginId}:${userSub}`;
+
+/**
+ * Ensure the user's connected space for a plugin exists (idempotent). Returns its
+ * id. The space is owned by the user — so it joins the ACL scope and search reaches
+ * its files — but read-only to user writes (only the reconciler writes its rows).
+ * Backed by a {@link Connection} row so a crawl can checkpoint against it.
+ */
+export async function ensureConnectorSpace(db: Db, userSub: string, pluginId: string, name: string): Promise<string> {
+  const id = connectorSpaceId(userSub, pluginId);
+  await db.run(
+    `INSERT OR IGNORE INTO spaces (id, name, kind, created_by, created_at) VALUES (?, ?, 'connected', ?, ?)`,
+    [id, name, userSub, new Date().toISOString()],
+  );
+  await writeTuple(db, { objectType: "space", objectId: id, relation: "owner", subjectType: "user", subjectId: userSub });
+  await ensureConnection(db, { id, tenantId: id, ownerId: userSub, type: pluginId, name });
   return id;
 }
 
@@ -49,7 +77,17 @@ export async function createSpace(
     [id, input.name, input.createdBy, now, icon, color],
   );
   await writeTuple(db, { objectType: "space", objectId: id, relation: "owner", subjectType: "user", subjectId: input.createdBy });
-  return { id, name: input.name, kind: "group", createdBy: input.createdBy, createdAt: now, icon, color };
+  return {
+    id,
+    name: input.name,
+    kind: "group",
+    createdBy: input.createdBy,
+    createdAt: now,
+    icon,
+    color,
+    versionPolicy: "smart",
+    versionDays: null,
+  };
 }
 
 /** Grant a user a role in a space (a tuple `space:<id>#<role>@user:<sub>`). */
@@ -110,12 +148,50 @@ export async function renameSpace(db: Db, id: string, name: string): Promise<Spa
   return getSpace(db, id);
 }
 
-/** Spaces the user can see (personal + any group they belong to). */
+/** This space's version-retention policy (defaults to `'smart'` for unknown/older rows). */
+export async function getVersionPolicy(
+  db: Db,
+  id: string,
+): Promise<{ policy: VersionPolicyKind; days: number | null }> {
+  const row = await db.first<{ version_policy: string | null; version_days: number | null }>(
+    "SELECT version_policy, version_days FROM spaces WHERE id = ?",
+    [id],
+  );
+  return { policy: toPolicy(row?.version_policy ?? null), days: row?.version_days ?? null };
+}
+
+/**
+ * Set a space's version-retention policy. `days` is only meaningful for `'days'`
+ * (cleared to NULL otherwise, so a later switch back can't inherit a stale window).
+ */
+export async function setVersionPolicy(
+  db: Db,
+  id: string,
+  policy: VersionPolicyKind,
+  days: number | null,
+): Promise<void> {
+  await db.run("UPDATE spaces SET version_policy = ?, version_days = ? WHERE id = ?", [
+    policy,
+    policy === "days" ? days : null,
+    id,
+  ]);
+}
+
+/**
+ * Spaces the user can see in the switcher (personal + any group they belong to).
+ * Excludes `connected` spaces: those are the persisted index over a connector and
+ * are presented separately (derived live from the plugin's config, with a stable
+ * public id), so they'd otherwise show twice. They remain in `memberSpaceIds`, so
+ * search still reaches their files.
+ */
 export async function listSpaces(db: Db, userSub: string): Promise<Space[]> {
   const ids = await memberSpaceIds(db, userSub);
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => "?").join(",");
-  const rows = await db.all<SpaceRow>(`SELECT * FROM spaces WHERE id IN (${placeholders}) ORDER BY kind, name`, ids);
+  const rows = await db.all<SpaceRow>(
+    `SELECT * FROM spaces WHERE id IN (${placeholders}) AND kind <> 'connected' ORDER BY kind, name`,
+    ids,
+  );
   return rows.map(toSpace);
 }
 

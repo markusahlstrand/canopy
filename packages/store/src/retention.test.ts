@@ -53,3 +53,39 @@ describe("versionsToPrune — tiered retention curve", () => {
     expect(versionsToPrune(versions, NOW)).toEqual(["doomed"]);
   });
 });
+
+describe("versionsToPrune — explicit policies", () => {
+  it("'all' prunes nothing, even an old crowded bucket", () => {
+    const base = 40 * DAY;
+    const versions = [v("a", base), v("b", base + DAY), v("c", base + 2 * DAY)];
+    expect(versionsToPrune(versions, NOW, { policy: "all" })).toEqual([]);
+  });
+
+  it("'days' prunes everything older than the window, keeps the rest", () => {
+    const versions = [v("recent", 2 * DAY), v("edge", 6 * DAY), v("old", 9 * DAY)];
+    // 7-day window → only the 9-day-old version falls outside.
+    expect(versionsToPrune(versions, NOW, { policy: "days", days: 7 })).toEqual(["old"]);
+  });
+
+  it("'days' still spares pinned + current versions outside the window", () => {
+    const versions = [
+      v("pinned-old", 30 * DAY, { keep: true }),
+      v("current-old", 31 * DAY, { isCurrent: true }),
+      v("plain-old", 32 * DAY),
+    ];
+    expect(versionsToPrune(versions, NOW, { policy: "days", days: 7 })).toEqual(["plain-old"]);
+  });
+
+  it("'days' with a non-positive window falls back to the smart curve", () => {
+    const base = 10 * DAY;
+    const versions = [v("d-new", base), v("d-old", base + 3 * HOUR)]; // same day bucket
+    // days: 0 is invalid → behaves like the default tiered prune.
+    expect(versionsToPrune(versions, NOW, { policy: "days", days: 0 })).toEqual(["d-old"]);
+  });
+
+  it("explicit 'smart' matches the default", () => {
+    const base = 10 * DAY;
+    const versions = [v("d-new", base), v("d-old", base + 3 * HOUR)];
+    expect(versionsToPrune(versions, NOW, { policy: "smart" })).toEqual(versionsToPrune(versions, NOW));
+  });
+});

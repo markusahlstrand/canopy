@@ -9,6 +9,8 @@ export interface StorageEntry {
   size?: number;
   /** ISO 8601. */
   modifiedAt?: string;
+  /** ISO 8601 — the backend's own creation time, when it exposes one. */
+  createdAt?: string;
   etag?: string;
   contentType?: string;
 }
@@ -30,6 +32,33 @@ export interface ChangeEvent {
   type: ChangeType;
   path: string;
   entry?: StorageEntry;
+}
+
+/** One ref in a connector that has a branch concept (e.g. a GitHub repo). */
+export interface BranchInfo {
+  name: string;
+  /** The repo's default branch (HEAD) — never deletable. */
+  isDefault: boolean;
+  /** The branch the connector is currently rooted at. */
+  current: boolean;
+  /** Branch protection is on (a guard for the delete affordance). */
+  protected?: boolean;
+  /** Tip commit SHA, when the backend reports it. */
+  commitSha?: string;
+}
+
+/**
+ * Optional branch management for connectors backed by a versioned source (today:
+ * GitHub). The connector is rooted at one branch — `list()` reports the rest so the
+ * UI can switch (a switch is a config change the host persists, then re-indexes),
+ * create, or delete. Create/delete are real writes against the backend and need a
+ * token with write access; their errors bubble up verbatim. Connectors without a
+ * branch concept (a NAS, R2) omit this and the UI shows no picker.
+ */
+export interface BranchOps {
+  list(): Promise<BranchInfo[]>;
+  create(name: string, from?: string): Promise<void>;
+  remove(name: string): Promise<void>;
 }
 
 /**
@@ -58,6 +87,10 @@ export interface StorageConnector {
    * lazy reconcile on read.
    */
   changes?(cursor?: string): AsyncIterable<ChangeEvent>;
+  /** The branch this connector is rooted at, when it has a branch concept. */
+  readonly branch?: string;
+  /** Optional branch management (list / create / delete). See {@link BranchOps}. */
+  branches?: BranchOps;
 }
 
 /** A storage connector packaged as a plugin: a factory plus its config contract. */
