@@ -1,8 +1,15 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import type { SourceFile } from "./graph-types";
 import type { SpecViewProps } from "./view-types";
+
+/** A request to reveal a specific line; nonce re-triggers even for a repeat target. */
+export interface RevealTarget {
+  file: string;
+  line?: number;
+  nonce: number;
+}
 
 const KIND_ICON: Record<SourceFile["kind"], string> = { tsp: "file-code", openapi: "globe", arazzo: "board" };
 const KIND_LABEL: Record<SourceFile["kind"], string> = { tsp: "TypeSpec", openapi: "OpenAPI", arazzo: "Arazzo" };
@@ -17,10 +24,28 @@ type Seg = { text: string } | { text: string; onClick: () => void; title: string
  * an `operationId` jumps to the Endpoints tab. This is the "complete view" — the
  * three projection tabs plus the canonical source they're built from.
  */
-export function SourceTab({ graph, onNavigate }: SpecViewProps) {
+export function SourceTab({ graph, onNavigate, reveal }: SpecViewProps & { reveal?: RevealTarget | null }) {
   const files = graph.sourceFiles;
   const [activeName, setActiveName] = useState(() => files[0]?.name ?? "");
   const active = files.find((f) => f.name === activeName) ?? files[0];
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [highlight, setHighlight] = useState<number | null>(null);
+
+  // Respond to a "View source" jump: switch file, scroll the line into view, flash it.
+  useEffect(() => {
+    if (!reveal) return;
+    setActiveName(reveal.file);
+    setHighlight(reveal.line ?? null);
+    const scrollT = setTimeout(() => {
+      const el = scrollRef.current?.querySelector(`[data-line="${reveal.line}"]`);
+      el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 60);
+    const clearT = setTimeout(() => setHighlight(null), 2400);
+    return () => {
+      clearTimeout(scrollT);
+      clearTimeout(clearT);
+    };
+  }, [reveal?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fileByBase = useMemo(() => new Map(files.map((f) => [basename(f.name), f])), [files]);
   const knownOps = useMemo(() => new Set(graph.endpoints.map((e) => e.operationId)), [graph.endpoints]);
@@ -106,11 +131,11 @@ export function SourceTab({ graph, onNavigate }: SpecViewProps) {
               <span className="font-mono font-semibold">{active.name}</span>
               <span className="ml-auto font-mono text-[10px] text-muted-foreground">{lines.length} lines · click imports & operationIds to follow</span>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto bg-background">
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-background">
               <pre className="min-w-full py-2 font-mono text-[12px] leading-[1.5]">
                 {lines.map((line, i) => (
-                  <div key={i} className="flex hover:bg-accent/30">
-                    <span className="sticky left-0 w-12 shrink-0 select-none bg-background pr-3 text-right text-muted-foreground/50">{i + 1}</span>
+                  <div key={i} data-line={i + 1} className={cn("flex transition-colors", highlight === i + 1 ? "bg-primary/15" : "hover:bg-accent/30")}>
+                    <span className={cn("sticky left-0 w-12 shrink-0 select-none pr-3 text-right", highlight === i + 1 ? "bg-primary/15 text-primary" : "bg-background text-muted-foreground/50")}>{i + 1}</span>
                     <code className="whitespace-pre px-3">
                       {linkify(line).map((seg, j) =>
                         "onClick" in seg ? (

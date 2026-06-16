@@ -1,5 +1,6 @@
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
+import { locate, type SourceLocation } from "./source-locate";
 import type { SpecViewProps } from "./view-types";
 
 /** A clickable row that navigates to another item (the cross-layer jump). */
@@ -36,7 +37,10 @@ const Empty = ({ text }: { text: string }) => <div className="px-2 py-1 text-[12
  * the item's details plus its cross-layer usages, every one a button that jumps to
  * the related item in its own tab. This is where "find usages" lives.
  */
-export function SpecInspector({ index, selection, onNavigate, onSelect }: SpecViewProps) {
+export function SpecInspector({ graph, index, selection, onNavigate, onSelect, onOpenSource }: SpecViewProps) {
+  const loc = selection ? locate(graph, selection) : undefined;
+  const headerSource = { loc, onOpenSource };
+
   if (!selection) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
@@ -55,7 +59,7 @@ export function SpecInspector({ index, selection, onNavigate, onSelect }: SpecVi
     const flows = index.flowsReachingModel(m.id);
     return (
       <div className="flex h-full flex-col overflow-y-auto">
-        <Header icon={m.kind === "enum" ? "list" : "database"} kind={m.kind === "enum" ? "Enum" : "Entity"} title={m.name} doc={m.doc} />
+        <Header icon={m.kind === "enum" ? "list" : "database"} kind={m.kind === "enum" ? "Enum" : "Entity"} title={m.name} doc={m.doc} {...headerSource} />
         {m.kind === "enum" ? (
           <Section title="Values" count={m.enumValues?.length}>
             <div className="flex flex-wrap gap-1 px-1">
@@ -104,7 +108,7 @@ export function SpecInspector({ index, selection, onNavigate, onSelect }: SpecVi
     const steps = index.stepsCallingEndpoint(e.id);
     return (
       <div className="flex h-full flex-col overflow-y-auto">
-        <Header icon="globe" kind="Endpoint" title={e.operationId} doc={e.doc} mono={`${e.verb?.toUpperCase() ?? ""} ${e.route ?? ""}`.trim()} />
+        <Header icon="globe" kind="Endpoint" title={e.operationId} doc={e.doc} mono={`${e.verb?.toUpperCase() ?? ""} ${e.route ?? ""}`.trim()} {...headerSource} />
         <Section title="Parameters" count={e.parameters.length}>
           {e.parameters.length ? (
             <ul className="px-1">
@@ -142,7 +146,7 @@ export function SpecInspector({ index, selection, onNavigate, onSelect }: SpecVi
     if (!f) return <Empty text="This flow is gone." />;
     return (
       <div className="flex h-full flex-col overflow-y-auto">
-        <Header icon="board" kind="Workflow" title={f.workflowId} doc={f.summary} />
+        <Header icon="board" kind="Workflow" title={f.workflowId} doc={f.summary} {...headerSource} />
         {!!f.inputs.length && <Section title="Inputs"><div className="flex flex-wrap gap-1 px-1">{f.inputs.map((i) => <span key={i} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{i}</span>)}</div></Section>}
         <Section title="Steps" count={f.steps.length}>
           {f.steps.map((s) => (
@@ -161,7 +165,7 @@ export function SpecInspector({ index, selection, onNavigate, onSelect }: SpecVi
   const deps = s.dependsOn.map((id) => index.stepById.get(id)).filter(Boolean);
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <Header icon="circle-check" kind={`Step · ${s.workflowId}`} title={s.stepId} doc={s.description} />
+      <Header icon="circle-check" kind={`Step · ${s.workflowId}`} title={s.stepId} doc={s.description} {...headerSource} />
       <Section title="Calls endpoint">
         {s.operationId ? (
           ep ? <LinkRow icon="globe" label={ep.operationId} sub={ep.verb?.toUpperCase()} onClick={() => onNavigate({ kind: "endpoint", id: ep.id })} />
@@ -196,7 +200,23 @@ export function SpecInspector({ index, selection, onNavigate, onSelect }: SpecVi
   );
 }
 
-function Header({ icon, kind, title, doc, mono }: { icon: string; kind: string; title: string; doc?: string; mono?: string }) {
+function Header({
+  icon,
+  kind,
+  title,
+  doc,
+  mono,
+  loc,
+  onOpenSource,
+}: {
+  icon: string;
+  kind: string;
+  title: string;
+  doc?: string;
+  mono?: string;
+  loc?: SourceLocation;
+  onOpenSource?: (file: string, line?: number) => void;
+}) {
   return (
     <div className="px-3 py-3">
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -205,6 +225,16 @@ function Header({ icon, kind, title, doc, mono }: { icon: string; kind: string; 
       <div className="mt-0.5 break-words font-mono text-[15px] font-semibold">{title}</div>
       {mono && <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{mono}</div>}
       {doc && <p className="mt-1.5 text-[12px] text-muted-foreground">{doc}</p>}
+      {loc && onOpenSource && (
+        <button
+          onClick={() => onOpenSource(loc.file, loc.line)}
+          title={`Open ${loc.file}${loc.line ? `:${loc.line}` : ""} in the Source tab`}
+          className="mt-2 flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
+        >
+          <Icon name="file-code" size={12} /> View source
+          <span className="font-mono text-[10px] opacity-70">{loc.file}{loc.line ? `:${loc.line}` : ""}</span>
+        </button>
+      )}
     </div>
   );
 }

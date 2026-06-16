@@ -36,6 +36,16 @@ export interface SpecModel {
   name: string;
   namespace?: string;
   kind: "model" | "enum";
+  /**
+   * Whether the model is a persisted **entity** (has identity / lives beyond a single
+   * request) or a transient **dto** — a request/response payload that only flows
+   * through an operation. Derived, not declared: a model is an entity when it carries
+   * `@key` or is reachable from a `@key`-bearing model through field references;
+   * everything else is a wire shape. The ER view shows entities and renders DTOs
+   * distinctly so the graph stays about real data relationships, not request envelopes.
+   * Set during graph assembly; `undefined` only on graphs built before classification.
+   */
+  role?: "entity" | "dto";
   doc?: string;
   fields: SpecField[];
   /** Enum members when `kind === "enum"`. */
@@ -170,6 +180,22 @@ export interface SourceFile {
   text: string;
 }
 
+// ── Layout sidecar (canopy.layout.json) ───────────────────────────────────────
+// Saved entity arrangements. The `.tsp` stays the source of truth for the model;
+// this only remembers positions. One file can hold several named views.
+
+export interface LayoutView {
+  id: string;
+  name: string;
+  /** model id → position. Missing entities fall back to auto-layout. */
+  entities: Record<string, { x: number; y: number }>;
+}
+
+export interface LayoutSidecar {
+  version: number;
+  views: LayoutView[];
+}
+
 export interface ProjectGraph {
   models: SpecModel[];
   endpoints: SpecEndpoint[];
@@ -180,6 +206,10 @@ export interface ProjectGraph {
   files: { tsp: string[]; openapi: string[]; arazzo: string[] };
   /** Every discovered file with its raw text — the canonical source of truth. */
   sourceFiles: SourceFile[];
+  /** Committed entity layout (from `canopy.layout.json`), with its named views. */
+  layout: LayoutSidecar;
+  /** Drive id of the layout sidecar, when one exists (for write-back). */
+  layoutFileId?: string;
   /** True when no contract/workflow content was found at all. */
   empty: boolean;
 }
@@ -192,5 +222,6 @@ export const emptyGraph = (): ProjectGraph => ({
   diagnostics: [],
   files: { tsp: [], openapi: [], arazzo: [] },
   sourceFiles: [],
+  layout: { version: 1, views: [{ id: "default", name: "Default", entities: {} }] },
   empty: true,
 });

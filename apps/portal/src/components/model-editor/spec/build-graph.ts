@@ -6,17 +6,43 @@
 
 import { parseArazzo } from "./arazzo";
 import type { DiscoveredFiles } from "./discover";
+import { emptySidecar, parseSidecar } from "./layout-sidecar";
 import { parseOpenApi } from "./openapi";
 import { compileTypeSpec } from "./typespec";
-import { type Diagnostic, type ProjectGraph, type SourceFile, type SpecFlow, type SpecSource } from "./graph-types";
+import { type Diagnostic, type ProjectGraph, type SourceFile, type SpecFlow, type SpecModel, type SpecSource } from "./graph-types";
 
 const basename = (p: string) => p.replace(/[#?].*$/, "").split("/").pop()!.trim();
+
+/**
+ * Tag each model as a persisted `entity` or a transient `dto`. An entity has identity
+ * (`@key`) or is reachable from one through model field references; everything else is
+ * a request/response payload that only flows through an operation. We grow the entity
+ * set from the `@key`-bearing seeds to a fixpoint: a `Listing` (no key, referenced only
+ * by an operation) stays a DTO, while a `File` it embeds is pulled in as an entity.
+ */
+export function classifyModels(models: SpecModel[]): SpecModel[] {
+  const byId = new Map(models.map((m) => [m.id, m] as const));
+  const entityIds = new Set(models.filter((m) => m.fields.some((f) => f.key)).map((m) => m.id));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const id of entityIds) {
+      for (const f of byId.get(id)!.fields) {
+        if (f.ref && byId.has(f.ref) && !entityIds.has(f.ref)) {
+          entityIds.add(f.ref);
+          grew = true;
+        }
+      }
+    }
+  }
+  return models.map((m) => ({ ...m, role: entityIds.has(m.id) ? "entity" : "dto" }));
+}
 
 export async function buildProjectGraph(files: DiscoveredFiles): Promise<ProjectGraph> {
   const diagnostics: Diagnostic[] = [];
 
   // ── Contract: TypeSpec models + endpoints ──
-  const { models, endpoints, diagnostics: tspDiag } = await compileTypeSpec(files.tsp);
+  const { models: rawModels, endpoints, diagnostics: tspDiag } = await compileTypeSpec(files.tsp);
+  const models = classifyModels(rawModels);
   diagnostics.push(...tspDiag);
 
   // ── OpenAPI: operationId sets per emitted file (for source resolution + validation) ──
@@ -88,6 +114,8 @@ export async function buildProjectGraph(files: DiscoveredFiles): Promise<Project
       arazzo: files.arazzo.map((f) => f.name),
     },
     sourceFiles,
+    layout: files.layout ? parseSidecar(files.layout.text) : emptySidecar(),
+    layoutFileId: files.layout?.id,
     empty,
   };
 }

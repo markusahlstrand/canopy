@@ -7,6 +7,7 @@
 // targets and non-local source urls are surfaced as unresolved rather than chased.
 
 import type { TextFile } from "./graph-types";
+import { SIDECAR_NAME } from "./layout-sidecar";
 
 export interface SpecFileRef {
   id: string;
@@ -24,6 +25,8 @@ export interface DiscoveredFiles {
   tsp: TextFile[];
   arazzo: TextFile[];
   openapi: TextFile[];
+  /** The `canopy.layout.json` sidecar, when present in the folder. */
+  layout?: TextFile;
 }
 
 export const isTsp = (name: string) => /\.tsp$/i.test(name);
@@ -61,13 +64,15 @@ export async function discoverProject(
       }
     });
 
+  let layout: TextFile | undefined;
   for (const result of await Promise.all(reads)) {
     if (!result) continue;
     const { ref, text } = result;
-    if (isTsp(ref.name)) tsp.set(ref.name, toTextFile(ref, text));
+    if (ref.name === SIDECAR_NAME) layout = toTextFile(ref, text);
+    else if (isTsp(ref.name)) tsp.set(ref.name, toTextFile(ref, text));
     else if (isArazzo(ref.name)) arazzo.set(ref.name, toTextFile(ref, text));
     else if (isYamlOrJson(ref.name) && (looksLikeOpenApi(ref.name) || sniffOpenApi(text))) openapi.set(ref.name, toTextFile(ref, text));
   }
 
-  return { tsp: [...tsp.values()], arazzo: [...arazzo.values()], openapi: [...openapi.values()] };
+  return { tsp: [...tsp.values()], arazzo: [...arazzo.values()], openapi: [...openapi.values()], layout };
 }

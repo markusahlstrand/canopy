@@ -1,5 +1,13 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
@@ -11,6 +19,7 @@ import { FlowsTab } from "./flows-tab";
 import { SourceTab } from "./source-tab";
 import { SpecInspector } from "./spec-inspector";
 import { DiagnosticsBar } from "./diagnostics-bar";
+import { useLayout, type CommitLayoutFn } from "./use-layout";
 import { tabForKind, type SpecTab, type SpecViewProps } from "./view-types";
 
 const FileChips = ({ graph }: { graph: ProjectGraph }) => (
@@ -29,11 +38,17 @@ const FileChips = ({ graph }: { graph: ProjectGraph }) => (
 export function SpecEditorView({
   graph,
   fileName,
+  projectKey,
+  onCommitLayout,
   onReload,
   reloading,
 }: {
   graph: ProjectGraph;
   fileName: string;
+  /** Stable id for the project folder — keys persisted entity layout. */
+  projectKey: string;
+  /** Writes the layout sidecar to the repo; absent when the host can't write. */
+  onCommitLayout?: CommitLayoutFn;
   onReload?: () => void;
   reloading?: boolean;
 }) {
@@ -41,9 +56,19 @@ export function SpecEditorView({
   const [selection, setSelection] = useState<SelectionRef | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [diagOpen, setDiagOpen] = useState(false);
+  // A request to reveal a line in the Source tab; the nonce re-triggers the scroll
+  // even when the same target is opened twice.
+  const [reveal, setReveal] = useState<{ file: string; line?: number; nonce: number } | null>(null);
+  // Entities-only by default; fall back to showing DTOs when the spec has no entities,
+  // so the canvas is never mysteriously empty.
+  const [showDtos, setShowDtos] = useState(() => !graph.models.some((m) => m.role === "entity"));
+  const entityCount = useMemo(() => graph.models.filter((m) => m.role !== "dto").length, [graph.models]);
+  const dtoCount = graph.models.length - entityCount;
 
   const index = useMemo(() => new SpecIndex(graph), [graph]);
   const related = useMemo(() => index.related(selection), [index, selection]);
+  const layout = useLayout(projectKey, graph, onCommitLayout);
+  const activeView = layout.views.find((v) => v.id === layout.activeViewId);
 
   const onSelect = (ref: SelectionRef | null) => setSelection(ref);
   const onNavigate = (ref: SelectionRef) => {
@@ -51,8 +76,12 @@ export function SpecEditorView({
     setTab(tabForKind(ref.kind));
     setPanelOpen(true);
   };
+  const onOpenSource = (file: string, line?: number) => {
+    setReveal((r) => ({ file, line, nonce: (r?.nonce ?? 0) + 1 }));
+    setTab("source");
+  };
 
-  const shared: SpecViewProps = { graph, index, selection, related, onSelect, onNavigate };
+  const shared: SpecViewProps = { graph, index, projectKey, selection, related, onSelect, onNavigate, onOpenSource };
 
   return (
     <div className="flex h-full w-full flex-col bg-background">
@@ -64,14 +93,64 @@ export function SpecEditorView({
         </div>
         <Tabs value={tab} onValueChange={(v) => setTab(v as SpecTab)}>
           <TabsList>
-            <TabsTrigger value="entities" className="gap-1.5"><Icon name="database" size={14} /> Entities <span className="font-mono text-[10px] text-muted-foreground">{graph.models.length}</span></TabsTrigger>
+            <TabsTrigger value="entities" className="gap-1.5"><Icon name="database" size={14} /> Entities <span className="font-mono text-[10px] text-muted-foreground">{showDtos ? graph.models.length : entityCount}</span></TabsTrigger>
             <TabsTrigger value="endpoints" className="gap-1.5"><Icon name="globe" size={14} /> Endpoints <span className="font-mono text-[10px] text-muted-foreground">{graph.endpoints.length}</span></TabsTrigger>
             <TabsTrigger value="flows" className="gap-1.5"><Icon name="board" size={14} /> Flows <span className="font-mono text-[10px] text-muted-foreground">{graph.flows.length}</span></TabsTrigger>
             <TabsTrigger value="source" className="gap-1.5"><Icon name="file-code" size={14} /> Source <span className="font-mono text-[10px] text-muted-foreground">{graph.sourceFiles.length}</span></TabsTrigger>
           </TabsList>
         </Tabs>
         <FileChips graph={graph} />
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1.5">
+          {tab === "entities" && dtoCount > 0 && (
+            <Button
+              variant={showDtos ? "secondary" : "outline"}
+              size="sm"
+              className="h-8 gap-1.5"
+              onClick={() => setShowDtos((v) => !v)}
+              title={showDtos ? "Hide request/response DTOs — show entities only" : "Show request/response DTOs alongside entities"}
+            >
+              <Icon name={showDtos ? "eye-off" : "eye"} size={14} />
+              {showDtos ? "Hide DTOs" : "Show DTOs"}
+              <span className="font-mono text-[10px] text-muted-foreground">{dtoCount}</span>
+            </Button>
+          )}
+          {tab === "entities" && graph.models.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-8 gap-1.5" title="Saved layout views">
+                  <Icon name="grid" size={14} />
+                  <span className="max-w-[120px] truncate">{activeView?.name ?? "Default"}</span>
+                  <Icon name="chevron-down" size={12} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Views ({layout.views.length})</DropdownMenuLabel>
+                {layout.views.map((v) => (
+                  <DropdownMenuItem key={v.id} onClick={() => layout.switchView(v.id)} className="gap-2">
+                    <Icon name="circle-check" size={13} className={cn(v.id === layout.activeViewId ? "text-primary" : "opacity-0")} />
+                    <span className="flex-1 truncate">{v.name}</span>
+                    <span className="font-mono text-[10px] text-muted-foreground">{Object.keys(v.entities).length}</span>
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={layout.addView} className="gap-2"><Icon name="plus" size={13} /> New view</DropdownMenuItem>
+                <DropdownMenuItem onClick={layout.renameView} className="gap-2"><Icon name="edit" size={13} /> Rename view</DropdownMenuItem>
+                <DropdownMenuItem onClick={layout.deleteView} disabled={layout.views.length <= 1} className="gap-2"><Icon name="trash" size={13} /> Delete view</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {layout.dirty && (
+            <Button
+              size="sm"
+              className="h-8 gap-1.5"
+              onClick={layout.commit}
+              disabled={layout.committing || !layout.canCommit}
+              title={layout.canCommit ? "Write canopy.layout.json back to the repo" : "This location is read-only — layout is staged locally"}
+            >
+              <Icon name={layout.committing ? "refresh" : "cloud"} size={14} className={layout.committing ? "animate-spin" : ""} />
+              {layout.committing ? "Committing…" : layout.canCommit ? "Commit layout" : "Staged"}
+            </Button>
+          )}
           {onReload && (
             <Button variant="ghost" size="icon-sm" onClick={onReload} title="Re-read files & rebuild graph" disabled={reloading}>
               <Icon name="refresh" size={16} className={reloading ? "animate-spin" : ""} />
@@ -89,10 +168,12 @@ export function SpecEditorView({
           {/* Conceptually Entities + Endpoints are two projections of one contract;
               Flows is a separate artifact referencing it. Mount only the active tab so
               each React Flow canvas measures correctly. */}
-          {tab === "entities" && <EntitiesTab {...shared} />}
+          {tab === "entities" && (
+            <EntitiesTab {...shared} positions={layout.positions} onMove={layout.move} onResetLayout={layout.resetActive} hasOverrides={layout.hasOverrides} showDtos={showDtos} />
+          )}
           {tab === "endpoints" && <EndpointsTab {...shared} />}
           {tab === "flows" && <FlowsTab {...shared} />}
-          {tab === "source" && <SourceTab {...shared} />}
+          {tab === "source" && <SourceTab {...shared} reveal={reveal} />}
         </div>
         {panelOpen && tab !== "source" && (
           <div className={cn("w-[340px] shrink-0 border-l bg-background", tab === "flows" ? "border-l-emerald-500/20" : "")}>

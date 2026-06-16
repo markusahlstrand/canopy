@@ -5,12 +5,16 @@ import type { RelatedSet, SpecIndex } from "./links";
 export interface SpecViewProps {
   graph: ProjectGraph;
   index: SpecIndex;
+  /** Stable id for the project folder — keys persisted entity layout. */
+  projectKey: string;
   selection: SelectionRef | null;
   related: RelatedSet;
   /** Select an item — highlights it everywhere but stays on the current tab. */
   onSelect: (ref: SelectionRef | null) => void;
   /** Select an item and switch to the tab that owns it (cross-layer jump). */
   onNavigate: (ref: SelectionRef) => void;
+  /** Open the Source tab on a file, optionally scrolling to + highlighting a line. */
+  onOpenSource: (file: string, line?: number) => void;
 }
 
 export type SpecTab = "entities" | "endpoints" | "flows" | "source";
