@@ -240,6 +240,9 @@ function DesktopApp() {
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const reload = () => setRefreshKey((k) => k + 1);
+  // Set by an explicit refresh so the *next* folder load skips the backend's reconcile
+  // debounce (a one-shot — background mirror ticks that also re-run the load stay cheap).
+  const freshOnceRef = useRef(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   // False when the backend is unreachable (or the browser is offline): the app
   // goes view-only — writes are blocked and served from the offline cache.
@@ -503,7 +506,9 @@ function DesktopApp() {
     let cancelled = false;
     setLoadError(null);
     setLoading(true);
-    const load = space === "shared" ? listShared() : listFiles(path, space || undefined);
+    const fresh = freshOnceRef.current;
+    freshOnceRef.current = false;
+    const load = space === "shared" ? listShared() : listFiles(path, space || undefined, { fresh });
     load
       .then((items) => {
         if (cancelled) return;
@@ -1048,6 +1053,10 @@ function DesktopApp() {
           onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
           onUpload={() => uploadInputRef.current?.click()}
           onRefresh={() => {
+            // Only arm the one-shot fresh flag in the drive view: the loader consumes it
+            // after an early return for non-drive views, so setting it elsewhere would leak
+            // onto the next unrelated drive navigation.
+            if (active === "drive") freshOnceRef.current = true; // bypass the reconcile debounce
             void forceSync(); // re-pull the offline mirror now (no-op if disabled)
             reload(); // re-fetch spaces/overview/shared + re-read the current folder
           }}

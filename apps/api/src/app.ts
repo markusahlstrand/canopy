@@ -480,9 +480,13 @@ export function createApp(deps: AppDeps) {
         const dir = c.req.query("path") ?? "";
         const pluginId = connectorTarget.slice(CONNECTOR_SPACE.length);
         const spaceId = await drive.service.ensureConnectorSpace(caller.sub, pluginId, cs.name);
+        // An explicit refresh (`?fresh`) bypasses the debounce so a folder the user is
+        // already viewing still re-converges against the backend (e.g. a new GitHub
+        // subfolder added on the current branch shows on the next refresh, not 60s later).
+        const force = c.req.query("fresh") != null;
         const debounceKey = `reconcile:${spaceId}:${dir}`;
-        const fresh = dataSources?.cache ? await dataSources.cache.get<string>(debounceKey) : null;
-        if (!fresh) {
+        const cached = !force && dataSources?.cache ? await dataSources.cache.get<string>(debounceKey) : null;
+        if (!cached) {
           await drive.service.reconcileConnectorFolder(caller.sub, spaceId, pluginId, cs.connector, dir);
           if (dataSources?.cache) await dataSources.cache.set(debounceKey, "1", RECONCILE_DEBOUNCE_MS);
           // Pull + index a slice of any newly-seen files' text, off the response path.

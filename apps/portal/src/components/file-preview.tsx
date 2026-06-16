@@ -588,7 +588,7 @@ export function FilePreview({
     <Suspense
       fallback={<div className="grid h-full min-h-[200px] place-items-center text-sm text-muted-foreground">Loading…</div>}
     >
-      <TrustedFileView key={`${file.id}:${contentNonce}`} fileId={file.id} fileName={file.name} onSaved={onSaved} />
+      <TrustedFileView key={`${file.id}:${contentNonce}`} fileId={file.id} fileName={file.name} spaceId={space} filePath={file.path} onSaved={onSaved} />
     </Suspense>
   ) : viewer ? (
     <PluginViewer

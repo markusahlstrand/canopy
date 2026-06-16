@@ -1,0 +1,115 @@
+arazzo: 1.0.1
+info:
+  title: Upload a file to a space
+  version: 1.0.0
+  summary: >-
+    Pick a space, reserve a content-addressed upload, stream the bytes, register
+    the file, then read it back — the core write path of the Canopy drive.
+# Explicit link back to the TypeSpec contract that emitted the OpenAPI below.
+x-typespec-source: ./main.tsp
+sourceDescriptions:
+  - name: canopy
+    url: ./openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: uploadFileToSpace
+    summary: Reserve an upload, send bytes, create the file record, and confirm it.
+    inputs:
+      type: object
+      required:
+        - fileName
+        - hash
+        - bytes
+      properties:
+        spaceId:
+          type: string
+          description: Target space. Omit to use the caller's personal space.
+        fileName:
+          type: string
+        hash:
+          type: string
+          description: SHA-256 of the bytes, lowercase hex.
+        mime:
+          type: string
+        path:
+          type: string
+          description: Virtual-folder location within the space, e.g. "Documents/2026".
+        bytes:
+          type: string
+          description: The file contents (raw body for the PUT).
+    steps:
+      - stepId: prepareUpload
+        description: Reserve an upload slot for the content hash.
+        operationId: prepareUpload
+        parameters:
+          - name: space
+            in: query
+            value: $inputs.spaceId
+        requestBody:
+          payload:
+            hash: $inputs.hash
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          # The blob is already stored content-addressed, so skip the byte upload
+          # and go straight to registering the file record.
+          - name: skipCommitWhenStored
+            type: goto
+            stepId: createFile
+            criteria:
+              - condition: $response.body#/exists == true
+        outputs:
+          alreadyStored: $response.body#/exists
+
+      - stepId: commitUpload
+        description: >-
+          Stream the bytes to the reserved slot. Skipped by the workflow runner
+          when prepareUpload reported the blob already exists.
+        operationId: commitUpload
+        parameters:
+          - name: token
+            in: path
+            value: $inputs.hash
+        requestBody:
+          payload: $inputs.bytes
+        successCriteria:
+          - condition: $statusCode == 201
+        outputs:
+          committedHash: $response.body#/hash
+          committedSize: $response.body#/size
+
+      - stepId: createFile
+        description: Register the file record and its first version.
+        operationId: createFile
+        parameters:
+          - name: space
+            in: query
+            value: $inputs.spaceId
+        requestBody:
+          payload:
+            name: $inputs.fileName
+            hash: $inputs.hash
+            mime: $inputs.mime
+            path: $inputs.path
+        successCriteria:
+          - condition: $statusCode == 201
+        outputs:
+          fileId: $response.body#/id
+
+      - stepId: confirmFile
+        description: Read the file back to confirm it landed with a current version.
+        operationId: getFile
+        parameters:
+          - name: id
+            in: path
+            value: $steps.createFile.outputs.fileId
+        successCriteria:
+          - condition: $statusCode == 200
+          - condition: $response.body#/currentVersionId != null
+        outputs:
+          fileName: $response.body#/name
+          versionId: $response.body#/currentVersionId
+    outputs:
+      fileId: $steps.createFile.outputs.fileId
+      fileName: $steps.confirmFile.outputs.fileName
+      versionId: $steps.confirmFile.outputs.versionId

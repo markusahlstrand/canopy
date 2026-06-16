@@ -1,0 +1,227 @@
+// The unified, normalised "project graph" the spec editor projects onto its three
+// tabs. The `.tsp` and `.arazzo` text files are the source of truth; this graph is
+// rebuilt from them on open and on change. It is deliberately framework-agnostic
+// (no React / React Flow types) so parsing, linking and validation can be unit
+// tested in isolation and reused by a future write-back path.
+
+/** A loaded text file (name + contents), the input to every parser here. */
+export interface TextFile {
+  /** File id in the drive, when discovered from a real folder (used to open it). */
+  id?: string;
+  /** Bare file name, e.g. `main.tsp`. */
+  name: string;
+  /** Folder-relative path used to resolve `import`/`url` references. */
+  path?: string;
+  text: string;
+}
+
+// ── Layer 1 + 2: the contract (TypeSpec models + operations) ──────────────────
+
+export interface SpecField {
+  name: string;
+  /** Raw TypeSpec type expression, e.g. `string`, `Pet[]`, `Owner | Error`. */
+  type: string;
+  optional?: boolean;
+  array?: boolean;
+  /** `@key` — marks the entity's identity field. */
+  key?: boolean;
+  doc?: string;
+  /** Name of a referenced model/enum when the field type points at one. */
+  ref?: string;
+}
+
+export interface SpecModel {
+  /** Stable id == fully-qualified name (`PetStore.Pet`). */
+  id: string;
+  name: string;
+  namespace?: string;
+  kind: "model" | "enum";
+  /**
+   * Whether the model is a persisted **entity** (has identity / lives beyond a single
+   * request) or a transient **dto** — a request/response payload that only flows
+   * through an operation. Derived, not declared: a model is an entity when it carries
+   * `@key` or is reachable from a `@key`-bearing model through field references;
+   * everything else is a wire shape. The ER view shows entities and renders DTOs
+   * distinctly so the graph stays about real data relationships, not request envelopes.
+   * Set during graph assembly; `undefined` only on graphs built before classification.
+   */
+  role?: "entity" | "dto";
+  doc?: string;
+  fields: SpecField[];
+  /** Enum members when `kind === "enum"`. */
+  enumValues?: string[];
+  /** `@error`-decorated models render distinctly and are treated as error shapes. */
+  isError?: boolean;
+  /** File the declaration came from. */
+  file?: string;
+}
+
+export interface SpecParam {
+  name: string;
+  type: string;
+  /** Where the parameter binds: path/query/header/body (from `@path` etc.). */
+  in?: "path" | "query" | "header" | "body";
+  optional?: boolean;
+  /** Referenced model name, when the parameter type is one. */
+  ref?: string;
+}
+
+export interface SpecResponse {
+  /** HTTP status or `default`, when known. */
+  status?: string;
+  /** Referenced model name. */
+  ref?: string;
+  /** Whether the referenced model is an error shape. */
+  isError?: boolean;
+}
+
+export interface SpecEndpoint {
+  /** Stable id == the OpenAPI `operationId` the op maps to (Arazzo binds by this). */
+  id: string;
+  operationId: string;
+  /** Source op name (may differ from operationId via `@operationId`). */
+  name: string;
+  namespace?: string;
+  /** Grouping container (`interface`/`namespace`), for the list view. */
+  group?: string;
+  verb?: "get" | "post" | "put" | "patch" | "delete" | "head";
+  route?: string;
+  doc?: string;
+  parameters: SpecParam[];
+  responses: SpecResponse[];
+  /** De-duplicated set of model names this op references (params + responses). */
+  refModels: string[];
+  file?: string;
+}
+
+// ── Layer 3: workflows (Arazzo) ───────────────────────────────────────────────
+
+/** A labelled control-flow edge out of a step (`onSuccess` / `onFailure`). */
+export interface FlowBranch {
+  on: "success" | "failure";
+  type: "goto" | "end" | "retry";
+  /** Target step id (for goto), within this workflow. */
+  stepId?: string;
+  /** Target workflow id (for goto across workflows). */
+  workflowId?: string;
+  /** Joined condition expressions, for the edge label. */
+  criteria?: string;
+}
+
+export interface SpecStep {
+  /** Stable id == `${workflowId}::${stepId}`. */
+  id: string;
+  stepId: string;
+  workflowId: string;
+  description?: string;
+  /** The operation this step invokes (the link to an endpoint). */
+  operationId?: string;
+  operationPath?: string;
+  /** A nested workflow this step runs instead of an operation. */
+  callsWorkflowId?: string;
+  /** Source description this step resolves its operation in (name). */
+  sourceName?: string;
+  outputs: string[];
+  successCriteria: string[];
+  branches: FlowBranch[];
+  /** Ids (`${workflowId}::${stepId}`) of steps this one reads via `$steps.x`. */
+  dependsOn: string[];
+}
+
+export interface SpecFlow {
+  /** Stable id == workflowId. */
+  id: string;
+  workflowId: string;
+  summary?: string;
+  inputs: string[];
+  outputs: string[];
+  steps: SpecStep[];
+  file?: string;
+}
+
+export interface SpecSource {
+  name: string;
+  url: string;
+  type?: string;
+  /** Drive file id the url resolved to, when found in the folder. */
+  resolvedFileId?: string;
+  resolved: boolean;
+}
+
+// ── Diagnostics ───────────────────────────────────────────────────────────────
+
+export type DiagnosticSeverity = "error" | "warning";
+export type SpecLayer = "tsp" | "arazzo" | "openapi" | "link";
+
+export interface Diagnostic {
+  severity: DiagnosticSeverity;
+  layer: SpecLayer;
+  message: string;
+  /** What the diagnostic points at, so a click can select + reveal it. */
+  target?: SelectionRef;
+  file?: string;
+}
+
+// ── The graph + selection ─────────────────────────────────────────────────────
+
+export type SelectionKind = "entity" | "endpoint" | "flow" | "step";
+
+export interface SelectionRef {
+  kind: SelectionKind;
+  /** The stable id of the referenced model/endpoint/flow/step. */
+  id: string;
+}
+
+/** A discovered file kept with its raw text, for the Source tab. */
+export interface SourceFile {
+  id?: string;
+  name: string;
+  kind: "tsp" | "openapi" | "arazzo";
+  text: string;
+}
+
+// ── Layout sidecar (canopy.layout.json) ───────────────────────────────────────
+// Saved entity arrangements. The `.tsp` stays the source of truth for the model;
+// this only remembers positions. One file can hold several named views.
+
+export interface LayoutView {
+  id: string;
+  name: string;
+  /** model id → position. Missing entities fall back to auto-layout. */
+  entities: Record<string, { x: number; y: number }>;
+}
+
+export interface LayoutSidecar {
+  version: number;
+  views: LayoutView[];
+}
+
+export interface ProjectGraph {
+  models: SpecModel[];
+  endpoints: SpecEndpoint[];
+  flows: SpecFlow[];
+  sources: SpecSource[];
+  diagnostics: Diagnostic[];
+  /** Names of the files that fed the graph, grouped by kind (for the header). */
+  files: { tsp: string[]; openapi: string[]; arazzo: string[] };
+  /** Every discovered file with its raw text — the canonical source of truth. */
+  sourceFiles: SourceFile[];
+  /** Committed entity layout (from `canopy.layout.json`), with its named views. */
+  layout: LayoutSidecar;
+  /** Drive id of the layout sidecar, when one exists (for write-back). */
+  layoutFileId?: string;
+  /** True when no contract/workflow content was found at all. */
+  empty: boolean;
+}
+
+export const emptyGraph = (): ProjectGraph => ({
+  models: [],
+  endpoints: [],
+  flows: [],
+  sources: [],
+  diagnostics: [],
+  files: { tsp: [], openapi: [], arazzo: [] },
+  sourceFiles: [],
+  layout: { version: 1, views: [{ id: "default", name: "Default", entities: {} }] },
+  empty: true,
+});

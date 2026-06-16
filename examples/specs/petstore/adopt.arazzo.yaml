@@ -1,0 +1,79 @@
+arazzo: 1.0.1
+info:
+  title: Adopt a pet
+  version: 1.0.0
+  summary: Find an available pet and adopt it on behalf of an owner.
+# Explicit link back to the TypeSpec contract that emitted the OpenAPI below.
+x-typespec-source: ./main.tsp
+sourceDescriptions:
+  - name: petstore
+    url: ./openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: adoptAPet
+    summary: Look up an owner, find a pet, and adopt it.
+    inputs:
+      type: object
+      properties:
+        ownerId:
+          type: string
+        species:
+          type: string
+    steps:
+      - stepId: loadOwner
+        description: Confirm the adopting owner exists.
+        operationId: getOwner
+        parameters:
+          - name: ownerId
+            in: path
+            value: $inputs.ownerId
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          ownerName: $response.body#/fullName
+
+      - stepId: findPets
+        description: List pets of the requested species.
+        operationId: listPets
+        parameters:
+          - name: species
+            in: query
+            value: $inputs.species
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          firstPetId: $response.body#/0/id
+
+      - stepId: inspectPet
+        description: Fetch the chosen pet's full record.
+        operationId: getPet
+        parameters:
+          - name: petId
+            in: path
+            value: $steps.findPets.outputs.firstPetId
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: goto
+            stepId: findPets
+            criteria:
+              - condition: $statusCode == 404
+        outputs:
+          petName: $response.body#/name
+
+      - stepId: adopt
+        description: Link the pet to the owner.
+        operationId: adoptPet
+        parameters:
+          - name: ownerId
+            in: path
+            value: $inputs.ownerId
+        requestBody:
+          payload: $steps.findPets.outputs.firstPetId
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          adoptedBy: $response.body#/fullName
+    outputs:
+      owner: $steps.adopt.outputs.adoptedBy
+      pet: $steps.inspectPet.outputs.petName

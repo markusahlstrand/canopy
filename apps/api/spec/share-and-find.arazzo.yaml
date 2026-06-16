@@ -1,0 +1,118 @@
+arazzo: 1.0.1
+info:
+  title: Create a space, add a file, and find it
+  version: 1.0.0
+  summary: >-
+    Stand up a fresh group space, upload a file into it, then confirm the file is
+    discoverable via full-text search — the read-after-write path of the drive.
+# Explicit link back to the TypeSpec contract that emitted the OpenAPI below.
+x-typespec-source: ./main.tsp
+sourceDescriptions:
+  - name: canopy
+    url: ./openapi.yaml
+    type: openapi
+  # Reuse the upload workflow defined in the sibling Arazzo document.
+  - name: uploadFlow
+    url: ./upload-file.arazzo.yaml
+    type: arazzo
+workflows:
+  - workflowId: createSpaceAddFileAndSearch
+    summary: Create a space, upload a file into it, and find it by search.
+    inputs:
+      type: object
+      required:
+        - spaceName
+        - fileName
+        - hash
+        - bytes
+        - query
+      properties:
+        spaceName:
+          type: string
+        fileName:
+          type: string
+        hash:
+          type: string
+          description: SHA-256 of the bytes, lowercase hex.
+        mime:
+          type: string
+        bytes:
+          type: string
+          description: The file contents (raw body for the PUT).
+        query:
+          type: string
+          description: A term expected to match the uploaded file's title or text.
+    steps:
+      - stepId: createSpace
+        description: Create the group space the file will live in.
+        operationId: createSpace
+        requestBody:
+          payload:
+            name: $inputs.spaceName
+        successCriteria:
+          - condition: $statusCode == 201
+        outputs:
+          spaceId: $response.body#/id
+
+      - stepId: uploadFile
+        description: >-
+          Run the upload-file workflow against the new space to put the bytes in
+          place and register the file record.
+        workflowId: $sourceDescriptions.uploadFlow.uploadFileToSpace
+        parameters:
+          - name: spaceId
+            value: $steps.createSpace.outputs.spaceId
+          - name: fileName
+            value: $inputs.fileName
+          - name: hash
+            value: $inputs.hash
+          - name: mime
+            value: $inputs.mime
+          - name: bytes
+            value: $inputs.bytes
+        outputs:
+          fileId: $outputs.fileId
+
+      - stepId: search
+        description: >-
+          Search for the file. The index is fed asynchronously on write, so retry
+          on an empty result set before giving up.
+        operationId: search
+        parameters:
+          - name: q
+            in: query
+            value: $inputs.query
+        successCriteria:
+          - condition: $statusCode == 200
+          - context: $response.body
+            condition: $.items[?(@.id == $steps.uploadFile.outputs.fileId)]
+            type: jsonpath
+        onFailure:
+          - type: retry
+            stepId: search
+            retryAfter: 1
+            retryLimit: 5
+            criteria:
+              - condition: $statusCode == 200
+        outputs:
+          topHitId: $response.body#/items/0/id
+          topHitTitle: $response.body#/items/0/title
+
+      - stepId: confirmFound
+        description: >-
+          Read the matched file back by id. The search success criteria already
+          assert our file is in the results, but it isn't guaranteed to be the
+          top hit, so fetch it directly to report its title reliably.
+        operationId: getFile
+        parameters:
+          - name: id
+            in: path
+            value: $steps.uploadFile.outputs.fileId
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          foundTitle: $response.body#/name
+    outputs:
+      spaceId: $steps.createSpace.outputs.spaceId
+      fileId: $steps.uploadFile.outputs.fileId
+      foundTitle: $steps.confirmFound.outputs.foundTitle

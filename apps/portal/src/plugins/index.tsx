@@ -15,8 +15,10 @@ const DocumentationView = lazy(() => import("./documentation-view").then((m) => 
 const ModelEditorView = lazy(() =>
   import("@/components/model-editor/model-editor-view").then((m) => ({ default: m.ModelEditorView })),
 );
+// Routes a matched file to the right canvas: `.prisma` → the Prisma model editor,
+// `.tsp`/`.arazzo` → the spec editor (TypeSpec + Arazzo, with cross-layer links).
 const ModelEditorFileView = lazy(() =>
-  import("@/components/model-editor/file-viewer").then((m) => ({ default: m.ModelEditorFileViewer })),
+  import("@/components/model-editor/file-router").then((m) => ({ default: m.ModelEditorFileRouter })),
 );
 
 /**
@@ -31,6 +33,10 @@ const ModelEditorFileView = lazy(() =>
 export interface FileViewProps {
   fileId: string;
   fileName: string;
+  /** Space the file lives in, when known — lets a viewer list sibling files. */
+  spaceId?: string;
+  /** The file's full drive path, when known — used to scope folder discovery. */
+  filePath?: string;
   /** Called after the viewer saves a new version, so the host can refresh. */
   onSaved?: () => void;
 }
