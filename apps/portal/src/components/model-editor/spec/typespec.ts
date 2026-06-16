@@ -517,6 +517,9 @@ export async function compileTypeSpec(
   const byName = new Map<string, string>();
   for (const m of sink.models) {
     byName.set(m.id, m.id);
+    // First-wins on the simple name: if two models in different namespaces share a
+    // simple name (e.g. `A.Pet` and `B.Pet`), only the first one parsed is reachable
+    // via the unqualified `Pet`. Fully-qualified ids above always disambiguate.
     if (!byName.has(m.name)) byName.set(m.name, m.id);
   }
   const errorModels = new Set(sink.models.filter((m) => m.isError).map((m) => m.id));

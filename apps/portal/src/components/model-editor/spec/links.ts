@@ -140,7 +140,7 @@ export class SpecIndex {
         const s = this.stepById.get(selection.id);
         if (!s) return r;
         r.steps.add(s.id);
-        r.flows.add(s.workflowId);
+        r.flows.add(this.flowForStep.get(s.id)!);
         const ep = this.endpointForStep(s);
         if (ep) addEndpoint(ep.id);
         break;

@@ -50,6 +50,14 @@ workflows:
             hash: $inputs.hash
         successCriteria:
           - condition: $statusCode == 200
+        onSuccess:
+          # The blob is already stored content-addressed, so skip the byte upload
+          # and go straight to registering the file record.
+          - name: skipCommitWhenStored
+            type: goto
+            stepId: createFile
+            criteria:
+              - condition: $response.body#/exists == true
         outputs:
           alreadyStored: $response.body#/exists
 

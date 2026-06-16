@@ -97,7 +97,22 @@ workflows:
         outputs:
           topHitId: $response.body#/items/0/id
           topHitTitle: $response.body#/items/0/title
+
+      - stepId: confirmFound
+        description: >-
+          Read the matched file back by id. The search success criteria already
+          assert our file is in the results, but it isn't guaranteed to be the
+          top hit, so fetch it directly to report its title reliably.
+        operationId: getFile
+        parameters:
+          - name: id
+            in: path
+            value: $steps.uploadFile.outputs.fileId
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          foundTitle: $response.body#/name
     outputs:
       spaceId: $steps.createSpace.outputs.spaceId
       fileId: $steps.uploadFile.outputs.fileId
-      foundTitle: $steps.search.outputs.topHitTitle
+      foundTitle: $steps.confirmFound.outputs.foundTitle
