@@ -6,9 +6,19 @@ The [TypeSpec](https://typespec.io) contract for the `@canopy/api` HTTP surface
 multi-step flows over it. Lives in the package that serves the API so it stays
 next to the implementation it defines.
 
-Intentionally **partial** for now — it covers the fundamentals (spaces, files +
-versions, the upload flow, search) and leaves connectors, sharing, comments,
-plugins, MCP and AI endpoints for later.
+**Complete** coverage of the `/api` surface served by `src/app.ts`: the drive
+(spaces, files + versions, the content-addressed upload flow, search, overview),
+sharing (per-file/folder grants, share links, comments, people), space membership
+& invites, connected spaces (NAS/repo connectors, branches, indexing, version
+policy), the offline-mirror change feed, per-user plugin settings, Plugin Studio
+(custom plugins), AI inference, and the data-source plugins (tasks/calendar).
+
+Out of band by design and **not** described here: the OIDC auth routes mounted at
+`/api/auth` (provided by the host's own Hono app), the read-only WebDAV mount
+(Basic auth), and the MCP server (OAuth bearer) — the latter two live outside
+`/api`. Endpoints are bearer-authenticated unless marked `@useAuth(NoAuth)`; a
+handful work anonymously to power the public demo (health, the invite preview, the
+share landing, integrations/tasks/calendar).
 
 ## Files
 

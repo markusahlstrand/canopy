@@ -105,6 +105,11 @@ export function parseArazzo(text: string, fileName: string): ArazzoResult {
       } satisfies SpecStep;
     });
 
+    // Arazzo has no native workflow `tags`, so we read the `x-tags` extension (and a
+    // bare `tags` for convenience). Used only for view filtering in the editor.
+    const rawTags = Array.isArray(w?.["x-tags"]) ? w["x-tags"] : Array.isArray(w?.tags) ? w.tags : [];
+    const tags = rawTags.filter((t: unknown): t is string => typeof t === "string");
+
     return {
       id: workflowId,
       workflowId,
@@ -112,6 +117,7 @@ export function parseArazzo(text: string, fileName: string): ArazzoResult {
       inputs: keysOf(w?.inputs?.properties) ,
       outputs: keysOf(w?.outputs),
       steps,
+      tags: tags.length ? tags : undefined,
       file: fileName,
     } satisfies SpecFlow;
   });

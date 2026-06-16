@@ -2,24 +2,582 @@ openapi: 3.0.0
 info:
   title: Canopy Drive
   description: |-
-    Canopy — an extensible, plugin-driven portal. This contract covers the
-    fundamentals of the drive HTTP API: spaces, files (with versions), the
-    content-addressed upload flow, and full-text search. It is intentionally
-    partial — connectors, sharing, comments, plugins, MCP and AI endpoints are
-    out of scope here.
+    Canopy — an extensible, plugin-driven portal. This contract covers the full HTTP
+    surface of the API worker: the DB-backed drive (spaces, files, versions, the
+    content-addressed upload flow, full-text search), sharing (grants, share links,
+    comments), space membership & invites, connected spaces (NAS/repo connectors,
+    branches, indexing), the offline-mirror change feed, per-user plugin settings,
+    Plugin Studio (custom plugins), AI inference, and the data-source plugins
+    (tasks/calendar).
 
-    All endpoints are bearer-authenticated unless noted; the personal space is
-    implied when no `space` query is given.
+    Endpoints are bearer-authenticated unless marked `@useAuth(NoAuth)`; a few work
+    anonymously to power the public demo. The personal space is implied when no
+    `space` query is given. A connected space is addressed as `connector:<pluginId>`
+    and is read-only unless its source plugin is writable (a NAS).
+
+    The WebDAV mount (Basic auth, outside `/api`) and the MCP server (OAuth bearer,
+    outside `/api`) are mounted by the worker but described elsewhere.
   version: 0.0.0
 tags: []
 paths:
+  /api/ai/generate:
+    post:
+      operationId: generate
+      description: Run inference through the caller's effective gateway (503 when none configured).
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiGenerateResult'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiGenerateRequest'
+  /api/ai/models:
+    get:
+      operationId: listAiModels
+      description: Models available to the caller (base providers + their own UI-configured ones).
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AiModel'
+                required:
+                  - models
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/app-passwords:
+    get:
+      operationId: listAppPasswords
+      description: Device passwords for WebDAV / Basic-auth clients.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AppPassword'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createAppPassword
+      description: Create an app password — the plaintext token is returned ONCE.
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppPasswordToken'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAppPassword'
+  /api/app-passwords/{id}:
+    delete:
+      operationId: deleteAppPassword
+      description: Delete an app password.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/calendar:
+    get:
+      operationId: listCalendar
+      description: Calendar events from the caller's configured source. `?from=`/`?to=` are ISO 8601.
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarList'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+        - {}
+  /api/changes:
+    get:
+      operationId: changesSince
+      description: |-
+        Offline-mirror delta: every file change in the caller's spaces since their
+        cursor. `?since=` is a URL-encoded JSON `{spaceId: seq}` map (absent →
+        bootstrap). `?limit=` caps the page.
+      parameters:
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangesPage'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/changes/stream:
+    get:
+      operationId: changesStream
+      description: |-
+        Live nudge: an SSE stream that emits a `bump` whenever the given space advances
+        (`?space=`, default = personal). 204 when no live channel is bound (Node) — the
+        client polls instead.
+      parameters:
+        - name: space
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/connector-files:
+    put:
+      operationId: uploadConnectorFile
+      description: |-
+        Upload bytes straight into a writable connected space (a NAS): write through
+        the connector, reconcile the folder, and return the resulting indexed file.
+        `?space=connector:<plugin>` + `?path=<space-relative path>`; body = raw bytes.
+      parameters:
+        - name: space
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/File'
+                  - $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+  /api/connector/{pluginId}/branch:
+    put:
+      operationId: switchBranch
+      description: Switch the branch the connected space is rooted at (persist + re-index).
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  branch:
+                    type: string
+                required:
+                  - ok
+                  - branch
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwitchBranch'
+  /api/connector/{pluginId}/branches:
+    get:
+      operationId: listBranches
+      description: "List the connected space's branches (`supported: false` for a NAS)."
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchList'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createBranch
+      description: Create a branch on the backend (needs a write token).
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBranch'
+    delete:
+      operationId: deleteBranch
+      description: Delete a branch on the backend. The name is a query param (`?name=`) for "/"-bearing refs.
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/connector/{pluginId}/logs/stream:
+    get:
+      operationId: connectorLogStream
+      description: SSE stream of the connector crawl's progress lines (204 without a live channel).
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/connector/{pluginId}/settings:
+    get:
+      operationId: getConnectorSettings
+      description: Read the connected space's version-retention policy.
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorSettings'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: setConnectorSettings
+      description: Update the connected space's version-retention policy.
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorSettings'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetConnectorSettings'
+  /api/connector/{pluginId}/status:
+    get:
+      operationId: connectorStatus
+      description: Indexing state of a connected space (sidebar polls this).
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorStatus'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/connector/{pluginId}/sync:
+    post:
+      operationId: syncConnector
+      description: Force a (re-)index of a connected space ("Sync now"); backgrounded.
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started:
+                    type: boolean
+                required:
+                  - started
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/file:
+    get:
+      operationId: readMountFile
+      description: |-
+        Read one file's bytes from a read-only mount (`?mount=`) or a connected space
+        (`?space=connector:<plugin>`). `?download` forces a save dialog. Legacy
+        path-based shape kept for the Documentation plugin.
+      parameters:
+        - name: mount
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: space
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: download
+          in: query
+          required: false
+          schema:
+            type: boolean
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+        - {}
   /api/files:
     get:
       operationId: listFiles
       description: |-
-        List one folder of a space. Defaults to the personal space root; pass
-        `space` and/or `path` to target a folder, or `trash`/`shared` to switch view.
+        List one folder. Defaults to the personal space root. `?mount=` reads a
+        read-only mount; `?space=connector:<plugin>` a connected space (reconciled on
+        view, `?fresh` bypasses the debounce); `?shared` files shared with me;
+        `?trash` the trash; otherwise `?space=` + `?path=`.
       parameters:
+        - name: mount
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
         - name: space
           in: query
           required: false
@@ -31,6 +589,12 @@ paths:
           required: false
           schema:
             type: string
+          explode: false
+        - name: fresh
+          in: query
+          required: false
+          schema:
+            type: boolean
           explode: false
         - name: trash
           in: query
@@ -60,8 +624,9 @@ paths:
     post:
       operationId: createFile
       description: |-
-        Create a file record plus its first version. The blob must already be
-        prepared and uploaded (see `prepareUpload` / `commitUpload`).
+        Create a file record plus its first version. The blob must already be prepared
+        and uploaded (see `prepareUpload` / `commitUpload`). Runs AI labeling in the
+        background.
       parameters:
         - name: space
           in: query
@@ -113,26 +678,36 @@ paths:
                 $ref: '#/components/schemas/Error'
     delete:
       operationId: deleteFile
-      description: Move a file to the trash (soft delete).
+      description: Move a file to the trash (soft delete), or `?permanent` to purge it + its content.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - name: permanent
+          in: query
+          required: false
+          schema:
+            type: boolean
+          explode: false
       responses:
-        '204':
-          description: 'There is no content to send for this request, but the headers may be useful. '
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
         default:
           description: An unexpected error response.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-  /api/files/{id}/content:
+  /api/files/{id}/comments:
     get:
-      operationId: getFileContent
-      description: Download the current version's bytes.
+      operationId: listComments
+      description: A file's comments, oldest first.
       parameters:
         - name: id
           in: path
@@ -142,6 +717,100 @@ paths:
       responses:
         '200':
           description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Comment'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: addComment
+      description: Post a comment. Anyone who can see the file (viewer+) may comment.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateComment'
+  /api/files/{id}/comments/{commentId}:
+    delete:
+      operationId: deleteComment
+      description: Soft-delete a comment (author or file owner only).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: commentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/files/{id}/content:
+    get:
+      operationId: getFileContent
+      description: |-
+        Download the current version's bytes. Serves an `ETag` and honors
+        `If-None-Match` (→ 304). `?download` forces a save dialog.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: download
+          in: query
+          required: false
+          schema:
+            type: boolean
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          headers:
+            e-tag:
+              required: true
+              schema:
+                type: string
           content:
             '*/*':
               schema:
@@ -153,10 +822,91 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/files/{id}/grants:
+    get:
+      operationId: listGrants
+      description: Direct grants on a file.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Grant'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: shareGrant
+      description: Add a grant on a file. (`email` subjects unknown to the directory become pending invites.)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantInput'
+    delete:
+      operationId: unshareGrant
+      description: Remove a grant on a file.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantInput'
   /api/files/{id}/metadata:
     patch:
       operationId: updateFileMetadata
-      description: Patch a file's freeform metadata (e.g. move it by changing `path`).
+      description: Patch a file's freeform metadata (e.g. move it by changing `path`). Never versions.
       parameters:
         - name: id
           in: path
@@ -199,17 +949,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/File'
+                $ref: '#/components/schemas/Ok'
         default:
           description: An unexpected error response.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-  /api/files/{id}/versions:
+  /api/files/{id}/shares:
     get:
-      operationId: listVersions
-      description: List a file's version history.
+      operationId: listFileShares
+      description: List share links for a file.
       parameters:
         - name: id
           in: path
@@ -224,7 +974,415 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/FileVersion'
+                  $ref: '#/components/schemas/ShareInfo'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createFileShare
+      description: Mint a share link for a file (the secret is returned once).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateShareResult'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateShare'
+  /api/files/{id}/uploads/prepare:
+    post:
+      operationId: prepareFileUpload
+      description: Reserve a blob for this file's next version, keyed to the file's space.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadTicket'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrepareUpload'
+  /api/files/{id}/uploads/{hash}:
+    put:
+      operationId: commitFileUpload
+      description: Stream bytes for a file-scoped blob; the token is the claimed SHA-256, re-verified.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: hash
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommittedBlob'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+  /api/files/{id}/versions:
+    get:
+      operationId: listVersions
+      description: List a file's version history (newest first).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VersionEntry'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: addVersion
+      description: Append a new content version (the blob must be prepared/uploaded). Dedup applies.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddVersion'
+  /api/files/{id}/versions/{versionId}/content:
+    get:
+      operationId: getVersionContent
+      description: Download a specific past version's bytes.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/files/{id}/versions/{versionId}/keep:
+    post:
+      operationId: keepVersion
+      description: Pin/unpin a version so retention never prunes it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KeepVersion'
+  /api/files/{id}/versions/{versionId}/restore:
+    post:
+      operationId: restoreVersion
+      description: 'Restore an older version: appends its content as the new current version.'
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/folders:
+    post:
+      operationId: createFolder
+      description: Create an (empty) folder in a space (or a writable connected space).
+      parameters:
+        - name: space
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/Folder'
+                  - $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFolder'
+  /api/health:
+    get:
+      operationId: health
+      description: Liveness + which drive/mounts are configured.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+      security:
+        - {}
+  /api/integrations:
+    get:
+      operationId: getIntegrations
+      description: What's connected for the caller (live vs. configure). Works anonymously (demo).
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Integrations'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+        - {}
+  /api/invites/pending:
+    get:
+      operationId: pendingInvites
+      description: Email invites awaiting the caller's verified address (the invites banner).
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingInvite'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/invites/pending/accept:
+    post:
+      operationId: acceptPendingInvites
+      description: Claim all pending email invites for the caller's address.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptPendingResult'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/invites/{token}:
+    get:
+      operationId: inviteInfo
+      description: Preview an invite link (no sign-in, so recipients see what they're joining).
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitePreview'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+        - {}
+  /api/invites/{token}/accept:
+    post:
+      operationId: acceptInvite
+      description: Accept an invite link (the signed-in account becomes the member).
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptInviteResult'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/mcp/connections:
+    get:
+      operationId: listMcpConnections
+      description: AI assistants that have connected over MCP (read-only, for Settings).
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/McpClient'
         default:
           description: An unexpected error response.
           content:
@@ -249,6 +1407,307 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Overview'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/people:
+    get:
+      operationId: connectedPeople
+      description: People the caller is connected to (space co-members + share peers), filtered by `?q=`.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Person'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/plugins/active:
+    get:
+      operationId: getActivePlugins
+      description: The caller's effective active set (own installs ∪ plugins applied to their spaces).
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginIds'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/plugins/custom:
+    get:
+      operationId: listCustomPlugins
+      description: Custom (Studio-generated) plugins the caller authored.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plugins:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CustomPlugin'
+                required:
+                  - plugins
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createCustomPlugin
+      description: Submit a Studio-generated plugin (validated server-side; 413 if source too large).
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  id:
+                    type: string
+                required:
+                  - ok
+                  - id
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomPlugin'
+  /api/plugins/custom/{id}:
+    delete:
+      operationId: deleteCustomPlugin
+      description: Delete a custom plugin.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/plugins/installed:
+    get:
+      operationId: getInstalledPlugins
+      description: Plugins the caller has installed (auth-dependent defaults when none saved).
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginIds'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: setInstalledPlugins
+      description: Set the caller's installed plugin set.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PluginIds'
+  /api/plugins/{id}/places:
+    get:
+      operationId: pluginPlaces
+      description: The places (group spaces the caller owns) a plugin can be applied to.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  places:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PluginPlace'
+                required:
+                  - places
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/plugins/{id}/settings:
+    get:
+      operationId: getPluginSettings
+      description: A plugin's settings schema + the caller's saved values (secrets never returned).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginSettings'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: setPluginSettings
+      description: Save a plugin's settings. On connect, a connector-backed source kicks a background index.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavePluginSettings'
+  /api/plugins/{id}/test:
+    get:
+      operationId: testPlugin
+      description: Actively exercise a connector-backed plugin (a live root listing) to surface failures.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginTestResult'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/processing:
+    get:
+      operationId: recentProcessing
+      description: Recent processor runs across the caller's spaces. `?plugin=` / `?limit=` filter.
+      parameters:
+        - name: plugin
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProcessingRun'
         default:
           description: An unexpected error response.
           content:
@@ -286,6 +1745,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SearchResults'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/shared-folders:
+    get:
+      operationId: listSharedFolders
+      description: Folders shared with the caller (direct or via a place), enriched with space name.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SharedFolder'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/shares/{id}:
+    delete:
+      operationId: revokeShare
+      description: Revoke a share link.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
         default:
           description: An unexpected error response.
           content:
@@ -363,13 +1865,10 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                name:
-                  type: string
+              $ref: '#/components/schemas/RenameSpace'
     delete:
       operationId: deleteSpace
-      description: Delete a space. Owner only.
+      description: Permanently delete a group space and everything in it. Owner only.
       parameters:
         - name: id
           in: path
@@ -377,20 +1876,465 @@ paths:
           schema:
             type: string
       responses:
-        '204':
-          description: 'There is no content to send for this request, but the headers may be useful. '
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
         default:
           description: An unexpected error response.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/spaces/{id}/folder-grants:
+    get:
+      operationId: listFolderGrants
+      description: Grants on a folder (`?path=`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Grant'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: shareFolderGrant
+      description: Add a folder grant. (`email` subjects unknown to the directory become pending invites.)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FolderGrantInput'
+    delete:
+      operationId: unshareFolderGrant
+      description: Remove a folder grant.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FolderGrantInput'
+  /api/spaces/{id}/invites:
+    post:
+      operationId: createInvite
+      description: Mint a single-use invite link. Owner only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpaceInvite'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvite'
+    get:
+      operationId: listInvites
+      description: List a space's invite links. Owner only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpaceInvite'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/spaces/{id}/invites/{token}:
+    delete:
+      operationId: revokeInvite
+      description: Revoke an invite link. Owner only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/spaces/{id}/members:
+    get:
+      operationId: listMembers
+      description: Members of a space (incl. pending email invites as member rows).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpaceMember'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: addMember
+      description: Add a member by email (they must have signed in once). Owner only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpaceMember'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSpaceMember'
+    delete:
+      operationId: removeMember
+      description: Remove a member. Owner only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoveSpaceMember'
+  /api/spaces/{id}/plugins:
+    get:
+      operationId: listSpacePlugins
+      description: Plugins applied to a space. Any member may read.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginIds'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: applySpacePlugin
+      description: Apply a plugin to a space (turns it on for everyone). Owner only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pluginId:
+                  type: string
+              required:
+                - pluginId
+  /api/spaces/{id}/plugins/{pluginId}:
+    delete:
+      operationId: removeSpacePlugin
+      description: Remove an applied plugin from a space. Owner only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: pluginId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/spaces/{id}/prefs:
+    patch:
+      operationId: setSpacePrefs
+      description: Pin/unpin a space into "My Drive".
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpacePrefs'
+  /api/spaces/{id}/shares:
+    get:
+      operationId: listSpaceShares
+      description: List share links for a space, or a folder within it (`?path=`).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ShareInfo'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createSpaceShare
+      description: Mint a share link for a space, or a folder within it (`path` in the body).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateShareResult'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateShare'
+  /api/tasks:
+    get:
+      operationId: listTasks
+      description: Tasks from the caller's configured source (or the demo default).
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskList'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+        - {}
   /api/uploads/prepare:
     post:
       operationId: prepareUpload
       description: |-
-        Reserve an upload for content-addressed bytes. If a blob with this hash
-        already exists, the response says so and the PUT can be skipped.
+        Reserve an upload for content-addressed bytes in a space. If a blob with this
+        hash already exists, the response says so and the PUT can be skipped.
       parameters:
         - name: space
           in: query
@@ -420,9 +2364,7 @@ paths:
   /api/uploads/{token}:
     put:
       operationId: commitUpload
-      description: |-
-        Stream the bytes for a prepared upload. `token` is the claimed SHA-256,
-        re-verified server-side.
+      description: Stream bytes for a prepared upload. `token` is the claimed SHA-256, re-verified.
       parameters:
         - name: token
           in: path
@@ -449,10 +2391,357 @@ paths:
             schema:
               type: string
               format: binary
+  /s/{secret}:
+    get:
+      operationId: openShare
+      description: |-
+        Public share landing — the secret in the path IS the credential. A file share
+        streams the bytes; a folder/space share returns a read-only JSON listing.
+        Access runs as the share's creator.
+      parameters:
+        - name: secret
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShareListing'
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+        - {}
 security:
   - BearerAuth: []
 components:
   schemas:
+    AcceptInviteResult:
+      type: object
+      required:
+        - spaceId
+        - alreadyMember
+      properties:
+        spaceId:
+          type: string
+        alreadyMember:
+          type: boolean
+          description: True if the caller already had that role or better.
+      description: Result of accepting an invite link.
+    AcceptPendingResult:
+      type: object
+      required:
+        - accepted
+      properties:
+        accepted:
+          type: integer
+          format: int32
+          description: Count of spaces joined.
+      description: Result of claiming all pending email invites.
+    AddSpaceMember:
+      type: object
+      required:
+        - email
+        - role
+      properties:
+        email:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+      description: Add a member to a space by email (they must have signed in once).
+    AddVersion:
+      type: object
+      required:
+        - hash
+      properties:
+        hash:
+          type: string
+          description: SHA-256 of the new bytes (its blob must be prepared/uploaded).
+        mime:
+          type: string
+        coalesce:
+          type: boolean
+          description: Coalesce into the current version if the same author saved recently.
+      description: Append a new content version to a file (never alters metadata).
+    AiGenerateRequest:
+      type: object
+      required:
+        - messages
+      properties:
+        model:
+          type: string
+          description: Model id from `/api/ai/models`; defaults to the first available.
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/AiMessage'
+        temperature:
+          type: number
+          format: double
+        maxTokens:
+          type: integer
+          format: int32
+          description: Server caps this at 32768.
+        json:
+          type: boolean
+          description: Request a strict-JSON reply where supported.
+      description: Run inference through the caller's effective gateway.
+    AiGenerateResult:
+      type: object
+      required:
+        - text
+        - model
+      properties:
+        text:
+          type: string
+          description: 'Generated text (a JSON string when `json: true` was requested).'
+        model:
+          type: string
+          description: The model actually used.
+      description: The generation result.
+    AiImagePart:
+      type: object
+      required:
+        - kind
+        - mime
+        - bytes
+      properties:
+        kind:
+          type: string
+          enum:
+            - image
+        mime:
+          type: string
+        bytes:
+          type: string
+          format: byte
+    AiMessage:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum:
+            - system
+            - user
+            - assistant
+        content:
+          anyOf:
+            - type: string
+            - type: array
+              items:
+                anyOf:
+                  - $ref: '#/components/schemas/AiTextPart'
+                  - $ref: '#/components/schemas/AiImagePart'
+      description: One chat message. A bare string `content` is shorthand for a single text part.
+    AiModel:
+      type: object
+      required:
+        - id
+        - label
+        - provider
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        provider:
+          type: string
+        vision:
+          type: boolean
+          description: True if the model accepts inline images/documents.
+      description: A model the caller can run (base providers + their own UI-configured ones).
+    AiTextPart:
+      type: object
+      required:
+        - kind
+        - text
+      properties:
+        kind:
+          type: string
+          enum:
+            - text
+        text:
+          type: string
+    AppPassword:
+      type: object
+      required:
+        - id
+        - name
+        - createdAt
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+      description: A device password for WebDAV / Basic-auth clients (the token is shown once).
+    AppPasswordToken:
+      type: object
+      required:
+        - id
+        - token
+      properties:
+        id:
+          type: string
+        token:
+          type: string
+      description: A newly-minted app password — the plaintext token is returned ONCE.
+    BranchInfo:
+      type: object
+      required:
+        - name
+        - isDefault
+        - current
+      properties:
+        name:
+          type: string
+        isDefault:
+          type: boolean
+          description: This is HEAD — never deletable.
+        current:
+          type: boolean
+          description: The connector is currently rooted here.
+        protected:
+          type: boolean
+        commitSha:
+          type: string
+      description: One branch (ref) of a connected repo.
+    BranchList:
+      type: object
+      required:
+        - supported
+        - branches
+      properties:
+        supported:
+          type: boolean
+        current:
+          type: string
+          nullable: true
+        canSwitch:
+          type: boolean
+          description: Only the owner of the config can persist a switch.
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchInfo'
+      description: "The connected space's branches, or `supported: false` for a NAS with no branch concept."
+    CalendarEvent:
+      type: object
+      required:
+        - id
+        - title
+        - start
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        start:
+          type: string
+          description: ISO 8601 (date or date-time).
+        end:
+          type: string
+          description: ISO 8601; omit for all-day / point-in-time events.
+        allDay:
+          type: boolean
+        kind:
+          type: string
+          enum:
+            - milestone
+            - release
+            - issue
+            - event
+        url:
+          type: string
+        tone:
+          type: string
+          description: Accent token.
+      description: A calendar event surfaced by a data-source plugin.
+    CalendarList:
+      type: object
+      required:
+        - events
+      properties:
+        source:
+          type: string
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/CalendarEvent'
+      description: Events from the active source.
+    ChangesPage:
+      type: object
+      required:
+        - changes
+        - cursor
+        - hasMore
+        - spaces
+      properties:
+        changes:
+          type: array
+          items:
+            anyOf:
+              - $ref: '#/components/schemas/MirrorFile'
+              - $ref: '#/components/schemas/MirrorTombstone'
+        cursor:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+          description: Per-space high-water seq map to send as the next `?since=`.
+        hasMore:
+          type: boolean
+        spaces:
+          type: array
+          items:
+            $ref: '#/components/schemas/MirrorSpace'
+      description: "A page of the offline-mirror delta: every file change since the caller's cursor."
+    Comment:
+      type: object
+      required:
+        - id
+        - authorId
+        - authorLabel
+        - body
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        authorId:
+          type: string
+        authorLabel:
+          type: string
+        body:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      description: A comment on a file, with a friendly author label resolved from the directory.
     CommittedBlob:
       type: object
       required:
@@ -465,12 +2754,122 @@ components:
           type: integer
           format: int64
       description: Result of streaming bytes to an upload ticket.
+    ConfigField:
+      type: object
+      required:
+        - key
+        - label
+        - type
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        type:
+          type: string
+          enum:
+            - string
+            - secret
+            - url
+            - boolean
+            - select
+        required:
+          type: boolean
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigFieldOption'
+          description: Choices for a `select` field.
+        optionsFrom:
+          type: string
+          enum:
+            - ai-models
+          description: Host fills options dynamically (today only "ai-models").
+        showWhen:
+          $ref: '#/components/schemas/ShowWhen'
+      description: One schema-driven config field for a plugin/processor/AI provider.
+    ConfigFieldOption:
+      type: object
+      required:
+        - value
+        - label
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+      description: A choice for a `select`-typed config field.
+    ConnectorSettings:
+      type: object
+      required:
+        - policy
+      properties:
+        policy:
+          $ref: '#/components/schemas/VersionPolicyKind'
+        days:
+          type: integer
+          format: int32
+          nullable: true
+          description: Retained-day window when `policy` is `days`, else null.
+      description: A connected space's version-retention policy.
+    ConnectorStatus:
+      type: object
+      required:
+        - indexing
+        - pending
+      properties:
+        indexing:
+          type: boolean
+          description: True while a crawl runs or extraction drains.
+        pending:
+          type: integer
+          format: int32
+          description: Versions still queued for text extraction.
+        lastIndexedAt:
+          type: string
+          format: date-time
+          nullable: true
+      description: Indexing state of a connected space (for the sidebar "Indexing…" hint).
     ContentSource:
       type: string
       enum:
         - blob
         - external
       description: "Where a version's bytes live: a blob Canopy owns, or a pointer into a connected store."
+    CreateAppPassword:
+      type: object
+      properties:
+        name:
+          type: string
+      description: Create an app password.
+    CreateBranch:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        from:
+          type: string
+      description: Create a branch on the backend (from another ref, default = the current branch).
+    CreateComment:
+      type: object
+      required:
+        - body
+      properties:
+        body:
+          type: string
+      description: Post a comment.
+    CreateCustomPlugin:
+      type: object
+      required:
+        - manifest
+        - source
+      properties:
+        manifest: {}
+        source:
+          type: string
+      description: Submit a Studio-generated plugin (manifest + source).
     CreateFile:
       type: object
       required:
@@ -491,6 +2890,48 @@ components:
           type: object
           additionalProperties: {}
       description: Fields needed to create a file record once its blob has been uploaded.
+    CreateFolder:
+      type: object
+      required:
+        - path
+      properties:
+        path:
+          type: string
+      description: Create an (empty) folder in a space.
+    CreateInvite:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          $ref: '#/components/schemas/Role'
+      description: Mint an invite link.
+    CreateShare:
+      type: object
+      properties:
+        role:
+          $ref: '#/components/schemas/Role'
+        label:
+          type: string
+        path:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+      description: Mint a share link. `path` (on a space) makes it a folder share.
+    CreateShareResult:
+      type: object
+      required:
+        - id
+        - secret
+      properties:
+        id:
+          type: string
+        secret:
+          type: string
+          description: Plaintext capability secret; not recoverable later.
+      description: Result of minting a share link — the secret is shown ONCE.
     CreateSpace:
       type: object
       required:
@@ -505,6 +2946,29 @@ components:
           type: string
           nullable: true
       description: Fields accepted when creating a shared (group) space.
+    CustomPlugin:
+      type: object
+      required:
+        - id
+        - manifest
+        - source
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        manifest:
+          description: The parsed manifest (validated against the manifest schema on save).
+        source:
+          type: string
+          description: ESM source for the sandboxed viewer/app entry.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      description: 'A runtime-authored (Plugin Studio) plugin: its manifest + sandboxed ESM source.'
     Error:
       type: object
       required:
@@ -528,6 +2992,9 @@ components:
       properties:
         id:
           type: string
+        tenantId:
+          type: string
+          description: The owning space id (the tenant); equals the space the file lives in.
         ownerId:
           type: string
         name:
@@ -560,10 +3027,13 @@ components:
           type: array
           items:
             type: string
-          description: Labels (emails / names) the file is shared with, beyond its owner.
+          description: Labels (emails / names / space names) the file is shared with, beyond its owner.
         ownerLabel:
           type: string
-      description: 'A file: a mutable record that points at its current version, joined with that version.'
+      description: |-
+        A file: a mutable record that points at its current version, joined with that
+        version. This is the display shape (`getFileForDisplay` / listings): the file
+        record plus its current version, who it's shared with, and a friendly owner label.
     FileVersion:
       type: object
       required:
@@ -581,10 +3051,22 @@ components:
           type: string
         source:
           $ref: '#/components/schemas/ContentSource'
+        blobKey:
+          type: string
+          nullable: true
+          description: Blob storage key (tenant-namespaced hash). Present iff `source` is `blob`.
         connectorId:
           type: string
           nullable: true
           description: Connection id when `source` is `external`, else null.
+        externalKey:
+          type: string
+          nullable: true
+          description: Object key in the connected store (external only).
+        etag:
+          type: string
+          nullable: true
+          description: Backend etag of the external object (external only).
         mime:
           type: string
           nullable: true
@@ -599,6 +3081,10 @@ components:
         keep:
           type: boolean
           description: 'Pinned: retention never prunes a kept version.'
+        contentRef:
+          type: string
+          nullable: true
+          description: R2 key of cached extracted text (external sources); null until the extract queue runs.
       description: Binds a file to its content at a point in time.
     Folder:
       type: object
@@ -611,6 +3097,141 @@ components:
         path:
           type: string
       description: A folder entry within a space.
+    FolderGrantInput:
+      type: object
+      required:
+        - path
+        - subjectType
+        - subjectId
+        - role
+      properties:
+        path:
+          type: string
+        subjectType:
+          $ref: '#/components/schemas/SubjectType'
+        subjectId:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+      description: Add/remove a grant on a folder (a space path + its subtree).
+    Grant:
+      type: object
+      required:
+        - objectType
+        - objectId
+        - relation
+        - subjectType
+        - subjectId
+      properties:
+        objectType:
+          $ref: '#/components/schemas/ShareObjectType'
+        objectId:
+          type: string
+        relation:
+          type: string
+          description: 'The granted role (the underlying relation: owner/editor/viewer).'
+        subjectType:
+          $ref: '#/components/schemas/SubjectType'
+        subjectId:
+          type: string
+        subjectRelation:
+          type: string
+          description: '"" for a direct grant; "member" for a space-userset grant.'
+        name:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        picture:
+          type: string
+          nullable: true
+      description: A direct ACL grant on a file or folder, enriched with the subject's directory info.
+    GrantInput:
+      type: object
+      required:
+        - subjectType
+        - subjectId
+        - role
+      properties:
+        subjectType:
+          $ref: '#/components/schemas/SubjectType'
+        subjectId:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        subjectRelation:
+          type: string
+      description: Add/remove a grant on a file. (For `email`, an unknown address becomes a pending invite.)
+    Health:
+      type: object
+      required:
+        - ok
+        - drive
+        - mounts
+      properties:
+        ok:
+          type: boolean
+        drive:
+          type: boolean
+        mounts:
+          type: array
+          items:
+            type: string
+      description: Liveness + which drive/mounts are configured.
+    Integrations:
+      type: object
+      required:
+        - sources
+        - usingDefault
+      properties:
+        sources:
+          type: array
+          items:
+            type: string
+          description: Available data-source plugin ids (e.g. ["github"]).
+        sourceId:
+          type: string
+          nullable: true
+          description: The currently configured source, or null.
+        repo:
+          type: string
+          nullable: true
+        usingDefault:
+          type: boolean
+          description: True when falling back to the public demo default.
+      description: What's connected for the caller (the integrations panel).
+    InvitePreview:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          $ref: '#/components/schemas/InviteStatus'
+        spaceId:
+          type: string
+          description: Present when `status` is `valid`.
+        spaceName:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+      description: Public preview of an invite link (no sign-in needed).
+    InviteStatus:
+      type: string
+      enum:
+        - valid
+        - used
+        - expired
+        - not_found
+      description: Whether an invite token can still be redeemed.
+    KeepVersion:
+      type: object
+      required:
+        - keep
+      properties:
+        keep:
+          type: boolean
+      description: Pin/unpin a version so retention never prunes it.
     Listing:
       type: object
       required:
@@ -633,6 +3254,113 @@ components:
           type: string
           description: Present for connected spaces.
       description: "One folder's listing within a space: the files and subfolders at `path`."
+    McpClient:
+      type: object
+      required:
+        - clientId
+        - firstSeenAt
+        - lastSeenAt
+      properties:
+        clientId:
+          type: string
+        name:
+          type: string
+          nullable: true
+        version:
+          type: string
+          nullable: true
+        firstSeenAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+      description: An AI assistant that has connected over MCP (recorded as a side effect of requests).
+    MirrorFile:
+      type: object
+      required:
+        - id
+        - spaceId
+        - name
+        - path
+        - metadata
+        - updatedAt
+        - seq
+      properties:
+        id:
+          type: string
+        spaceId:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+          description: Virtual folder path, normalized.
+        metadata:
+          type: object
+          additionalProperties: {}
+        updatedAt:
+          type: string
+          format: date-time
+        seq:
+          type: integer
+          format: int64
+          description: Per-space change sequence.
+        size:
+          type: integer
+          format: int64
+          nullable: true
+        mime:
+          type: string
+          nullable: true
+        ownerLabel:
+          type: string
+        sharedWith:
+          type: array
+          items:
+            type: string
+      description: A live (upsert) file change in the offline-mirror delta.
+    MirrorSpace:
+      type: object
+      required:
+        - id
+        - role
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+        kind:
+          type: string
+      description: Which spaces a `/changes` page covers, with the caller's role + kind in each.
+    MirrorTombstone:
+      type: object
+      required:
+        - id
+        - spaceId
+        - seq
+        - deleted
+      properties:
+        id:
+          type: string
+        spaceId:
+          type: string
+        seq:
+          type: integer
+          format: int64
+        deleted:
+          type: boolean
+          enum:
+            - true
+      description: A delete (tombstone) change in the offline-mirror delta.
+    Ok:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+      description: The generic success envelope returned by mutating routes that have no body.
     Overview:
       type: object
       required:
@@ -646,6 +3374,97 @@ components:
           type: integer
           format: int64
       description: Lightweight per-space stats for the dashboard.
+    PendingInvite:
+      type: object
+      required:
+        - spaceId
+        - spaceName
+        - role
+      properties:
+        spaceId:
+          type: string
+        spaceName:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+      description: An email invite awaiting the caller's (verified) address.
+    Person:
+      type: object
+      required:
+        - sub
+        - updatedAt
+      properties:
+        sub:
+          type: string
+        email:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        picture:
+          type: string
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+      description: A person the caller is connected to (space co-member or file-share peer).
+    PluginIds:
+      type: object
+      required:
+        - ids
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+      description: A set of plugin ids (installed / active / a space's applied plugins).
+    PluginPlace:
+      type: object
+      required:
+        - spaceId
+        - name
+        - applied
+      properties:
+        spaceId:
+          type: string
+        name:
+          type: string
+        applied:
+          type: boolean
+      description: A group space a plugin can be applied to, flagged with whether it's applied there.
+    PluginSettings:
+      type: object
+      required:
+        - fields
+        - values
+        - secretsSet
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigField'
+        values:
+          type: object
+          additionalProperties:
+            type: string
+        secretsSet:
+          type: array
+          items:
+            type: string
+      description: |-
+        A plugin's settings: the server-authoritative field schema, the caller's saved
+        non-secret values, and which secret fields are set (secret values never leave the server).
+    PluginTestResult:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+        error:
+          type: string
+      description: Result of actively exercising a connector-backed plugin (a live root listing).
     PrepareUpload:
       type: object
       required:
@@ -658,6 +3477,58 @@ components:
           type: integer
           format: int64
       description: Request to reserve an upload slot for content with the given hash.
+    ProcessingRun:
+      type: object
+      required:
+        - fileId
+        - fileName
+        - spaceName
+        - at
+        - plugin
+        - status
+      properties:
+        fileId:
+          type: string
+        fileName:
+          type: string
+        spaceName:
+          type: string
+        at:
+          type: string
+          format: date-time
+        plugin:
+          type: string
+          description: Processor id (e.g. "document-ai").
+        status:
+          type: string
+          enum:
+            - ok
+            - error
+        model:
+          type: string
+        labels:
+          type: array
+          items:
+            type: string
+        described:
+          type: boolean
+        note:
+          type: string
+      description: One processor run over a file, flattened from the file's metadata log. Newest first.
+    RemoveSpaceMember:
+      type: object
+      required:
+        - sub
+      properties:
+        sub:
+          type: string
+      description: Remove a member from a space.
+    RenameSpace:
+      type: object
+      properties:
+        name:
+          type: string
+      description: Patch body for renaming a space.
     Role:
       type: string
       enum:
@@ -665,6 +3536,17 @@ components:
         - editor
         - viewer
       description: Resource-level role. owner ⊃ editor ⊃ viewer.
+    SavePluginSettings:
+      type: object
+      required:
+        - values
+      properties:
+        values:
+          type: object
+          additionalProperties:
+            type: string
+            nullable: true
+      description: Save a plugin's settings. Omitted keys are unchanged; empty secret = keep existing.
     SearchHit:
       type: object
       required:
@@ -705,6 +3587,124 @@ components:
           type: string
           description: Present when more results are available.
       description: A page of search hits.
+    SetConnectorSettings:
+      type: object
+      required:
+        - versionPolicy
+      properties:
+        versionPolicy:
+          $ref: '#/components/schemas/VersionPolicyKind'
+        versionDays:
+          type: integer
+          format: int32
+          nullable: true
+      description: Update a connected space's version-retention policy.
+    ShareInfo:
+      type: object
+      required:
+        - id
+        - objectType
+        - spaceId
+        - path
+        - role
+        - createdBy
+        - createdAt
+      properties:
+        id:
+          type: string
+        objectType:
+          $ref: '#/components/schemas/ShareObjectType'
+        spaceId:
+          type: string
+        fileId:
+          type: string
+          nullable: true
+          description: Non-null only for `file` shares.
+        path:
+          type: string
+          description: Folder path for `folder` shares; "" otherwise.
+        role:
+          $ref: '#/components/schemas/Role'
+        label:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+      description: A share link's metadata (the secret itself is returned only once, on create).
+    ShareListing:
+      type: object
+      required:
+        - objectType
+        - role
+        - path
+        - files
+        - folders
+      properties:
+        objectType:
+          $ref: '#/components/schemas/ShareObjectType'
+        role:
+          $ref: '#/components/schemas/Role'
+        path:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/File'
+        folders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Folder'
+        spaceName:
+          type: string
+      description: "A folder/space share's public landing: a read-only listing plus the link's role."
+    ShareObjectType:
+      type: string
+      enum:
+        - file
+        - folder
+        - space
+      description: What a share link points at.
+    SharedFolder:
+      type: object
+      required:
+        - spaceId
+        - path
+        - role
+        - spaceName
+      properties:
+        spaceId:
+          type: string
+        path:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        spaceName:
+          type: string
+      description: A folder shared with the caller, enriched with its space name.
+    ShowWhen:
+      type: object
+      required:
+        - field
+        - in
+      properties:
+        field:
+          type: string
+        in:
+          type: array
+          items:
+            type: string
+      description: "Conditional visibility: show this field only when another field's value is in `in`."
     Space:
       type: object
       required:
@@ -737,7 +3737,54 @@ components:
           type: string
           nullable: true
           description: Optional accent color — an HSL triplet like "145 33% 36%".
+        createdBy:
+          type: string
+          description: Who created the space (absent on synthetic `connected` spaces).
+        createdAt:
+          type: string
+          format: date-time
+        versionPolicy:
+          allOf:
+            - $ref: '#/components/schemas/VersionPolicyKind'
+          description: Retention policy for this space's file versions.
+        versionDays:
+          type: integer
+          format: int32
+          nullable: true
+          description: Retained-day window when `versionPolicy` is `days`, else null.
       description: A space as returned to the caller, including their role in it.
+    SpaceInvite:
+      type: object
+      required:
+        - token
+        - spaceId
+        - role
+        - createdBy
+        - createdAt
+      properties:
+        token:
+          type: string
+        spaceId:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        acceptedBy:
+          type: string
+          nullable: true
+        acceptedAt:
+          type: string
+          format: date-time
+          nullable: true
+      description: A single-use invite link with the role baked in.
     SpaceKind:
       type: string
       enum:
@@ -748,6 +3795,99 @@ components:
         A drive: one `personal` space per user, shared `group` spaces (e.g. a family),
         and read-only `connected` spaces — a persisted index over a user's connected
         backend (a Synology NAS, a GitHub repo).
+    SpaceMember:
+      type: object
+      required:
+        - sub
+        - role
+        - pending
+      properties:
+        sub:
+          type: string
+          description: The user's sub, or "" for a pending email invite.
+        role:
+          $ref: '#/components/schemas/Role'
+        email:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        pending:
+          type: boolean
+          description: True for an email invite not yet claimed.
+      description: A member of a space (or a pending email invite resolved as a member row).
+    SpacePrefs:
+      type: object
+      required:
+        - mounted
+      properties:
+        mounted:
+          type: boolean
+      description: Pin/unpin a space into "My Drive".
+    SubjectType:
+      type: string
+      enum:
+        - user
+        - space
+        - email
+      description: Who a grant/share is granted to.
+    SwitchBranch:
+      type: object
+      required:
+        - branch
+      properties:
+        branch:
+          type: string
+      description: Switch the branch the connected space is rooted at.
+    Task:
+      type: object
+      required:
+        - id
+        - title
+        - status
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum:
+            - todo
+            - in_progress
+            - blocked
+            - done
+        assignee:
+          type: string
+        due:
+          type: string
+        labels:
+          type: array
+          items:
+            type: string
+        priority:
+          type: string
+          enum:
+            - low
+            - normal
+            - high
+        url:
+          type: string
+      description: A task surfaced by a data-source plugin.
+    TaskList:
+      type: object
+      required:
+        - tasks
+      properties:
+        source:
+          type: string
+          nullable: true
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+      description: Tasks from the active source.
     UploadTicket:
       type: object
       required:
@@ -769,6 +3909,26 @@ components:
             - method
             - url
       description: Where (and whether) to upload. When `exists` is true the blob is already stored.
+    VersionEntry:
+      type: object
+      required:
+        - createdByLabel
+      properties:
+        createdByLabel:
+          type: string
+      allOf:
+        - $ref: '#/components/schemas/FileVersion'
+      description: A version in a file's history, with a friendly label for who created it.
+    VersionPolicyKind:
+      type: string
+      enum:
+        - all
+        - smart
+        - days
+      description: |-
+        Version-retention policy a space applies to its files' history. `smart` thins on a
+        tiered curve (default), `all` keeps everything, `days` keeps only the last N days.
+        The current + pinned versions survive any policy.
   securitySchemes:
     BearerAuth:
       type: http

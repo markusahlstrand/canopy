@@ -51,6 +51,38 @@ function decoString(decos: Deco[], name: string): string | undefined {
 const hasDeco = (decos: Deco[], name: string) => decos.some((d) => d.name === name);
 const docOf = (decos: Deco[]) => decoString(decos, "__doc") ?? decoString(decos, "doc");
 
+/** Every string literal in a decorator's raw args, in order. */
+function decoStrings(args: string): string[] {
+  const out: string[] = [];
+  const re = /"((?:[^"\\]|\\.)*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(args))) {
+    try {
+      out.push(JSON.parse(`"${m[1]}"`));
+    } catch {
+      out.push(m[1]!);
+    }
+  }
+  return out;
+}
+
+/**
+ * Tags for filtering. We accept both the ergonomic `@tag("a", "b")` (repeatable) and
+ * the standards-clean `@extension("x-tags", #["a", "b"])` vendor extension — the latter
+ * is the only target-valid way to tag a *model* in the official compiler.
+ */
+function tagsOf(decos: Deco[]): string[] | undefined {
+  const tags = new Set<string>();
+  for (const d of decos) {
+    if (d.name === "tag") for (const s of decoStrings(d.args)) tags.add(s);
+    else if (d.name === "extension") {
+      const strs = decoStrings(d.args);
+      if (strs[0] === "x-tags") for (const s of strs.slice(1)) tags.add(s);
+    }
+  }
+  return tags.size ? [...tags] : undefined;
+}
+
 /**
  * Replace comments with whitespace, but lift `/** … *\/` doc comments into a
  * synthetic `@__doc("…")` decorator on the following declaration so the UI can show
@@ -288,6 +320,7 @@ function parseModelBody(name: string, decos: Deco[], body: string, scope: Scope,
     kind: "model",
     doc: docOf(decos),
     isError: hasDeco(decos, "error"),
+    tags: tagsOf(decos),
     fields,
     file,
   };
@@ -304,6 +337,7 @@ function parseEnumBody(name: string, decos: Deco[], body: string, scope: Scope, 
     namespace: scope.ns || undefined,
     kind: "enum",
     doc: docOf(decos),
+    tags: tagsOf(decos),
     fields: [],
     enumValues: values,
     file,
@@ -352,9 +386,13 @@ function makeEndpoint(
   routePrefix: string,
   group: string,
   file: string,
+  inheritedTags?: string[],
 ): SpecEndpoint & { _retRaw: string } {
   const operationId = decoString(decos, "operationId") ?? opName;
   const route = (routePrefix + routeOf(decos)) || undefined;
+  // Operation tags inherit from the enclosing interface/namespace (`@tag("pets")
+  // interface Pets {…}`), as OpenAPI does, then add the op's own tags.
+  const tagSet = new Set([...(inheritedTags ?? []), ...(tagsOf(decos) ?? [])]);
   return {
     id: operationId,
     operationId,
@@ -367,6 +405,7 @@ function makeEndpoint(
     parameters: parseParams(paramsStr),
     responses: parseResponses(retStr),
     refModels: [],
+    tags: tagSet.size ? [...tagSet] : undefined,
     file,
     _retRaw: retStr,
   };
@@ -379,6 +418,7 @@ interface FileResult {
 
 function parseInterfaceBody(decos: Deco[], body: string, ifaceName: string, scope: Scope, file: string): SpecEndpoint[] {
   const prefix = scope.routePrefix + routeOf(decos);
+  const ifaceTags = tagsOf(decos);
   const r = new Reader(body.replace(/^\{/, "").replace(/\}$/, ""));
   const out: SpecEndpoint[] = [];
   while (!r.done) {
@@ -404,7 +444,7 @@ function parseInterfaceBody(decos: Deco[], body: string, ifaceName: string, scop
       ret = r.until([";"]).trim();
     }
     if (r.peek() === ";") r.i++;
-    out.push(makeEndpoint(kw, odecos, params, ret, scope, prefix, ifaceName, file));
+    out.push(makeEndpoint(kw, odecos, params, ret, scope, prefix, ifaceName, file, ifaceTags));
   }
   return out;
 }
