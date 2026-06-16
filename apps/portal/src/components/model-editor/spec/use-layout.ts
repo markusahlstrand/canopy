@@ -41,8 +41,13 @@ export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: Co
 
   // (Re)load when the project or a fresh build arrives: stage from idb if a draft
   // exists, else start from the committed sidecar.
+  const rehydrating = useRef(false);
   useEffect(() => {
     let alive = true;
+    // Block draft persistence until the async load lands the new project's `working`,
+    // otherwise the debounced writer can flush the *previous* project's layout into the
+    // *new* project's draft (deps fire with stale `working` on the projectKey change).
+    rehydrating.current = true;
     setCommitted(graph.layout);
     setLayoutFileId(graph.layoutFileId);
     (async () => {
@@ -51,6 +56,7 @@ export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: Co
       const w = draft ? parseSidecar(draft) : graph.layout;
       setWorking(w);
       setActiveViewId((id) => (w.views.some((v) => v.id === id) ? id : w.views[0]?.id ?? "default"));
+      rehydrating.current = false;
     })();
     return () => {
       alive = false;
@@ -67,6 +73,7 @@ export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: Co
       return;
     }
     const t = setTimeout(() => {
+      if (rehydrating.current) return; // mid-project-switch: `working` is still the old project's
       if (dirty) void putDraft(projectKey, SIDECAR_NAME, serializeSidecar(working));
       else void deleteDraft(projectKey, SIDECAR_NAME);
     }, 500);

@@ -1053,7 +1053,10 @@ function DesktopApp() {
           onToggleTheme={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}
           onUpload={() => uploadInputRef.current?.click()}
           onRefresh={() => {
-            freshOnceRef.current = true; // make the folder re-read bypass the reconcile debounce
+            // Only arm the one-shot fresh flag in the drive view: the loader consumes it
+            // after an early return for non-drive views, so setting it elsewhere would leak
+            // onto the next unrelated drive navigation.
+            if (active === "drive") freshOnceRef.current = true; // bypass the reconcile debounce
             void forceSync(); // re-pull the offline mirror now (no-op if disabled)
             reload(); // re-fetch spaces/overview/shared + re-read the current folder
           }}
