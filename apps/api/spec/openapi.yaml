@@ -2690,6 +2690,89 @@ components:
           items:
             $ref: '#/components/schemas/CalendarEvent'
       description: Events from the active source.
+    CapAiGenerate:
+      type: object
+      required:
+        - kind
+      properties:
+        kind:
+          type: string
+          enum:
+            - ai:generate
+        models:
+          type: array
+          items:
+            type: string
+      description: Run inference, optionally restricted to named models.
+    CapIndexQuery:
+      type: object
+      required:
+        - kind
+      properties:
+        kind:
+          type: string
+          enum:
+            - index:query
+      description: Query the full-text index within the caller's scope.
+    CapItemRead:
+      type: object
+      required:
+        - kind
+      properties:
+        kind:
+          type: string
+          enum:
+            - item:read
+      description: Read the previewed item's bytes/metadata.
+    CapItemWrite:
+      type: object
+      required:
+        - kind
+      properties:
+        kind:
+          type: string
+          enum:
+            - item:write
+      description: Write back to the item (a new version / metadata).
+    CapKv:
+      type: object
+      required:
+        - kind
+      properties:
+        kind:
+          type: string
+          enum:
+            - kv
+      description: Per-plugin key/value scratch storage.
+    CapNetFetch:
+      type: object
+      required:
+        - kind
+        - hosts
+      properties:
+        kind:
+          type: string
+          enum:
+            - net:fetch
+        hosts:
+          type: array
+          items:
+            type: string
+      description: Fetch from an allow-list of hosts.
+    CapStorageRead:
+      type: object
+      required:
+        - kind
+      properties:
+        kind:
+          type: string
+          enum:
+            - storage:read
+        connectors:
+          type: array
+          items:
+            type: string
+      description: Read from named storage connectors.
     ChangesPage:
       type: object
       required:
@@ -2836,6 +2919,54 @@ components:
         - blob
         - external
       description: "Where a version's bytes live: a blob Canopy owns, or a pointer into a connected store."
+    ContextMenuContribution:
+      type: object
+      required:
+        - id
+        - label
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        icon:
+          type: string
+        when:
+          type: object
+          properties:
+            kinds:
+              type: array
+              items:
+                type: string
+      description: A context-menu entry the plugin adds, optionally restricted to item kinds.
+    Contributions:
+      type: object
+      properties:
+        contextMenu:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContextMenuContribution'
+        railPanel:
+          $ref: '#/components/schemas/RailPanelContribution'
+        detailView:
+          $ref: '#/components/schemas/DetailViewContribution'
+        detailFields:
+          type: array
+          items:
+            $ref: '#/components/schemas/DetailFieldContribution'
+        viewers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ViewerContribution'
+        creators:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileCreatorContribution'
+        store:
+          $ref: '#/components/schemas/StoreListing'
+        dataSource:
+          $ref: '#/components/schemas/DataSourceContribution'
+      description: The declarative UI contribution points a plugin's manifest can declare.
     CreateAppPassword:
       type: object
       properties:
@@ -2866,7 +2997,8 @@ components:
         - manifest
         - source
       properties:
-        manifest: {}
+        manifest:
+          $ref: '#/components/schemas/PluginManifest'
         source:
           type: string
       description: Submit a Studio-generated plugin (manifest + source).
@@ -2958,6 +3090,8 @@ components:
         id:
           type: string
         manifest:
+          allOf:
+            - $ref: '#/components/schemas/PluginManifest'
           description: The parsed manifest (validated against the manifest schema on save).
         source:
           type: string
@@ -2968,7 +3102,61 @@ components:
         updatedAt:
           type: string
           format: date-time
-      description: 'A runtime-authored (Plugin Studio) plugin: its manifest + sandboxed ESM source.'
+      description: |-
+        A runtime-authored (Plugin Studio) plugin: its manifest + sandboxed ESM source.
+        Studio plugins are a subset of the manifest surface — a file viewer
+        (`contributes.viewers`) or a standalone app (`contributes.detailView`) — and may
+        only declare sandbox-safe capabilities (`item:read`, `item:write`, `net:fetch`).
+    DataSourceContribution:
+      type: object
+      required:
+        - provides
+      properties:
+        provides:
+          type: array
+          items:
+            type: string
+            enum:
+              - tasks
+              - calendar
+        config:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigField'
+      description: Declares the plugin contributes typed data sources (tasks / calendar).
+    DetailFieldContribution:
+      type: object
+      required:
+        - id
+        - label
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+      description: A field the plugin adds to the file-preview details grid.
+    DetailViewContribution:
+      type: object
+      required:
+        - id
+        - title
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        nav:
+          type: object
+          properties:
+            section:
+              type: string
+          required:
+            - section
+          description: Place a launcher in the left sidebar under this named section.
+        immersive:
+          type: boolean
+          description: Render edge-to-edge (drop the host page chrome).
+      description: A full-content view shown when the plugin is opened from the sidebar (a standalone app).
     Error:
       type: object
       required:
@@ -3034,6 +3222,31 @@ components:
         A file: a mutable record that points at its current version, joined with that
         version. This is the display shape (`getFileForDisplay` / listings): the file
         record plus its current version, who it's shared with, and a friendly owner label.
+    FileCreatorContribution:
+      type: object
+      required:
+        - id
+        - label
+        - defaultName
+        - extension
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        icon:
+          type: string
+        defaultName:
+          type: string
+        extension:
+          type: string
+          description: Extension appended to the name, including the dot (e.g. ".md").
+        mime:
+          type: string
+        template:
+          type: string
+          description: Optional starter content (UTF-8 text).
+      description: A file type the plugin can create from the host's "New" menu.
     FileVersion:
       type: object
       required:
@@ -3419,6 +3632,49 @@ components:
           items:
             type: string
       description: A set of plugin ids (installed / active / a space's applied plugins).
+    PluginManifest:
+      type: object
+      required:
+        - id
+        - name
+        - version
+        - capabilities
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+          description: lucide icon name for sidebar / rail / store surfaces.
+        color:
+          type: string
+          description: hsl() accent string for tinted icon backgrounds.
+        entry:
+          type: string
+          description: Entry module path within the source bundle, relative to the manifest.
+        capabilities:
+          type: array
+          items:
+            anyOf:
+              - $ref: '#/components/schemas/CapItemRead'
+              - $ref: '#/components/schemas/CapItemWrite'
+              - $ref: '#/components/schemas/CapIndexQuery'
+              - $ref: '#/components/schemas/CapStorageRead'
+              - $ref: '#/components/schemas/CapNetFetch'
+              - $ref: '#/components/schemas/CapKv'
+              - $ref: '#/components/schemas/CapAiGenerate'
+        serverHooks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServerHook'
+        contributes:
+          $ref: '#/components/schemas/Contributions'
+      description: "A plugin's manifest: identity, declared capabilities, and UI contributions."
     PluginPlace:
       type: object
       required:
@@ -3515,6 +3771,19 @@ components:
         note:
           type: string
       description: One processor run over a file, flattened from the file's metadata log. Newest first.
+    RailPanelContribution:
+      type: object
+      required:
+        - id
+        - title
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        icon:
+          type: string
+      description: A panel the plugin renders into the right-hand rail.
     RemoveSpaceMember:
       type: object
       required:
@@ -3587,6 +3856,12 @@ components:
           type: string
           description: Present when more results are available.
       description: A page of search hits.
+    ServerHook:
+      type: string
+      enum:
+        - enrichItem
+        - transformUpload
+      description: Server-side hook a plugin can implement (runs inside the sandbox).
     SetConnectorSettings:
       type: object
       required:
@@ -3825,6 +4100,27 @@ components:
         mounted:
           type: boolean
       description: Pin/unpin a space into "My Drive".
+    StoreListing:
+      type: object
+      required:
+        - category
+        - tagline
+      properties:
+        category:
+          type: string
+          enum:
+            - Productivity
+            - Finance
+            - Lifestyle
+            - Security
+            - Media
+            - Wellness
+            - Help
+        tagline:
+          type: string
+        popular:
+          type: boolean
+      description: How the plugin appears in the plugin store.
     SubjectType:
       type: string
       enum:
@@ -3929,6 +4225,28 @@ components:
         Version-retention policy a space applies to its files' history. `smart` thins on a
         tiered curve (default), `all` keeps everything, `days` keeps only the last N days.
         The current + pinned versions survive any policy.
+    ViewerContribution:
+      type: object
+      required:
+        - id
+        - match
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        match:
+          type: array
+          items:
+            type: string
+          description: 'MIME types and/or extensions: "application/pdf", "image/*", ".heic", or "pdf".'
+        fill:
+          type: boolean
+          description: Fill the preview box instead of auto-growing to content.
+        immersive:
+          type: boolean
+          description: Take over the whole surface when expanded full screen.
+      description: A sandboxed viewer the plugin renders for matching file types.
   securitySchemes:
     BearerAuth:
       type: http

@@ -644,6 +644,166 @@ model PluginPlace {
   applied: boolean;
 }
 
+// ───────────────────────────── plugin manifest ───────────────────────────────
+// A plugin's declared identity, the capabilities the host grants it (scoped — no
+// ambient access), and the declarative UI contribution points it renders into.
+
+/** Read the previewed item's bytes/metadata. */
+model CapItemRead {
+  kind: "item:read";
+}
+
+/** Write back to the item (a new version / metadata). */
+model CapItemWrite {
+  kind: "item:write";
+}
+
+/** Query the full-text index within the caller's scope. */
+model CapIndexQuery {
+  kind: "index:query";
+}
+
+/** Read from named storage connectors. */
+model CapStorageRead {
+  kind: "storage:read";
+  connectors?: string[];
+}
+
+/** Fetch from an allow-list of hosts. */
+model CapNetFetch {
+  kind: "net:fetch";
+  hosts: string[];
+}
+
+/** Per-plugin key/value scratch storage. */
+model CapKv {
+  kind: "kv";
+}
+
+/** Run inference, optionally restricted to named models. */
+model CapAiGenerate {
+  kind: "ai:generate";
+  models?: string[];
+}
+
+/** A capability a plugin declares in its manifest. The host grants only what's declared. */
+alias Capability =
+  | CapItemRead
+  | CapItemWrite
+  | CapIndexQuery
+  | CapStorageRead
+  | CapNetFetch
+  | CapKv
+  | CapAiGenerate;
+
+/** Server-side hook a plugin can implement (runs inside the sandbox). */
+union ServerHook {
+  enrichItem: "enrichItem",
+  transformUpload: "transformUpload",
+}
+
+/** A context-menu entry the plugin adds, optionally restricted to item kinds. */
+model ContextMenuContribution {
+  id: string;
+  label: string;
+  icon?: string;
+  when?: {
+    kinds?: string[];
+  };
+}
+
+/** A panel the plugin renders into the right-hand rail. */
+model RailPanelContribution {
+  id: string;
+  title: string;
+  icon?: string;
+}
+
+/** A full-content view shown when the plugin is opened from the sidebar (a standalone app). */
+model DetailViewContribution {
+  id: string;
+  title: string;
+  /** Place a launcher in the left sidebar under this named section. */
+  nav?: {
+    section: string;
+  };
+  /** Render edge-to-edge (drop the host page chrome). */
+  immersive?: boolean;
+}
+
+/** A field the plugin adds to the file-preview details grid. */
+model DetailFieldContribution {
+  id: string;
+  label: string;
+}
+
+/** A sandboxed viewer the plugin renders for matching file types. */
+model ViewerContribution {
+  id: string;
+  title?: string;
+  /** MIME types and/or extensions: "application/pdf", "image/*", ".heic", or "pdf". */
+  match: string[];
+  /** Fill the preview box instead of auto-growing to content. */
+  fill?: boolean;
+  /** Take over the whole surface when expanded full screen. */
+  immersive?: boolean;
+}
+
+/** A file type the plugin can create from the host's "New" menu. */
+model FileCreatorContribution {
+  id: string;
+  label: string;
+  icon?: string;
+  defaultName: string;
+  /** Extension appended to the name, including the dot (e.g. ".md"). */
+  extension: string;
+  mime?: string;
+  /** Optional starter content (UTF-8 text). */
+  template?: string;
+}
+
+/** How the plugin appears in the plugin store. */
+model StoreListing {
+  category: "Productivity" | "Finance" | "Lifestyle" | "Security" | "Media" | "Wellness" | "Help";
+  tagline: string;
+  popular?: boolean;
+}
+
+/** Declares the plugin contributes typed data sources (tasks / calendar). */
+model DataSourceContribution {
+  provides: ("tasks" | "calendar")[];
+  config?: ConfigField[];
+}
+
+/** The declarative UI contribution points a plugin's manifest can declare. */
+model Contributions {
+  contextMenu?: ContextMenuContribution[];
+  railPanel?: RailPanelContribution;
+  detailView?: DetailViewContribution;
+  detailFields?: DetailFieldContribution[];
+  viewers?: ViewerContribution[];
+  creators?: FileCreatorContribution[];
+  store?: StoreListing;
+  dataSource?: DataSourceContribution;
+}
+
+/** A plugin's manifest: identity, declared capabilities, and UI contributions. */
+model PluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  /** lucide icon name for sidebar / rail / store surfaces. */
+  icon?: string;
+  /** hsl() accent string for tinted icon backgrounds. */
+  color?: string;
+  /** Entry module path within the source bundle, relative to the manifest. */
+  entry?: string;
+  capabilities: Capability[];
+  serverHooks?: ServerHook[];
+  contributes?: Contributions;
+}
+
 // ───────────────────────────── installed / custom plugins ────────────────────
 
 /** A set of plugin ids (installed / active / a space's applied plugins). */
@@ -651,11 +811,16 @@ model PluginIds {
   ids: string[];
 }
 
-/** A runtime-authored (Plugin Studio) plugin: its manifest + sandboxed ESM source. */
+/**
+ * A runtime-authored (Plugin Studio) plugin: its manifest + sandboxed ESM source.
+ * Studio plugins are a subset of the manifest surface — a file viewer
+ * (`contributes.viewers`) or a standalone app (`contributes.detailView`) — and may
+ * only declare sandbox-safe capabilities (`item:read`, `item:write`, `net:fetch`).
+ */
 model CustomPlugin {
   @key id: string;
   /** The parsed manifest (validated against the manifest schema on save). */
-  manifest: unknown;
+  manifest: PluginManifest;
   /** ESM source for the sandboxed viewer/app entry. */
   source: string;
   createdAt: utcDateTime;
@@ -664,7 +829,7 @@ model CustomPlugin {
 
 /** Submit a Studio-generated plugin (manifest + source). */
 model CreateCustomPlugin {
-  manifest: unknown;
+  manifest: PluginManifest;
   source: string;
 }
 
