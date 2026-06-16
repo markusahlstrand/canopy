@@ -48,6 +48,7 @@ import {
   moveFile,
   setSpaceMounted,
   syncConnector,
+  clearSpaceContent,
   fetchMe,
   rememberOpened,
   fetchInstalledPlugins,
@@ -1066,8 +1067,14 @@ function DesktopApp() {
             active === "drive" && space.startsWith("connector:") ? space.slice("connector:".length) : null
           }
           onBranchSwitched={() => {
-            void forceSync();
-            reload();
+            // Connector file bytes are cached client-side keyed by a branch-less content
+            // URL, so a switch must evict this space's cached content or reads keep
+            // returning the old branch's bytes. Clear first, then re-pull the offline
+            // mirror and re-read the current folder against the new branch.
+            void clearSpaceContent(space).finally(() => {
+              void forceSync();
+              reload();
+            });
           }}
           offline={!online}
           railAvailable={railAvailable}
