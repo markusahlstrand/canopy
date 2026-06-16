@@ -21,7 +21,10 @@ export function loadLibrary(): Library {
     if (!raw) return { models: [], currentId: null };
     const data = JSON.parse(raw) as Partial<Library>;
     const models = Array.isArray(data.models) ? data.models.filter(isStored) : [];
-    return { models, currentId: data.currentId ?? models[0]?.id ?? null };
+    // Only honour a stored currentId that still points at a loaded model (it may have
+    // been deleted) — otherwise fall back to the first model so selection isn't broken.
+    const currentId = models.some((m) => m.id === data.currentId) ? data.currentId! : (models[0]?.id ?? null);
+    return { models, currentId };
   } catch {
     return { models: [], currentId: null };
   }

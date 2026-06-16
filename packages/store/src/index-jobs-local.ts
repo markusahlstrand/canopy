@@ -26,9 +26,12 @@ export function inProcessIndexJobs(deps: SweepDeps): IndexJobs {
     if (!conn) return;
     const connector = await deps.connectorForUser(conn.ownerId, conn.type);
     if (!connector) return;
+    // Crawl against the stored connection's identity, not the incoming target — they
+    // should agree, but the row is canonical, so writes can never be mis-attributed.
+    const canonical: CrawlTarget = { ownerSub: conn.ownerId, spaceId: conn.id, pluginId: conn.type };
     const run = await startIndexRun(deps.db, conn.id);
     try {
-      const folders = await crawlConnector(deps.service, target, connector, FULL_CRAWL_LIMIT);
+      const folders = await crawlConnector(deps.service, canonical, connector, FULL_CRAWL_LIMIT);
       for (let i = 0; i < MAX_DRAIN_BATCHES; i++) {
         const { extracted, failed } = await deps.service.drainExternalExtractQueue(DRAIN_BATCH);
         if (extracted + failed === 0) break; // nothing left pending

@@ -40,7 +40,12 @@ export function CacheBudgetControl({ space }: { space: string }) {
     try {
       await setCacheLimit(space, bytes);
     } finally {
-      await refresh(); // pick up any eviction the new limit triggered
+      // refresh() must not strand `busy` on — swallow its failure so setBusy(false) always runs.
+      try {
+        await refresh(); // pick up any eviction the new limit triggered
+      } catch {
+        /* leave the displayed usage as-is */
+      }
       setBusy(false);
     }
   }
@@ -50,7 +55,11 @@ export function CacheBudgetControl({ space }: { space: string }) {
     try {
       await clearSpaceContent(space);
     } finally {
-      await refresh();
+      try {
+        await refresh();
+      } catch {
+        /* leave the displayed usage as-is */
+      }
       setBusy(false);
     }
   }

@@ -146,9 +146,13 @@ export function ConnectorSettingsDialog({
   async function reindex() {
     setSyncing(true);
     try {
-      await syncConnector(pluginId);
-      // Give the run a beat to record its row, then refresh the header.
-      setTimeout(() => void connectorStatus(pluginId).then(setStatus), 1200);
+      const res = await syncConnector(pluginId);
+      if (res.ok) {
+        // Give the run a beat to record its row, then refresh the header.
+        setTimeout(() => void connectorStatus(pluginId).then(setStatus), 1200);
+      } else {
+        console.warn(`[connector] sync failed: ${res.error ?? "unknown error"}`);
+      }
     } finally {
       setSyncing(false);
     }
@@ -171,7 +175,9 @@ export function ConnectorSettingsDialog({
   }
 
   const indexing = status?.indexing ?? false;
-  const policyDirty = !loaded || loaded.policy !== policy || (policy === "days" && loaded.days !== days);
+  // Dirty only once the server settings have loaded — otherwise the defaults would
+  // read as "changed" and let the user Save over not-yet-loaded values.
+  const policyDirty = !!loaded && (loaded.policy !== policy || (policy === "days" && loaded.days !== days));
   const daysValid = policy !== "days" || (Number.isFinite(days) && days >= 1);
 
   return (

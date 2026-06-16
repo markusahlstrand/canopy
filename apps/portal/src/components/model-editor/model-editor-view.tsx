@@ -48,6 +48,7 @@ import { coerceModel, layout } from "./model-io";
 import { fromPrisma } from "./prisma-parse";
 import { sampleModel } from "./sample";
 import { loadLibrary, saveLibrary, type StoredModel } from "./storage";
+import { useHostApi } from "@/plugins/host";
 import {
   ACCENTS,
   ACCENT_KEYS,
@@ -188,8 +189,13 @@ function fileBoot(file: FileBinding): DomainModel {
   return model;
 }
 
-function Editor({ file, onNewDocument }: { file?: FileBinding; onNewDocument?: () => void }) {
+function Editor({ file }: { file?: FileBinding }) {
   const fileMode = !!file;
+  // Host bridge — only present when mounted as a standalone view in the portal.
+  // In file mode (a .prisma preview) we never offer "new document", so its absence
+  // is fine. Lets the scratch canvas persist itself to the drive without the host
+  // wiring a model-editor-specific callback.
+  const host = useHostApi();
   const boot = useMemo(() => (file ? null : bootstrap()), [file]);
   const initialModel = useMemo(
     () => (file ? fileBoot(file) : boot!.current.model),
@@ -346,6 +352,25 @@ function Editor({ file, onNewDocument }: { file?: FileBinding; onNewDocument?: (
     saveLibrary({ models: merged, currentId: copy.id });
     setName(copy.model.name);
   }, [model, models, flushCurrent]);
+
+  // Persist the current scratch canvas to a real .prisma file in the drive and open
+  // it in file mode. Routed through the generic host bridge — no host-side callback.
+  const newDocument = useCallback(async () => {
+    if (!host) return;
+    if (!host.online) {
+      toast.error("You can't create documents while offline");
+      return;
+    }
+    const input = window.prompt("New Prisma document name", name || "schema");
+    if (!input?.trim()) return;
+    const base = input.trim();
+    const fileName = base.toLowerCase().endsWith(".prisma") ? base : `${base}.prisma`;
+    await host.createAndOpenFile({
+      name: fileName,
+      content: toPrisma(model, { metadata: false }),
+      mime: "text/x-prisma",
+    });
+  }, [host, model, name]);
 
   const deleteModel = useCallback(
     (id: string) => {
@@ -682,10 +707,10 @@ function Editor({ file, onNewDocument }: { file?: FileBinding; onNewDocument?: (
                 <DropdownMenuItem onClick={duplicateModel} className="gap-2">
                   <Icon name="package" size={14} /> Duplicate current
                 </DropdownMenuItem>
-                {onNewDocument && (
+                {host && (
                   <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={onNewDocument} className="gap-2">
+                    <DropdownMenuItem onClick={() => void newDocument()} className="gap-2">
                       <Icon name="file-text" size={14} /> New Prisma document…
                     </DropdownMenuItem>
                   </>
@@ -876,16 +901,10 @@ function Editor({ file, onNewDocument }: { file?: FileBinding; onNewDocument?: (
   );
 }
 
-export function ModelEditorView({
-  file,
-  onNewDocument,
-}: {
-  file?: FileBinding;
-  onNewDocument?: () => void;
-} = {}) {
+export function ModelEditorView({ file }: { file?: FileBinding } = {}) {
   return (
     <ReactFlowProvider>
-      <Editor file={file} onNewDocument={onNewDocument} />
+      <Editor file={file} />
     </ReactFlowProvider>
   );
 }

@@ -143,7 +143,6 @@ const NAV = [
   { id: "home", icon: "home", label: "Home" },
   { id: "drive", icon: "my-drive", label: "My Drive" },
   { id: "starred", icon: "starred", label: "Starred" },
-  { id: "model-editor", icon: "model", label: "Model Editor" },
   { id: "trash", icon: "trash", label: "Trash" },
   { id: "settings", icon: "settings", label: "Settings" },
 ];

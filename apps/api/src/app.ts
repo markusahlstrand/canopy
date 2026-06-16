@@ -290,6 +290,36 @@ export function createApp(deps: AppDeps) {
     return connector ? { connector, name: resolved!.config.repo ?? pluginId } : null;
   }
 
+  // The live connector for a *writable* connected space (a NAS), or null when the
+  // space isn't a configured, writable connector space. A writable source plugin
+  // (`writable: true`) is served read-write — its connected space accepts folder
+  // creates and uploads, routed through the connector. Gates every connector write.
+  async function writableConnectorSpace(
+    c: Context,
+    spaceId?: string | null,
+  ): Promise<{ connector: StorageConnector; name: string; pluginId: string } | null> {
+    if (!isConnectorSpace(spaceId)) return null;
+    const pluginId = spaceId.slice(CONNECTOR_SPACE.length);
+    if (!sourcePlugins.find((p) => p.id === pluginId)?.writable) return null;
+    const cs = await connectorSpace(c, spaceId);
+    return cs ? { ...cs, pluginId } : null;
+  }
+
+  // After a connector write, converge the affected folder so the new file/folder
+  // gets a real index row (and a stable id) like any space. Returns the space id.
+  async function reconcileConnectorWrite(
+    sub: string,
+    cw: { connector: StorageConnector; name: string; pluginId: string },
+    dir: string,
+  ): Promise<string> {
+    const spaceId = await drive!.service.ensureConnectorSpace(sub, cw.pluginId, cw.name);
+    await drive!.service.reconcileConnectorFolder(sub, spaceId, cw.pluginId, cw.connector, dir);
+    return spaceId;
+  }
+
+  // The parent folder of a space-relative path ("docs/a.txt" → "docs", "a.txt" → "").
+  const parentDir = (p: string) => p.split("/").slice(0, -1).join("/");
+
   // Map domain errors to HTTP. Anything else bubbles as a 500.
   async function handle(c: Context, fn: () => Promise<Response>): Promise<Response> {
     try {
@@ -603,6 +633,92 @@ export function createApp(deps: AppDeps) {
     return c.json(await drive!.service.setSpaceVersionPolicy(caller, spaceId, policy as VersionPolicyKind, days));
   }));
 
+  // ── connected-space branches (a GitHub repo's refs) ─────────────────────────
+  // A connector may expose branch management (StorageConnector.branches). The repo
+  // is rooted at one branch; switching is a config change we persist + re-index,
+  // while create/delete are live writes against the backend (need a write token).
+
+  // List the connected space's branches. `supported:false` when this connector has
+  // no branch concept (a NAS) — the UI then shows no picker.
+  app.get("/api/connector/:pluginId/branches", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs) return c.json({ error: "not connected" }, 404);
+    if (!cs.connector.branches) return c.json({ supported: false, current: null, branches: [] });
+    const resolved = await resolveConfig(c, pluginId);
+    try {
+      const branches = await cs.connector.branches.list();
+      return c.json({
+        supported: true,
+        current: cs.connector.branch ?? null,
+        // Only the owner of the config can persist a switch; the demo default can't.
+        canSwitch: !!resolved?.own,
+        branches,
+      });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 502);
+    }
+  }));
+
+  // Create a branch on the backend (from another ref, default = the current branch).
+  app.post("/api/connector/:pluginId/branches", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs?.connector.branches) return c.json({ error: "branches not supported" }, 400);
+    const body = await c.req.json<{ name?: string; from?: string }>();
+    const name = body.name?.trim();
+    if (!name) return c.json({ error: "branch name required" }, 400);
+    try {
+      await cs.connector.branches.create(name, body.from?.trim() || undefined);
+      return c.json({ ok: true }, 201);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 502);
+    }
+  }));
+
+  // Delete a branch on the backend. The name is a query param (`?name=`) so a branch
+  // with a "/" — e.g. "feature/x" — doesn't fight the path router.
+  app.delete("/api/connector/:pluginId/branches", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const name = (c.req.query("name") ?? "").trim();
+    if (!name) return c.json({ error: "branch name required" }, 400);
+    const cs = await connectorSpace(c, `${CONNECTOR_SPACE}${pluginId}`);
+    if (!cs?.connector.branches) return c.json({ error: "branches not supported" }, 400);
+    if (name === cs.connector.branch) return c.json({ error: "can't delete the branch you're viewing" }, 400);
+    try {
+      await cs.connector.branches.remove(name);
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 502);
+    }
+  }));
+
+  // Switch the branch the connected space is rooted at: persist `branch` into the
+  // caller's plugin settings, then re-index so the space reflects the new ref. Needs
+  // the caller's own config (the demo default has nothing to persist into).
+  app.put("/api/connector/:pluginId/branch", driveRoute(async (c, caller) => {
+    const pluginId = c.req.param("pluginId")!;
+    const src = findSource(pluginId);
+    if (!src) return c.json({ error: "unknown plugin" }, 404);
+    const body = await c.req.json<{ branch?: string }>();
+    const branch = body.branch?.trim();
+    if (!branch) return c.json({ error: "branch required" }, 400);
+    const resolved = await resolveConfig(c, pluginId);
+    if (!resolved?.own) {
+      return c.json({ error: "Connect your own repository in the plugin settings to switch branches." }, 400);
+    }
+    const raw = await drive!.service.getPluginSettings(caller.sub, pluginId);
+    const stored = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    stored.branch = branch;
+    await drive!.service.setPluginSettings(caller.sub, pluginId, JSON.stringify(stored));
+    // Re-index against the new branch so the connected space's files/search converge.
+    if (deps.indexJobs && dataSources?.connectorFor) {
+      const spaceId = await drive!.service.ensureConnectorSpace(caller.sub, pluginId, resolved.config.repo ?? pluginId);
+      runBackground(deps.indexJobs.startConnectorIndex({ ownerSub: caller.sub, spaceId, pluginId }));
+    }
+    return c.json({ ok: true, branch });
+  }));
+
   // Spaces the caller can see (for the space switcher). Real drive spaces, plus a
   // read-only "connected" space for each source plugin the caller has a connector
   // configured for (e.g. their GitHub repo) — derived from the plugin's settings,
@@ -622,9 +738,10 @@ export function createApp(deps: AppDeps) {
           id: `${CONNECTOR_SPACE}${p.id}`,
           name,
           kind: "connected",
-          role: "viewer",
+          role: p.writable ? "editor" : "viewer",
           mounted: false,
-          readonly: true,
+          // A writable source (a NAS) is served read-write; an indexed repo stays read-only.
+          readonly: !p.writable,
         });
       }
     }
@@ -773,8 +890,36 @@ export function createApp(deps: AppDeps) {
   app.post("/api/folders", driveRoute(async (c, caller) => {
     const { path } = await c.req.json<{ path: string }>();
     if (!path) return c.json({ error: "path required" }, 400);
+    // A writable connected space (a NAS): create the folder on the connector, then
+    // reconcile so it appears in the index. (resolveSpace would refuse it below.)
+    const cw = await writableConnectorSpace(c, c.req.query("space"));
+    if (cw) {
+      if (!cw.connector.mkdir) throw new PermissionError("connector cannot create folders");
+      await cw.connector.mkdir(path);
+      await reconcileConnectorWrite(caller.sub, cw, parentDir(path));
+      return c.json({ ok: true }, 201);
+    }
     const space = await resolveSpace(c, caller.sub);
     return c.json(await drive!.service.createFolder(space, caller.sub, path), 201);
+  }));
+
+  // Upload bytes straight into a writable connected space (a NAS): write through the
+  // connector, reconcile the folder, and return the resulting indexed file (so the UI
+  // gets a real id to open). The managed blob-store flow (/api/uploads/* → /api/files)
+  // doesn't apply here — the NAS is the source of truth, not the blob store.
+  // `?space=connector:<plugin>` + `?path=<space-relative file path>`; body = raw bytes.
+  app.put("/api/connector-files", driveRoute(async (c, caller) => {
+    const cw = await writableConnectorSpace(c, c.req.query("space"));
+    if (!cw) throw new PermissionError("space is read-only");
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "path required" }, 400);
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    await cw.connector.write(path, bytes);
+    const spaceId = await reconcileConnectorWrite(caller.sub, cw, parentDir(path));
+    const name = path.split("/").pop()!;
+    const listing = await drive!.service.list(caller.sub, spaceId, parentDir(path));
+    const file = listing.files.find((f: { name: string }) => f.name === name);
+    return c.json(file ?? { ok: true }, 201);
   }));
 
   // Lightweight stats for the dashboard (file count + bytes used in a space).
@@ -801,7 +946,8 @@ export function createApp(deps: AppDeps) {
     const tag = `"${file.version.blobKey ?? file.version.etag ?? file.version.id}"`;
     c.header("ETag", tag);
     c.header("Cache-Control", "no-cache"); // always revalidate; never serve stale without checking
-    if (c.req.header("if-none-match") === tag) return c.body(null, 304);
+    // Strip a weak-validator prefix some clients/proxies add (`W/"…"`) so the 304 still fires.
+    if (c.req.header("if-none-match")?.replace(/^W\//, "") === tag) return c.body(null, 304);
     // Managed blobs stream from the blob store; external (indexed) sources stream
     // through their connector — both behind one opener.
     const stream = await drive!.service.openContentStream(file);

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ShareDialog } from "@/components/share-dialog";
@@ -8,11 +8,7 @@ import { FileIcon } from "@/components/file-icon";
 import { AvatarGroup, PersonAvatar } from "@/components/person-avatar";
 import { PluginViewer } from "@/components/plugin-viewer";
 import { findViewer } from "@/plugins/viewers";
-// Model Editor is a trusted first-party view (React Flow); lazy-load it so its
-// heavy deps stay out of the main bundle until a .prisma file is opened.
-const ModelEditorFileViewer = lazy(() =>
-  import("@/components/model-editor/file-viewer").then((m) => ({ default: m.ModelEditorFileViewer })),
-);
+import { PLUGIN_UI } from "@/plugins";
 import {
   addComment,
   contentUrl,
@@ -507,6 +503,10 @@ export function FilePreview({
   // and never evicted (distinct from star). Loaded from the local pin set when the file changes.
   const [offline, setOffline] = useState(false);
   const [offlineBusy, setOfflineBusy] = useState(false);
+  // Tracks the currently-shown file so an in-flight offline toggle can tell whether the
+  // user has since navigated away (this component persists across file changes).
+  const currentFileId = useRef(file?.id);
+  currentFileId.current = file?.id;
   useEffect(() => {
     if (!file || file.kind === "folder") {
       setOffline(false);
@@ -521,15 +521,16 @@ export function FilePreview({
 
   async function toggleOffline() {
     if (!file) return;
+    const target = file; // capture — the user may navigate away mid-flight
     const next = !offline;
     setOffline(next); // optimistic
     setOfflineBusy(true);
     try {
-      await setItemOffline(file, space, next);
+      await setItemOffline(target, space, next);
     } catch {
-      setOffline(!next); // rollback
+      if (currentFileId.current === target.id) setOffline(!next); // rollback only if still on the same file
     } finally {
-      setOfflineBusy(false);
+      if (currentFileId.current === target.id) setOfflineBusy(false);
     }
   }
 
@@ -540,14 +541,16 @@ export function FilePreview({
     viewer?.plugin === "markdown-editor" ||
     viewer?.plugin === "code-editor" ||
     viewer?.plugin === "univer-office";
-  // Images and the Model Editor fill the available area instead of auto-growing
-  // the iframe to content — the host gives them a real box (see layout below).
-  const isModelEditor = viewer?.plugin === "model-editor";
-  const fillViewer = viewer?.plugin === "image-viewer" || isModelEditor;
-  // Full-screen Model Editor is a focused workspace: it owns the whole viewport,
-  // so we drop the metadata sidebar, the prev/next nav arrows and the centred
-  // max-width cap and let the canvas bleed to every edge.
-  const fullBleed = full && isModelEditor;
+  // A trusted first-party React viewer (e.g. the Model Editor canvas) renders in
+  // process instead of the sandboxed iframe — the host looks it up by plugin id.
+  const TrustedFileView = viewer ? PLUGIN_UI[viewer.plugin]?.FileView : undefined;
+  // Layout hints come straight from the viewer's manifest contribution, so the
+  // host carries no per-plugin knowledge. `fill` gives the viewer a real box
+  // instead of auto-growing to content; `immersive` makes a full-screen viewer
+  // take over the surface — dropping the metadata sidebar, the prev/next arrows
+  // and the centred max-width cap, and yielding the arrow keys to the canvas.
+  const fillViewer = !!viewer?.fill;
+  const fullBleed = full && !!viewer?.immersive;
 
   // The panel isn't a modal (in split mode the list stays usable), so it owns its own
   // keyboard shortcuts: Escape closes it, and the arrow keys step to the previous/next
@@ -562,8 +565,8 @@ export function FilePreview({
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
-      // The full-screen Model Editor owns its arrow keys (canvas nudging), and its
-      // on-screen nav arrows are hidden, so don't steal them for file navigation.
+      // An immersive full-screen viewer owns its own arrow keys (e.g. canvas
+      // nudging) and hides the on-screen nav arrows, so don't steal them here.
       if (fullBleed) return;
       if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
         if (!onPrev) return;
@@ -581,11 +584,11 @@ export function FilePreview({
 
   if (!file) return null;
 
-  const viewerNode = isModelEditor ? (
+  const viewerNode = TrustedFileView ? (
     <Suspense
       fallback={<div className="grid h-full min-h-[200px] place-items-center text-sm text-muted-foreground">Loading…</div>}
     >
-      <ModelEditorFileViewer key={`${file.id}:${contentNonce}`} fileId={file.id} fileName={file.name} onSaved={onSaved} />
+      <TrustedFileView key={`${file.id}:${contentNonce}`} fileId={file.id} fileName={file.name} onSaved={onSaved} />
     </Suspense>
   ) : viewer ? (
     <PluginViewer

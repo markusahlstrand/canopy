@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { ShareDialog } from "@/components/share-dialog";
 import { Icon } from "@/lib/icons";
@@ -122,14 +122,20 @@ export function FileDetailSheet({
   // "Available offline" toggle — seeded from the listing's annotation, optimistic on tap.
   const [offline, setOffline] = useState(false);
   useEffect(() => setOffline(!!file?.offline), [file?.id, file?.offline]);
+  // Serialize toggles — overlapping setItemOffline calls can land out of order and
+  // leave the persisted state disagreeing with what the user last tapped.
+  const toggling = useRef(false);
   async function toggleOffline() {
-    if (!file || file.kind === "folder") return;
+    if (!file || file.kind === "folder" || toggling.current) return;
     const next = !offline;
     setOffline(next);
+    toggling.current = true;
     try {
       await setItemOffline(file, undefined, next);
     } catch {
       setOffline(!next);
+    } finally {
+      toggling.current = false;
     }
   }
   return (

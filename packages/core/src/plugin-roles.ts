@@ -29,6 +29,13 @@ import type { PluginManifest } from "./plugin";
 export interface ServerDataSource {
   id: string;
   configFields: ConnectorConfigField[];
+  /**
+   * The connector backing this source supports writes (create folder, upload,
+   * delete). When true the host serves its connected space read-write — the New
+   * menu appears and writes route through the connector — instead of the default
+   * read-only. A NAS (Synology) sets this; an indexed GitHub repo does not.
+   */
+  writable?: boolean;
   /** Build providers from a resolved (decrypted) config; returns what it can. */
   build(
     config: Record<string, string>,

@@ -7,11 +7,19 @@
   "color": "265 70% 58%",
   "capabilities": [{ "kind": "item:read" }, { "kind": "item:write" }],
   "contributes": {
+    "detailView": {
+      "id": "model-editor",
+      "title": "Model Editor",
+      "nav": { "section": "Apps" },
+      "immersive": true
+    },
     "viewers": [
       {
         "id": "prisma",
         "title": "Model Editor",
-        "match": [".prisma", "text/x-prisma"]
+        "match": [".prisma", "text/x-prisma"],
+        "fill": true,
+        "immersive": true
       }
     ],
     "creators": [

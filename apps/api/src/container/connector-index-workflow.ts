@@ -94,7 +94,7 @@ export class ConnectorIndexWorkflow extends WorkflowEntrypoint {
       }
 
       await step.do("finish-run", async () => {
-        await finishIndexRun(db, run.id, { cursor: String(Math.floor(Date.now() / 1000)), filesSeen: seen.size });
+        await finishIndexRun(db, run.id, { cursor: String(Math.floor(Date.now() / 1000)), filesSeen: totalFiles });
         await log(`Done — ${plural(seen.size, "folder")}, ${plural(totalFiles, "file")}`);
       });
     } catch (err) {

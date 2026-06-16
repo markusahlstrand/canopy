@@ -177,7 +177,17 @@
           "required": ["id", "title"],
           "properties": {
             "id": { "type": "string" },
-            "title": { "type": "string" }
+            "title": { "type": "string" },
+            "nav": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["section"],
+              "properties": {
+                "section": { "type": "string", "description": "Sidebar section heading the launcher is grouped under (e.g. \"Apps\", \"Tools\")." }
+              },
+              "description": "Add a launcher for this view to the left sidebar. Omit to keep it reachable only from Home / the plugin list."
+            },
+            "immersive": { "type": "boolean", "description": "Render edge-to-edge: the host drops its page header and centred max-width column so a canvas-style app owns the whole area." }
           },
           "description": "A full-page view opened from the sidebar."
         },
@@ -209,7 +219,9 @@
                 "minItems": 1,
                 "items": { "type": "string" },
                 "description": "MIME types and/or extensions handled. Each entry is an exact MIME (\"application/pdf\"), a MIME wildcard (\"image/*\"), a dot-extension (\".heic\"), or a bare extension (\"pdf\")."
-              }
+              },
+              "fill": { "type": "boolean", "description": "Fill the preview box instead of auto-growing to content (media/canvas viewers)." },
+              "immersive": { "type": "boolean", "description": "When expanded full screen, take over the surface: the host hides the metadata sidebar, the prev/next nav arrows and the max-width cap, and yields the arrow keys to the viewer." }
             }
           }
         },

@@ -8,6 +8,16 @@ import { DocumentAiView } from "./document-ai-view";
 
 // Lazy-loaded: pulls react-markdown + remark-gfm into a separate chunk.
 const DocumentationView = lazy(() => import("./documentation-view").then((m) => ({ default: m.DocumentationView })));
+// Model Editor is a trusted first-party React app (React Flow) that is both a
+// standalone view and a `.prisma` file viewer. Lazy so its heavy deps stay out of
+// the main bundle until it's opened. Its `immersive` manifest flags tell the host
+// to give both surfaces the full screen (see file-preview / App).
+const ModelEditorView = lazy(() =>
+  import("@/components/model-editor/model-editor-view").then((m) => ({ default: m.ModelEditorView })),
+);
+const ModelEditorFileView = lazy(() =>
+  import("@/components/model-editor/file-viewer").then((m) => ({ default: m.ModelEditorFileViewer })),
+);
 
 /**
  * Host-side render map for plugin UI contributions. Manifests stay declarative
@@ -17,9 +27,24 @@ const DocumentationView = lazy(() => import("./documentation-view").then((m) => 
  * sandboxed slot path instead (see {@link sandboxedSlot} / UI_PLUGINS) — calendar
  * has been migrated there as the reference implementation.
  */
+/** Props the host passes to a trusted React file viewer ({@link PluginUI.FileView}). */
+export interface FileViewProps {
+  fileId: string;
+  fileName: string;
+  /** Called after the viewer saves a new version, so the host can refresh. */
+  onSaved?: () => void;
+}
+
 export interface PluginUI {
   RailPanel?: ComponentType;
   DetailView?: ComponentType;
+  /**
+   * A trusted React viewer for the plugin's file types — the in-process
+   * counterpart of a sandboxed `contributes.viewers` entry, for first-party views
+   * that need full React/host access (e.g. a canvas editor). The host renders this
+   * instead of an iframe when a matching file opens.
+   */
+  FileView?: ComponentType<FileViewProps>;
 }
 
 export const PLUGIN_UI: Record<string, PluginUI> = {
@@ -28,6 +53,7 @@ export const PLUGIN_UI: Record<string, PluginUI> = {
   github: { DetailView: GithubView },
   synology: { DetailView: SynologyView },
   "document-ai": { DetailView: DocumentAiView },
+  "model-editor": { DetailView: ModelEditorView, FileView: ModelEditorFileView },
 };
 
 /**

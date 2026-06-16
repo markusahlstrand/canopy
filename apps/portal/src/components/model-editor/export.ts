@@ -181,13 +181,16 @@ export function toPrisma(model: DomainModel, opts: { metadata?: boolean } = {}):
   for (const e of model.entities) {
     const model_ = pascal(e.name);
     out.push(`model ${model_} {`);
-    const hasPk = e.properties.some((p) => p.primaryKey);
-    if (!hasPk) out.push("  id        String   @id @default(cuid())");
+    // A single primary key is a field-level `@id`; two or more is a composite key,
+    // which Prisma expresses as one model-level `@@id([...])` (multiple `@id` is invalid).
+    const pkProps = e.properties.filter((p) => p.primaryKey);
+    const composite = pkProps.length > 1;
+    if (!pkProps.length) out.push("  id        String   @id @default(cuid())");
     for (const p of e.properties) {
       const base = p.type === "enum" ? (enumNameByProp.get(`${e.id}:${p.id}`) ?? "String") : PRISMA_TYPE[p.type];
       const optional = p.required || p.primaryKey ? "" : "?";
       const attrs: string[] = [];
-      if (p.primaryKey) attrs.push("@id");
+      if (p.primaryKey && !composite) attrs.push("@id");
       if (p.unique && !p.primaryKey) attrs.push("@unique");
       if (p.type === "ref" && p.refEntityId) {
         const target = byId.get(p.refEntityId);
@@ -213,6 +216,7 @@ export function toPrisma(model: DomainModel, opts: { metadata?: boolean } = {}):
         out.push(`  ${field.padEnd(9)} ${pascal(source.name)}${many ? "[]" : "?"}`);
       }
     }
+    if (composite) out.push(`  @@id([${pkProps.map((p) => ident(p.name)).join(", ")}])`);
     out.push("}", "");
   }
   return out.join("\n");
@@ -272,28 +276,43 @@ export function toSqlDdl(model: DomainModel): string {
   // Foreign keys from explicit relations (best-effort, *-to-one ends). Skip when
   // the table already has a column of that name (e.g. a hand-modelled ref property).
   const hasColumn = (e: Entity, col: string) => e.properties.some((p) => snake(p.name) === col);
+  // The referenced table's primary key column + its type, so a FK points at the real
+  // key (not an assumed `id`) and the column types line up. A table with no explicit PK
+  // got the synthesized `id UUID`; a composite PK can't be a single-column FK target → null.
+  const refTarget = (e: Entity): { col: string; type: string } | null => {
+    const pks = e.properties.filter((p) => p.primaryKey);
+    if (pks.length === 0) return { col: "id", type: "UUID" };
+    if (pks.length > 1) return null;
+    const pk = pks[0]!;
+    return { col: snake(pk.name), type: SQL_TYPE[pk.type] };
+  };
   for (const r of model.relations) {
     const from = byId.get(r.fromEntityId);
     const to = byId.get(r.toEntityId);
     if (!from || !to) continue;
     if (r.cardinality === "N-1") {
+      const ref = refTarget(to);
       const col = `${snake(to.name)}_id`;
-      if (!hasColumn(from, col))
-        out.push(`ALTER TABLE ${snake(from.name)} ADD COLUMN ${col} UUID REFERENCES ${snake(to.name)}(id);`);
+      if (ref && !hasColumn(from, col))
+        out.push(`ALTER TABLE ${snake(from.name)} ADD COLUMN ${col} ${ref.type} REFERENCES ${snake(to.name)}(${ref.col});`);
     } else if (r.cardinality === "1-N") {
+      const ref = refTarget(from);
       const col = `${snake(from.name)}_id`;
-      if (!hasColumn(to, col))
-        out.push(`ALTER TABLE ${snake(to.name)} ADD COLUMN ${col} UUID REFERENCES ${snake(from.name)}(id);`);
+      if (ref && !hasColumn(to, col))
+        out.push(`ALTER TABLE ${snake(to.name)} ADD COLUMN ${col} ${ref.type} REFERENCES ${snake(from.name)}(${ref.col});`);
     } else if (r.cardinality === "N-M") {
+      const ra = refTarget(from);
+      const rb = refTarget(to);
       const a = snake(from.name);
       const b = snake(to.name);
-      out.push(
-        `CREATE TABLE ${a}_${b} (`,
-        `  ${a}_id UUID REFERENCES ${a}(id),`,
-        `  ${b}_id UUID REFERENCES ${b}(id),`,
-        `  PRIMARY KEY (${a}_id, ${b}_id)`,
-        `);`,
-      );
+      if (ra && rb)
+        out.push(
+          `CREATE TABLE ${a}_${b} (`,
+          `  ${a}_id ${ra.type} REFERENCES ${a}(${ra.col}),`,
+          `  ${b}_id ${rb.type} REFERENCES ${b}(${rb.col}),`,
+          `  PRIMARY KEY (${a}_id, ${b}_id)`,
+          `);`,
+        );
     }
   }
   return out.join("\n").trim() + "\n";

@@ -226,7 +226,7 @@ setInterval(() => {
 // initial run after boot warms the index without blocking startup.
 const SYNC_INTERVAL_MS = 30 * 60_000; // every 30 minutes
 const sweep = () =>
-  void syncAllConnectors({ db, service, connectorForUser }, "synology").catch((err) =>
+  void syncAllConnectors({ db, service, connectorForUser }).catch((err) =>
     console.warn("  ⚠ connector sweep failed:", err),
   );
 setTimeout(sweep, 15_000).unref();

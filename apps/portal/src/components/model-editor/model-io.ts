@@ -50,7 +50,7 @@ export function coerceModel(input: unknown, opts: { layout?: boolean } = {}): Do
       name,
       description: typeof e.description === "string" ? e.description : undefined,
       color,
-      position: { x: Number(pos?.x ?? 0), y: Number(pos?.y ?? 0) },
+      position: { x: finite(pos?.x), y: finite(pos?.y) },
       properties: coerceProperties(e.properties),
     };
   });
@@ -120,6 +120,13 @@ function coerceProperties(raw: unknown): Property[] {
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.length ? v : undefined;
+}
+
+/** A coordinate coerced to a finite number — NaN/Infinity (bad JSON) fall back to 0
+ *  so they can't slip past the layout check and corrupt rendering. */
+function finite(v: unknown): number {
+  const n = Number(v ?? 0);
+  return Number.isFinite(n) ? n : 0;
 }
 
 /**

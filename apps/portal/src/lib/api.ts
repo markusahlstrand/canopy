@@ -405,7 +405,10 @@ async function revalidateContent(url: string, spaceId: string, etag?: string): P
     const newEtag = res.headers.get("etag") ?? undefined;
     if (newEtag && newEtag === etag) return; // same content (no validator change) — don't churn
     await cacheContent(url, { bytes, mime, name: "", size: bytes.byteLength, at: Date.now(), spaceId, etag: newEtag });
-    publishContentUpdate(url); // an open viewer can now reload the fresh bytes
+    // Only nudge an open viewer when a validator confirms the bytes actually changed
+    // (newEtag present and ≠ the old one). Without an ETag we can't tell, so re-cache
+    // silently rather than churning every viewer on each revalidation.
+    if (newEtag) publishContentUpdate(url);
   } catch {
     // offline / backend unreachable — the cached copy stands
   }
@@ -608,6 +611,20 @@ async function uploadFileBlob(id: string, bytes: Uint8Array): Promise<string> {
 
 /** Upload files into a virtual folder of a space: hash → dedup-prepare → (PUT if new) → create record. */
 export async function uploadFiles(dir: string, files: File[], spaceId?: string): Promise<number> {
+  // A connected space (a NAS) is the source of truth, not the managed blob store:
+  // stream the bytes straight to the connector, which writes + reconciles the index.
+  if (spaceId?.startsWith("connector:")) {
+    for (const file of files) {
+      const path = dir ? `${dir}/${file.name}` : file.name;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const res = await apiFetch(
+        `/api/connector-files?space=${encodeURIComponent(spaceId)}&path=${encodeURIComponent(path)}`,
+        { method: "PUT", body: bytes as unknown as BodyInit },
+      );
+      if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+    }
+    return files.length;
+  }
   const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
   for (const file of files) {
     const bytes = new Uint8Array(await file.arrayBuffer());
@@ -634,13 +651,24 @@ export async function createFile(
   mime = "text/markdown",
   spaceId?: string,
 ): Promise<FileItem> {
-  const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
-  const hash = await uploadBlob(new TextEncoder().encode(content), spaceId);
-  const res = await apiFetch(`/api/files${sp}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name, hash, mime, path: dir }),
-  });
+  let res: Response;
+  if (spaceId?.startsWith("connector:")) {
+    // Connected space (a NAS): write the seeded bytes through the connector, which
+    // reconciles and returns the new file row (with its real id) to open in-editor.
+    const path = dir ? `${dir}/${name}` : name;
+    res = await apiFetch(
+      `/api/connector-files?space=${encodeURIComponent(spaceId)}&path=${encodeURIComponent(path)}`,
+      { method: "PUT", body: new TextEncoder().encode(content) as unknown as BodyInit },
+    );
+  } else {
+    const sp = spaceId ? `?space=${encodeURIComponent(spaceId)}` : "";
+    const hash = await uploadBlob(new TextEncoder().encode(content), spaceId);
+    res = await apiFetch(`/api/files${sp}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, hash, mime, path: dir }),
+    });
+  }
   if (!res.ok) throw new Error(`create failed: ${res.status}`);
   const f = (await res.json()) as ApiFile;
   return {
@@ -964,6 +992,70 @@ export async function setConnectorSettings(
   if (!res.ok) throw new Error(`save settings failed: ${res.status}`);
   const raw = (await res.json()) as { policy: VersionPolicy; days: number | null };
   return { versionPolicy: raw.policy, versionDays: raw.days };
+}
+
+// ── connected-space branches (a GitHub repo's refs) ──────────────────────────
+
+/** One branch of a connected repo (mirrors the core `BranchInfo`). */
+export interface BranchInfo {
+  name: string;
+  isDefault: boolean;
+  current: boolean;
+  protected?: boolean;
+  commitSha?: string;
+}
+
+export interface BranchListing {
+  /** False when this connector has no branch concept (a NAS) — show no picker. */
+  supported: boolean;
+  /** The branch the space is rooted at, or null. */
+  current: string | null;
+  /** Whether the caller can persist a branch switch (only with their own config). */
+  canSwitch: boolean;
+  branches: BranchInfo[];
+}
+
+const NO_BRANCHES: BranchListing = { supported: false, current: null, canSwitch: false, branches: [] };
+
+/** List a connected space's branches. Resolves to "unsupported" on any failure so a
+ *  non-GitHub space (or an unreachable repo) simply shows no branch picker. */
+export async function listBranches(pluginId: string): Promise<BranchListing> {
+  try {
+    const res = await apiFetch(`/api/connector/${encodeURIComponent(pluginId)}/branches`);
+    if (!res.ok) return NO_BRANCHES;
+    return (await res.json()) as BranchListing;
+  } catch {
+    return NO_BRANCHES;
+  }
+}
+
+/** Switch the branch the connected space is rooted at (persists + re-indexes server-side). */
+export async function switchBranch(pluginId: string, branch: string): Promise<void> {
+  const res = await apiFetch(`/api/connector/${encodeURIComponent(pluginId)}/branch`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ branch }),
+  });
+  if (!res.ok) throw await apiError(res, "switch branch failed");
+}
+
+/** Create a branch on the backend, optionally from a given base ref (default: current). */
+export async function createBranch(pluginId: string, name: string, from?: string): Promise<void> {
+  const res = await apiFetch(`/api/connector/${encodeURIComponent(pluginId)}/branches`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, from }),
+  });
+  if (!res.ok) throw await apiError(res, "create branch failed");
+}
+
+/** Delete a branch on the backend. */
+export async function deleteBranch(pluginId: string, name: string): Promise<void> {
+  const res = await apiFetch(
+    `/api/connector/${encodeURIComponent(pluginId)}/branches?name=${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw await apiError(res, "delete branch failed");
 }
 
 /** Create a shared (group) space, optionally with a sidebar icon + accent color. */

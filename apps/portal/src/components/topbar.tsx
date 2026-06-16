@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Me } from "@/lib/api";
+import { BranchPicker } from "@/components/branch-picker";
 
 function initialsOf(s: string): string {
   const parts = s.split(/[\s@.]+/).filter(Boolean);
@@ -55,6 +56,11 @@ interface TopbarProps {
   onUpload: () => void;
   /** Hide the Upload button in a read-only (connected) space. */
   readonly?: boolean;
+  /** When the current view is a connected space, its connector plugin id — enables the
+   *  branch picker (it self-hides for connectors without a branch concept, e.g. a NAS). */
+  connectorPluginId?: string | null;
+  /** A branch switch landed — host should reload the view (re-fetch + re-sync). */
+  onBranchSwitched?: () => void;
   railAvailable: boolean;
   railOpen: boolean;
   onToggleRail: () => void;
@@ -79,6 +85,8 @@ export function Topbar({
   onToggleTheme,
   onUpload,
   readonly,
+  connectorPluginId,
+  onBranchSwitched,
   railAvailable,
   railOpen,
   onToggleRail,
@@ -156,6 +164,15 @@ export function Topbar({
           );
         })}
       </div>
+
+      {/* Branch picker — only for a connected space whose connector has branches (GitHub) */}
+      {connectorPluginId && (
+        <BranchPicker
+          key={connectorPluginId}
+          pluginId={connectorPluginId}
+          onSwitched={() => onBranchSwitched?.()}
+        />
+      )}
 
       <div className="flex-1" />
 

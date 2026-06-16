@@ -87,9 +87,14 @@ export function pull(): Promise<void> {
       for (let guard = 0; guard < 10_000; guard++) {
         const res = await apiFetch(`/api/changes?since=${encodeURIComponent(JSON.stringify(cursors))}`);
         if (!res.ok) {
-          // 401 (signed out) etc. — not an error worth flagging; just stop.
-          status = { ...status, error: false };
-          break;
+          // 401 (signed out) isn't an error worth flagging — just stop. A 5xx or other
+          // failure is a real error: throw so the catch flags it and lastSyncedAt isn't
+          // bumped to look like a successful sync.
+          if (res.status === 401) {
+            status = { ...status, error: false };
+            break;
+          }
+          throw new Error(`changes pull failed: ${res.status}`);
         }
         const data = (await res.json()) as DeltaResponse;
         if (data.changes.length) {

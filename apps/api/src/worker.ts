@@ -285,6 +285,6 @@ export default {
     const { db, service, connectorForUser } = await buildDeps(env);
     await service.pruneAllVersions();
     await service.pruneTombstones(); // GC offline-sync tombstones past the bootstrap horizon
-    await syncAllConnectors({ db, service, connectorForUser }, "synology");
+    await syncAllConnectors({ db, service, connectorForUser });
   },
 };

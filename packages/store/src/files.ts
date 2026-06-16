@@ -2308,9 +2308,22 @@ export class FileService {
     const disappeared = existing.filter((r) => !seenKeys.has(r.external_key ?? ""));
     const consumed = new Set<string>();
     let tombstoned = 0;
+    // Rename inference is only safe when the etag identifies exactly one file on each
+    // side. A non-unique etag (shared by duplicates, empty files, …) can't tell which
+    // disappeared file became which new one, so treating it as a rename would
+    // misattach the wrong id's shares/history/comments. When ambiguous, fall back to
+    // insert + tombstone (correct, just without preserving the id).
+    const countBySig = (etags: (string | null)[]) => {
+      const m = new Map<string, number>();
+      for (const s of etags) if (s) m.set(s, (m.get(s) ?? 0) + 1);
+      return m;
+    };
+    const newBySig = countBySig(newEntries.map((e) => e.etag ?? null));
+    const goneBySig = countBySig(disappeared.map((d) => d.etag ?? null));
     for (const e of newEntries) {
       const sig = e.etag ?? null;
-      const match = sig ? disappeared.find((d) => !consumed.has(d.id) && (d.etag ?? null) === sig) : undefined;
+      const unique = !!sig && newBySig.get(sig) === 1 && goneBySig.get(sig) === 1;
+      const match = unique ? disappeared.find((d) => !consumed.has(d.id) && (d.etag ?? null) === sig) : undefined;
       if (match) {
         consumed.add(match.id);
         await this.renameExternalFile(match.id, match.version_id, e, now);
@@ -2470,13 +2483,18 @@ export class FileService {
           contentRef = `extract/${file.id}.txt`;
           await this.store.put(contentRef, new TextEncoder().encode(text));
         }
-        // Only land if still 'pending' — a concurrent change may have re-queued it.
-        await this.db.run(
-          "UPDATE file_versions SET extract_state = 'done', content_ref = ? WHERE id = ? AND extract_state = 'pending'",
-          [contentRef, row.vid],
+        // Only land if still 'pending' AND the file hasn't changed underneath us — a
+        // concurrent reconcile may have re-queued this version with a new etag/key, in
+        // which case the text we just extracted is stale. The `IS` comparisons are
+        // null-safe; a non-match leaves the row 'pending' for a fresh re-extract.
+        const { rowsAffected } = await this.db.run(
+          "UPDATE file_versions SET extract_state = 'done', content_ref = ? WHERE id = ? AND extract_state = 'pending' AND etag IS ? AND external_key IS ?",
+          [contentRef, row.vid, version.etag ?? null, version.externalKey ?? null],
         );
-        await this.indexFileDoc(file, text ?? undefined);
-        extracted++;
+        if (rowsAffected > 0) {
+          await this.indexFileDoc(file, text ?? undefined);
+          extracted++;
+        }
       } catch (err) {
         await this.db.run(
           "UPDATE file_versions SET extract_state = 'error', extract_attempts = extract_attempts + 1 WHERE id = ?",

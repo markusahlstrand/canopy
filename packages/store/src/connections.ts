@@ -53,6 +53,12 @@ export async function listConnectionsByType(db: Db, type: string): Promise<Conne
   return rows.map(toConnection);
 }
 
+/** Every connection, regardless of type — for an all-backends sweep. */
+export async function listAllConnections(db: Db): Promise<Connection[]> {
+  const rows = await db.all<ConnectionRow>("SELECT * FROM connections ORDER BY created_at", []);
+  return rows.map(toConnection);
+}
+
 // ── index runs (resumable crawl bookkeeping) ─────────────────────────────────
 // Each sweep of a connection is an `index_runs` row. The `cursor` carries the
 // high-water change marker (for Synology: the last seen mtime, unix seconds) from
@@ -84,7 +90,7 @@ export async function finishIndexRun(db: Db, runId: string, out: { cursor: strin
 /** Mark a run failed (its cursor is not advanced, so the next run retries the same range). */
 export async function failIndexRun(db: Db, runId: string, error: string): Promise<void> {
   await db.run("UPDATE index_runs SET status = 'error', error = ?, finished_at = ? WHERE id = ?", [
-    error.slice(0, 500),
+    String(error ?? "").slice(0, 500),
     new Date().toISOString(),
     runId,
   ]);

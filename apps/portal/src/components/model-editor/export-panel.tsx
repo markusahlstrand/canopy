@@ -19,10 +19,16 @@ export function ExportPanel({ model }: { model: DomainModel }) {
   }, [target, model]);
 
   function copy() {
-    void navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard.writeText(code).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      (err) => {
+        // Blocked clipboard (no user activation / denied permission) — don't flip to "Copied".
+        console.warn("Copy failed:", err);
+      },
+    );
   }
 
   function download() {

@@ -1,7 +1,7 @@
 import type { Db } from "./db";
 import type { Connection } from "./types";
 import type { FileService, ReconcileConnector } from "./files";
-import { listConnectionsByType, startIndexRun, finishIndexRun, failIndexRun } from "./connections";
+import { listAllConnections, listConnectionsByType, startIndexRun, finishIndexRun, failIndexRun } from "./connections";
 
 /**
  * Keep a connected space's index fresh. The reconcile primitive (one folder) lives
@@ -101,9 +101,14 @@ export async function syncConnection(deps: SweepDeps, conn: Connection): Promise
   return { folders };
 }
 
-/** Sweep every connection of a type (the cron / interval entry point). Per-connection failures are isolated. */
-export async function syncAllConnectors(deps: SweepDeps, type: string): Promise<void> {
-  const conns = await listConnectionsByType(deps.db, type);
+/**
+ * Sweep connections (the cron / interval entry point). With `type`, only that
+ * connector's connections; without it, every connector-backed space regardless of
+ * type (so a GitHub repo gets the same safety-net refresh as a NAS). Per-connection
+ * failures are isolated.
+ */
+export async function syncAllConnectors(deps: SweepDeps, type?: string): Promise<void> {
+  const conns = type ? await listConnectionsByType(deps.db, type) : await listAllConnections(deps.db);
   for (const conn of conns) {
     try {
       await syncConnection(deps, conn);

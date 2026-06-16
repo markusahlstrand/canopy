@@ -16,7 +16,8 @@ registerSW({
   immediate: true,
   onRegisteredSW(_swUrl, registration) {
     if (!registration) return
-    const check = () => void registration.update()
+    // Swallow transient SW/network rejections so repeated checks don't log unhandled rejections.
+    const check = () => void registration.update().catch(() => {})
     setInterval(check, SW_UPDATE_INTERVAL_MS)
     // Also check the instant the tab regains focus, so coming back to a
     // long-open tab picks up a fresh deploy without waiting out the interval.

@@ -72,7 +72,8 @@ import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
 import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
-import { CREATORS, setCustomViewers, type InstalledViewer } from "@/plugins/viewers";
+import { HostApiProvider, type HostApi } from "@/plugins/host";
+import { setCustomViewers, type InstalledViewer } from "@/plugins/viewers";
 import { sandboxedSlot, setCustomSlots } from "@/plugins/ui";
 import { PluginSlot } from "@/components/plugin-slot";
 import { PluginDataProvider, usePluginCapabilities } from "@/plugins/data";
@@ -142,9 +143,6 @@ function Segmented({ value, onChange }: { value: "list" | "grid"; onChange: (v: 
 }
 
 const MobileApp = lazy(() => import("@/mobile/mobile-app").then((m) => ({ default: m.MobileApp })));
-const ModelEditorView = lazy(() =>
-  import("@/components/model-editor/model-editor-view").then((m) => ({ default: m.ModelEditorView })),
-);
 
 export default function App() {
   const isMobile = useIsMobile();
@@ -646,28 +644,32 @@ function DesktopApp() {
     }
   }
 
-  // "New Prisma document…" from inside the Model Editor view: create a real
-  // .prisma file at the root of My Drive and open it full-screen in file mode.
-  async function newPrismaDocument() {
-    if (!online) {
-      toast("You're offline", { description: "You can't create documents until you're back online." });
-      return;
-    }
-    const creator = CREATORS.find((c) => c.plugin === "model-editor");
-    const ext = creator?.extension ?? ".prisma";
-    const input = window.prompt("New Prisma document name", creator?.defaultName ?? "schema");
-    if (!input?.trim()) return;
-    const base = input.trim();
-    const name = base.toLowerCase().endsWith(ext) ? base : base + ext;
-    try {
-      const file = await createFile("", name, creator?.template ?? "", creator?.mime, undefined);
-      reload();
-      setPreviewMode("full"); // take over the screen with the editor
-      setPreviewFile(file);
-    } catch (err) {
-      toast("Couldn't create document", { description: (err as Error).message });
-    }
-  }
+  // Generic host bridge handed to trusted, first-party plugin UI (the Model Editor
+  // and any future canvas-style app). Creating-and-opening a drive file is the one
+  // thing those views can't do alone, so it's offered here — without the host
+  // knowing which plugin is asking.
+  const hostApi = useMemo<HostApi>(
+    () => ({
+      online,
+      createAndOpenFile: async ({ name, content, mime }) => {
+        if (!online) {
+          toast("You're offline", { description: "You can't create documents until you're back online." });
+          return null;
+        }
+        try {
+          const file = await createFile("", name, content, mime, undefined);
+          reload();
+          setPreviewMode("full"); // take over the screen with the editor
+          setPreviewFile(file);
+          return file;
+        } catch (err) {
+          toast("Couldn't create document", { description: (err as Error).message });
+          return null;
+        }
+      },
+    }),
+    [online, reload],
+  );
 
   async function upload(fileList: FileList | null) {
     const files = fileList ? Array.from(fileList) : [];
@@ -928,8 +930,6 @@ function DesktopApp() {
           ? ["Trash"]
           : active === "plugin-studio"
             ? ["Plugin Studio"]
-            : active === "model-editor"
-              ? ["Model Editor"]
             : active === "build-plugin"
               ? ["Build a plugin"]
             : active === "settings"
@@ -937,6 +937,14 @@ function DesktopApp() {
               : active.startsWith("plugin:")
               ? [installed.find((p) => `plugin:${p.id}` === active)?.name ?? "Plugin"]
               : driveCrumb;
+
+  // An "app" plugin whose detail view declares itself immersive (e.g. a canvas
+  // editor) takes over the whole content area — no page header, no max-width column.
+  // Derived from the manifest, so the host special-cases no plugin by id.
+  const immersiveDetailId =
+    active.startsWith("plugin:") && installed.find((p) => p.id === active.slice(7))?.contributes?.detailView?.immersive
+      ? active.slice(7)
+      : null;
 
   const railAvailable = active !== "home" && installed.some((p) => p.contributes?.railPanel);
   // A docked preview claims the right side, so the plugin rail steps aside while
@@ -965,6 +973,7 @@ function DesktopApp() {
 
   return (
     <PluginDataProvider githubInstalled={activeIds.includes("github")}>
+    <HostApiProvider value={hostApi}>
     <div className="flex h-screen flex-col">
       <OfflineBanner />
       <DemoBanner auth={auth} onSignIn={signIn} />
@@ -1044,6 +1053,13 @@ function DesktopApp() {
           }}
           syncing={sync.syncing}
           readonly={active === "drive" && readonly}
+          connectorPluginId={
+            active === "drive" && space.startsWith("connector:") ? space.slice("connector:".length) : null
+          }
+          onBranchSwitched={() => {
+            void forceSync();
+            reload();
+          }}
           offline={!online}
           railAvailable={railAvailable}
           railOpen={tweaks.showRail}
@@ -1054,12 +1070,8 @@ function DesktopApp() {
         />
 
         <main className="relative flex-1 overflow-auto">
-          {active === "model-editor" ? (
-            <Suspense
-              fallback={<div className="grid h-full place-items-center text-sm text-muted-foreground">Loading…</div>}
-            >
-              <ModelEditorView onNewDocument={newPrismaDocument} />
-            </Suspense>
+          {immersiveDetailId ? (
+            <PluginDetail id={immersiveDetailId} installed={installed} immersive />
           ) : (
           <div className="mx-auto max-w-[1280px] px-8 pb-8 pt-[22px]">
             {active === "home" ? (
@@ -1374,6 +1386,7 @@ function DesktopApp() {
       <Toaster position="bottom-right" />
       </div>
     </div>
+    </HostApiProvider>
     </PluginDataProvider>
   );
 }
@@ -1457,6 +1470,7 @@ function TrashView({
 function PluginDetail({
   id,
   installed,
+  immersive,
 }: {
   id: string;
   installed: {
@@ -1471,12 +1485,31 @@ function PluginDetail({
       creators?: { label: string; extension: string }[];
     };
   }[];
+  /** Render edge-to-edge with no page header/chrome (manifest detailView.immersive). */
+  immersive?: boolean;
 }) {
   const manifest = installed.find((p) => p.id === id);
   const sandboxed = sandboxedSlot(id, "detailView");
   const DetailView = PLUGIN_UI[id]?.DetailView;
   const capabilities = usePluginCapabilities();
   if (!manifest) return null;
+
+  // Immersive app: hand the whole content area to the plugin's view — no header,
+  // no max-width column (the host already skips the centred wrapper for these).
+  if (immersive && (sandboxed || DetailView)) {
+    return (
+      <div className="h-full">
+        {sandboxed ? (
+          <PluginSlot plugin={id} slot="detailView" source={sandboxed.source} capabilities={capabilities} />
+        ) : (
+          <Suspense fallback={<div className="grid h-full place-items-center text-sm text-muted-foreground">Loading…</div>}>
+            {DetailView ? <DetailView /> : null}
+          </Suspense>
+        )}
+      </div>
+    );
+  }
+
   // Viewer plugins have no detail view; instead of an empty page, show what file
   // types they handle and create — derived straight from the manifest.
   const fileTypes = [...new Set(manifest.contributes?.viewers?.flatMap((v) => v.match) ?? [])];
