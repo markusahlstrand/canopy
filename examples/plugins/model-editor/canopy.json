@@ -54,6 +54,15 @@
         "extension": ".tsp",
         "mime": "text/x-typespec",
         "template": "import \"@typespec/http\";\n\nusing TypeSpec.Http;\n\n@service(#{ title: \"My API\" })\nnamespace MyApi;\n\nmodel Item {\n  @key id: string;\n  name: string;\n}\n\n@route(\"/items\")\ninterface Items {\n  @get\n  @operationId(\"listItems\")\n  list(): Item[];\n}\n"
+      },
+      {
+        "id": "arazzo",
+        "label": "Arazzo workflow",
+        "icon": "board",
+        "defaultName": "workflow",
+        "extension": ".arazzo.yaml",
+        "mime": "application/yaml",
+        "template": "arazzo: 1.0.1\ninfo:\n  title: My workflow\n  version: 1.0.0\n# Point sourceDescriptions at the OpenAPI your .tsp emits; x-typespec-source links\n# back to the contract so the editor can trace steps → endpoints → entities.\nx-typespec-source: ./main.tsp\nsourceDescriptions:\n  - name: api\n    url: ./openapi.yaml\n    type: openapi\nworkflows:\n  - workflowId: myWorkflow\n    summary: Describe what this flow does.\n    steps:\n      - stepId: firstStep\n        description: Call an operation from the source above.\n        operationId: listItems\n        successCriteria:\n          - condition: $statusCode == 200\n        outputs:\n          result: $response.body\n    outputs:\n      result: $steps.firstStep.outputs.result\n"
       }
     ],
     "store": {

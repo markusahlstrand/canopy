@@ -6,10 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/node.ts",
     "start": "tsx src/node.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "spec": "tsp compile spec"
   },
   "dependencies": {
-    "@cloudflare/containers": "^0.3.5",
     "@canopy/connector-github": "workspace:*",
     "@canopy/connector-local": "workspace:*",
     "@canopy/connector-r2": "workspace:*",
@@ -17,6 +17,7 @@
     "@canopy/core": "workspace:*",
     "@canopy/docworker": "workspace:*",
     "@canopy/store": "workspace:*",
+    "@cloudflare/containers": "^0.3.5",
     "@hono/node-server": "^1.14.4",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "hono": "^4.10.3",
@@ -25,6 +26,10 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "@typespec/compiler": "^1.13.0",
+    "@typespec/http": "^1.13.0",
+    "@typespec/openapi": "^1.13.0",
+    "@typespec/openapi3": "^1.13.0",
     "tsx": "^4.20.6",
     "typescript": "~6.0.3"
   }
