@@ -81,10 +81,16 @@ export function AssistantPanel({ getModel, onApply }: AssistantPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    void host.listAiModels().then((m) => {
-      setModels(m);
-      if (m[0]) setModelId(m[0].id);
-    });
+    void host
+      .listAiModels()
+      .then((m) => {
+        setModels(m);
+        if (m[0]) setModelId(m[0].id);
+      })
+      .catch((err: unknown) => {
+        console.error("Failed to load AI models", err);
+        setModels([]); // stable fallback: aiAvailable resolves to false
+      });
   }, [host]);
 
   useEffect(() => {

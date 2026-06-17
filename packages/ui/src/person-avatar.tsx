@@ -50,8 +50,8 @@ export function AvatarGroup({ people, max = 3 }: { people: string[]; max?: numbe
   return (
     <div className="flex items-center">
       <div className="flex -space-x-1.5">
-        {shown.map((p) => (
-          <PersonAvatar key={p} name={p} size="sm" />
+        {shown.map((p, i) => (
+          <PersonAvatar key={`${i}-${p}`} name={p} size="sm" />
         ))}
         {overflow > 0 && (
           <span

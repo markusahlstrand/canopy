@@ -35,34 +35,39 @@ export function SynologyView() {
   const onSync = useCallback(async () => {
     setSyncing(true);
     setSynced(false);
-    const res = await host.syncConnector("synology");
-    setSyncing(false);
-    if (res.ok) {
-      setSynced(true);
-      setTimeout(() => setSynced(false), 4000);
+    try {
+      const res = await host.syncConnector("synology");
+      if (res.ok) {
+        setSynced(true);
+        setTimeout(() => setSynced(false), 4000);
+      }
+    } catch {
+      // Surface the failure on the next probe; here we just don't get stuck "Syncing…".
+    } finally {
+      setSyncing(false);
     }
   }, [host]);
 
   const load = useCallback(async () => {
     setState((s) => ({ ...s, loading: true }));
-    const spaces = await host.listSpaces();
-    const space = spaces.find((s) => s.id === "connector:synology");
-    if (!space) {
-      setState({ connected: false, name: null, loading: false, error: null });
-      return;
+    try {
+      const spaces = await host.listSpaces();
+      const space = spaces.find((s) => s.id === "connector:synology");
+      if (!space) {
+        setState({ connected: false, name: null, loading: false, error: null });
+        return;
+      }
+      // Config is saved → probe the NAS so a failure shows up here instead of only
+      // when the user clicks into the space and gets an opaque empty folder.
+      const result = await host.testConnector("synology");
+      setState({ connected: true, name: space.name ?? null, loading: false, error: result.ok ? null : (result.error ?? "Connection failed") });
+    } catch (err) {
+      setState({ connected: false, name: null, loading: false, error: (err as Error).message });
     }
-    // Config is saved → probe the NAS so a failure shows up here instead of only
-    // when the user clicks into the space and gets an opaque empty folder.
-    const result = await host.testConnector("synology");
-    setState({ connected: true, name: space.name ?? null, loading: false, error: result.ok ? null : (result.error ?? "Connection failed") });
   }, [host]);
 
   useEffect(() => {
-    let alive = true;
-    void load().catch((err: Error) => alive && setState({ connected: false, name: null, loading: false, error: err.message }));
-    return () => {
-      alive = false;
-    };
+    void load();
   }, [load]);
 
   return (

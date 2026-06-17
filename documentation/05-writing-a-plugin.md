@@ -62,26 +62,30 @@ every member; the registry renders the union of the two.
 ## 3. Build the view, using only granted access
 
 The plugin's job is to read markdown from the `documentation` mount and render it. It reaches storage
-through the host API — the same `?mount=documentation` it declared a capability for — never directly:
+through the host — `usePluginHost()` from `@canopy/plugin-sdk`, the same `documentation` mount it declared
+a capability for — never directly via `@/lib/api`:
 
 ```tsx
 // apps/portal/src/plugins/documentation-view.tsx (trimmed)
+import { usePluginHost, type PluginFile } from "@canopy/plugin-sdk";
+
 export function DocumentationView() {
-  const [docs, setDocs] = useState<FileItem[]>([]);
+  const host = usePluginHost();
+  const [docs, setDocs] = useState<PluginFile[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState("");
 
   useEffect(() => {
-    listFiles("", "documentation").then((items) => {  // GET /api/files?mount=documentation
+    host.listMount("", "documentation").then((items) => {  // GET /api/files?mount=documentation
       const md = items.filter((f) => /\.md$/i.test(f.name));
       setDocs(md);
       setSelected((s) => s ?? md[0]?.path ?? null);
     });
-  }, []);
+  }, [host]);
 
   useEffect(() => {
-    if (selected) readText(selected, "documentation").then(setContent);   // GET /api/file?mount=documentation
-  }, [selected]);
+    if (selected) host.readMountText(selected, "documentation").then(setContent);   // GET /api/file?mount=documentation
+  }, [selected, host]);
 
   return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
 }
@@ -90,7 +94,7 @@ export function DocumentationView() {
 The data path end to end:
 
 ```
-DocumentationView ─ listFiles("", "documentation") ─► GET /api/files?mount=documentation
+DocumentationView ─ host.listMount("", "documentation") ─► GET /api/files?mount=documentation
                                        └─ @canopy/api picks the "documentation" connector
                                             └─ @canopy/connector-local reads ./documentation
 ```

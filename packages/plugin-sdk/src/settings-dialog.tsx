@@ -88,9 +88,16 @@ export function PluginSettingsDialog({
           setFields(s.fields);
           setValues(withInferredControllers(s.fields, s.values, s.secretsSet));
           setSecretsSet(s.secretsSet);
+        } else {
+          // No settings for this plugin: clear any state held over from a previous
+          // pluginId so stale fields/values can't be submitted under the new id.
+          setFields([]);
+          setValues({});
+          setSecretsSet([]);
         }
         setPlaces(p);
       })
+      .catch((e) => alive && setError((e as Error).message))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
@@ -209,7 +216,7 @@ export function PluginSettingsDialog({
                     {f.required && <span className="ml-1 text-destructive">*</span>}
                   </label>
                   <Input
-                    type={isSecret ? "password" : "text"}
+                    type={isSecret ? "password" : f.type === "url" ? "url" : "text"}
                     value={values[f.key] ?? ""}
                     placeholder={stored ? "•••••••• (saved — leave blank to keep)" : undefined}
                     onChange={(e) => setValue(f.key, e.target.value)}

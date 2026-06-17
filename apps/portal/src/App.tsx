@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -251,7 +251,7 @@ function DesktopApp() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
-  const reload = () => setRefreshKey((k) => k + 1);
+  const reload = useCallback(() => setRefreshKey((k) => k + 1), []);
   // Set by an explicit refresh so the *next* folder load skips the backend's reconcile
   // debounce (a one-shot — background mirror ticks that also re-run the load stay cheap).
   const freshOnceRef = useRef(false);

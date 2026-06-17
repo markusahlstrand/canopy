@@ -116,7 +116,7 @@ model SpacePrefs {
 /** A member of a space (or a pending email invite resolved as a member row). */
 model SpaceMember {
   /** The user's sub, or "" for a pending email invite. */
-  sub: Sub;
+  sub: Sub | "";
   role: Role;
   email?: string | null;
   name?: string | null;
