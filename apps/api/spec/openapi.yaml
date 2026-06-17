@@ -2819,7 +2819,7 @@ components:
         id:
           type: string
         authorId:
-          type: string
+          $ref: '#/components/schemas/Sub'
         authorLabel:
           type: string
         body:
@@ -3191,7 +3191,7 @@ components:
           type: string
           description: The owning space id (the tenant); equals the space the file lives in.
         ownerId:
-          type: string
+          $ref: '#/components/schemas/Sub'
         name:
           type: string
         currentVersionId:
@@ -3297,7 +3297,7 @@ components:
           type: string
           format: date-time
         createdBy:
-          type: string
+          $ref: '#/components/schemas/Sub'
         keep:
           type: boolean
           description: 'Pinned: retention never prunes a kept version.'
@@ -3797,7 +3797,7 @@ components:
         - sub
       properties:
         sub:
-          type: string
+          $ref: '#/components/schemas/Sub'
       description: Remove a member from a space.
     RenameSpace:
       type: object
@@ -3911,7 +3911,7 @@ components:
           type: string
           nullable: true
         createdBy:
-          type: string
+          $ref: '#/components/schemas/Sub'
         createdAt:
           type: string
           format: date-time
@@ -4020,7 +4020,8 @@ components:
           nullable: true
           description: Optional accent color — an HSL triplet like "145 33% 36%".
         createdBy:
-          type: string
+          allOf:
+            - $ref: '#/components/schemas/Sub'
           description: Who created the space (absent on synthetic `connected` spaces).
         createdAt:
           type: string
@@ -4051,7 +4052,7 @@ components:
         role:
           $ref: '#/components/schemas/Role'
         createdBy:
-          type: string
+          $ref: '#/components/schemas/Sub'
         createdAt:
           type: string
           format: date-time
@@ -4061,6 +4062,8 @@ components:
           nullable: true
         acceptedBy:
           type: string
+          allOf:
+            - $ref: '#/components/schemas/Sub'
           nullable: true
         acceptedAt:
           type: string
@@ -4085,7 +4088,8 @@ components:
         - pending
       properties:
         sub:
-          type: string
+          allOf:
+            - $ref: '#/components/schemas/Sub'
           description: The user's sub, or "" for a pending email invite.
         role:
           $ref: '#/components/schemas/Role'
@@ -4128,6 +4132,16 @@ components:
         popular:
           type: boolean
       description: How the plugin appears in the plugin store.
+    Sub:
+      type: string
+      description: |-
+        A reference to a `Person` — holds that person's `sub` (the user-directory key).
+        This is a *logical* foreign key only: the user directory is a projection of the
+        external IdP, upserted lazily on login, so a `sub` may legitimately be referenced
+        before its `Person` row exists. It is deliberately NOT enforced as a database
+        foreign key. The `x-references` extension carries the relationship into the
+        generated OpenAPI so schema/ER/diagram tooling can link these fields to `Person`.
+      x-references: Person
     SubjectType:
       type: string
       enum:

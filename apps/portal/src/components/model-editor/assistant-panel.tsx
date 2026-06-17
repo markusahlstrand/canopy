@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { aiGenerate, listAiModels, type AiModel } from "@/lib/api";
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
+  Icon,
+  cn,
+} from "@canopy/ui";
+import { usePluginHost, type AiModel } from "@canopy/plugin-sdk";
 import { PROPERTY_TYPES, type DomainModel } from "./types";
 
 interface ChatMessage {
@@ -66,6 +66,7 @@ export interface AssistantPanelProps {
 }
 
 export function AssistantPanel({ getModel, onApply }: AssistantPanelProps) {
+  const host = usePluginHost();
   const [models, setModels] = useState<AiModel[] | null>(null);
   const [modelId, setModelId] = useState<string>("");
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -80,11 +81,17 @@ export function AssistantPanel({ getModel, onApply }: AssistantPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    void listAiModels().then((m) => {
-      setModels(m);
-      if (m[0]) setModelId(m[0].id);
-    });
-  }, []);
+    void host
+      .listAiModels()
+      .then((m) => {
+        setModels(m);
+        if (m[0]) setModelId(m[0].id);
+      })
+      .catch((err: unknown) => {
+        console.error("Failed to load AI models", err);
+        setModels([]); // stable fallback: aiAvailable resolves to false
+      });
+  }, [host]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -110,7 +117,7 @@ export function AssistantPanel({ getModel, onApply }: AssistantPanelProps) {
         },
         ...history.map((m) => ({ role: m.role, content: m.text })),
       ];
-      const raw = await aiGenerate({
+      const raw = await host.aiGenerate({
         messages: apiMessages,
         model: modelId || undefined,
         json: true,

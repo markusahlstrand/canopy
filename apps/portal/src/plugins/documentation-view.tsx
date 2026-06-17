@@ -1,9 +1,8 @@
 import { Fragment, isValidElement, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { listMount, mountFileUrl, readText } from "@/lib/api";
-import type { FileItem } from "@/lib/mock-data";
-import { cn } from "@/lib/utils";
+import { cn } from "@canopy/ui";
+import { usePluginHost, usePluginTheme, type PluginFile } from "@canopy/plugin-sdk";
 
 /** A page's stable slug: filename without the `NN-` prefix or `.md` extension. */
 function slug(name: string): string {
@@ -96,7 +95,7 @@ function writeDocParam(s: string, replace = false) {
 /** Resolve an in-doc link href to a loaded page, or null if it's external. Handles
  *  bare names (`how-plugins-work`), numbered files (`05-writing-a-plugin.md`), and
  *  `#anchor` / path noise — so cross-doc links navigate in-app instead of reloading. */
-function resolveDoc(href: string, docs: FileItem[]): FileItem | null {
+function resolveDoc(href: string, docs: PluginFile[]): PluginFile | null {
   if (/^([a-z]+:|\/|#|mailto:)/i.test(href)) return null; // absolute, protocol, anchor-only
   const ref = href.split("#")[0].split("?")[0].split("/").pop() ?? "";
   if (!ref) return null;
@@ -111,27 +110,10 @@ const loadMermaid = () => (mermaidPromise ??= import("mermaid").then((m) => m.de
 
 let mermaidSeq = 0;
 
-/** Track the app's `.dark` class (set on <html> by the theme toggle) so diagrams
- *  re-render in the matching mermaid theme. Provider-agnostic on purpose. */
-function useIsDark(): boolean {
-  const [dark, setDark] = useState(
-    () => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
-  );
-  useEffect(() => {
-    const el = document.documentElement;
-    const update = () => setDark(el.classList.contains("dark"));
-    update();
-    const mo = new MutationObserver(update);
-    mo.observe(el, { attributes: true, attributeFilter: ["class"] });
-    return () => mo.disconnect();
-  }, []);
-  return dark;
-}
-
 /** Renders one ```mermaid fenced block to an inline SVG. Falls back to showing
  *  the source (so a bad diagram or an offline mermaid never blanks the page). */
 function Mermaid({ code }: { code: string }) {
-  const dark = useIsDark();
+  const dark = usePluginTheme().dark;
   const [svg, setSvg] = useState("");
   const [failed, setFailed] = useState(false);
   const idRef = useRef(`mmd-${++mermaidSeq}`);
@@ -189,7 +171,8 @@ function Mermaid({ code }: { code: string }) {
  * in-app rather than reloading the SPA.
  */
 export function DocumentationView() {
-  const [docs, setDocs] = useState<FileItem[]>([]);
+  const host = usePluginHost();
+  const [docs, setDocs] = useState<PluginFile[]>([]);
   const [selected, setSelected] = useState<string | null>(null); // the page's mount path
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -200,14 +183,15 @@ export function DocumentationView() {
   const [pluginsOverride, setPluginsOverride] = useState<boolean | null>(null);
   // Mirror the loaded list into a ref for event-time readers (popstate, link
   // clicks) that are captured once and would otherwise see a stale closure.
-  const docsRef = useRef<FileItem[]>([]);
+  const docsRef = useRef<PluginFile[]>([]);
   useEffect(() => {
     docsRef.current = docs;
   }, [docs]);
 
   // Load the page list, then open the page named in `?doc=` (or the first page).
   useEffect(() => {
-    listMount("", "documentation")
+    host
+      .listMount("", "documentation")
       .then((items) => {
         const md = items.filter((f) => f.kind !== "folder" && /\.md$/i.test(f.name));
         setDocs(md);
@@ -219,15 +203,16 @@ export function DocumentationView() {
         }
       })
       .catch((err: Error) => setError(err.message));
-  }, []);
+  }, [host]);
 
   // Fetch the selected page's markdown.
   useEffect(() => {
     if (!selected) return;
-    readText(selected, "documentation")
+    host
+      .readMountText(selected, "documentation")
       .then(setContent)
       .catch((err: Error) => setError(err.message));
-  }, [selected]);
+  }, [selected, host]);
 
   // Back/forward: re-open whatever page the URL now points at.
   useEffect(() => {
@@ -293,7 +278,7 @@ export function DocumentationView() {
         // click never navigates the SPA away and loses state.
         if (href && !href.includes("/")) {
           return (
-            <a href={mountFileUrl(href, "documentation")} target="_blank" rel="noreferrer">
+            <a href={host.mountFileUrl(href, "documentation")} target="_blank" rel="noreferrer">
               {children}
             </a>
           );
@@ -305,7 +290,7 @@ export function DocumentationView() {
         );
       },
     }),
-    [],
+    [host],
   );
 
   if (error) {
@@ -333,7 +318,7 @@ export function DocumentationView() {
       groups: [
         ...groups.map((g) => ({
           label: g.label,
-          items: g.slugs.map((s) => bySlug.get(s)).filter((d): d is FileItem => !!d),
+          items: g.slugs.map((s) => bySlug.get(s)).filter((d): d is PluginFile => !!d),
         })),
         ...(ungrouped.length ? [{ label: "More", items: ungrouped }] : []),
       ].filter((g) => g.items.length > 0),
@@ -350,7 +335,7 @@ export function DocumentationView() {
   const compareOpen = compareOverride ?? (!!currentDoc && (isCompare(currentDoc.name) || curSlug === OVERVIEW_SLUG));
   const pluginsOpen = pluginsOverride ?? (!!currentDoc && (isPlugin(currentDoc.name) || curSlug === PLUGINS_OVERVIEW_SLUG));
 
-  const navButton = (d: FileItem, label: string) => (
+  const navButton = (d: PluginFile, label: string) => (
     <button
       key={d.path}
       onClick={() => d.path && open(d.path)}
@@ -366,8 +351,8 @@ export function DocumentationView() {
   // An overview page rendered expandable: it reveals its section's pages (grouped)
   // nested beneath it. Shared by "How it compares" and "Built-in plugins".
   const renderExpandable = (
-    d: FileItem,
-    section: { docs: FileItem[]; groups: { label: string; items: FileItem[] }[] },
+    d: PluginFile,
+    section: { docs: PluginFile[]; groups: { label: string; items: PluginFile[] }[] },
     labelFn: (n: string) => string,
     isOpen: boolean,
     setOpen: (b: boolean) => void,

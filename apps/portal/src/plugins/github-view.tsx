@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Icon } from "@/lib/icons";
-import { Button } from "@/components/ui/button";
-import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
+import { Icon, Button } from "@canopy/ui";
+import { PluginSettingsDialog } from "@canopy/plugin-sdk";
 import { getCalendar, getIntegrations, getTasks } from "@/lib/api";
 import { usePluginDataRefresh } from "./data";
 

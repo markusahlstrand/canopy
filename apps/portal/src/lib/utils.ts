@@ -1,6 +1,3 @@
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
+// Moved to the shared @canopy/ui package; re-exported here so existing
+// `@/lib/utils` imports across the app keep working.
+export { cn } from "@canopy/ui";

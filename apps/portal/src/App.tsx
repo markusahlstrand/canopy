@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -70,11 +70,13 @@ import { SpaceMembersDialog } from "@/components/space-members-dialog";
 import { SpaceCacheDialog } from "@/components/space-cache-dialog";
 import { ConnectorSettingsDialog } from "@/components/connector-settings-dialog";
 import { CreateSpaceDialog } from "@/components/create-space-dialog";
-import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
+import { PluginSettingsDialog } from "@canopy/plugin-sdk";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
 import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
 import { HostApiProvider, type HostApi } from "@/plugins/host";
+import { createHostBridge } from "@/plugins/host-bridge";
+import { PluginHostProvider } from "@canopy/plugin-sdk";
 import { setCustomViewers, type InstalledViewer } from "@/plugins/viewers";
 import { sandboxedSlot, setCustomSlots } from "@/plugins/ui";
 import { PluginSlot } from "@/components/plugin-slot";
@@ -249,7 +251,7 @@ function DesktopApp() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
-  const reload = () => setRefreshKey((k) => k + 1);
+  const reload = useCallback(() => setRefreshKey((k) => k + 1), []);
   // Set by an explicit refresh so the *next* folder load skips the backend's reconcile
   // debounce (a one-shot — background mirror ticks that also re-run the load stay cheap).
   const freshOnceRef = useRef(false);
@@ -686,6 +688,8 @@ function DesktopApp() {
     }),
     [online, reload],
   );
+  // The plugin capability bridge handed to trusted plugin views via the SDK.
+  const pluginHost = useMemo(() => createHostBridge(hostApi), [hostApi]);
 
   async function upload(fileList: FileList | null) {
     const files = fileList ? Array.from(fileList) : [];
@@ -1015,6 +1019,7 @@ function DesktopApp() {
   return (
     <PluginDataProvider githubInstalled={activeIds.includes("github")}>
     <HostApiProvider value={hostApi}>
+    <PluginHostProvider value={pluginHost}>
     <div className="flex h-screen flex-col">
       <OfflineBanner />
       <DemoBanner auth={auth} onSignIn={signIn} />
@@ -1428,6 +1433,7 @@ function DesktopApp() {
       <Toaster position="bottom-right" />
       </div>
     </div>
+    </PluginHostProvider>
     </HostApiProvider>
     </PluginDataProvider>
   );

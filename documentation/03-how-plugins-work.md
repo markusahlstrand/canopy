@@ -416,20 +416,47 @@ Every plugin registers its `PluginManifest` in the `PluginRegistry`, and the hos
 registry to build the sidebar, rail tabs, context menus, and store. That **declarative half** is
 identical for everyone. What differs is the **render half** — and there are now two tiers:
 
-- **Trusted, first-party (compiled-in React).** Tasks, Documentation, GitHub, and Document AI
-  ship as React components the host compiles into its own bundle, mapped by plugin id in
-  `PLUGIN_UI`. They get full React + host APIs because they run *as* host code — a privileged
-  tier, not the third-party contract.
+- **Trusted, first-party (compiled-in React).** Tasks, Documentation, GitHub, Document AI, and the
+  Model Editor ship as React components the host compiles into its own bundle, mapped by plugin id
+  in `PLUGIN_UI`. They run *as* host code — a privileged tier, not the third-party contract.
 
   ```ts
   // apps/portal/src/plugins/index.tsx — the trusted first-party tier
   export const PLUGIN_UI: Record<string, PluginUI> = {
-    documentation: { DetailView: DocumentationView },
-    tasks:         { DetailView: TasksView },
-    github:        { DetailView: GithubView },
-    "document-ai": { DetailView: DocumentAiView },
+    documentation:  { DetailView: DocumentationView },
+    tasks:          { DetailView: TasksView },
+    github:         { DetailView: GithubView },
+    "document-ai":  { DetailView: DocumentAiView },
+    "model-editor": { FileView: ModelEditorFileView },
   };
   ```
+
+  Privileged does **not** mean unbounded. **All** trusted views reach the host through a defined
+  contract instead of importing app internals directly:
+
+  - **`@canopy/plugin-sdk`** — the capability bridge. A view calls `usePluginHost()` to get a
+    `HostBridge` and `usePluginTheme()` for light/dark, instead of importing `@/lib/api` or wiring
+    its own `.dark` observer. The app implements the bridge once
+    (`apps/portal/src/plugins/host-bridge.ts`) and provides it via `<PluginHostProvider>`. Swapping
+    that one implementation is what would let the same view run in a different host (e.g. a VS Code
+    webview). The SDK also ships the generic, schema-driven `PluginSettingsDialog` (it reaches
+    settings I/O through the bridge, so any plugin can offer settings).
+  - **`@canopy/ui`** — the shared component library. Views import shadcn primitives, the `Icon`
+    set, `cn`, `toast`, and shared host components like `PersonAvatar` from `@canopy/ui` (used by
+    the app too), rather than from `@/components/ui/*` or `@/lib/*`.
+
+  **The boundary is hybrid by design.** `HostBridge` carries genuinely *generic* capabilities —
+  files, AI, plugin settings, connector spaces (`listSpaces` / `syncConnector` / `testConnector`),
+  and mount reading. Capabilities that are specific to one feature — the GitHub data-source
+  (`getTasks` / `getCalendar` / `getIntegrations`, via the `PluginDataProvider` context) and
+  Document AI's processing feed (`listProcessing`) — deliberately stay app-coupled rather than
+  bloating a generic contract that only first-party code would use.
+
+  An ESLint `no-restricted-imports` rule keeps each view on the boundary: the
+  `src/components/model-editor/**` block bans app-internal imports wholesale, and the block over the
+  five detail/file views bans UI paths plus the *generic* `@/lib/api` names (the ones with a
+  `HostBridge` home) by name — while letting the feature-specific endpoints through. That encodes
+  the hybrid line so it can't quietly rot.
 
 - **Sandboxed (opaque-origin iframe).** An untrusted plugin renders the same rail-panel /
   detail-view slots inside the client-UI sandbox — a vanilla `render(ctx)` in an

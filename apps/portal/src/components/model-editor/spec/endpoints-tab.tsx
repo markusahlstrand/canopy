@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
+import { Icon } from "@canopy/ui";
+import { cn } from "@canopy/ui";
 import type { SpecEndpoint } from "./graph-types";
 import type { SpecViewProps } from "./view-types";
 

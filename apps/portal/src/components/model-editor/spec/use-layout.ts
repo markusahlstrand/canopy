@@ -4,7 +4,7 @@
 // `canopy.layout.json` sidecar back through the host.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@canopy/ui";
 import type { LayoutSidecar, LayoutView, ProjectGraph } from "./graph-types";
 import type { XY } from "./layout";
 import { newView, parseSidecar, serializeSidecar, SIDECAR_NAME } from "./layout-sidecar";

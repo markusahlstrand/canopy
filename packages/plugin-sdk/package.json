@@ -1,0 +1,28 @@
+{
+  "name": "@canopy/plugin-sdk",
+  "version": "0.0.0",
+  "description": "Canopy plugin SDK: the host-capability contract (HostBridge) and React hooks trusted plugins use instead of reaching into app internals.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@canopy/core": "workspace:*",
+    "@canopy/ui": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.15",
+    "react": "^19.2.6",
+    "typescript": "~6.0.3"
+  }
+}

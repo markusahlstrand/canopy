@@ -1,9 +1,5 @@
 import { useState } from "react";
-import { PersonAvatar } from "@/components/person-avatar";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Badge } from "@/components/ui/badge";
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
+import { PersonAvatar, Checkbox, Badge, Icon, cn } from "@canopy/ui";
 import type { Task, TaskStatus } from "@/lib/api";
 import { useTasks } from "./data";
 

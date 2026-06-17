@@ -1,19 +1,21 @@
 import { useEffect, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Icon } from "@/lib/icons";
 import {
-  applySpacePlugin,
-  getPluginPlaces,
-  getPluginSettings,
-  removeSpacePlugin,
-  savePluginSettings,
-  type PluginConfigField,
-  type PluginPlace,
-} from "@/lib/api";
+  Button,
+  Checkbox,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  Icon,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@canopy/ui";
+import { usePluginHost } from "./context";
+import type { PluginConfigField, PluginPlace } from "./settings";
 
 /**
  * Seed a `showWhen` controller (e.g. a connection "mode") for an *existing* config
@@ -44,6 +46,9 @@ function withInferredControllers(
  * to the client — a stored secret shows as "set", and leaving it blank keeps the
  * existing value) plus an "Applies to places" picker: the group spaces the caller
  * owns, where applying turns the plugin on for everyone in that place.
+ *
+ * Lives in the SDK and reaches settings I/O through {@link usePluginHost}, so any
+ * plugin can offer settings without importing app internals.
  */
 export function PluginSettingsDialog({
   pluginId,
@@ -61,6 +66,7 @@ export function PluginSettingsDialog({
   /** Called after a place toggle, so the host can refresh its active-plugin set. */
   onPlacesChanged?: () => void;
 }) {
+  const host = usePluginHost();
   const [fields, setFields] = useState<PluginConfigField[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [secretsSet, setSecretsSet] = useState<string[]>([]);
@@ -75,28 +81,35 @@ export function PluginSettingsDialog({
     let alive = true;
     setLoading(true);
     setError(null);
-    Promise.all([getPluginSettings(pluginId), getPluginPlaces(pluginId)])
+    Promise.all([host.getPluginSettings(pluginId), host.getPluginPlaces(pluginId)])
       .then(([s, p]) => {
         if (!alive) return;
         if (s) {
           setFields(s.fields);
           setValues(withInferredControllers(s.fields, s.values, s.secretsSet));
           setSecretsSet(s.secretsSet);
+        } else {
+          // No settings for this plugin: clear any state held over from a previous
+          // pluginId so stale fields/values can't be submitted under the new id.
+          setFields([]);
+          setValues({});
+          setSecretsSet([]);
         }
         setPlaces(p);
       })
+      .catch((e) => alive && setError((e as Error).message))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, [open, pluginId]);
+  }, [open, pluginId, host]);
 
   async function togglePlace(place: PluginPlace) {
     setPlaceBusy(place.spaceId);
     setError(null);
     try {
-      if (place.applied) await removeSpacePlugin(place.spaceId, pluginId);
-      else await applySpacePlugin(place.spaceId, pluginId);
+      if (place.applied) await host.removeSpacePlugin(place.spaceId, pluginId);
+      else await host.applySpacePlugin(place.spaceId, pluginId);
       setPlaces((prev) =>
         prev.map((p) => (p.spaceId === place.spaceId ? { ...p, applied: !p.applied } : p)),
       );
@@ -122,7 +135,7 @@ export function PluginSettingsDialog({
       // behavior; the server keeps an empty secret, so hidden secrets are untouched.
       const payload: Record<string, string> = {};
       for (const f of fields) payload[f.key] = visible(f) ? (values[f.key] ?? "") : "";
-      await savePluginSettings(pluginId, payload);
+      await host.savePluginSettings(pluginId, payload);
       onSaved?.();
       onOpenChange(false);
     } catch (e) {
@@ -203,7 +216,7 @@ export function PluginSettingsDialog({
                     {f.required && <span className="ml-1 text-destructive">*</span>}
                   </label>
                   <Input
-                    type={isSecret ? "password" : f.type === "url" ? "text" : "text"}
+                    type={isSecret ? "password" : f.type === "url" ? "url" : "text"}
                     value={values[f.key] ?? ""}
                     placeholder={stored ? "•••••••• (saved — leave blank to keep)" : undefined}
                     onChange={(e) => setValue(f.key, e.target.value)}

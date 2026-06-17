@@ -1,8 +1,23 @@
 import "@typespec/http";
+import "@typespec/openapi";
 
 using TypeSpec.Http;
+using TypeSpec.OpenAPI;
 
 namespace Canopy;
+
+// ───────────────────────────── shared scalars ────────────────────────────────
+
+/**
+ * A reference to a `Person` — holds that person's `sub` (the user-directory key).
+ * This is a *logical* foreign key only: the user directory is a projection of the
+ * external IdP, upserted lazily on login, so a `sub` may legitimately be referenced
+ * before its `Person` row exists. It is deliberately NOT enforced as a database
+ * foreign key. The `x-references` extension carries the relationship into the
+ * generated OpenAPI so schema/ER/diagram tooling can link these fields to `Person`.
+ */
+@extension("x-references", "Person")
+scalar Sub extends string;
 
 // ───────────────────────────── shared enums ──────────────────────────────────
 
@@ -73,7 +88,7 @@ model Space {
   /** Optional accent color — an HSL triplet like "145 33% 36%". */
   color?: string | null;
   /** Who created the space (absent on synthetic `connected` spaces). */
-  createdBy?: string;
+  createdBy?: Sub;
   createdAt?: utcDateTime;
   /** Retention policy for this space's file versions. */
   versionPolicy?: VersionPolicyKind;
@@ -101,7 +116,7 @@ model SpacePrefs {
 /** A member of a space (or a pending email invite resolved as a member row). */
 model SpaceMember {
   /** The user's sub, or "" for a pending email invite. */
-  sub: string;
+  sub: Sub | "";
   role: Role;
   email?: string | null;
   name?: string | null;
@@ -117,7 +132,7 @@ model AddSpaceMember {
 
 /** Remove a member from a space. */
 model RemoveSpaceMember {
-  sub: string;
+  sub: Sub;
 }
 
 // ───────────────────────────── invites ───────────────────────────────────────
@@ -135,10 +150,10 @@ model SpaceInvite {
   token: string;
   spaceId: string;
   role: Role;
-  createdBy: string;
+  createdBy: Sub;
   createdAt: utcDateTime;
   expiresAt?: utcDateTime | null;
-  acceptedBy?: string | null;
+  acceptedBy?: Sub | null;
   acceptedAt?: utcDateTime | null;
 }
 
@@ -194,7 +209,7 @@ model FileVersion {
   mime?: string | null;
   size: int64;
   createdAt: utcDateTime;
-  createdBy: string;
+  createdBy: Sub;
   /** Pinned: retention never prunes a kept version. */
   keep: boolean;
   /** R2 key of cached extracted text (external sources); null until the extract queue runs. */
@@ -215,7 +230,7 @@ model File {
   @key id: string;
   /** The owning space id (the tenant); equals the space the file lives in. */
   tenantId: string;
-  ownerId: string;
+  ownerId: Sub;
   name: string;
   currentVersionId?: string | null;
   /** Freeform JSON. `path` holds the virtual-folder location (e.g. "Documents/2026"). */
@@ -334,7 +349,7 @@ model Overview {
 /** A comment on a file, with a friendly author label resolved from the directory. */
 model Comment {
   @key id: string;
-  authorId: string;
+  authorId: Sub;
   authorLabel: string;
   body: string;
   createdAt: utcDateTime;
@@ -409,7 +424,7 @@ model ShareInfo {
   path: string;
   role: Role;
   label?: string | null;
-  createdBy: string;
+  createdBy: Sub;
   createdAt: utcDateTime;
   lastUsedAt?: utcDateTime | null;
   expiresAt?: utcDateTime | null;

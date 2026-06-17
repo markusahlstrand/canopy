@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
+import { Icon } from "@canopy/ui";
+import { cn } from "@canopy/ui";
 import type { SourceFile } from "./graph-types";
 import type { SpecViewProps } from "./view-types";
 

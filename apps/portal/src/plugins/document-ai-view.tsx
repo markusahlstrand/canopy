@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { Icon } from "@/lib/icons";
-import { Button } from "@/components/ui/button";
-import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
-import { getPluginSettings, listAiModels, listProcessing, type AiModel, type ProcessingRun } from "@/lib/api";
+import { Icon, Button } from "@canopy/ui";
+import { PluginSettingsDialog, usePluginHost, type AiModel } from "@canopy/plugin-sdk";
+import { listProcessing, type ProcessingRun } from "@/lib/api";
 
 function fmtWhen(iso: string): string {
   if (!iso) return "";
@@ -78,6 +77,7 @@ function ActivityFeed() {
  * model is available + which one is in use, and opens the (generic) settings dialog.
  */
 export function DocumentAiView() {
+  const host = usePluginHost();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [state, setState] = useState<{ models: AiModel[]; selected?: string; loading: boolean }>({
     models: [],
@@ -85,9 +85,9 @@ export function DocumentAiView() {
   });
 
   const load = useCallback(async () => {
-    const [models, settings] = await Promise.all([listAiModels(), getPluginSettings("document-ai")]);
+    const [models, settings] = await Promise.all([host.listAiModels(), host.getPluginSettings("document-ai")]);
     setState({ models, selected: settings?.values.model || undefined, loading: false });
-  }, []);
+  }, [host]);
 
   useEffect(() => {
     let alive = true;
