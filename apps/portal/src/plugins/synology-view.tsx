@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Icon } from "@/lib/icons";
-import { Button } from "@/components/ui/button";
-import { PluginSettingsDialog } from "@/components/plugin-settings-dialog";
-import { listSpaces, syncConnector, testConnector } from "@/lib/api";
+import { Icon, Button } from "@canopy/ui";
+import { PluginSettingsDialog, usePluginHost } from "@canopy/plugin-sdk";
 
 interface ConnState {
   /** Config is saved, so the space exists — independent of whether the NAS answers. */
@@ -28,6 +26,7 @@ interface ConnState {
  * milestone — see the project notes.
  */
 export function SynologyView() {
+  const host = usePluginHost();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [state, setState] = useState<ConnState>({ connected: false, name: null, loading: true, error: null });
   const [syncing, setSyncing] = useState(false);
@@ -36,17 +35,17 @@ export function SynologyView() {
   const onSync = useCallback(async () => {
     setSyncing(true);
     setSynced(false);
-    const res = await syncConnector("synology");
+    const res = await host.syncConnector("synology");
     setSyncing(false);
     if (res.ok) {
       setSynced(true);
       setTimeout(() => setSynced(false), 4000);
     }
-  }, []);
+  }, [host]);
 
   const load = useCallback(async () => {
     setState((s) => ({ ...s, loading: true }));
-    const spaces = await listSpaces();
+    const spaces = await host.listSpaces();
     const space = spaces.find((s) => s.id === "connector:synology");
     if (!space) {
       setState({ connected: false, name: null, loading: false, error: null });
@@ -54,9 +53,9 @@ export function SynologyView() {
     }
     // Config is saved → probe the NAS so a failure shows up here instead of only
     // when the user clicks into the space and gets an opaque empty folder.
-    const result = await testConnector("synology");
+    const result = await host.testConnector("synology");
     setState({ connected: true, name: space.name ?? null, loading: false, error: result.ok ? null : (result.error ?? "Connection failed") });
-  }, []);
+  }, [host]);
 
   useEffect(() => {
     let alive = true;

@@ -16,8 +16,8 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
+import { Icon } from "@canopy/ui";
+import { cn } from "@canopy/ui";
 import { ACCENTS, ACCENT_KEYS, type AccentKey } from "../types";
 import { layeredPositions, type XY } from "./layout";
 import type { SpecModel } from "./graph-types";

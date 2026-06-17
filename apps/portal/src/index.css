@@ -2,6 +2,10 @@
 @import "tw-animate-css";
 @plugin "@tailwindcss/typography";
 
+/* Generate utilities for class names that live in the shared UI package, which
+   Tailwind's automatic content detection (rooted at this app) would otherwise miss. */
+@source "../../../packages/ui/src";
+
 @custom-variant dark (&:is(.dark *));
 
 :root {

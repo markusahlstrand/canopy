@@ -1,4 +1,8 @@
 import type { AiMessage, Page, PluginManifest, StorageEntry } from "@canopy/core";
+// The plugin-settings contract lives in the SDK (it's a generic plugin concept);
+// re-exported here so existing `@/lib/api` consumers keep importing it unchanged.
+import type { PluginConfigField, PluginPlace, PluginSettings } from "@canopy/plugin-sdk";
+export type { PluginConfigField, PluginPlace, PluginSettings };
 import type { MirrorFile } from "@canopy/mirror";
 import type { FileItem, FileKind, ProcessingEntry } from "@/lib/mock-data";
 import { apiFetch, isBackendReachable } from "@/lib/connectivity";
@@ -1567,12 +1571,6 @@ export async function removeSpacePlugin(spaceId: string, pluginId: string): Prom
   if (!res.ok) throw new Error(`remove plugin failed: ${res.status}`);
 }
 
-export interface PluginPlace {
-  spaceId: string;
-  name: string;
-  applied: boolean;
-}
-
 /** The group spaces the caller owns, each flagged with whether `pluginId` is applied there. */
 export async function getPluginPlaces(pluginId: string): Promise<PluginPlace[]> {
   const res = await apiFetch(`/api/plugins/${encodeURIComponent(pluginId)}/places`);
@@ -1631,17 +1629,6 @@ export async function getIntegrations(): Promise<Integrations> {
 }
 
 // ── generic plugin settings (schema-driven) ───────────────────────────────────
-
-export interface PluginConfigField {
-  key: string;
-  label: string;
-  type: "string" | "secret" | "url" | "boolean" | "select";
-  required?: boolean;
-  /** Choices for a "select" field (for AI-model fields, filled by the server). */
-  options?: { value: string; label: string }[];
-  /** Show this field only when `field` currently holds one of these values. */
-  showWhen?: { field: string; in: string[] };
-}
 
 /** A model the deployment's AI gateway exposes (Cloudflare Workers AI, Gemini, local). */
 export interface AiModel {
@@ -1723,14 +1710,6 @@ export async function saveCustomPlugin(manifest: PluginManifest, source: string)
 export async function deleteCustomPlugin(id: string): Promise<void> {
   const res = await apiFetch(`/api/plugins/custom/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`delete plugin failed: ${res.status}`);
-}
-
-export interface PluginSettings {
-  fields: PluginConfigField[];
-  /** Current non-secret values. */
-  values: Record<string, string>;
-  /** Keys of secret fields that have a stored value (the value itself is never sent). */
-  secretsSet: string[];
 }
 
 /** One processor run over a file, from the aggregate processing feed. */

@@ -1,5 +1,5 @@
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
+import { Icon } from "@canopy/ui";
+import { cn } from "@canopy/ui";
 import { locate, type SourceLocation } from "./source-locate";
 import type { SpecViewProps } from "./view-types";
 

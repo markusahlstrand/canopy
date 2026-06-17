@@ -1,6 +1,6 @@
 import { Suspense, lazy } from "react";
-import type { FileViewProps } from "@/plugins";
-import { Icon } from "@/lib/icons";
+import type { FileViewProps } from "@canopy/plugin-sdk";
+import { Icon } from "@canopy/ui";
 import { isArazzo, isTsp } from "./spec/discover";
 
 // Both canvases are heavy (React Flow + parsers), so keep each in its own lazy chunk

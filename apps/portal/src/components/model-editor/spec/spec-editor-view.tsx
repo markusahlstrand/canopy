@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@canopy/ui";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -7,10 +7,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
+} from "@canopy/ui";
+import { Tabs, TabsList, TabsTrigger } from "@canopy/ui";
+import { Icon } from "@canopy/ui";
+import { cn } from "@canopy/ui";
 import type { ProjectGraph, SelectionRef } from "./graph-types";
 import { SpecIndex } from "./links";
 import { EntitiesTab } from "./entities-tab";

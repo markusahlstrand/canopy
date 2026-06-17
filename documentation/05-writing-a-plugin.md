@@ -113,6 +113,14 @@ export const PLUGIN_UI: Record<string, PluginUI> = {
 When you open Documentation from the sidebar, the host looks up `PLUGIN_UI["documentation"].DetailView` and
 renders it in the content area. That's the whole plugin.
 
+> **Stay on the boundary.** Even a trusted React view should reach the host through the
+> `@canopy/plugin-sdk` contract — `usePluginHost()` for file/AI capabilities, `usePluginTheme()`
+> for light/dark — and import UI from `@canopy/ui` (shadcn primitives, `Icon`, `cn`, `toast`),
+> rather than reaching into `@/lib/api`, `@/plugins/host`, or `@/components/ui/*`. The Model Editor
+> is the reference, with a lint rule enforcing the boundary on `src/components/model-editor/**`.
+> Keeping a view on the SDK is what makes it swappable to a sandboxed runtime — or another host
+> entirely (e.g. a VS Code webview) — by reimplementing the bridge, not the view.
+
 ## A data-source plugin (GitHub)
 
 The Documentation plugin reads bytes; the **GitHub** plugin feeds _typed records_ into the

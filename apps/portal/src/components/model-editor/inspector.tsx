@@ -1,15 +1,15 @@
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Button } from "@canopy/ui";
+import { Checkbox } from "@canopy/ui";
+import { Input } from "@canopy/ui";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
+} from "@canopy/ui";
+import { Icon } from "@canopy/ui";
+import { cn } from "@canopy/ui";
 import type { EntityNodeData } from "./entity-node";
 import {
   ACCENT_KEYS,

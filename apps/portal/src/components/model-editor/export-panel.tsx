@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
+import { Button } from "@canopy/ui";
+import { Icon } from "@canopy/ui";
+import { cn } from "@canopy/ui";
 import { EXPORT_TARGETS, type ExportFormat } from "./export";
 import type { DomainModel } from "./types";
 

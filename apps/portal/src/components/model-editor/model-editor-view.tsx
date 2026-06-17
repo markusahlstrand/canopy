@@ -16,29 +16,29 @@ import {
   type Node,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Button,
+  Checkbox,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Icon } from "@/lib/icons";
-import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+  Input,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  Icon,
+  cn,
+  toast,
+} from "@canopy/ui";
 import { EntityNode, type EntityNodeData } from "./entity-node";
 import { AssistantPanel } from "./assistant-panel";
 import { ExportPanel } from "./export-panel";
@@ -47,7 +47,7 @@ import { toPrisma } from "./export";
 import { coerceModel, layout } from "./model-io";
 import { fromPrisma } from "./prisma-parse";
 import { loadLibrary, saveLibrary, type StoredModel } from "./storage";
-import { useHostApi } from "@/plugins/host";
+import { useOptionalPluginHost, usePluginTheme } from "@canopy/plugin-sdk";
 import {
   ACCENTS,
   ACCENT_KEYS,
@@ -141,19 +141,6 @@ function flowToModel(nodes: Node[], edges: Edge[], name: string): DomainModel {
   };
 }
 
-/** Mirror the app's `.dark` class into React Flow's colorMode. */
-function useColorMode(): "light" | "dark" {
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
-  useEffect(() => {
-    const obs = new MutationObserver(() =>
-      setDark(document.documentElement.classList.contains("dark")),
-    );
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
-  }, []);
-  return dark ? "dark" : "light";
-}
-
 const emptyModel = (): DomainModel => ({ name: "Untitled model", version: 1, entities: [], relations: [] });
 
 /** Load the saved library, seeding a blank model on first run. */
@@ -194,7 +181,7 @@ function Editor({ file }: { file?: FileBinding }) {
   // In file mode (a .prisma preview) we never offer "new document", so its absence
   // is fine. Lets the scratch canvas persist itself to the drive without the host
   // wiring a model-editor-specific callback.
-  const host = useHostApi();
+  const host = useOptionalPluginHost();
   const boot = useMemo(() => (file ? null : bootstrap()), [file]);
   const initialModel = useMemo(
     () => (file ? fileBoot(file) : boot!.current.model),
@@ -220,7 +207,7 @@ function Editor({ file }: { file?: FileBinding }) {
   const dirtyOnce = useRef(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const colorMode = useColorMode();
+  const colorMode = usePluginTheme().dark ? "dark" : "light";
   const { screenToFlowPosition, fitView } = useReactFlow();
 
   const model = useMemo(() => flowToModel(nodes, edges, name), [nodes, edges, name]);

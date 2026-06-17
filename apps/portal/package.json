@@ -13,6 +13,8 @@
   "dependencies": {
     "@canopy/core": "workspace:*",
     "@canopy/mirror": "workspace:*",
+    "@canopy/plugin-sdk": "workspace:*",
+    "@canopy/ui": "workspace:*",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.3.0",
     "@xyflow/react": "^12.11.0",

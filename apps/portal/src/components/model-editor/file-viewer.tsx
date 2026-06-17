@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { fetchFileText, saveFileVersion } from "@/lib/api";
-import { Icon } from "@/lib/icons";
+import { Icon } from "@canopy/ui";
+import { usePluginHost } from "@canopy/plugin-sdk";
 import { ModelEditorView } from "./model-editor-view";
 
 /**
@@ -16,6 +16,7 @@ export function ModelEditorFileViewer({
   fileName: string;
   onSaved?: () => void;
 }) {
+  const host = usePluginHost();
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,13 +24,14 @@ export function ModelEditorFileViewer({
     let alive = true;
     setContent(null);
     setError(null);
-    fetchFileText(fileId)
+    host
+      .readFileText(fileId)
       .then((t) => alive && setContent(t))
       .catch((e) => alive && setError(e instanceof Error ? e.message : "Failed to load"));
     return () => {
       alive = false;
     };
-  }, [fileId]);
+  }, [fileId, host]);
 
   if (error) {
     return (
@@ -52,7 +54,7 @@ export function ModelEditorFileViewer({
         name: fileName,
         content,
         onSave: async (prisma) => {
-          await saveFileVersion(fileId, prisma, "text/x-prisma");
+          await host.saveFileVersion(fileId, prisma, "text/x-prisma");
           onSaved?.();
         },
       }}
