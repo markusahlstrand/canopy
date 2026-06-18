@@ -1,0 +1,14 @@
+# Everything is bundled into dist/ — ship only that, the manifest and the readme.
+.vscode/**
+src/**
+webview/**
+node_modules/**
+*.ts
+*.tsx
+*.mjs
+tsconfig.json
+vite.config.ts
+.vscodeignore
+.gitignore
+icon.svg
+**/*.map

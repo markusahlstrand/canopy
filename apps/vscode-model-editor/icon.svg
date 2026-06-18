@@ -1,0 +1,30 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9B6BF0"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+
+  <!-- relation between the two entities -->
+  <path d="M120 104 C 132 104, 124 152, 136 152" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" opacity="0.85"/>
+  <circle cx="120" cy="104" r="7" fill="#FFFFFF"/>
+  <circle cx="136" cy="152" r="7" fill="#FFFFFF"/>
+
+  <!-- entity A -->
+  <rect x="40" y="64" width="80" height="80" rx="12" fill="#FFFFFF"/>
+  <rect x="40" y="64" width="80" height="22" rx="12" fill="#EDE4FF"/>
+  <rect x="40" y="80" width="80" height="6" fill="#EDE4FF"/>
+  <rect x="52" y="98" width="42" height="7" rx="3.5" fill="#B79CF2"/>
+  <rect x="52" y="114" width="56" height="7" rx="3.5" fill="#D9CCFA"/>
+  <rect x="52" y="128" width="34" height="7" rx="3.5" fill="#D9CCFA"/>
+
+  <!-- entity B -->
+  <rect x="136" y="112" width="80" height="80" rx="12" fill="#FFFFFF"/>
+  <rect x="136" y="112" width="80" height="22" rx="12" fill="#EDE4FF"/>
+  <rect x="136" y="128" width="80" height="6" fill="#EDE4FF"/>
+  <rect x="148" y="146" width="42" height="7" rx="3.5" fill="#B79CF2"/>
+  <rect x="148" y="162" width="56" height="7" rx="3.5" fill="#D9CCFA"/>
+  <rect x="148" y="176" width="34" height="7" rx="3.5" fill="#D9CCFA"/>
+</svg>
