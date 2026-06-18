@@ -14,6 +14,17 @@ Canopy portal. The only thing that differs per host is the `HostBridge`: in the
 portal it talks to the Canopy API; here it talks to the VS Code extension host
 over `postMessage`.
 
+## Install
+
+Download `canopy-model-editor.vsix` from the
+[latest release](https://github.com/markusahlstrand/canopy/releases/latest), then:
+
+```sh
+code --install-extension canopy-model-editor.vsix
+```
+
+…or in VS Code: **Extensions panel → ⋯ → Install from VSIX…**.
+
 ## Get started
 
 Run **Canopy Model Editor: Create Sample Project** from the Command Palette (or the
