@@ -1,0 +1,54 @@
+name: Release VS Code extension
+
+# Builds the Canopy Model Editor extension and publishes the .vsix.
+# - Push a tag like `vscode-model-editor-v0.0.1` → a GitHub Release with the .vsix attached.
+# - Run manually (workflow_dispatch) → the .vsix is uploaded as a build artifact only.
+on:
+  push:
+    tags:
+      - "vscode-model-editor-v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/vscode-model-editor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Build extension
+        run: pnpm run build
+
+      - name: Package .vsix
+        run: pnpm exec vsce package --no-dependencies -o canopy-model-editor.vsix
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: canopy-model-editor-vsix
+          path: apps/vscode-model-editor/canopy-model-editor.vsix
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/vscode-model-editor/canopy-model-editor.vsix
+          generate_release_notes: true

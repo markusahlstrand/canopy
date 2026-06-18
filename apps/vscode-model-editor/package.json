@@ -1,0 +1,106 @@
+{
+  "name": "canopy-model-editor",
+  "displayName": "Canopy Model Editor",
+  "description": "Visual editors for Prisma schemas, TypeSpec APIs and Arazzo workflows — the Canopy Model Editor plugin, in VS Code.",
+  "version": "0.0.1",
+  "publisher": "sesamy",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/markusahlstrand/canopy.git",
+    "directory": "apps/vscode-model-editor"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["Visualization", "Programming Languages", "Other"],
+  "keywords": [
+    "prisma",
+    "typespec",
+    "arazzo",
+    "schema",
+    "data model",
+    "er diagram",
+    "openapi",
+    "visual editor"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "canopy.modelEditor",
+        "displayName": "Canopy Model Editor",
+        "selector": [
+          { "filenamePattern": "*.prisma" },
+          { "filenamePattern": "*.tsp" },
+          { "filenamePattern": "*.arazzo" },
+          { "filenamePattern": "*.arazzo.yaml" },
+          { "filenamePattern": "*.arazzo.yml" },
+          { "filenamePattern": "*.arazzo.json" }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "canopy.modelEditor.createSample",
+        "title": "Create Sample Project",
+        "category": "Canopy Model Editor"
+      },
+      {
+        "command": "canopy.modelEditor.openWithText",
+        "title": "Open With Text Editor",
+        "category": "Canopy Model Editor"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "canopy.modelEditor.getStarted",
+        "title": "Canopy Model Editor",
+        "description": "Visually edit Prisma schemas, TypeSpec APIs and Arazzo workflows.",
+        "steps": [
+          {
+            "id": "createSample",
+            "title": "Create a sample project",
+            "description": "Generate a ready-to-edit Pet Store project (.prisma, .tsp and .arazzo) in a folder.\n[Create Sample Project](command:canopy.modelEditor.createSample)",
+            "media": { "image": "icon.png", "altText": "Canopy Model Editor" },
+            "completionEvents": ["onCommand:canopy.modelEditor.createSample"]
+          },
+          {
+            "id": "openFile",
+            "title": "Open a model file",
+            "description": "Open any .prisma, .tsp or .arazzo file — it opens in the visual editor automatically. To see the raw text, right-click the tab → Reopen Editor With… → Text Editor.",
+            "media": { "image": "icon.png", "altText": "Canopy Model Editor" }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "build:host": "node esbuild.mjs",
+    "build:webview": "vite build",
+    "build": "pnpm run build:host && pnpm run build:webview",
+    "watch:host": "node esbuild.mjs --watch",
+    "watch:webview": "vite build --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "pnpm run build && vsce package --no-dependencies -o canopy-model-editor.vsix"
+  },
+  "devDependencies": {
+    "@canopy/model-editor": "workspace:*",
+    "@canopy/plugin-sdk": "workspace:*",
+    "@canopy/ui": "workspace:*",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@types/vscode": "^1.95.0",
+    "@vitejs/plugin-react": "^6.0.2",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.13"
+  }
+}

@@ -14,7 +14,7 @@ const DocumentationView = lazy(() => import("./documentation-view").then((m) => 
 // Routes a matched file to the right canvas: `.prisma` → the Prisma model editor,
 // `.tsp`/`.arazzo` → the spec editor (TypeSpec + Arazzo, with cross-layer links).
 const ModelEditorFileView = lazy(() =>
-  import("@/components/model-editor/file-router").then((m) => ({ default: m.ModelEditorFileRouter })),
+  import("@canopy/model-editor").then((m) => ({ default: m.ModelEditorFileRouter })),
 );
 
 /**
