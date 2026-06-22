@@ -14,7 +14,7 @@ import { ModelEditorProvider } from "./editorProvider";
 const README = `# Canopy Model Editor — Pet Store sample
 
 A coherent Pet Store across every editor. Open **main.tsp** and use the tabs
-(Entities · Endpoints · Channels · Flows · Source) — clicking any item highlights
+(Entities · Endpoints · Events · Flows · Source) — clicking any item highlights
 what references it in the other layers.
 
 - **schema.prisma** — a Prisma data model (\`Owner\` → \`Pet\` → \`Visit\`). Drag
@@ -28,7 +28,7 @@ what references it in the other layers.
   them back to \`main.tsp\` so the editor can trace steps → endpoints → entities.
 - **events.asyncapi.yaml** — AsyncAPI channels whose message payloads link to the
   \`Pet\` and \`Visit\` entities, bound to the \`getPet\` / \`bookVisit\` endpoints —
-  surfaced in the **Channels** tab.
+  surfaced in the **Events** tab.
 
 To see the raw text of any file, right-click the tab →
 **Reopen Editor With… → Text Editor**.
@@ -81,7 +81,7 @@ export async function createSampleProject(): Promise<void> {
   await Promise.all(SAMPLE_FILES.map((f) => writeFile(path.join(baseDir, f.name), f.content)));
 
   // Open the contract in the spec workspace so the user lands on the cross-linked
-  // Entities · Endpoints · Channels · Flows tabs straight away.
+  // Entities · Endpoints · Events · Flows tabs straight away.
   await vscode.commands.executeCommand(
     "vscode.openWith",
     vscode.Uri.file(path.join(baseDir, "main.tsp")),

@@ -33,7 +33,7 @@ const FileChips = ({ graph }: { graph: ProjectGraph }) => (
 );
 
 /**
- * The spec workspace (Entities · Endpoints · Channels · Flows · Source). Selection
+ * The spec workspace (Entities · Endpoints · Events · Flows · Source). Selection
  * lives here so it follows across tabs:
  * `onSelect` highlights the related items everywhere (via {@link SpecIndex.related})
  * while staying put; `onNavigate` is the cross-layer jump that also switches tab.
@@ -113,7 +113,7 @@ export function SpecEditorView({
           <TabsList>
             <TabsTrigger value="entities" className="gap-1.5"><Icon name="database" size={14} /> Entities <span className="font-mono text-[10px] text-muted-foreground">{showDtos ? graph.models.length : entityCount}</span></TabsTrigger>
             <TabsTrigger value="endpoints" className="gap-1.5"><Icon name="globe" size={14} /> Endpoints <span className="font-mono text-[10px] text-muted-foreground">{graph.endpoints.length}</span></TabsTrigger>
-            <TabsTrigger value="channels" className="gap-1.5"><Icon name="radio" size={14} /> Channels <span className="font-mono text-[10px] text-muted-foreground">{graph.channels.length}</span></TabsTrigger>
+            <TabsTrigger value="channels" className="gap-1.5"><Icon name="radio" size={14} /> Events <span className="font-mono text-[10px] text-muted-foreground">{graph.channels.length}</span></TabsTrigger>
             <TabsTrigger value="flows" className="gap-1.5"><Icon name="board" size={14} /> Flows <span className="font-mono text-[10px] text-muted-foreground">{graph.flows.length}</span></TabsTrigger>
             <TabsTrigger value="source" className="gap-1.5"><Icon name="file-code" size={14} /> Source <span className="font-mono text-[10px] text-muted-foreground">{graph.sourceFiles.length}</span></TabsTrigger>
           </TabsList>

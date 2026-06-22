@@ -1,6 +1,6 @@
 // The canonical "Pet Store" sample project — one coherent contract projected across
 // every layer the editor understands, so opening `main.tsp` populates all of the
-// Entities · Endpoints · Channels · Flows · Source tabs and each item cross-links to
+// Entities · Endpoints · Events · Flows · Source tabs and each item cross-links to
 // what references it elsewhere. Shared by the VS Code extension's "Create Sample
 // Project" command and the standalone demo's "Try a sample", so the two never drift.
 //
