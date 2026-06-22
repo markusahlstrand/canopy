@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -9,13 +9,15 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useNodesState,
   useReactFlow,
   type Edge,
   type Node,
-  type NodeChange,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "../model-editor.css";
+import { onNodeDragStart, onNodeDragStop } from "../node-drag-cursor";
 import { Icon } from "@canopy/ui";
 import { cn } from "@canopy/ui";
 import { ACCENTS, ACCENT_KEYS, type AccentKey } from "../types";
@@ -102,6 +104,23 @@ function SpecEntityNodeImpl({ data, selected }: NodeProps) {
 const SpecEntityNode = memo(SpecEntityNodeImpl);
 const nodeTypes = { specEntity: SpecEntityNode };
 
+// Shared fallback position (stable identity) for entities without a placed/auto position.
+const FALLBACK_POS = { x: 0, y: 0 };
+
+/** Card width is fixed by `w-[230px]`. */
+const ENTITY_WIDTH = 230;
+// Rough card height so dagre can pack ranks without overlap. We round each part up:
+// over-estimating only adds breathing room, while under-estimating brings overlap back.
+function estimateEntityHeight(m: SpecModel): number {
+  const header = 40;
+  const tags = m.tags?.length ? 30 : 0;
+  const body =
+    m.kind === "enum"
+      ? 20 + Math.ceil((m.enumValues?.length ?? 0) / 3) * 28
+      : Math.max(1, m.fields.length) * 30;
+  return header + tags + body;
+}
+
 function Graph({ graph, selection, related, onSelect, positions, onMove, onResetLayout, hasOverrides, showDtos, tagFilter }: EntitiesTabProps) {
   const { fitView } = useReactFlow();
   // Entities are the default view; DTOs (request/response payloads) are opt-in so the
@@ -124,41 +143,99 @@ function Graph({ graph, selection, related, onSelect, positions, onMove, onReset
 
   // Auto-layout gives the default arrangement; the active view's saved positions
   // override it per model. Drags are reported up to the shell, which stages them.
-  // Only edges between visible nodes count, so hiding DTOs doesn't strand entities.
-  const layout = useMemo(
-    () => layeredPositions(models.map((m) => ({ id: m.id, deps: m.fields.map((f) => f.ref).filter((r): r is string => !!r && visibleIds.has(r)) })), { dx: 300, dy: 200 }),
-    [models, visibleIds],
-  );
-
-  const onNodesChange = useCallback(
-    (changes: NodeChange[]) => {
-      for (const c of changes) if (c.type === "position" && c.position) onMove(c.id, c.position);
-    },
-    [onMove],
-  );
+  //
+  // Direction matters: edges are drawn source = the model holding the FK → target =
+  // the referenced model (arrowhead on the referenced one, out the right handle into
+  // the next card's left handle). For those to flow forward, the *referencing* model
+  // must sit to the LEFT of the one it points at. `layeredPositions` places an item's
+  // `deps` to its left, so we feed it reverse adjacency: a referenced model lists the
+  // models that point at it as its upstream deps. Only edges between visible nodes
+  // count, so hiding DTOs doesn't strand entities.
+  const layoutItems = useMemo(() => {
+    const upstream = new Map<string, string[]>(models.map((m) => [m.id, []]));
+    for (const m of models)
+      for (const f of m.fields)
+        if (f.ref && f.ref !== m.id && visibleIds.has(f.ref)) upstream.get(f.ref)!.push(m.id);
+    return models.map((m) => ({
+      id: m.id,
+      deps: upstream.get(m.id)!,
+      width: ENTITY_WIDTH,
+      height: estimateEntityHeight(m),
+    }));
+  }, [models, visibleIds]);
+  // ELK is async, so compute into state. We keep the previous result while a new one
+  // is in flight (rather than clearing it) so a filter toggle re-flows without a flash.
+  const [layout, setLayout] = useState<Map<string, XY>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    layeredPositions(layoutItems, { width: ENTITY_WIDTH }).then((pos) => alive && setLayout(pos));
+    return () => {
+      alive = false;
+    };
+  }, [layoutItems]);
 
   const resetLayout = useCallback(() => {
     onResetLayout();
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 40);
   }, [onResetLayout, fitView]);
 
-  const nodes: Node[] = useMemo(
-    () =>
-      models.map((m) => ({
+  // Build nodes while preserving object identity for unchanged entities: React Flow
+  // re-renders a node whenever its object reference changes, so rebuilding every node
+  // each render (e.g. on a single drag) would re-render the whole graph and flicker at
+  // scale. Reuse the prior node object whenever its inputs are referentially identical
+  // — only the dragged entity's position changes, so only it is rebuilt.
+  const nodeCache = useRef(new Map<string, { node: Node; sig: readonly unknown[] }>());
+  const targetNodes: Node[] = useMemo(() => {
+    const cache = nodeCache.current;
+    const live = new Set<string>();
+    const out = models.map((m) => {
+      live.add(m.id);
+      const position = positions[m.id] ?? layout.get(m.id) ?? FALLBACK_POS;
+      const color = colorFor.get(m.id) ?? "zinc";
+      const dim = related.entities.size > 0 && !related.entities.has(m.id);
+      const isErr = errored.has(m.id);
+      const isDto = m.role === "dto";
+      const selected = selection?.kind === "entity" && selection.id === m.id;
+      const sig: readonly unknown[] = [m, position, color, dim, isErr, isDto, selected, onSelect];
+      const prev = cache.get(m.id);
+      if (prev && prev.sig.every((v, i) => v === sig[i])) return prev.node;
+      const node: Node = {
         id: m.id,
         type: "specEntity",
-        position: positions[m.id] ?? layout.get(m.id) ?? { x: 0, y: 0 },
-        data: {
-          model: m,
-          color: colorFor.get(m.id) ?? "zinc",
-          dim: related.entities.size > 0 && !related.entities.has(m.id),
-          errored: errored.has(m.id),
-          isDto: m.role === "dto",
-          onPick: (id: string) => onSelect({ kind: "entity", id }),
-        } satisfies EntityNodeData,
-        selected: selection?.kind === "entity" && selection.id === m.id,
-      })),
-    [models, layout, positions, colorFor, related, errored, selection, onSelect],
+        position,
+        data: { model: m, color, dim, errored: isErr, isDto, onPick: (id: string) => onSelect({ kind: "entity", id }) } satisfies EntityNodeData,
+        selected,
+      };
+      cache.set(m.id, { node, sig });
+      return node;
+    });
+    for (const id of cache.keys()) if (!live.has(id)) cache.delete(id);
+    return out;
+  }, [models, layout, positions, colorFor, related, errored, selection, onSelect]);
+
+  // React Flow owns node positions during a drag. We mirror `targetNodes` into its
+  // state and let `onNodesChange` apply drag deltas, committing the final position to
+  // the layout store only on drag stop. Re-deriving the nodes array from the store on
+  // every drag frame (the previous approach) handed React Flow a fresh object for the
+  // node it was dragging each frame, so it lost its measured size and flashed.
+  const [nodes, setNodes, onNodesChange] = useNodesState(targetNodes);
+  const dragging = useRef(false);
+  useEffect(() => {
+    if (dragging.current) return; // never clobber the node being moved mid-drag
+    setNodes(targetNodes);
+  }, [targetNodes, setNodes]);
+
+  const handleDragStart = useCallback(() => {
+    dragging.current = true;
+    onNodeDragStart();
+  }, []);
+  const handleDragStop = useCallback(
+    (_e: unknown, _node: Node, dragged: Node[]) => {
+      dragging.current = false;
+      onNodeDragStop();
+      for (const n of dragged) onMove(n.id, n.position);
+    },
+    [onMove],
   );
 
   const edges: Edge[] = useMemo(() => {
@@ -186,15 +263,23 @@ function Graph({ graph, selection, related, onSelect, positions, onMove, onReset
     return out;
   }, [models, visibleIds, related]);
 
+  // Re-fit once positions resolve (layout is async) and on every re-flow.
   useEffect(() => {
     const t = setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 80);
     return () => clearTimeout(t);
-  }, [models, fitView]);
+  }, [layout, fitView]);
 
   if (!models.length) {
     return (
       <div className="grid h-full place-items-center text-sm text-muted-foreground">
         {graph.models.length ? "No entities — every model here is a request/response DTO. Toggle “Show DTOs”." : "No TypeSpec models found in this project."}
+      </div>
+    );
+  }
+  if (!layout.size) {
+    return (
+      <div className="grid h-full place-items-center text-muted-foreground">
+        <Icon name="refresh" size={20} className="animate-spin" />
       </div>
     );
   }
@@ -204,6 +289,8 @@ function Graph({ graph, selection, related, onSelect, positions, onMove, onReset
       edges={edges}
       nodeTypes={nodeTypes}
       onNodesChange={onNodesChange}
+      onNodeDragStart={handleDragStart}
+      onNodeDragStop={handleDragStop}
       onPaneClick={() => onSelect(null)}
       fitView
       minZoom={0.2}

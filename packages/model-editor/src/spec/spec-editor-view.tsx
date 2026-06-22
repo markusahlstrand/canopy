@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Button } from "@canopy/ui";
 import {
   DropdownMenu,
@@ -15,6 +15,7 @@ import type { ProjectGraph, SelectionRef } from "./graph-types";
 import { SpecIndex } from "./links";
 import { EntitiesTab } from "./entities-tab";
 import { EndpointsTab } from "./endpoints-tab";
+import { ChannelsTab } from "./channels-tab";
 import { FlowsTab } from "./flows-tab";
 import { SourceTab } from "./source-tab";
 import { SpecInspector } from "./spec-inspector";
@@ -26,12 +27,14 @@ const FileChips = ({ graph }: { graph: ProjectGraph }) => (
   <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
     {graph.files.tsp.length > 0 && <span className="flex items-center gap-1" title={graph.files.tsp.join(", ")}><Icon name="file-code" size={12} /> {graph.files.tsp.length} tsp</span>}
     {graph.files.openapi.length > 0 && <span className="flex items-center gap-1" title={graph.files.openapi.join(", ")}><Icon name="globe" size={12} /> {graph.files.openapi.length} openapi</span>}
+    {graph.files.asyncapi.length > 0 && <span className="flex items-center gap-1" title={graph.files.asyncapi.join(", ")}><Icon name="radio" size={12} /> {graph.files.asyncapi.length} asyncapi</span>}
     {graph.files.arazzo.length > 0 && <span className="flex items-center gap-1" title={graph.files.arazzo.join(", ")}><Icon name="board" size={12} /> {graph.files.arazzo.length} arazzo</span>}
   </div>
 );
 
 /**
- * The three-tab spec workspace. Selection lives here so it follows across tabs:
+ * The spec workspace (Entities · Endpoints · Channels · Flows · Source). Selection
+ * lives here so it follows across tabs:
  * `onSelect` highlights the related items everywhere (via {@link SpecIndex.related})
  * while staying put; `onNavigate` is the cross-layer jump that also switches tab.
  */
@@ -52,7 +55,9 @@ export function SpecEditorView({
   onReload?: () => void;
   reloading?: boolean;
 }) {
-  const [tab, setTab] = useState<SpecTab>(graph.endpoints.length || graph.models.length ? "entities" : "flows");
+  const [tab, setTab] = useState<SpecTab>(
+    graph.endpoints.length || graph.models.length ? "entities" : graph.flows.length ? "flows" : graph.channels.length ? "channels" : "flows",
+  );
   const [selection, setSelection] = useState<SelectionRef | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [diagOpen, setDiagOpen] = useState(false);
@@ -70,24 +75,27 @@ export function SpecEditorView({
     for (const m of graph.models) m.tags?.forEach((t) => s.add(t));
     for (const f of graph.flows) f.tags?.forEach((t) => s.add(t));
     for (const e of graph.endpoints) e.tags?.forEach((t) => s.add(t));
+    for (const c of graph.channels) c.tags?.forEach((t) => s.add(t));
     return [...s].sort();
-  }, [graph.models, graph.flows, graph.endpoints]);
+  }, [graph.models, graph.flows, graph.endpoints, graph.channels]);
 
   const index = useMemo(() => new SpecIndex(graph), [graph]);
   const related = useMemo(() => index.related(selection), [index, selection]);
   const layout = useLayout(projectKey, graph, onCommitLayout);
   const activeView = layout.views.find((v) => v.id === layout.activeViewId);
 
-  const onSelect = (ref: SelectionRef | null) => setSelection(ref);
-  const onNavigate = (ref: SelectionRef) => {
+  // Stable identities: these flow into node `data` (e.g. each entity's onPick), so a
+  // fresh arrow per render would invalidate every node object on every drag frame.
+  const onSelect = useCallback((ref: SelectionRef | null) => setSelection(ref), []);
+  const onNavigate = useCallback((ref: SelectionRef) => {
     setSelection(ref);
     setTab(tabForKind(ref.kind));
     setPanelOpen(true);
-  };
-  const onOpenSource = (file: string, line?: number) => {
+  }, []);
+  const onOpenSource = useCallback((file: string, line?: number) => {
     setReveal((r) => ({ file, line, nonce: (r?.nonce ?? 0) + 1 }));
     setTab("source");
-  };
+  }, []);
   const toggleTag = (t: string) =>
     layout.setTagFilter(layout.tagFilter.includes(t) ? layout.tagFilter.filter((x) => x !== t) : [...layout.tagFilter, t]);
 
@@ -105,6 +113,7 @@ export function SpecEditorView({
           <TabsList>
             <TabsTrigger value="entities" className="gap-1.5"><Icon name="database" size={14} /> Entities <span className="font-mono text-[10px] text-muted-foreground">{showDtos ? graph.models.length : entityCount}</span></TabsTrigger>
             <TabsTrigger value="endpoints" className="gap-1.5"><Icon name="globe" size={14} /> Endpoints <span className="font-mono text-[10px] text-muted-foreground">{graph.endpoints.length}</span></TabsTrigger>
+            <TabsTrigger value="channels" className="gap-1.5"><Icon name="radio" size={14} /> Channels <span className="font-mono text-[10px] text-muted-foreground">{graph.channels.length}</span></TabsTrigger>
             <TabsTrigger value="flows" className="gap-1.5"><Icon name="board" size={14} /> Flows <span className="font-mono text-[10px] text-muted-foreground">{graph.flows.length}</span></TabsTrigger>
             <TabsTrigger value="source" className="gap-1.5"><Icon name="file-code" size={14} /> Source <span className="font-mono text-[10px] text-muted-foreground">{graph.sourceFiles.length}</span></TabsTrigger>
           </TabsList>
@@ -202,12 +211,13 @@ export function SpecEditorView({
       <div className="flex min-h-0 flex-1">
         <div className="relative min-w-0 flex-1">
           {/* Conceptually Entities + Endpoints are two projections of one contract;
-              Flows is a separate artifact referencing it. Mount only the active tab so
-              each React Flow canvas measures correctly. */}
+              Channels (events) and Flows are separate artifacts referencing it. Mount
+              only the active tab so each React Flow canvas measures correctly. */}
           {tab === "entities" && (
             <EntitiesTab {...shared} positions={layout.positions} onMove={layout.move} onResetLayout={layout.resetActive} hasOverrides={layout.hasOverrides} showDtos={showDtos} tagFilter={layout.tagFilter} />
           )}
           {tab === "endpoints" && <EndpointsTab {...shared} tagFilter={layout.tagFilter} />}
+          {tab === "channels" && <ChannelsTab {...shared} tagFilter={layout.tagFilter} />}
           {tab === "flows" && (
             <FlowsTab {...shared} stepPositions={layout.stepPositions} onMoveStep={layout.moveStep} onResetSteps={layout.resetSteps} hasStepOverrides={layout.hasStepOverrides} tagFilter={layout.tagFilter} />
           )}

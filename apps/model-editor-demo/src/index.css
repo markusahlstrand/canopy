@@ -1,0 +1,17 @@
+@import "tailwindcss";
+/* Shared Canopy palette, fonts, @theme mapping and dark variant. */
+@import "../../../packages/ui/src/tokens.css";
+
+/* The shared UI + model-editor classes live outside this app, so point Tailwind's
+   content scanner at their source to generate the utilities they use. */
+@source "../../../packages/ui/src";
+@source "../../../packages/model-editor/src";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+}

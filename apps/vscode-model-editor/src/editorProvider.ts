@@ -5,7 +5,7 @@ import * as files from "./files";
 import type { HostMethod, HostToWebview, WebviewToHost } from "./messages";
 
 /**
- * A custom editor that opens `.prisma` / `.tsp` / `.arazzo` files in the Canopy
+ * A custom editor that opens `.prisma` / `.tsp` / `.arazzo` / `.asyncapi` files in the Canopy
  * Model Editor webview. The extension host owns the {@link vscode.TextDocument};
  * the webview is the UI and talks to it over postMessage (see ./messages.ts).
  * Saving from the canvas replaces the document text and persists it; external/text

@@ -65,6 +65,9 @@ import {
   Timer,
   Calculator,
   Workflow,
+  Radio,
+  Send,
+  Inbox,
   type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties } from "react";
@@ -140,6 +143,9 @@ const MAP: Record<string, LucideIcon> = {
   timer: Timer,
   calculator: Calculator,
   model: Workflow,
+  radio: Radio,
+  send: Send,
+  inbox: Inbox,
 };
 
 export function Icon({

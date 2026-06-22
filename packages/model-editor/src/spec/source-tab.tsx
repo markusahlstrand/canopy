@@ -11,8 +11,8 @@ export interface RevealTarget {
   nonce: number;
 }
 
-const KIND_ICON: Record<SourceFile["kind"], string> = { tsp: "file-code", openapi: "globe", arazzo: "board" };
-const KIND_LABEL: Record<SourceFile["kind"], string> = { tsp: "TypeSpec", openapi: "OpenAPI", arazzo: "Arazzo" };
+const KIND_ICON: Record<SourceFile["kind"], string> = { tsp: "file-code", openapi: "globe", asyncapi: "radio", arazzo: "board" };
+const KIND_LABEL: Record<SourceFile["kind"], string> = { tsp: "TypeSpec", openapi: "OpenAPI", asyncapi: "AsyncAPI", arazzo: "Arazzo" };
 
 const basename = (p: string) => p.replace(/[#?].*$/, "").split("/").pop()!.trim();
 
@@ -22,7 +22,7 @@ type Seg = { text: string } | { text: string; onClick: () => void; title: string
  * Reads the raw text of every discovered file and makes the references between them
  * navigable: `import`/`url`/`x-typespec-source` jump to the referenced file here;
  * an `operationId` jumps to the Endpoints tab. This is the "complete view" — the
- * three projection tabs plus the canonical source they're built from.
+ * projection tabs plus the canonical source they're built from.
  */
 export function SourceTab({ graph, onNavigate, reveal }: SpecViewProps & { reveal?: RevealTarget | null }) {
   const files = graph.sourceFiles;
@@ -101,7 +101,7 @@ export function SourceTab({ graph, onNavigate, reveal }: SpecViewProps & { revea
     <div className="flex h-full min-h-0">
       {/* File list */}
       <div className="w-56 shrink-0 overflow-y-auto border-r bg-muted/20 py-2">
-        {(["tsp", "openapi", "arazzo"] as const).map((kind) => {
+        {(["tsp", "openapi", "asyncapi", "arazzo"] as const).map((kind) => {
           const group = files.filter((f) => f.kind === kind);
           if (!group.length) return null;
           return (

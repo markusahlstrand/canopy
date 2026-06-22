@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -9,13 +9,15 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useNodesState,
   useReactFlow,
   type Edge,
   type Node,
-  type NodeChange,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "../model-editor.css";
+import { onNodeDragStart, onNodeDragStop } from "../node-drag-cursor";
 import { Icon } from "@canopy/ui";
 import { cn } from "@canopy/ui";
 import { layeredPositions, type XY } from "./layout";
@@ -72,6 +74,14 @@ function StepNodeImpl({ data, selected }: NodeProps) {
 }
 const StepNode = memo(StepNodeImpl);
 
+/** Card width is fixed by `w-[210px]`. */
+const STEP_WIDTH = 210;
+// Step cards grow a row per optional detail; over-estimate so dagre never packs two
+// into the same space (see the matching note in entities-tab).
+function estimateStepHeight(s: SpecStep): number {
+  return 48 + (s.operationId ? 26 : 0) + (s.callsWorkflowId ? 26 : 0) + (s.successCriteria.length ? 24 : 0);
+}
+
 function FlowLabelImpl({ data }: NodeProps) {
   const d = data as { label: string; tags?: string[] };
   return (
@@ -87,6 +97,9 @@ function FlowLabelImpl({ data }: NodeProps) {
 const FlowLabel = memo(FlowLabelImpl);
 const nodeTypes = { step: StepNode, flowLabel: FlowLabel };
 
+// Shared fallback position (stable identity) for steps without a placed position.
+const FALLBACK_POS = { x: 0, y: 0 };
+
 function Graph({ graph, index, selection, related, onSelect, stepPositions, onMoveStep, onResetSteps, hasStepOverrides, tagFilter }: FlowsTabProps) {
   const { fitView } = useReactFlow();
   const errored = useMemo(
@@ -99,38 +112,60 @@ function Graph({ graph, index, selection, related, onSelect, stepPositions, onMo
     [graph.flows, tagFilter],
   );
 
-  const { nodes, edges } = useMemo(() => {
-    const nodes: Node[] = [];
-    const edges: Edge[] = [];
-    let yOffset = 0;
-    for (const flow of flows) {
-      const pos = layeredPositions(flow.steps.map((s) => ({ id: s.id, deps: s.dependsOn })), { dx: 290, dy: 150 });
-      const ys = [...pos.values()].map((p) => p.y);
-      const minY = ys.length ? Math.min(...ys) : 0;
-      const maxY = ys.length ? Math.max(...ys) : 0;
-      nodes.push({
-        id: `label:${flow.id}`,
-        type: "flowLabel",
-        position: { x: -200, y: yOffset },
-        data: { label: flow.workflowId, tags: flow.tags },
-        draggable: false,
-        selectable: false,
-      });
-      for (const s of flow.steps) {
-        const p = pos.get(s.id) ?? { x: 0, y: 0 };
-        nodes.push({
-          id: s.id,
-          type: "step",
-          position: stepPositions[s.id] ?? { x: p.x, y: p.y - minY + yOffset },
-          data: {
-            step: s,
-            resolvedOp: !s.operationId || !!index.endpointForStep(s),
-            dim: related.steps.size > 0 && !related.steps.has(s.id),
-            errored: errored.has(s.id),
-            onPick: (id: string) => onSelect({ kind: "step", id }),
-          } satisfies StepNodeData,
-          selected: selection?.kind === "step" && selection.id === s.id,
+  // Per-flow auto-layout + label nodes. ELK is async, so we lay every flow out in
+  // parallel, then stack them vertically. Keyed on `flows` alone (not `stepPositions`)
+  // so dragging a step doesn't re-run the layout, and the previous result is kept while
+  // a new one is in flight so a re-flow doesn't flash.
+  const [layout, setLayout] = useState<{ labelByFlow: Map<string, Node>; stepBase: Map<string, XY> }>(() => ({
+    labelByFlow: new Map(),
+    stepBase: new Map(),
+  }));
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const perFlow = await Promise.all(
+        flows.map((flow) =>
+          layeredPositions(
+            flow.steps.map((s) => ({ id: s.id, deps: s.dependsOn, width: STEP_WIDTH, height: estimateStepHeight(s) })),
+            { width: STEP_WIDTH },
+          ).then((pos) => ({ flow, pos })),
+        ),
+      );
+      if (!alive) return;
+      const labelByFlow = new Map<string, Node>();
+      const stepBase = new Map<string, XY>();
+      let yOffset = 0;
+      for (const { flow, pos } of perFlow) {
+        const ys = [...pos.values()].map((p) => p.y);
+        const minY = ys.length ? Math.min(...ys) : 0;
+        const maxY = ys.length ? Math.max(...ys) : 0;
+        labelByFlow.set(flow.id, {
+          id: `label:${flow.id}`,
+          type: "flowLabel",
+          position: { x: -200, y: yOffset },
+          data: { label: flow.workflowId, tags: flow.tags },
+          draggable: false,
+          selectable: false,
         });
+        for (const s of flow.steps) {
+          const p = pos.get(s.id) ?? FALLBACK_POS;
+          stepBase.set(s.id, { x: p.x, y: p.y - minY + yOffset });
+        }
+        yOffset += maxY - minY + 260;
+      }
+      setLayout({ labelByFlow, stepBase });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [flows]);
+
+  // Edges depend on the flow structure and the highlight state, not on positions, so
+  // they stay referentially stable across a drag (React Flow re-routes them itself).
+  const edges = useMemo(() => {
+    const edges: Edge[] = [];
+    for (const flow of flows) {
+      for (const s of flow.steps) {
         for (const dep of s.dependsOn) {
           const active = related.steps.has(dep) && related.steps.has(s.id);
           edges.push({
@@ -163,15 +198,78 @@ function Graph({ graph, index, selection, related, onSelect, stepPositions, onMo
           });
         }
       }
-      yOffset += maxY - minY + 260;
     }
-    return { nodes, edges };
-  }, [flows, index, related, errored, selection, onSelect, stepPositions]);
+    return edges;
+  }, [flows, related]);
 
-  // Drags are reported up to the shell, which stages them (same loop as the ER tab).
-  const onNodesChange = useCallback(
-    (changes: NodeChange[]) => {
-      for (const c of changes) if (c.type === "position" && c.position) onMoveStep(c.id, c.position);
+  // Build nodes preserving object identity for unchanged steps (see entities-tab):
+  // dragging one step only changes its position, so only it is rebuilt — the rest of
+  // the graph keeps its references and doesn't re-render.
+  const nodeCache = useRef(new Map<string, { node: Node; sig: readonly unknown[] }>());
+  const targetNodes = useMemo(() => {
+    const cache = nodeCache.current;
+    const live = new Set<string>();
+    const out: Node[] = [];
+    for (const flow of flows) {
+      const label = layout.labelByFlow.get(flow.id);
+      if (label) {
+        out.push(label); // already stable (rebuilt only when `flows` changes)
+        live.add(label.id);
+      }
+      for (const s of flow.steps) {
+        live.add(s.id);
+        const position = stepPositions[s.id] ?? layout.stepBase.get(s.id) ?? FALLBACK_POS;
+        const resolvedOp = !s.operationId || !!index.endpointForStep(s);
+        const dim = related.steps.size > 0 && !related.steps.has(s.id);
+        const isErr = errored.has(s.id);
+        const selected = selection?.kind === "step" && selection.id === s.id;
+        const sig: readonly unknown[] = [s, position, resolvedOp, dim, isErr, selected, onSelect];
+        const prev = cache.get(s.id);
+        if (prev && prev.sig.every((v, i) => v === sig[i])) {
+          out.push(prev.node);
+          continue;
+        }
+        const node: Node = {
+          id: s.id,
+          type: "step",
+          position,
+          data: {
+            step: s,
+            resolvedOp,
+            dim,
+            errored: isErr,
+            onPick: (id: string) => onSelect({ kind: "step", id }),
+          } satisfies StepNodeData,
+          selected,
+        };
+        cache.set(s.id, { node, sig });
+        out.push(node);
+      }
+    }
+    for (const id of cache.keys()) if (!live.has(id)) cache.delete(id);
+    return out;
+  }, [layout, flows, stepPositions, index, related, errored, selection, onSelect]);
+
+  // React Flow owns positions during a drag; we only commit to the layout store on drag
+  // stop (same approach as the ER tab). Re-deriving the nodes array from the store every
+  // drag frame handed React Flow a fresh object for the node it was moving, which lost
+  // its measured size and flashed.
+  const [nodes, setNodes, onNodesChange] = useNodesState(targetNodes);
+  const dragging = useRef(false);
+  useEffect(() => {
+    if (dragging.current) return; // never clobber the step being moved mid-drag
+    setNodes(targetNodes);
+  }, [targetNodes, setNodes]);
+
+  const handleDragStart = useCallback(() => {
+    dragging.current = true;
+    onNodeDragStart();
+  }, []);
+  const handleDragStop = useCallback(
+    (_e: unknown, _node: Node, dragged: Node[]) => {
+      dragging.current = false;
+      onNodeDragStop();
+      for (const n of dragged) onMoveStep(n.id, n.position);
     },
     [onMoveStep],
   );
@@ -181,15 +279,23 @@ function Graph({ graph, index, selection, related, onSelect, stepPositions, onMo
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 40);
   }, [onResetSteps, fitView]);
 
+  // Re-fit once positions resolve (layout is async) and on every re-flow.
   useEffect(() => {
     const t = setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 80);
     return () => clearTimeout(t);
-  }, [flows, fitView]);
+  }, [layout, fitView]);
 
   if (!flows.length) {
     return (
       <div className="grid h-full place-items-center text-sm text-muted-foreground">
         {graph.flows.length ? "No workflows match the active tag filter." : "No Arazzo workflows found in this project."}
+      </div>
+    );
+  }
+  if (!layout.labelByFlow.size) {
+    return (
+      <div className="grid h-full place-items-center text-muted-foreground">
+        <Icon name="refresh" size={20} className="animate-spin" />
       </div>
     );
   }
@@ -199,6 +305,8 @@ function Graph({ graph, index, selection, related, onSelect, stepPositions, onMo
       edges={edges}
       nodeTypes={nodeTypes}
       onNodesChange={onNodesChange}
+      onNodeDragStart={handleDragStart}
+      onNodeDragStop={handleDragStop}
       onPaneClick={() => onSelect(null)}
       fitView
       minZoom={0.2}

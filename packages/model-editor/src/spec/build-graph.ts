@@ -5,13 +5,21 @@
 // that no longer exist.
 
 import { parseArazzo } from "./arazzo";
+import { parseAsyncApi } from "./asyncapi";
 import type { DiscoveredFiles } from "./discover";
 import { emptySidecar, parseSidecar } from "./layout-sidecar";
 import { parseOpenApi } from "./openapi";
 import { compileTypeSpec } from "./typespec";
-import { type Diagnostic, type ProjectGraph, type SourceFile, type SpecFlow, type SpecModel, type SpecSource } from "./graph-types";
+import { type Diagnostic, type ProjectGraph, type SourceFile, type SpecChannel, type SpecEndpoint, type SpecFlow, type SpecModel, type SpecSource } from "./graph-types";
 
 const basename = (p: string) => p.replace(/[#?].*$/, "").split("/").pop()!.trim();
+
+/** Compare two HTTP routes ignoring query strings and trailing slashes. */
+const sameRoute = (a?: string, b?: string) => {
+  if (!a || !b) return false;
+  const norm = (s: string) => s.replace(/[?#].*$/, "").replace(/\/+$/, "") || "/";
+  return norm(a) === norm(b);
+};
 
 /**
  * Tag each model as a persisted `entity` or a transient `dto`. An entity has identity
@@ -95,23 +103,70 @@ export async function buildProjectGraph(files: DiscoveredFiles): Promise<Project
     }
   }
 
+  // ── Events: parse every AsyncAPI doc, then link it to the contract ──
+  // Payload refs and the optional `x-operationId` are short names; resolve them to the
+  // model ids / endpoints the rest of the graph keys on (mirroring TypeSpec's pass).
+  const modelIdByName = new Map<string, string>();
+  for (const m of models) {
+    modelIdByName.set(m.id, m.id);
+    if (!modelIdByName.has(m.name)) modelIdByName.set(m.name, m.id);
+  }
+  const resolveModel = (name: string) => modelIdByName.get(name) ?? modelIdByName.get(name.split(".").pop()!);
+  const endpointByOp = new Map<string, SpecEndpoint>(endpoints.map((e) => [e.operationId, e]));
+
+  const channels: SpecChannel[] = [];
+  for (const f of files.asyncapi) {
+    const res = parseAsyncApi(f.text, f.name);
+    if (!res.isAsyncApi) continue;
+    diagnostics.push(...res.diagnostics);
+    for (const ch of res.channels) {
+      // Rewrite each payload ref from its schema name to the resolved model id so the
+      // UI can navigate to the entity; leave it as the raw name when no model matches.
+      for (const msg of ch.messages) if (msg.payloadRef) msg.payloadRef = resolveModel(msg.payloadRef) ?? msg.payloadRef;
+      ch.refModels = [...new Set(ch.messages.map((m) => m.payloadRef).filter((r): r is string => !!r && modelIdByName.has(r)))];
+
+      // Endpoint link: an explicit `x-operationId` wins; else match the address to a route.
+      if (ch.operationIdHint) {
+        const ep = endpointByOp.get(ch.operationIdHint);
+        if (ep) ch.endpointId = ep.id;
+        else {
+          diagnostics.push({
+            severity: "warning",
+            layer: "link",
+            message: `Channel "${ch.name}" binds x-operationId "${ch.operationIdHint}", which no operation provides.`,
+            target: { kind: "channel", id: ch.id },
+            file: f.name,
+          });
+        }
+      }
+      if (!ch.endpointId) {
+        const match = endpoints.find((e) => sameRoute(e.route, ch.address));
+        if (match) ch.endpointId = match.id;
+      }
+      channels.push(ch);
+    }
+  }
+
   const sourceFiles: SourceFile[] = [
     ...files.tsp.map((f) => ({ id: f.id, name: f.name, kind: "tsp" as const, text: f.text })),
     ...files.openapi.map((f) => ({ id: f.id, name: f.name, kind: "openapi" as const, text: f.text })),
     ...files.arazzo.map((f) => ({ id: f.id, name: f.name, kind: "arazzo" as const, text: f.text })),
+    ...files.asyncapi.map((f) => ({ id: f.id, name: f.name, kind: "asyncapi" as const, text: f.text })),
   ];
 
-  const empty = models.length === 0 && endpoints.length === 0 && flows.length === 0;
+  const empty = models.length === 0 && endpoints.length === 0 && flows.length === 0 && channels.length === 0;
   return {
     models,
     endpoints,
     flows,
+    channels,
     sources,
     diagnostics,
     files: {
       tsp: files.tsp.map((f) => f.name),
       openapi: files.openapi.map((f) => f.name),
       arazzo: files.arazzo.map((f) => f.name),
+      asyncapi: files.asyncapi.map((f) => f.name),
     },
     sourceFiles,
     layout: files.layout ? parseSidecar(files.layout.text) : emptySidecar(),

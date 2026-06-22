@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   Button,
   Select,
@@ -65,7 +65,7 @@ export interface AssistantPanelProps {
   onApply: (model: unknown) => void;
 }
 
-export function AssistantPanel({ getModel, onApply }: AssistantPanelProps) {
+export const AssistantPanel = memo(function AssistantPanel({ getModel, onApply }: AssistantPanelProps) {
   const host = usePluginHost();
   const [models, setModels] = useState<AiModel[] | null>(null);
   const [modelId, setModelId] = useState<string>("");
@@ -223,7 +223,7 @@ export function AssistantPanel({ getModel, onApply }: AssistantPanelProps) {
       </div>
     </div>
   );
-}
+});
 
 function Dot() {
   return <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current [animation-duration:1s]" />;

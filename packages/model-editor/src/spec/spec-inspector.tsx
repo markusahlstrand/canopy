@@ -45,7 +45,7 @@ export function SpecInspector({ graph, index, selection, onNavigate, onSelect, o
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
         <Icon name="link" size={22} />
-        <p className="text-[12px]">Select an entity, endpoint, or flow step to see its details and what references it across the other layers.</p>
+        <p className="text-[12px]">Select an entity, endpoint, channel, or flow step to see its details and what references it across the other layers.</p>
       </div>
     );
   }
@@ -57,6 +57,7 @@ export function SpecInspector({ graph, index, selection, onNavigate, onSelect, o
     if (!m) return <Empty text="This entity is no longer in the model." />;
     const endpoints = index.endpointsUsingModel(m.id);
     const flows = index.flowsReachingModel(m.id);
+    const channels = index.channelsUsingModel(m.id);
     return (
       <div className="flex h-full flex-col overflow-y-auto">
         <Header icon={m.kind === "enum" ? "list" : "database"} kind={m.kind === "enum" ? "Enum" : "Entity"} title={m.name} doc={m.doc} {...headerSource} />
@@ -98,6 +99,54 @@ export function SpecInspector({ graph, index, selection, onNavigate, onSelect, o
             <LinkRow key={f.id} icon="board" label={f.workflowId} onClick={() => onNavigate({ kind: "flow", id: f.id })} />
           )) : <Empty text="No flow reaches this entity." />}
         </Section>
+        {!!channels.length && (
+          <Section title="Carried by channels" count={channels.length}>
+            {channels.map((c) => (
+              <LinkRow key={c.id} icon="radio" label={c.name} sub={c.protocols?.join(", ")} onClick={() => onNavigate({ kind: "channel", id: c.id })} />
+            ))}
+          </Section>
+        )}
+      </div>
+    );
+  }
+
+  if (selection.kind === "channel") {
+    const c = index.channelById.get(selection.id);
+    if (!c) return <Empty text="This channel is no longer in the document." />;
+    const endpoint = index.endpointForChannel(c);
+    return (
+      <div className="flex h-full flex-col overflow-y-auto">
+        <Header icon="radio" kind="Channel" title={c.name} doc={c.doc} mono={[c.address, c.protocols?.join(", ")].filter(Boolean).join("  ·  ") || undefined} {...headerSource} />
+        {!!c.operations.length && (
+          <Section title="Operations" count={c.operations.length}>
+            {c.operations.map((op) => (
+              <div key={op.id} className="flex items-center gap-2 px-2 py-1 text-[12px]">
+                <span className={cn("rounded px-1 py-0.5 font-mono text-[9px] uppercase", op.action === "send" ? "bg-emerald-500/10 text-emerald-600" : "bg-sky-500/10 text-sky-600")}>{op.action}</span>
+                <span className="truncate font-mono text-[11px]">{op.id}</span>
+              </div>
+            ))}
+          </Section>
+        )}
+        <Section title="Messages" count={c.messages.length}>
+          {c.messages.length ? c.messages.map((msg) => (
+            msg.payloadRef && index.modelById.get(msg.payloadRef) ? (
+              <LinkRow key={msg.name} icon="database" label={msg.name} sub={nameOf(msg.payloadRef)} onClick={() => onNavigate({ kind: "entity", id: msg.payloadRef! })} />
+            ) : (
+              <div key={msg.name} className="flex items-center gap-2 px-2 py-1 text-[12px]">
+                <Icon name="bell" size={13} className="shrink-0 text-muted-foreground" />
+                <span className="font-medium">{msg.name}</span>
+                {(msg.payloadRef || msg.payloadType) && <span className="ml-auto truncate font-mono text-[11px] text-muted-foreground">{msg.payloadRef ?? msg.payloadType}</span>}
+              </div>
+            )
+          )) : <Empty text="No messages on this channel." />}
+        </Section>
+        <Section title="Linked endpoint">
+          {endpoint ? (
+            <LinkRow icon="globe" label={endpoint.operationId} sub={endpoint.verb?.toUpperCase()} onClick={() => onNavigate({ kind: "endpoint", id: endpoint.id })} />
+          ) : c.operationIdHint ? (
+            <LinkRow icon="alert-triangle" tone="error" label={c.operationIdHint} sub="unresolved" onClick={() => onSelect(selection)} />
+          ) : <Empty text="No HTTP endpoint linked." />}
+        </Section>
       </div>
     );
   }
@@ -106,6 +155,7 @@ export function SpecInspector({ graph, index, selection, onNavigate, onSelect, o
     const e = index.endpointById.get(selection.id);
     if (!e) return <Empty text="This endpoint is no longer in the contract." />;
     const steps = index.stepsCallingEndpoint(e.id);
+    const channels = index.channelsForEndpointId(e.id);
     return (
       <div className="flex h-full flex-col overflow-y-auto">
         <Header icon="globe" kind="Endpoint" title={e.operationId} doc={e.doc} mono={`${e.verb?.toUpperCase() ?? ""} ${e.route ?? ""}`.trim()} {...headerSource} />
@@ -137,6 +187,13 @@ export function SpecInspector({ graph, index, selection, onNavigate, onSelect, o
             <LinkRow key={s.id} icon="board" label={s.stepId} sub={s.workflowId} onClick={() => onNavigate({ kind: "step", id: s.id })} />
           )) : <Empty text="No flow step calls this endpoint." />}
         </Section>
+        {!!channels.length && (
+          <Section title="Channels" count={channels.length}>
+            {channels.map((c) => (
+              <LinkRow key={c.id} icon="radio" label={c.name} sub={c.protocols?.join(", ")} onClick={() => onNavigate({ kind: "channel", id: c.id })} />
+            ))}
+          </Section>
+        )}
       </div>
     );
   }

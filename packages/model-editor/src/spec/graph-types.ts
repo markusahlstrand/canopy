@@ -154,10 +154,65 @@ export interface SpecSource {
   resolved: boolean;
 }
 
+// ── Layer 4: events (AsyncAPI) ────────────────────────────────────────────────
+// The async counterpart to the HTTP contract: channels carry messages whose
+// payloads are (often) the same models the REST endpoints use. We read structure
+// only — channels, their send/receive operations, and message payload refs — and
+// link payloads back to entities and (best-effort) channels back to endpoints.
+
+export interface SpecMessage {
+  /** Message key/name within the document. */
+  name: string;
+  title?: string;
+  /** Referenced model name when the payload points at a named schema. */
+  payloadRef?: string;
+  /** Raw payload type when it isn't a named ref (inline object, primitive…). */
+  payloadType?: string;
+  contentType?: string;
+  doc?: string;
+}
+
+/** One AsyncAPI operation — 3.x `send`/`receive`, or a normalised 2.x publish/subscribe. */
+export interface SpecChannelOp {
+  /** Operation id (3.x operations map key, or 2.x `operationId`). */
+  id: string;
+  /** Direction from the application's perspective (2.x subscribe⇒receive, publish⇒send). */
+  action: "send" | "receive";
+  doc?: string;
+  /** Names of the messages this operation carries. */
+  messages: string[];
+}
+
+export interface SpecChannel {
+  /** Stable id == channel key (3.x) or channel name (2.x). */
+  id: string;
+  /** Display name — the channel key. */
+  name: string;
+  /** The channel address/topic/path (3.x `address`; 2.x falls back to the key). */
+  address?: string;
+  doc?: string;
+  /** Protocols this channel binds to, resolved from its servers (e.g. `sse`, `ws`). */
+  protocols?: string[];
+  operations: SpecChannelOp[];
+  messages: SpecMessage[];
+  /** De-duplicated model names referenced by any message payload. */
+  refModels: string[];
+  /**
+   * Explicit endpoint link hint from an `x-operationId` extension (channel or
+   * operation level). Validated against the contract in build-graph.
+   */
+  operationIdHint?: string;
+  /** Resolved endpoint id this channel links to (via {@link operationIdHint} or route match). */
+  endpointId?: string;
+  /** Tags from `tags: [{name}]`/`x-tags`, for view filtering. */
+  tags?: string[];
+  file?: string;
+}
+
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 
 export type DiagnosticSeverity = "error" | "warning";
-export type SpecLayer = "tsp" | "arazzo" | "openapi" | "link";
+export type SpecLayer = "tsp" | "arazzo" | "openapi" | "asyncapi" | "link";
 
 export interface Diagnostic {
   severity: DiagnosticSeverity;
@@ -170,7 +225,7 @@ export interface Diagnostic {
 
 // ── The graph + selection ─────────────────────────────────────────────────────
 
-export type SelectionKind = "entity" | "endpoint" | "flow" | "step";
+export type SelectionKind = "entity" | "endpoint" | "flow" | "step" | "channel";
 
 export interface SelectionRef {
   kind: SelectionKind;
@@ -182,7 +237,7 @@ export interface SelectionRef {
 export interface SourceFile {
   id?: string;
   name: string;
-  kind: "tsp" | "openapi" | "arazzo";
+  kind: "tsp" | "openapi" | "arazzo" | "asyncapi";
   text: string;
 }
 
@@ -213,10 +268,12 @@ export interface ProjectGraph {
   models: SpecModel[];
   endpoints: SpecEndpoint[];
   flows: SpecFlow[];
+  /** Event-driven channels (AsyncAPI), the async projection of the contract. */
+  channels: SpecChannel[];
   sources: SpecSource[];
   diagnostics: Diagnostic[];
   /** Names of the files that fed the graph, grouped by kind (for the header). */
-  files: { tsp: string[]; openapi: string[]; arazzo: string[] };
+  files: { tsp: string[]; openapi: string[]; arazzo: string[]; asyncapi: string[] };
   /** Every discovered file with its raw text — the canonical source of truth. */
   sourceFiles: SourceFile[];
   /** Committed entity layout (from `canopy.layout.json`), with its named views. */
@@ -231,9 +288,10 @@ export const emptyGraph = (): ProjectGraph => ({
   models: [],
   endpoints: [],
   flows: [],
+  channels: [],
   sources: [],
   diagnostics: [],
-  files: { tsp: [], openapi: [], arazzo: [] },
+  files: { tsp: [], openapi: [], arazzo: [], asyncapi: [] },
   sourceFiles: [],
   layout: { version: 1, views: [{ id: "default", name: "Default", entities: {}, steps: {}, tagFilter: [] }] },
   empty: true,

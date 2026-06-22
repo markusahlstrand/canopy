@@ -8,6 +8,7 @@ data-model and API files in a visual editor instead of plain text:
 | `.prisma` | Visual Prisma schema / ER editor |
 | `.tsp` | TypeSpec entities + endpoints |
 | `.arazzo`, `.arazzo.yaml/.yml/.json` | Arazzo workflow builder |
+| `.asyncapi`, `.asyncapi.yaml/.yml/.json` | AsyncAPI channels (events) |
 
 The UI is the exact same React component tree (`@canopy/model-editor`) used by the
 Canopy portal. The only thing that differs per host is the `HostBridge`: in the
@@ -29,9 +30,9 @@ code --install-extension canopy-model-editor.vsix
 
 Run **Canopy Model Editor: Create Sample Project** from the Command Palette (or the
 "Create a sample project" button in the extension's Walkthrough) to drop a small
-Pet Store project — `schema.prisma`, `main.tsp`, `workflow.arazzo.yaml` — into a
-folder and open it in the editor. Or just open any existing `.prisma` / `.tsp` /
-`.arazzo` file.
+Pet Store project — `schema.prisma`, `main.tsp`, `workflow.arazzo.yaml`,
+`events.asyncapi.yaml` — into a folder and open it in the editor. Or just open any
+existing `.prisma` / `.tsp` / `.arazzo` / `.asyncapi` file.
 
 ## How it works
 
@@ -55,9 +56,15 @@ pnpm --filter canopy-model-editor build
 ```
 
 Then press **F5** (Run "Run Model Editor Extension") to launch an Extension
-Development Host, and open a `.prisma` / `.tsp` / `.arazzo` file. For iterative
-work run `pnpm --filter canopy-model-editor watch:host` and `watch:webview` in
-parallel.
+Development Host, and open a `.prisma` / `.tsp` / `.arazzo` / `.asyncapi` file. For iterative
+work run both watchers (host + webview) in one terminal:
+
+```sh
+pnpm --filter canopy-model-editor dev
+```
+
+After a host (`src/*.ts`) change, reload the dev-host window (`Cmd+R`); after a
+webview change, just reopen the file's editor tab.
 
 ## Package
 

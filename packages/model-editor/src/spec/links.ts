@@ -1,9 +1,9 @@
 // The cross-reference index — the heart of the feature. It turns the flat graph into
 // typed adjacency (endpoint↔entity, step→endpoint, flow→step) and answers the two
 // questions the UI asks constantly: "what does this select?" (selection-follows) and
-// "what uses this?" (find-usages), in both directions across all three layers.
+// "what uses this?" (find-usages), in both directions across all the layers.
 
-import type { ProjectGraph, SelectionRef, SpecEndpoint, SpecFlow, SpecModel, SpecStep } from "./graph-types";
+import type { ProjectGraph, SelectionRef, SpecChannel, SpecEndpoint, SpecFlow, SpecModel, SpecStep } from "./graph-types";
 
 /** Ids of related items per layer, used to highlight across tabs. */
 export interface RelatedSet {
@@ -11,6 +11,7 @@ export interface RelatedSet {
   endpoints: Set<string>;
   steps: Set<string>;
   flows: Set<string>;
+  channels: Set<string>;
 }
 
 const emptyRelated = (): RelatedSet => ({
@@ -18,6 +19,7 @@ const emptyRelated = (): RelatedSet => ({
   endpoints: new Set(),
   steps: new Set(),
   flows: new Set(),
+  channels: new Set(),
 });
 
 export class SpecIndex {
@@ -25,6 +27,7 @@ export class SpecIndex {
   readonly endpointById = new Map<string, SpecEndpoint>();
   readonly flowById = new Map<string, SpecFlow>();
   readonly stepById = new Map<string, SpecStep>();
+  readonly channelById = new Map<string, SpecChannel>();
 
   /** operationId → endpoint (== endpoint.id, kept explicit for clarity). */
   private readonly endpointByOp = new Map<string, SpecEndpoint>();
@@ -34,6 +37,10 @@ export class SpecIndex {
   private readonly stepsForEndpoint = new Map<string, Set<string>>();
   /** step id → its flow id. */
   private readonly flowForStep = new Map<string, string>();
+  /** model id → channels whose messages carry it. */
+  private readonly channelsForModel = new Map<string, Set<string>>();
+  /** endpoint id → channels linked to it. */
+  private readonly channelsForEndpoint = new Map<string, Set<string>>();
 
   readonly graph: ProjectGraph;
 
@@ -58,6 +65,17 @@ export class SpecIndex {
           if (!this.stepsForEndpoint.has(ep.id)) this.stepsForEndpoint.set(ep.id, new Set());
           this.stepsForEndpoint.get(ep.id)!.add(s.id);
         }
+      }
+    }
+    for (const c of graph.channels) {
+      this.channelById.set(c.id, c);
+      for (const ref of c.refModels) {
+        if (!this.channelsForModel.has(ref)) this.channelsForModel.set(ref, new Set());
+        this.channelsForModel.get(ref)!.add(c.id);
+      }
+      if (c.endpointId) {
+        if (!this.channelsForEndpoint.has(c.endpointId)) this.channelsForEndpoint.set(c.endpointId, new Set());
+        this.channelsForEndpoint.get(c.endpointId)!.add(c.id);
       }
     }
   }
@@ -89,6 +107,28 @@ export class SpecIndex {
     return e.refModels.map((id) => this.modelById.get(id)!).filter(Boolean);
   }
 
+  /** Channels whose messages carry a given model. */
+  channelsUsingModel(modelId: string): SpecChannel[] {
+    return [...(this.channelsForModel.get(modelId) ?? [])].map((id) => this.channelById.get(id)!).filter(Boolean);
+  }
+
+  /** Channels linked to a given endpoint (via x-operationId or route match). */
+  channelsForEndpointId(endpointId: string): SpecChannel[] {
+    return [...(this.channelsForEndpoint.get(endpointId) ?? [])].map((id) => this.channelById.get(id)!).filter(Boolean);
+  }
+
+  /** Models a channel's messages carry, de-duplicated in ref order. */
+  modelsForChannel(channelId: string): SpecModel[] {
+    const c = this.channelById.get(channelId);
+    if (!c) return [];
+    return c.refModels.map((id) => this.modelById.get(id)!).filter(Boolean);
+  }
+
+  /** The endpoint a channel links to, when one resolved. */
+  endpointForChannel(channel: SpecChannel): SpecEndpoint | undefined {
+    return channel.endpointId ? this.endpointById.get(channel.endpointId) : undefined;
+  }
+
   /** Flows that transitively reach a model (via any endpoint that references it). */
   flowsReachingModel(modelId: string): SpecFlow[] {
     const flows = new Set<string>();
@@ -110,6 +150,7 @@ export class SpecIndex {
         r.steps.add(s.id);
         r.flows.add(this.flowForStep.get(s.id)!);
       }
+      for (const c of this.channelsForEndpointId(id)) r.channels.add(c.id);
     };
 
     switch (selection.kind) {
@@ -120,11 +161,20 @@ export class SpecIndex {
         for (const f of m.fields) if (f.ref) r.entities.add(f.ref); // models it references
         for (const e of this.endpointsUsingModel(m.id)) addEndpoint(e.id);
         for (const f of this.flowsReachingModel(m.id)) r.flows.add(f.id);
+        for (const c of this.channelsUsingModel(m.id)) r.channels.add(c.id);
         break;
       }
       case "endpoint":
         addEndpoint(selection.id);
         break;
+      case "channel": {
+        const c = this.channelById.get(selection.id);
+        if (!c) return r;
+        r.channels.add(c.id);
+        for (const id of c.refModels) r.entities.add(id);
+        if (c.endpointId) addEndpoint(c.endpointId);
+        break;
+      }
       case "flow": {
         const f = this.flowById.get(selection.id);
         if (!f) return r;

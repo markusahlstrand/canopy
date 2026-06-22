@@ -1,0 +1,25 @@
+/* Model Editor canvas tuning, layered on top of @xyflow/react's stylesheet. */
+
+/*
+ * Promote each node to its own compositor layer. React Flow ships no `will-change`,
+ * so every node and edge paints into the single viewport layer — dragging one node
+ * then repaints the whole canvas every frame (measured ~4M px² per frame at 25
+ * nodes), which shows up as flicker on large graphs. With each node on its own
+ * layer, a drag re-composites instead of repainting. Scoped to nodes (not the
+ * viewport) so panning/zooming is unaffected.
+ */
+.react-flow__node {
+  will-change: transform;
+}
+
+/*
+ * While a node is being dragged, pin the whole document to the `grabbing` cursor.
+ * Our node cards set `cursor: pointer`, and when the pointer briefly outpaces the
+ * dragged node it sits over the pane (default arrow) — so without this the cursor
+ * flickers between the arrow/pointer and the grab hand mid-drag. The class is
+ * toggled on <body> via React Flow's onNodeDragStart/Stop.
+ */
+body.canopy-node-dragging,
+body.canopy-node-dragging * {
+  cursor: grabbing !important;
+}

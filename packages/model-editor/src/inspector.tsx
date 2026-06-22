@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Button } from "@canopy/ui";
 import { Checkbox } from "@canopy/ui";
 import { Input } from "@canopy/ui";
@@ -47,7 +48,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function Inspector(props: InspectorProps) {
+export const Inspector = memo(function Inspector(props: InspectorProps) {
   const { entity, relation, entities } = props;
 
   if (!entity && !relation) {
@@ -221,7 +222,7 @@ export function Inspector(props: InspectorProps) {
       </div>
     </div>
   );
-}
+});
 
 function PropertyRow({
   prop,

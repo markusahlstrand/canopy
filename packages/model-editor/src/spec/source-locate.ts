@@ -4,7 +4,7 @@
 // the untouched text is both simpler and accurate enough to anchor a "View source"
 // jump.
 
-import type { ProjectGraph, SelectionRef, SpecEndpoint, SpecFlow, SpecModel, SpecStep } from "./graph-types";
+import type { ProjectGraph, SelectionRef, SpecChannel, SpecEndpoint, SpecFlow, SpecModel, SpecStep } from "./graph-types";
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -35,6 +35,9 @@ const locateEndpoint = (text: string, e: SpecEndpoint) =>
 
 const locateFlow = (text: string, f: SpecFlow) => firstLine(text, new RegExp(`\\bworkflowId\\s*:\\s*["']?${esc(f.workflowId)}\\b`));
 const locateStep = (text: string, s: SpecStep) => firstLine(text, new RegExp(`\\bstepId\\s*:\\s*["']?${esc(s.stepId)}\\b`));
+// The channel key is a YAML map key under `channels:` — anchor on `<name>:`.
+const locateChannel = (text: string, c: SpecChannel) =>
+  firstLine(text, new RegExp(`^\\s*["']?${esc(c.name)}["']?\\s*:`, "m"), new RegExp(`\\baddress\\s*:\\s*["']?${esc(c.address ?? c.name)}\\b`));
 
 export interface SourceLocation {
   file: string;
@@ -62,6 +65,12 @@ export function locate(graph: ProjectGraph, ref: SelectionRef): SourceLocation |
     const text = textOf(f?.file);
     if (!f?.file || !text) return undefined;
     return { file: f.file, line: locateFlow(text, f) };
+  }
+  if (ref.kind === "channel") {
+    const c = graph.channels.find((x) => x.id === ref.id);
+    const text = textOf(c?.file);
+    if (!c?.file || !text) return undefined;
+    return { file: c.file, line: locateChannel(text, c) };
   }
   // step — its source line lives in the flow's Arazzo file
   const step = graph.flows.flatMap((f) => f.steps).find((s) => s.id === ref.id);

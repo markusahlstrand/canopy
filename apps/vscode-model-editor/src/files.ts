@@ -6,7 +6,7 @@ import type { PluginFile } from "@canopy/plugin-sdk";
  * Maps the model-editor's file capabilities onto the workspace filesystem. The
  * plugin treats files by opaque "id" and folders by "dir"; in VS Code both are
  * just filesystem paths (`Uri.fsPath`). The spec editor uses these to discover
- * sibling `.tsp`/`.arazzo`/`.json` files and to write its sidecar — so backing
+ * sibling `.tsp`/`.arazzo`/`.asyncapi`/`.json` files and to write its sidecar — so backing
  * them with `vscode.workspace.fs` makes cross-layer linking work for real.
  */
 

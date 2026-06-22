@@ -17,10 +17,10 @@ export interface SpecViewProps {
   onOpenSource: (file: string, line?: number) => void;
 }
 
-export type SpecTab = "entities" | "endpoints" | "flows" | "source";
+export type SpecTab = "entities" | "endpoints" | "channels" | "flows" | "source";
 
 export const tabForKind = (kind: SelectionRef["kind"]): SpecTab =>
-  kind === "entity" ? "entities" : kind === "endpoint" ? "endpoints" : "flows";
+  kind === "entity" ? "entities" : kind === "endpoint" ? "endpoints" : kind === "channel" ? "channels" : "flows";
 
 export const sameRef = (a: SelectionRef | null, b: SelectionRef | null): boolean =>
   !!a && !!b && a.kind === b.kind && a.id === b.id;

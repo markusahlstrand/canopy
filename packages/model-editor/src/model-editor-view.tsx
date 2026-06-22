@@ -16,6 +16,8 @@ import {
   type Node,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "./model-editor.css";
+import { onNodeDragStart, onNodeDragStop } from "./node-drag-cursor";
 import {
   Button,
   Checkbox,
@@ -74,6 +76,12 @@ const defaultEdgeOptions = {
   markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
   style: { strokeWidth: 1.5 },
 };
+
+// Hoisted so their identity is stable across renders — passing fresh array/object
+// literals here makes React Flow re-process them on every drag frame (flicker).
+const deleteKeyCodes = ["Backspace", "Delete"];
+const proOptions = { hideAttribution: true };
+const miniMapNodeColor = (n: Node) => ACCENTS[(n.data as EntityNodeData).color ?? "zinc"].dot;
 
 type Selection = { type: "entity" | "relation"; id: string } | null;
 type RightTab = "assistant" | "inspector" | "export";
@@ -142,6 +150,11 @@ function flowToModel(nodes: Node[], edges: Edge[], name: string): DomainModel {
 }
 
 const emptyModel = (): DomainModel => ({ name: "Untitled model", version: 1, entities: [], relations: [] });
+
+// A single stable model reference handed to the (memoised) ExportPanel while it's
+// hidden, so dragging nodes never re-renders it; the live model flows in only when
+// the Export tab is active.
+const EXPORT_IDLE_MODEL = emptyModel();
 
 /** Load the saved library, seeding a blank model on first run. */
 function bootstrap(): { models: StoredModel[]; current: StoredModel } {
@@ -212,6 +225,16 @@ function Editor({ file }: { file?: FileBinding }) {
 
   const model = useMemo(() => flowToModel(nodes, edges, name), [nodes, edges, name]);
 
+  // Mirror the live model/nodes in refs so callbacks can read the latest values
+  // without listing them as deps. That keeps handlers passed to the side panels
+  // stable across renders, so dragging a node (which churns `nodes` every frame)
+  // re-renders only React Flow, not the whole editor tree.
+  const modelRef = useRef(model);
+  modelRef.current = model;
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+  const getModel = useCallback(() => modelRef.current, []);
+
   // ── File mode: track unsaved changes; save serialises the canvas to Prisma ──
   useEffect(() => {
     if (!fileMode) return;
@@ -227,7 +250,7 @@ function Editor({ file }: { file?: FileBinding }) {
       if (!file?.onSave || saving) return;
       setSaving(true);
       try {
-        await file.onSave(toPrisma(model, { metadata: embed }));
+        await file.onSave(toPrisma(modelRef.current, { metadata: embed }));
         setDirty(false);
       } catch {
         toast.error("Couldn't save the file");
@@ -235,7 +258,7 @@ function Editor({ file }: { file?: FileBinding }) {
         setSaving(false);
       }
     },
-    [file, model, saving],
+    [file, saving],
   );
 
   const saveToFile = useCallback(() => {
@@ -535,7 +558,7 @@ function Editor({ file }: { file?: FileBinding }) {
         return;
       }
       // Keep manual positions for entities that still exist (matched by name).
-      const prevPos = new Map(nodes.map((n) => [data(n).name.toLowerCase(), n.position]));
+      const prevPos = new Map(nodesRef.current.map((n) => [data(n).name.toLowerCase(), n.position]));
       if (!opts.layoutFresh) {
         for (const e of parsed.entities) {
           const p = prevPos.get(e.name.toLowerCase());
@@ -551,7 +574,7 @@ function Editor({ file }: { file?: FileBinding }) {
       setSelection(null);
       setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 60);
     },
-    [nodes, setNodes, setEdges, fitView],
+    [setNodes, setEdges, fitView],
   );
 
   // ── Toolbar actions ──
@@ -596,31 +619,47 @@ function Editor({ file }: { file?: FileBinding }) {
   );
 
   // ── Derived inspector inputs ──
-  const selectedEntity =
-    selection?.type === "entity"
-      ? (() => {
-          const n = nodes.find((x) => x.id === selection.id);
-          return n ? { id: n.id, data: data(n) } : null;
-        })()
-      : null;
+  // Memoised on the data that the inspector actually shows — entity/relation
+  // identity, names, properties — but NOT on node positions, so dragging a node
+  // (which replaces the node object every frame) doesn't re-render the inspector.
+  const selectedNode = selection?.type === "entity" ? nodes.find((x) => x.id === selection.id) ?? null : null;
+  const selectedNodeData = selectedNode ? data(selectedNode) : null;
+  const selectedEntity = useMemo(
+    () => (selectedNode ? { id: selectedNode.id, data: selectedNodeData! } : null),
+    [selectedNode?.id, selectedNodeData],
+  );
 
-  const selectedRelation =
-    selection?.type === "relation"
-      ? (() => {
-          const e = edges.find((x) => x.id === selection.id);
-          if (!e) return null;
-          const from = nodes.find((n) => n.id === e.source);
-          const to = nodes.find((n) => n.id === e.target);
-          return {
-            id: e.id,
-            data: (e.data ?? { cardinality: "1-N" }) as RelationData,
-            fromName: from ? data(from).name : "?",
-            toName: to ? data(to).name : "?",
-          };
-        })()
-      : null;
+  const selectedEdge = selection?.type === "relation" ? edges.find((x) => x.id === selection.id) ?? null : null;
+  const fromNode = selectedEdge ? nodes.find((n) => n.id === selectedEdge.source) : undefined;
+  const toNode = selectedEdge ? nodes.find((n) => n.id === selectedEdge.target) : undefined;
+  const fromName = fromNode ? data(fromNode).name : "?";
+  const toName = toNode ? data(toNode).name : "?";
+  const selectedRelation = useMemo(
+    () =>
+      selectedEdge
+        ? { id: selectedEdge.id, data: (selectedEdge.data ?? { cardinality: "1-N" }) as RelationData, fromName, toName }
+        : null,
+    [selectedEdge?.id, selectedEdge?.data, fromName, toName],
+  );
 
-  const entityList = useMemo(() => nodes.map((n) => ({ id: n.id, name: data(n).name })), [nodes]);
+  // Stable across position-only changes: only the id/name pairs matter here.
+  const entitySig = nodes.map((n) => `${n.id}:${data(n).name}`).join("|");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- entitySig captures the relevant content of `nodes`
+  const entityList = useMemo(() => nodes.map((n) => ({ id: n.id, name: data(n).name })), [entitySig]);
+
+  // Stable canvas handlers — inline arrows here would change identity every drag
+  // frame and force React Flow to re-render the whole canvas (flicker).
+  const onNodeClick = useCallback((_: unknown, n: Node) => {
+    setSelection({ type: "entity", id: n.id });
+    setTab("inspector");
+    setPanelOpen(true);
+  }, []);
+  const onEdgeClick = useCallback((_: unknown, e: Edge) => {
+    setSelection({ type: "relation", id: e.id });
+    setTab("inspector");
+    setPanelOpen(true);
+  }, []);
+  const onPaneClick = useCallback(() => setSelection(null), []);
 
   return (
     <div className="flex h-full w-full flex-col bg-background">
@@ -768,28 +807,22 @@ function Editor({ file }: { file?: FileBinding }) {
             nodeTypes={nodeTypes}
             defaultEdgeOptions={defaultEdgeOptions}
             colorMode={colorMode}
-            onNodeClick={(_, n) => {
-              setSelection({ type: "entity", id: n.id });
-              setTab("inspector");
-              setPanelOpen(true);
-            }}
-            onEdgeClick={(_, e) => {
-              setSelection({ type: "relation", id: e.id });
-              setTab("inspector");
-              setPanelOpen(true);
-            }}
-            onPaneClick={() => setSelection(null)}
-            deleteKeyCode={["Backspace", "Delete"]}
+            onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
+            onPaneClick={onPaneClick}
+            onNodeDragStart={onNodeDragStart}
+            onNodeDragStop={onNodeDragStop}
+            deleteKeyCode={deleteKeyCodes}
             fitView
             minZoom={0.2}
-            proOptions={{ hideAttribution: true }}
+            proOptions={proOptions}
           >
             <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
             <Controls showInteractive={false} />
             <MiniMap
               pannable
               zoomable
-              nodeColor={(n) => ACCENTS[(n.data as EntityNodeData).color ?? "zinc"].dot}
+              nodeColor={miniMapNodeColor}
               className="!bg-card"
             />
           </ReactFlow>
@@ -815,7 +848,7 @@ function Editor({ file }: { file?: FileBinding }) {
               {/* Render panels without TabsContent so chat state survives tab switches. */}
               <div className="min-h-0 flex-1 overflow-hidden">
                 <div className={cn("h-full", tab !== "assistant" && "hidden")}>
-                  <AssistantPanel getModel={() => model} onApply={(m) => applyModel(m)} />
+                  <AssistantPanel getModel={getModel} onApply={applyModel} />
                 </div>
                 <div className={cn("h-full overflow-y-auto", tab !== "inspector" && "hidden")}>
                   <Inspector
@@ -834,7 +867,7 @@ function Editor({ file }: { file?: FileBinding }) {
                   />
                 </div>
                 <div className={cn("h-full", tab !== "export" && "hidden")}>
-                  <ExportPanel model={model} />
+                  <ExportPanel model={tab === "export" ? model : EXPORT_IDLE_MODEL} active={tab === "export"} />
                 </div>
               </div>
             </Tabs>
