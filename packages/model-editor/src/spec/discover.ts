@@ -60,7 +60,7 @@ export async function discoverProject(
   else if (isAsyncApi(opened.name)) asyncapi.set(opened.name, { id: opened.id, name: opened.name, path: opened.path, text: opened.text });
 
   const reads = provider.siblings
-    .filter((ref) => isTsp(ref.name) || isArazzo(ref.name) || isYamlOrJson(ref.name))
+    .filter((ref) => isTsp(ref.name) || isArazzo(ref.name) || isAsyncApi(ref.name) || isYamlOrJson(ref.name))
     .filter((ref) => ref.name !== opened.name) // opened file already seeded
     .map(async (ref) => {
       try {
@@ -77,8 +77,9 @@ export async function discoverProject(
     if (ref.name === SIDECAR_NAME) layout = toTextFile(ref, text);
     else if (isTsp(ref.name)) tsp.set(ref.name, toTextFile(ref, text));
     else if (isArazzo(ref.name)) arazzo.set(ref.name, toTextFile(ref, text));
-    // AsyncAPI is also YAML/JSON, so sniff it before falling through to OpenAPI.
-    else if (isYamlOrJson(ref.name) && (looksLikeAsyncApi(ref.name) || sniffAsyncApi(text))) asyncapi.set(ref.name, toTextFile(ref, text));
+    // A bare `.asyncapi` file (or an `.asyncapi.{yaml,json}`); AsyncAPI is also
+    // YAML/JSON, so sniff the YAML/JSON ones before falling through to OpenAPI.
+    else if (isAsyncApi(ref.name) || (isYamlOrJson(ref.name) && (looksLikeAsyncApi(ref.name) || sniffAsyncApi(text)))) asyncapi.set(ref.name, toTextFile(ref, text));
     else if (isYamlOrJson(ref.name) && (looksLikeOpenApi(ref.name) || sniffOpenApi(text))) openapi.set(ref.name, toTextFile(ref, text));
   }
 

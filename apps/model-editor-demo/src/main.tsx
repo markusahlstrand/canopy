@@ -99,7 +99,9 @@ function App() {
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={pickFolder}
-              className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm hover:bg-accent"
+              disabled={!supported}
+              title={supported ? undefined : "Your browser doesn't support opening local folders"}
+              className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Icon name="folder" size={14} />
               {root ? "Change folder" : "Open folder"}

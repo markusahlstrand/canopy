@@ -84,7 +84,7 @@ export async function createSampleProject(): Promise<void> {
   // Entities · Endpoints · Events · Flows tabs straight away.
   await vscode.commands.executeCommand(
     "vscode.openWith",
-    vscode.Uri.file(path.join(baseDir, "main.tsp")),
+    vscode.Uri.file(path.join(baseDir, SAMPLE_ENTRYPOINT)),
     ModelEditorProvider.viewType,
   );
   vscode.window.showInformationMessage(`Pet Store sample project created in ${baseDir}.`);

@@ -14,11 +14,16 @@ export function createSampleBridge(): HostBridge {
   const noop = async () => {};
   return {
     online: true,
-    readFileText: async (id) => text.get(id) ?? "",
+    readFileText: async (id) => {
+      const cur = text.get(id);
+      if (cur === undefined) throw new Error(`No such file: ${id}`);
+      return cur;
+    },
     saveFileVersion: async (id, next) => {
+      if (!text.has(id)) throw new Error(`No such file: ${id}`);
       text.set(id, next);
     },
-    getFile: async (id) => asFile(id),
+    getFile: async (id) => (text.has(id) ? asFile(id) : null),
     listFiles: async () => [...text.keys()].map(asFile),
     createFile: async (_dir, name, content) => {
       text.set(name, content ?? "");

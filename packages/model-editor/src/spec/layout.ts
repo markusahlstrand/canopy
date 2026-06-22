@@ -67,7 +67,9 @@ export async function layeredPositions(items: LayoutItem[], opts: LayoutOpts = {
     children: items.map((i) => ({ id: i.id, width: i.width ?? dw, height: i.height ?? dh })),
     edges: items.flatMap((i) =>
       // dep ranks left of the node; skip self-loops and dangling refs with no node.
-      i.deps
+      // Dedupe deps so two fields pointing at the same target don't yield duplicate
+      // edge ids (ELK rejects collisions).
+      [...new Set(i.deps)]
         .filter((dep) => dep !== i.id && ids.has(dep))
         .map((dep) => ({ id: `${dep}->${i.id}`, sources: [dep], targets: [i.id] })),
     ),

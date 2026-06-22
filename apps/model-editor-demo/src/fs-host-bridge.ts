@@ -39,7 +39,19 @@ export function createFsHostBridge(
     },
     getFile: async (id) => {
       const { dir, name } = splitPath(id);
-      return { id, name, path: dir, kind: name.includes(".") ? undefined : "folder" };
+      try {
+        const parent = await dirHandle(root(), dir);
+        try {
+          await parent.getFileHandle(name);
+          return { id, name, path: dir };
+        } catch {
+          // Not a file — fall through to test for a directory of the same name.
+          await parent.getDirectoryHandle(name);
+          return { id, name, path: dir, kind: "folder" };
+        }
+      } catch {
+        return null; // no such entry (or its parent is gone)
+      }
     },
     listFiles: async (dir) => {
       const base = dir ?? "";

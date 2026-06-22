@@ -114,7 +114,9 @@ export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: Co
         const v: LayoutView = {
           ...cur,
           entities: { ...cur.entities },
-          ...(cur.steps ? { steps: { ...cur.steps } } : null),
+          // `steps` is required; spreading an absent map yields {} so the clone always
+          // carries the field (and the step mutators can write into it safely).
+          steps: { ...cur.steps },
         };
         fn(v);
         const views = w.views.slice();

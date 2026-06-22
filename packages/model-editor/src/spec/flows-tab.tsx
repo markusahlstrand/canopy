@@ -273,6 +273,8 @@ function Graph({ graph, index, selection, related, onSelect, stepPositions, onMo
     },
     [onMoveStep],
   );
+  // If we unmount mid-drag (drag-stop never fires), clear the global grabbing cursor.
+  useEffect(() => () => void (dragging.current && onNodeDragStop()), []);
 
   const resetLayout = useCallback(() => {
     onResetSteps();

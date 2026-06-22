@@ -75,8 +75,10 @@ export function createGithubConnector(id: string, config: GithubConnectorConfig)
     // (60 req/hr per IP) is spent — common during extract on a token-less deploy.
     // Point at the fix (set a token) instead of leaving a bare "403".
     if (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0") {
-      const reset = res.headers.get("x-ratelimit-reset");
-      const when = reset ? ` (resets at ${new Date(Number(reset) * 1000).toISOString()})` : "";
+      const reset = Number(res.headers.get("x-ratelimit-reset"));
+      // Only format when the header parsed to a real epoch — a bogus value must not
+      // throw here and mask the underlying GitHub failure.
+      const when = Number.isFinite(reset) && reset > 0 ? ` (resets at ${new Date(reset * 1000).toISOString()})` : "";
       const hint = config.token ? "" : " — set GITHUB_TOKEN to raise the limit";
       detail = `: rate limit exceeded${when}${hint}`;
     }

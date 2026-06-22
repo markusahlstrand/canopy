@@ -250,8 +250,11 @@ function Editor({ file }: { file?: FileBinding }) {
       if (!file?.onSave || saving) return;
       setSaving(true);
       try {
-        await file.onSave(toPrisma(modelRef.current, { metadata: embed }));
-        setDirty(false);
+        // Snapshot what we're saving; if the user edits during the in-flight save,
+        // `modelRef.current` moves on and we must keep `dirty` so those edits persist.
+        const saved = modelRef.current;
+        await file.onSave(toPrisma(saved, { metadata: embed }));
+        if (modelRef.current === saved) setDirty(false);
       } catch {
         toast.error("Couldn't save the file");
       } finally {

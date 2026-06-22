@@ -237,6 +237,8 @@ function Graph({ graph, selection, related, onSelect, positions, onMove, onReset
     },
     [onMove],
   );
+  // If we unmount mid-drag (drag-stop never fires), clear the global grabbing cursor.
+  useEffect(() => () => void (dragging.current && onNodeDragStop()), []);
 
   const edges: Edge[] = useMemo(() => {
     const seen = new Set<string>();

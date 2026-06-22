@@ -78,7 +78,9 @@ export function parseAsyncApi(text: string, fileName: string): AsyncApiResult {
   try {
     doc = yaml.load(text);
   } catch (e) {
-    return { ...empty, diagnostics: [{ severity: "error", layer: "asyncapi", message: `Invalid YAML in ${fileName}: ${e instanceof Error ? e.message : "parse error"}`, file: fileName }] };
+    // Flag as AsyncAPI so the graph builder keeps these diagnostics (it skips results
+    // where `isAsyncApi` is false) and the parse error reaches the UI.
+    return { ...empty, isAsyncApi: true, diagnostics: [{ severity: "error", layer: "asyncapi", message: `Invalid YAML in ${fileName}: ${e instanceof Error ? e.message : "parse error"}`, file: fileName }] };
   }
   if (!isObj(doc) || !("asyncapi" in doc)) return empty;
   const d = doc;
