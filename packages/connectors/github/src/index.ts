@@ -71,6 +71,17 @@ export function createGithubConnector(id: string, config: GithubConnectorConfig)
     } catch {
       /* non-JSON body — fall back to the status */
     }
+    // A 403 with the rate-limit counter at zero means the unauthenticated quota
+    // (60 req/hr per IP) is spent — common during extract on a token-less deploy.
+    // Point at the fix (set a token) instead of leaving a bare "403".
+    if (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0") {
+      const reset = Number(res.headers.get("x-ratelimit-reset"));
+      // Only format when the header parsed to a real epoch — a bogus value must not
+      // throw here and mask the underlying GitHub failure.
+      const when = Number.isFinite(reset) && reset > 0 ? ` (resets at ${new Date(reset * 1000).toISOString()})` : "";
+      const hint = config.token ? "" : " — set GITHUB_TOKEN to raise the limit";
+      detail = `: rate limit exceeded${when}${hint}`;
+    }
     return new Error(`github ${verb} failed (${res.status})${detail}`);
   }
 
@@ -138,7 +149,7 @@ export function createGithubConnector(id: string, config: GithubConnectorConfig)
     async list(path): Promise<Page<StorageEntry>> {
       const res = await contents(repoPath(path));
       if (res.status === 404) return { items: [] };
-      if (!res.ok) throw new Error(`github list failed: ${res.status}`);
+      if (!res.ok) throw await ghError(res, "list");
       const data = (await res.json()) as GhContentItem | GhContentItem[];
       const arr = Array.isArray(data) ? data : [data];
       const items: StorageEntry[] = arr.map((it) => ({
@@ -154,7 +165,7 @@ export function createGithubConnector(id: string, config: GithubConnectorConfig)
     async stat(path): Promise<StorageEntry | null> {
       const res = await contents(repoPath(path));
       if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`github stat failed: ${res.status}`);
+      if (!res.ok) throw await ghError(res, "stat");
       const data = (await res.json()) as GhContentItem | GhContentItem[];
       if (Array.isArray(data)) {
         const name = path.split("/").filter(Boolean).pop() ?? "";
@@ -166,7 +177,7 @@ export function createGithubConnector(id: string, config: GithubConnectorConfig)
     async read(path): Promise<ReadableStream<Uint8Array>> {
       // Raw media type streams the file directly (works for private repos too).
       const res = await contents(repoPath(path), "application/vnd.github.raw");
-      if (!res.ok || !res.body) throw new Error(`github read failed: ${res.status}`);
+      if (!res.ok || !res.body) throw await ghError(res, "read");
       return res.body as ReadableStream<Uint8Array>;
     },
 

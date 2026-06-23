@@ -1,7 +1,7 @@
 import { Suspense, lazy } from "react";
 import type { FileViewProps } from "@canopy/plugin-sdk";
 import { Icon } from "@canopy/ui";
-import { isArazzo, isTsp } from "./spec/discover";
+import { isArazzo, isAsyncApi, isTsp } from "./spec/discover";
 
 // Both canvases are heavy (React Flow + parsers), so keep each in its own lazy chunk
 // and only pull in the one the opened file needs.
@@ -16,11 +16,11 @@ const Spinner = () => (
 
 /**
  * Dispatches a file the Model Editor plugin claims to the right canvas by extension:
- * `.tsp`/`.arazzo` open the spec editor (TypeSpec + Arazzo with cross-layer links),
- * everything else (`.prisma`) opens the Prisma model editor.
+ * `.tsp`/`.arazzo`/`.asyncapi` open the spec editor (TypeSpec + Arazzo + AsyncAPI with
+ * cross-layer links), everything else (`.prisma`) opens the Prisma model editor.
  */
 export function ModelEditorFileRouter(props: FileViewProps) {
-  const spec = isTsp(props.fileName) || isArazzo(props.fileName);
+  const spec = isTsp(props.fileName) || isArazzo(props.fileName) || isAsyncApi(props.fileName);
   return (
     <Suspense fallback={<Spinner />}>{spec ? <SpecFileViewer {...props} /> : <PrismaFileViewer {...props} />}</Suspense>
   );

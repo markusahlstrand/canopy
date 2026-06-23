@@ -28,6 +28,13 @@
         "match": [".arazzo", ".arazzo.yaml", ".arazzo.yml", ".arazzo.json"],
         "fill": true,
         "immersive": true
+      },
+      {
+        "id": "asyncapi",
+        "title": "Spec Editor",
+        "match": [".asyncapi", ".asyncapi.yaml", ".asyncapi.yml", ".asyncapi.json"],
+        "fill": true,
+        "immersive": true
       }
     ],
     "creators": [
@@ -57,6 +64,15 @@
         "extension": ".arazzo.yaml",
         "mime": "application/yaml",
         "template": "arazzo: 1.0.1\ninfo:\n  title: My workflow\n  version: 1.0.0\n# Point sourceDescriptions at the OpenAPI your .tsp emits; x-typespec-source links\n# back to the contract so the editor can trace steps → endpoints → entities.\nx-typespec-source: ./main.tsp\nsourceDescriptions:\n  - name: api\n    url: ./openapi.yaml\n    type: openapi\nworkflows:\n  - workflowId: myWorkflow\n    summary: Describe what this flow does.\n    steps:\n      - stepId: firstStep\n        description: Call an operation from the source above.\n        operationId: listItems\n        successCriteria:\n          - condition: $statusCode == 200\n        outputs:\n          result: $response.body\n    outputs:\n      result: $steps.firstStep.outputs.result\n"
+      },
+      {
+        "id": "asyncapi",
+        "label": "AsyncAPI events",
+        "icon": "radio",
+        "defaultName": "events",
+        "extension": ".asyncapi.yaml",
+        "mime": "application/yaml",
+        "template": "asyncapi: 3.0.0\ninfo:\n  title: My events\n  version: 1.0.0\n# Message payloads that $ref a schema named like a .tsp model link to that entity;\n# an x-operationId (or a channel address matching an endpoint route) links to an endpoint.\nservers:\n  live:\n    host: example.com\n    protocol: sse\nchannels:\n  itemEvents:\n    address: /items/events\n    servers:\n      - $ref: '#/servers/live'\n    messages:\n      itemChanged:\n        $ref: '#/components/messages/ItemChanged'\noperations:\n  receiveItemChanged:\n    action: receive\n    channel:\n      $ref: '#/channels/itemEvents'\n    messages:\n      - $ref: '#/channels/itemEvents/messages/itemChanged'\ncomponents:\n  messages:\n    ItemChanged:\n      summary: An item was created or updated.\n      payload:\n        $ref: '#/components/schemas/Item'\n  schemas:\n    Item:\n      type: object\n"
       }
     ],
     "store": {

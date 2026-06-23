@@ -11,7 +11,7 @@ import type { CommitLayoutFn } from "./use-layout";
 /**
  * Bridges a stored `.tsp`/`.arazzo` file to the spec editor: it reads the opened
  * file, scans its folder for the related contract/workflow/openapi files, builds the
- * cross-layer project graph, and renders the three-tab workspace over it. Read-only
+ * cross-layer project graph, and renders the spec workspace over it. Read-only
  * for now — write-back to the text files is a later phase.
  */
 export function SpecFileViewer({ fileId, fileName, spaceId, filePath }: FileViewProps) {

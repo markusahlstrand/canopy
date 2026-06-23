@@ -1,22 +1,26 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Button } from "@canopy/ui";
 import { Icon } from "@canopy/ui";
 import { cn } from "@canopy/ui";
 import { EXPORT_TARGETS, type ExportFormat } from "./export";
 import type { DomainModel } from "./types";
 
-export function ExportPanel({ model }: { model: DomainModel }) {
+export const ExportPanel = memo(function ExportPanel({ model, active = true }: { model: DomainModel; active?: boolean }) {
   const [format, setFormat] = useState<ExportFormat>("json");
   const [copied, setCopied] = useState(false);
 
   const target = EXPORT_TARGETS.find((t) => t.id === format)!;
+  // Serialising the whole model is expensive; skip it while the panel is hidden
+  // so dragging nodes (which churns `model` every frame) stays smooth. It
+  // recomputes as soon as the tab becomes active.
   const code = useMemo(() => {
+    if (!active) return "";
     try {
       return target.render(model);
     } catch (e) {
       return `// Export failed: ${e instanceof Error ? e.message : String(e)}`;
     }
-  }, [target, model]);
+  }, [target, model, active]);
 
   function copy() {
     navigator.clipboard.writeText(code).then(
@@ -75,4 +79,4 @@ export function ExportPanel({ model }: { model: DomainModel }) {
       </pre>
     </div>
   );
-}
+});

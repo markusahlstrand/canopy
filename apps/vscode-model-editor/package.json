@@ -37,7 +37,11 @@
           { "filenamePattern": "*.arazzo" },
           { "filenamePattern": "*.arazzo.yaml" },
           { "filenamePattern": "*.arazzo.yml" },
-          { "filenamePattern": "*.arazzo.json" }
+          { "filenamePattern": "*.arazzo.json" },
+          { "filenamePattern": "*.asyncapi" },
+          { "filenamePattern": "*.asyncapi.yaml" },
+          { "filenamePattern": "*.asyncapi.yml" },
+          { "filenamePattern": "*.asyncapi.json" }
         ],
         "priority": "default"
       }
@@ -58,19 +62,19 @@
       {
         "id": "canopy.modelEditor.getStarted",
         "title": "Canopy Model Editor",
-        "description": "Visually edit Prisma schemas, TypeSpec APIs and Arazzo workflows.",
+        "description": "Visually edit Prisma schemas, TypeSpec APIs, Arazzo workflows and AsyncAPI events.",
         "steps": [
           {
             "id": "createSample",
             "title": "Create a sample project",
-            "description": "Generate a ready-to-edit Pet Store project (.prisma, .tsp and .arazzo) in a folder.\n[Create Sample Project](command:canopy.modelEditor.createSample)",
+            "description": "Generate a ready-to-edit Pet Store project (.prisma, .tsp, .arazzo and .asyncapi) in a folder.\n[Create Sample Project](command:canopy.modelEditor.createSample)",
             "media": { "image": "icon.png", "altText": "Canopy Model Editor" },
             "completionEvents": ["onCommand:canopy.modelEditor.createSample"]
           },
           {
             "id": "openFile",
             "title": "Open a model file",
-            "description": "Open any .prisma, .tsp or .arazzo file — it opens in the visual editor automatically. To see the raw text, right-click the tab → Reopen Editor With… → Text Editor.",
+            "description": "Open any .prisma, .tsp, .arazzo or .asyncapi file — it opens in the visual editor automatically. To see the raw text, right-click the tab → Reopen Editor With… → Text Editor.",
             "media": { "image": "icon.png", "altText": "Canopy Model Editor" }
           }
         ]
@@ -83,6 +87,7 @@
     "build": "pnpm run build:host && pnpm run build:webview",
     "watch:host": "node esbuild.mjs --watch",
     "watch:webview": "vite build --watch",
+    "dev": "concurrently -n host,webview -c blue,green \"pnpm run watch:host\" \"pnpm run watch:webview\"",
     "typecheck": "tsc --noEmit",
     "package": "pnpm run build && vsce package --no-dependencies -o canopy-model-editor.vsix"
   },
@@ -97,6 +102,7 @@
     "@types/vscode": "^1.95.0",
     "@vitejs/plugin-react": "^6.0.2",
     "@vscode/vsce": "^3.6.0",
+    "concurrently": "^9.2.1",
     "esbuild": "^0.25.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

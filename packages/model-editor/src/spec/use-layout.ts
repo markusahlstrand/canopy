@@ -13,6 +13,13 @@ import { deleteDraft, getDraft, putDraft } from "./drafts-store";
 /** Writes the sidecar text to the repo, returning the (possibly new) file id. */
 export type CommitLayoutFn = (text: string, fileId: string | undefined) => Promise<string | undefined>;
 
+// Stable empty fallbacks. Returning a fresh `{}`/`[]` from the render below would
+// give `positions`/`tagFilter` a new identity every render, which cascades into the
+// tabs' `useMemo`s and their `fitView` effects — re-fitting the canvas (snapping the
+// zoom) on every render, including every frame of a node drag.
+const EMPTY_POSITIONS: Record<string, XY> = {};
+const EMPTY_TAGS: string[] = [];
+
 export interface LayoutController {
   views: LayoutView[];
   activeViewId: string;
@@ -38,8 +45,6 @@ export interface LayoutController {
   resetSteps: () => void;
   commit: () => void;
 }
-
-const clone = (s: LayoutSidecar): LayoutSidecar => JSON.parse(JSON.stringify(s));
 
 export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: CommitLayoutFn): LayoutController {
   const [committed, setCommitted] = useState<LayoutSidecar>(graph.layout);
@@ -90,17 +95,33 @@ export function useLayout(projectKey: string, graph: ProjectGraph, onCommit?: Co
   }, [working, dirty, projectKey]);
 
   const activeView = working.views.find((v) => v.id === activeViewId) ?? working.views[0];
-  const positions = activeView?.entities ?? {};
-  const stepPositions = activeView?.steps ?? {};
-  const tagFilter = activeView?.tagFilter ?? [];
+  const positions = activeView?.entities ?? EMPTY_POSITIONS;
+  const stepPositions = activeView?.steps ?? EMPTY_POSITIONS;
+  const tagFilter = activeView?.tagFilter ?? EMPTY_TAGS;
 
   const mutateActive = useCallback(
     (fn: (v: LayoutView) => void) => {
       setWorking((w) => {
-        const next = clone(w);
-        const v = next.views.find((x) => x.id === activeViewId) ?? next.views[0];
-        if (v) fn(v);
-        return next;
+        // Structural sharing, not a deep clone: only the touched view (and its
+        // entities/steps maps, which the mutators write into) get fresh references.
+        // A deep clone here would hand every render new `entities`/`tagFilter`
+        // references, churning the tabs' memos and re-fitting the canvas on every
+        // drag frame (flicker + zoom snapping back). Unchanged entries keep identity,
+        // so dragging one node only invalidates that node.
+        const i = Math.max(0, w.views.findIndex((x) => x.id === activeViewId));
+        const cur = w.views[i];
+        if (!cur) return w;
+        const v: LayoutView = {
+          ...cur,
+          entities: { ...cur.entities },
+          // `steps` is required; spreading an absent map yields {} so the clone always
+          // carries the field (and the step mutators can write into it safely).
+          steps: { ...cur.steps },
+        };
+        fn(v);
+        const views = w.views.slice();
+        views[i] = v;
+        return { ...w, views };
       });
     },
     [activeViewId],
