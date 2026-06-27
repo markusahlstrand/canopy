@@ -43,20 +43,33 @@ export function SpecFileViewer({ fileId, fileName, spaceId, filePath }: FileView
     let alive = true;
     setGraph(null);
     setError(null);
+    const space = spaceId;
     (async () => {
       const text = await host.readFileText(fileId);
+      const opened = { id: fileId, name: fileName, path: filePath, text };
 
       // Resolve the containing folder + space so we can list sibling files. For a
       // FileItem, `path` is already the containing directory (not the full file path),
       // both from a listing and from getFile — so use it as-is. Fall back to a metadata
       // lookup only when the host didn't hand us a path (e.g. a `?file=` deep link).
-      const space = spaceId;
       let dir = filePath ?? "";
       if (filePath == null) {
         const meta = await host.getFile(fileId);
         if (meta) dir = meta.path ?? "";
       }
 
+      // ── Phase 1: render the opened file on its own, before touching the folder. ──
+      // This is the file the user actually opened, so show it immediately instead of
+      // blocking the first paint on listing + reading every sibling in the directory.
+      const seed = await buildProjectGraph(await discoverProject(opened, { siblings: [], readText: () => Promise.resolve("") }));
+      if (!alive) return;
+      // Key layout by the project folder so positions are stable across reloads and
+      // shared by every file opened in the same folder.
+      setProjectKey(`${space ?? "personal"}|${dir}`);
+      setProject({ dir, space });
+      setGraph(seed);
+
+      // ── Phase 2: scan the folder for related files and merge the full graph. ──
       let siblings = await host.listFiles(dir, space).catch(() => []);
       // Safety net: if the opened file isn't in the listed folder, our directory was
       // wrong — re-resolve it from metadata and relist. Keeps discovery working even if
@@ -73,15 +86,12 @@ export function SpecFileViewer({ fileId, fileName, spaceId, filePath }: FileView
         .filter((f) => f.kind !== "folder")
         .map((f) => ({ id: f.id, name: f.name, path: f.path ?? "" }));
 
-      const files = await discoverProject({ id: fileId, name: fileName, path: filePath, text }, { siblings: refs, readText: (r) => host.readFileText(r.id) });
+      const files = await discoverProject(opened, { siblings: refs, readText: (r) => host.readFileText(r.id) });
       const built = await buildProjectGraph(files);
-      if (alive) {
-        // Key layout by the project folder so positions are stable across reloads and
-        // shared by every file opened in the same folder.
-        setProjectKey(`${space ?? "personal"}|${dir}`);
-        setProject({ dir, space });
-        setGraph(built);
-      }
+      if (!alive) return;
+      setProjectKey(`${space ?? "personal"}|${dir}`);
+      setProject({ dir, space });
+      setGraph(built);
     })().catch((e) => alive && setError(e instanceof Error ? e.message : "Failed to load"));
 
     return () => {

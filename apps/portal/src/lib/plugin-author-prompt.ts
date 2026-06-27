@@ -143,6 +143,32 @@ export function buildGenerationMessages(idea: string, kind: PluginKind = "viewer
   ];
 }
 
+/**
+ * System + user messages to *refine* an existing plugin: the model gets the
+ * current manifest and source plus a change instruction, and returns the COMPLETE
+ * updated plugin in the same two-block format. The plugin kind (and so the system
+ * prompt) is inferred from the manifest — an app contributes a detailView, a
+ * viewer contributes viewers — so the caller doesn't pass it.
+ */
+export function buildRefinementMessages(instruction: string, current: GeneratedPlugin): AiMessage[] {
+  const isApp = !!current.manifest.contributes?.detailView;
+  const system = isApp ? SYSTEM_APP : SYSTEM_VIEWER;
+  const manifestJson = JSON.stringify(current.manifest, null, 2);
+  return [
+    { role: "system", content: system },
+    {
+      role: "user",
+      content:
+        `Here is an existing Canopy ${isApp ? "app" : "file-viewer"} plugin. Apply the requested change and ` +
+        `return the COMPLETE updated plugin in the same two fenced blocks (a full manifest and a full index.js) ` +
+        `— not a diff or only the changed parts. Keep the same manifest id.\n\n` +
+        `Current manifest:\n\`\`\`json\n${manifestJson}\n\`\`\`\n\n` +
+        `Current index.js:\n\`\`\`js\n${current.source}\n\`\`\`\n\n` +
+        `Change to apply: ${instruction.trim()}\n\nReturn only the two fenced blocks described above.`,
+    },
+  ];
+}
+
 /** A fenced ```lang … ``` block. `lang` is lowercased, "" when the model omitted it. */
 interface Fence {
   lang: string;

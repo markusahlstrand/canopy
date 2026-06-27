@@ -97,6 +97,11 @@ export function createAiSearchIndex(opts: AiSearchIndexOptions) {
         aiQuery(db, instance, query, scope, limit),
       ]);
 
+      // AI contributed nothing (no hits, or it degraded to empty): return the
+      // FTS page untouched. Fusing here would needlessly remap FTS's own scores
+      // onto an RRF scale and drop its cursor — for no ranking benefit.
+      if (aiHits.length === 0) return ftsPage;
+
       // Reciprocal-rank fusion: a doc's fused score is the sum of 1/(k+rank)
       // across the lists it appears in, so agreement between the two backends
       // floats a hit to the top without needing comparable raw scores.
@@ -202,14 +207,22 @@ async function aiQuery(
   // soft-deleted. This is the authoritative ACL + liveness boundary (the AI-side
   // metadata filter above is only a cost/recall optimization on top).
   const ids = [...byId.keys()];
-  const rows = await db.all<FileRow>(
-    `SELECT id, tenant_id AS spaceId, name AS title, updated_at AS modifiedAt, metadata
-       FROM files
-      WHERE id IN (${ids.map(() => "?").join(",")})
-        AND tenant_id IN (${scope.spaceIds.map(() => "?").join(",")})
-        AND deleted_at IS NULL`,
-    [...ids, ...scope.spaceIds],
-  );
+  let rows: FileRow[];
+  try {
+    rows = await db.all<FileRow>(
+      `SELECT id, tenant_id AS spaceId, name AS title, updated_at AS modifiedAt, metadata
+         FROM files
+        WHERE id IN (${ids.map(() => "?").join(",")})
+          AND tenant_id IN (${scope.spaceIds.map(() => "?").join(",")})
+          AND deleted_at IS NULL`,
+      [...ids, ...scope.spaceIds],
+    );
+  } catch (err) {
+    // Best-effort, like the search call above: a resolution failure drops the AI
+    // leg to empty rather than rejecting the whole (FTS-backed) search.
+    console.warn(`[search] ai-search hit resolution failed: ${(err as Error).message}`);
+    return [];
+  }
 
   const hits: { hit: SearchHit; order: number }[] = [];
   for (const r of rows) {

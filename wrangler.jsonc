@@ -166,7 +166,7 @@
 		"GITHUB_BRANCH": "main",
 		"OIDC_ISSUER": "https://canopy.token.sesamy.dev",
 		"OIDC_CLIENT_ID": "canopy",
-		"OIDC_AUDIENCE": "urn:canopy"
+		"OIDC_AUDIENCE": "urn:canopy",
 		// Name of the AI Search instance to query. Uncomment together with the
 		// "ai_search_namespaces" binding above to enable hybrid semantic search.
 		// "AI_SEARCH_INSTANCE": "canopy-search"
