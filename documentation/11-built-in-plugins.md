@@ -47,6 +47,20 @@ Two different switches, depending on the plugin:
 | [Univer Office](plugin-univer-office) | Spreadsheets (CSV/TSV) and Univer documents |
 | [Code Editor](plugin-code-editor) | Source code, with the VS Code editor (Monaco) |
 
+## Model & API editor
+
+| Plugin | Handles |
+|---|---|
+| [Model Editor](plugin-model-editor) | `.prisma` (ER/schema), `.tsp` (TypeSpec), `.arazzo` (workflows), `.asyncapi` (events) |
+
+Unlike the sandboxed viewers above, the **Model Editor** is a *trusted first-party* file editor —
+it ships as React in `PLUGIN_UI`, reaching the host only through the `@canopy/plugin-sdk`
+`HostBridge`. That discipline makes it Canopy's clearest **proof of the architecture's
+flexibility**: the exact same `@canopy/model-editor` view runs in three different hosts, each just
+reimplementing the bridge — the Canopy portal, a [VS Code extension](plugin-model-editor)
+(`apps/vscode-model-editor`), and a backend-free [standalone web app](plugin-model-editor)
+(`apps/model-editor-demo`). One view, three hosts, three bridges.
+
 ## Search (⌘K)
 
 A **⌘K / Ctrl-K command palette** searches files by name, content, and AI labels and jumps to a

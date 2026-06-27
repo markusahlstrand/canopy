@@ -1636,6 +1636,8 @@ export interface AiModel {
   label: string;
   provider: string;
   vision?: boolean;
+  /** One-line "what it's good for", shown as a tooltip in the model list. */
+  description?: string;
 }
 
 /** Models available for plugins to use, or [] when the server has no AI provider. */

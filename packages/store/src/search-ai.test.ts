@@ -45,7 +45,9 @@ function stubInstance(response: AiSearchResponse) {
     items: {
       async upload(name, content, opts) {
         state.uploads.push({ name, content, metadata: opts?.metadata });
-        return { id: name };
+        // The real Items API mints an opaque id distinct from the upload name —
+        // model that so tests catch any delete-by-name regression.
+        return { id: `item-${name}`, key: name };
       },
       async delete(id) {
         state.deletes.push(id);
@@ -138,7 +140,7 @@ describe("createAiSearchIndex (hybrid, Items-API push)", () => {
       async search() {
         throw new Error("binding unavailable");
       },
-      items: { async upload() {}, async delete() {} },
+      items: { async upload(name) { return { id: `item-${name}` }; }, async delete() {} },
     };
     const index = createAiSearchIndex({ db, instance, fts });
 
@@ -192,14 +194,29 @@ describe("createAiSearchIndex (hybrid, Items-API push)", () => {
     expect((await fts.query({ text: "folder" }, ALL)).items.map((i) => i.id)).toEqual(["fld"]);
   });
 
-  it("delete removes from both the Items API and FTS", async () => {
+  it("delete removes from both the Items API (by returned itemId) and FTS", async () => {
     const fts = createSqlSearchIndex(db);
     const { instance, state } = stubInstance({ chunks: [] });
     const index = createAiSearchIndex({ db, instance, fts });
 
     await index.upsert({ id: "1", spaceId: SPACE_A, title: "doomed", text: "to be deleted", kind: "file" });
     await index.delete("1");
-    expect(state.deletes).toEqual(["1"]);
+    // Deletes by the opaque itemId minted at upload, not the fileId/upload key.
+    expect(state.deletes).toEqual(["item-1"]);
     expect((await fts.query({ text: "doomed" }, ALL)).items).toEqual([]);
+  });
+
+  it("purges the AI item when a re-upsert leaves the doc body empty", async () => {
+    const fts = createSqlSearchIndex(db);
+    const { instance, state } = stubInstance({ chunks: [] });
+    const index = createAiSearchIndex({ db, instance, fts });
+
+    await index.upsert({ id: "1", spaceId: SPACE_A, title: "report", text: "annual figures", kind: "file" });
+    expect(state.uploads).toHaveLength(1);
+    // Body removed (e.g. content cleared / extraction failed): the prior item
+    // must be deleted so stale chunks can't keep producing hits.
+    await index.upsert({ id: "1", spaceId: SPACE_A, title: "report", text: "", kind: "file" });
+    expect(state.deletes).toEqual(["item-1"]);
+    expect(state.uploads).toHaveLength(1); // no re-upload of an empty body
   });
 });

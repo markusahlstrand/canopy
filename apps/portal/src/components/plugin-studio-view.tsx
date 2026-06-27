@@ -49,7 +49,11 @@ export function PluginStudioView({
   useEffect(() => {
     listAiModels().then((m) => {
       setModels(m);
-      if (m[0]) setModel(m[0].id);
+      // Default to a code model when the host exposes one (Qwen2.5 Coder on
+      // Cloudflare) — it's the task here — else the host's general default.
+      const coder = m.find((x) => /\b(coder|code)\b/i.test(`${x.id} ${x.label}`));
+      const pick = coder ?? m[0];
+      if (pick) setModel(pick.id);
     });
   }, []);
 

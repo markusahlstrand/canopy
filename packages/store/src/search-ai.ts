@@ -41,21 +41,31 @@ export function createAiSearchIndex(opts: AiSearchIndexOptions) {
       if (list.length === 0) return;
       // FTS is the lexical leg + zero-lag freshness; always fed, authoritative.
       await fts.upsert(list);
-      // Push content-bearing docs to AI Search for semantic recall. Title-only
-      // docs (e.g. folders, or files whose body hasn't been extracted yet) add
-      // nothing to embed — they'll be (re)uploaded once a body exists. Best-effort.
+      // Push content-bearing docs to AI Search for semantic recall. Best-effort.
       await Promise.all(
-        list
-          .filter((d) => d.text)
-          .map(async (d) => {
-            try {
-              const content = [d.title, d.text].filter(Boolean).join("\n");
-              // Upsert by name: re-feeding the same id replaces the prior item.
-              await instance.items.upload(d.id, content, { metadata: { spaceId: d.spaceId } });
-            } catch (err) {
-              console.warn(`[search] ai-search upload failed for ${d.id}: ${(err as Error).message}`);
+        list.map(async (d) => {
+          try {
+            // Only files with a body embed usefully. A title-only doc (a folder,
+            // or a file whose body hasn't been extracted yet — or was *removed*)
+            // must not stay in the index: purge any prior item so stale chunks
+            // can't keep producing hits/snippets after content disappears.
+            if (!d.text?.trim()) {
+              await deleteAiItem(db, instance, d.id);
+              return;
             }
-          }),
+            const content = [d.title, d.text].filter(Boolean).join("\n");
+            const prev = await getAiItemId(db, d.id);
+            const { id: itemId } = await instance.items.upload(d.id, content, {
+              metadata: { spaceId: d.spaceId },
+            });
+            await setAiItemId(db, d.id, itemId);
+            // The Items API keys by name but mints a fresh `id` per upload; if a
+            // re-upload didn't overwrite in place, drop the superseded item.
+            if (prev && prev !== itemId) await safeDelete(instance, prev);
+          } catch (err) {
+            console.warn(`[search] ai-search upload failed for ${d.id}: ${(err as Error).message}`);
+          }
+        }),
       );
     },
 
@@ -68,7 +78,7 @@ export function createAiSearchIndex(opts: AiSearchIndexOptions) {
       await Promise.all(
         list.map(async (id) => {
           try {
-            await instance.items.delete(id);
+            await deleteAiItem(db, instance, id);
           } catch (err) {
             console.warn(`[search] ai-search delete failed for ${id}: ${(err as Error).message}`);
           }
@@ -168,8 +178,9 @@ async function aiQuery(
   }
 
   // The AI Search response shape has shifted across versions (chunks/data,
-  // item/attributes) — read defensively.
-  const chunks = res.chunks ?? res.data ?? [];
+  // item/attributes) — read defensively. Guard the array type too: a malformed
+  // payload must degrade to FTS-only, not throw mid-iteration.
+  const chunks = Array.isArray(res.chunks) ? res.chunks : Array.isArray(res.data) ? res.data : [];
   if (chunks.length === 0) return [];
 
   // Keep the best-scoring chunk per file id, preserving first-seen order so the
@@ -275,6 +286,41 @@ function matchesFilter(meta: Record<string, unknown>, filter?: Record<string, un
   return true;
 }
 
+// --- AI Search item map (fileId → the opaque itemId `upload()` returns) -----
+// `items.delete()`/`items.get()` only accept that itemId — there is no
+// delete-by-name — so we persist it on upload and resolve it back here.
+
+async function getAiItemId(db: Db, fileId: string): Promise<string | undefined> {
+  const row = await db.first<{ item_id: string }>("SELECT item_id FROM ai_search_items WHERE file_id = ?", [fileId]);
+  return row?.item_id;
+}
+
+async function setAiItemId(db: Db, fileId: string, itemId: string): Promise<void> {
+  await db.run(
+    `INSERT INTO ai_search_items (file_id, item_id) VALUES (?, ?)
+       ON CONFLICT(file_id) DO UPDATE SET item_id = excluded.item_id`,
+    [fileId, itemId],
+  );
+}
+
+/** Delete the AI Search item mapped to `fileId` (if any) and drop the mapping. */
+async function deleteAiItem(db: Db, instance: AiSearchInstance, fileId: string): Promise<void> {
+  const itemId = await getAiItemId(db, fileId);
+  if (!itemId) return;
+  await safeDelete(instance, itemId);
+  await db.run("DELETE FROM ai_search_items WHERE file_id = ?", [fileId]);
+}
+
+/** Delete an item by its itemId, swallowing failure so cleanup stays idempotent
+ *  and best-effort (a stale chunk can't surface — `aiQuery` re-checks liveness). */
+async function safeDelete(instance: AiSearchInstance, itemId: string): Promise<void> {
+  try {
+    await instance.items.delete(itemId);
+  } catch (err) {
+    console.warn(`[search] ai-search item delete failed for ${itemId}: ${(err as Error).message}`);
+  }
+}
+
 const RRF_K = 60;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -306,9 +352,10 @@ export interface AiSearchInstance {
 
 /** The built-in-storage Items API: push documents into the instance directly. */
 export interface AiSearchItems {
-  /** Upload (upsert) an item by name; `content` is the text to index. Queued for processing. */
-  upload(name: string, content: string, opts?: { metadata?: Record<string, unknown> }): Promise<unknown>;
-  /** Remove an item previously uploaded under `id`. */
+  /** Upload an item under `name` (we use the fileId); `content` is the text to
+   *  index. Returns the opaque `id` that `delete()`/`get()` require. Queued for processing. */
+  upload(name: string, content: string, opts?: { metadata?: Record<string, unknown> }): Promise<{ id: string; key?: string }>;
+  /** Remove an item by the `id` returned from {@link upload} (not the upload name). */
   delete(id: string): Promise<unknown>;
 }
 

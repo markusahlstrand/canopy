@@ -123,7 +123,12 @@ renders it in the content area. That's the whole plugin.
 > rather than reaching into `@/lib/api`, `@/plugins/host`, or `@/components/ui/*`. The Model Editor
 > is the reference, with a lint rule enforcing the boundary on `src/components/model-editor/**`.
 > Keeping a view on the SDK is what makes it swappable to a sandboxed runtime — or another host
-> entirely (e.g. a VS Code webview) — by reimplementing the bridge, not the view.
+> entirely — by reimplementing the bridge, not the view. The Model Editor does exactly this today:
+> the same `@canopy/model-editor` component tree runs in the Canopy portal, as a
+> [VS Code extension](plugin-model-editor) (`apps/vscode-model-editor`, bridge over webview
+> `postMessage`), and as a backend-free [standalone web app](plugin-model-editor)
+> (`apps/model-editor-demo`, bridge over the File System Access API) — three hosts, one view, three
+> `HostBridge` implementations.
 
 ## A data-source plugin (GitHub)
 

@@ -438,8 +438,12 @@ identical for everyone. What differs is the **render half** — and there are no
     `HostBridge` and `usePluginTheme()` for light/dark, instead of importing `@/lib/api` or wiring
     its own `.dark` observer. The app implements the bridge once
     (`apps/portal/src/plugins/host-bridge.ts`) and provides it via `<PluginHostProvider>`. Swapping
-    that one implementation is what would let the same view run in a different host (e.g. a VS Code
-    webview). The SDK also ships the generic, schema-driven `PluginSettingsDialog` (it reaches
+    that one implementation is what lets the same view run in a different host — and the
+    [Model Editor](plugin-model-editor) already does: its `@canopy/model-editor` view runs unchanged
+    in the portal, in a [VS Code extension](plugin-model-editor) (bridge over webview `postMessage`),
+    and in a backend-free [standalone app](plugin-model-editor) (bridge over the File System Access
+    API). Same view, three hosts, three bridges — the portability the SDK boundary buys, shipped. The
+    SDK also ships the generic, schema-driven `PluginSettingsDialog` (it reaches
     settings I/O through the bridge, so any plugin can offer settings).
   - **`@canopy/ui`** — the shared component library. Views import shadcn primitives, the `Icon`
     set, `cn`, `toast`, and shared host components like `PersonAvatar` from `@canopy/ui` (used by
