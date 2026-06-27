@@ -9,6 +9,7 @@ export * from "./schema";
 export * from "./retention";
 export * from "./cache";
 export * from "./search";
+export * from "./search-ai";
 export * from "./repo";
 export * from "./authz";
 export * from "./users";
