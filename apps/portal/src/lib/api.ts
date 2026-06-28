@@ -752,6 +752,14 @@ export async function deleteFile(id: string): Promise<void> {
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
 }
 
+/** Re-run the processing pipeline for a file: re-extract text, re-index for search,
+ *  and re-run AI document processors (labels/description). The AI pass runs server-side
+ *  off the response path, so this resolves once the re-index is queued. */
+export async function reprocessFile(id: string): Promise<void> {
+  const res = await apiFetch(`/api/files/${id}/reprocess`, { method: "POST" });
+  if (!res.ok) throw new Error(`reprocess failed: ${res.status}`);
+}
+
 /** Files in the caller's Trash, newest deletion first. */
 export async function listTrash(): Promise<FileItem[]> {
   const res = await apiFetch("/api/files?trash=1");
@@ -854,6 +862,16 @@ export async function moveFile(id: string, path: string): Promise<void> {
     body: JSON.stringify({ path }),
   });
   if (!res.ok) throw new Error(`move failed: ${res.status}`);
+}
+
+/** Rename a file — persisted as the file's `name` column (a metadata edit, no new version). */
+export async function renameFile(id: string, name: string): Promise<void> {
+  const res = await apiFetch(`/api/files/${id}/metadata`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`rename failed: ${res.status}`);
 }
 
 /** Create an empty folder at a virtual path within a space. */

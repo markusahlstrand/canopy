@@ -412,6 +412,12 @@ export function FileTable({
                     {f.offline ? "Remove download" : "Available offline"}
                   </ContextMenuItem>
                   <ContextMenuItem onSelect={() => onAction("Move", f)}>Move</ContextMenuItem>
+                  {f.kind !== "folder" && (
+                    <ContextMenuItem onSelect={() => onAction("Reprocess", f)}>
+                      <Icon name="sparkles" size={15} />
+                      Reprocess
+                    </ContextMenuItem>
+                  )}
                   {pluginItems.length > 0 && <ContextMenuSeparator />}
                   {pluginItems.map((item) => (
                     <ContextMenuItem key={item.pluginId + item.label} onSelect={() => onAction(item.label, f)}>

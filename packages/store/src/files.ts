@@ -1398,12 +1398,29 @@ export class FileService {
     return this.enrichForDisplay(rows.map(joinedToFileWithVersion));
   }
 
-  /** Merge into the metadata JSON. Does NOT create a new version. Requires editor+. */
+  /**
+   * Merge into the metadata JSON. Does NOT create a new version. Requires editor+.
+   *
+   * A `name` key is the one exception that lands on a real column (the file's
+   * display name) rather than in the metadata blob — so rename rides the same
+   * path as star/tags/move without inventing a separate endpoint.
+   */
   async patchMetadata(caller: Caller, id: string, patch: Record<string, unknown>): Promise<FileWithVersion> {
     const file = await this.requirePerm(caller, id, "editor");
-    const metadata = { ...file.metadata, ...patch };
-    if ("path" in patch) metadata.path = normPath(String(patch.path ?? ""));
-    await this.db.run("UPDATE files SET metadata = ?, updated_at = ? WHERE id = ?", [
+    const { name: namePatch, ...metaPatch } = patch;
+    const metadata = { ...file.metadata, ...metaPatch };
+    if ("path" in metaPatch) metadata.path = normPath(String(metaPatch.path ?? ""));
+
+    // Validate a rename: a non-empty name with no path separators (the name is a
+    // single segment; moving lives on `metadata.path`).
+    let name = file.name;
+    if ("name" in patch) {
+      name = String(namePatch ?? "").trim();
+      if (!name || name.includes("/") || name.includes("\\")) throw new Error("invalid file name");
+    }
+
+    await this.db.run("UPDATE files SET name = ?, metadata = ?, updated_at = ? WHERE id = ?", [
+      name,
       JSON.stringify(metadata),
       new Date().toISOString(),
       id,
@@ -1929,6 +1946,30 @@ export class FileService {
       await this.indexFileDoc(file, body);
     } catch (err) {
       console.warn(`[search] reindex failed for ${fileId}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Re-run text extraction + search indexing for a single file — the user-facing
+   *  "Reprocess" action. A managed blob re-extracts inline (the same path every
+   *  mutation takes). An external file is re-pulled from its connector and its
+   *  cached extract (`content_ref`) refreshed, so a source whose bytes changed
+   *  out-of-band becomes searchable again without waiting for the next reconcile.
+   *  Editor on the file is required. (AI document processors are re-run separately
+   *  by the API, off the response path — they need the gateway, not the store.) */
+  async reprocess(caller: Caller, id: string): Promise<void> {
+    const file = await this.requirePerm(caller, id, "editor");
+    const version = file.currentVersionId ? await this.loadVersion(file.currentVersionId) : null;
+    if (version?.source === "external") {
+      const text = await this.extractExternalText(file, version);
+      const contentRef = text ? `extract/${file.id}.txt` : version.contentRef ?? null;
+      if (text && contentRef) await this.store.put(contentRef, new TextEncoder().encode(text));
+      await this.db.run("UPDATE file_versions SET extract_state = 'done', content_ref = ? WHERE id = ?", [
+        contentRef,
+        version.id,
+      ]);
+      await this.indexFileDoc(file, text ?? undefined);
+    } else {
+      await this.reindex(id);
     }
   }
 

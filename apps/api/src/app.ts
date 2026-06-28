@@ -969,6 +969,19 @@ export function createApp(deps: AppDeps) {
     return c.json(await drive!.service.patchMetadata(caller, c.req.param("id")!, patch));
   }));
 
+  // Re-run the default processing pipeline for a single file: re-extract its text +
+  // re-feed the search index now (editor-gated), then re-run configured AI document
+  // processors over the current bytes off the response path — the same enrichment a
+  // fresh upload gets. Useful when a processor was added/reconfigured after upload, or
+  // a connector-backed file changed out-of-band. Returns 202: the AI pass is async.
+  app.post("/api/files/:id/reprocess", driveRoute(async (c, caller) => {
+    const id = c.req.param("id")!;
+    await drive!.service.reprocess(caller, id);
+    const file = await drive!.service.getFile(caller, id);
+    runBackground(labelFileInBackground(caller.sub, file));
+    return c.json({ ok: true }, 202);
+  }));
+
   // Stage a blob for a *specific file's* next version, keyed to the file's own
   // space and gated by editor on the file. Unlike /api/uploads/* (which keys by
   // ?space=), this can't land the blob in the wrong space, so the version POST

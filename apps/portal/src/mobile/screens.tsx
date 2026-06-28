@@ -2,8 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { Icon } from "@/lib/icons";
 import { FileIcon } from "@/components/file-icon";
 import { PersonAvatar, AvatarGroup } from "@/components/person-avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { listFiles, listShared, type SpaceView } from "@/lib/api";
+import { listFiles, listShared, type Me, type SpaceView } from "@/lib/api";
 import { PLUGIN_CATALOG, STORAGE, type FileItem, type FileKind } from "@/lib/mock-data";
 
 function SectionHeader({ title, onMore }: { title: string; onMore?: () => void }) {
@@ -73,20 +81,76 @@ const ACTIVITY = [
   { who: "Maya", action: "renamed", target: "Family photos", when: "Yesterday" },
 ];
 
+// Tappable avatar that opens an account menu. Mirrors the desktop topbar: a real
+// signed-in user gets name/email + Sign out; logged out gets a Log in entry and
+// no fabricated persona (the green "online" dot is only shown when signed in).
+function AccountMenu({
+  userName,
+  auth,
+  onSignIn,
+  onSignOut,
+}: {
+  userName: string;
+  auth: Me;
+  onSignIn: () => void;
+  onSignOut: () => void;
+}) {
+  const user = auth.user;
+  const name = user?.name ?? user?.email?.split("@")[0] ?? userName;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button aria-label="Account" className="relative shrink-0 rounded-full">
+          <PersonAvatar name={user ? name : "?"} size="lg" />
+          {user && (
+            <span className="absolute -right-0.5 -top-0.5 size-[11px] rounded-full bg-primary ring-2 ring-background" />
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        {user ? (
+          <>
+            <DropdownMenuLabel>
+              <div className="font-medium">{name}</div>
+              {user.email && (
+                <div className="text-[12px] font-normal text-muted-foreground">{user.email}</div>
+              )}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onSignOut}>
+              <Icon name="log-out" size={15} /> Sign out
+            </DropdownMenuItem>
+          </>
+        ) : (
+          <DropdownMenuItem onClick={onSignIn} disabled={auth.offline}>
+            <Icon name="log-out" size={15} className="rotate-180" /> Log in
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function HomeScreen({
   userName,
+  auth,
   spaceCount,
   installed,
   refreshKey,
   onOpenFile,
   onNav,
+  onSignIn,
+  onSignOut,
 }: {
   userName: string;
+  auth: Me;
   spaceCount: number;
   installed: string[];
   refreshKey: number;
   onOpenFile: (f: FileItem) => void;
   onNav: (view: string) => void;
+  onSignIn: () => void;
+  onSignOut: () => void;
 }) {
   const [recent, setRecent] = useState<FileItem[]>([]);
   useEffect(() => {
@@ -107,10 +171,7 @@ export function HomeScreen({
           <div className="truncate text-[13px] font-medium text-muted-foreground">{greeting()}</div>
           <div className="truncate text-[28px] font-semibold leading-tight tracking-tight">{userName}</div>
         </div>
-        <div className="relative">
-          <PersonAvatar name={userName} size="lg" />
-          <span className="absolute -right-0.5 -top-0.5 size-[11px] rounded-full bg-primary ring-2 ring-background" />
-        </div>
+        <AccountMenu userName={userName} auth={auth} onSignIn={onSignIn} onSignOut={onSignOut} />
       </div>
 
       <div className="mb-5">
