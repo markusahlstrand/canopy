@@ -121,11 +121,11 @@ function AccountMenu({
               <Icon name="log-out" size={15} /> Sign out
             </DropdownMenuItem>
           </>
-        ) : (
+        ) : auth.authConfigured ? (
           <DropdownMenuItem onClick={onSignIn} disabled={auth.offline}>
             <Icon name="log-out" size={15} className="rotate-180" /> Log in
           </DropdownMenuItem>
-        )}
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

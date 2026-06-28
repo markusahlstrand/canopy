@@ -73,10 +73,15 @@ export async function discoverProject(
   const openapi = new Map<string, TextFile>();
   const asyncapi = new Map<string, TextFile>();
 
-  // Seed with the opened file so discovery works even before anything is read.
-  if (isTsp(opened.name)) tsp.set(opened.name, { id: opened.id, name: opened.name, path: opened.path, text: opened.text });
-  else if (isArazzo(opened.name)) arazzo.set(opened.name, { id: opened.id, name: opened.name, path: opened.path, text: opened.text });
-  else if (isAsyncApi(opened.name)) asyncapi.set(opened.name, { id: opened.id, name: opened.name, path: opened.path, text: opened.text });
+  // Seed with the opened file so discovery works even before anything is read. The
+  // opened file is excluded from the sibling read below, so it has to be classified
+  // here — including OpenAPI/AsyncAPI YAML/JSON, which are detected by name or by
+  // sniffing the body (sniff AsyncAPI before OpenAPI, mirroring the sibling pass).
+  const openedFile = { id: opened.id, name: opened.name, path: opened.path, text: opened.text };
+  if (isTsp(opened.name)) tsp.set(opened.name, openedFile);
+  else if (isArazzo(opened.name)) arazzo.set(opened.name, openedFile);
+  else if (isAsyncApi(opened.name) || (isYamlOrJson(opened.name) && (looksLikeAsyncApi(opened.name) || sniffAsyncApi(opened.text)))) asyncapi.set(opened.name, openedFile);
+  else if (isYamlOrJson(opened.name) && (looksLikeOpenApi(opened.name) || sniffOpenApi(opened.text))) openapi.set(opened.name, openedFile);
 
   const reads = provider.siblings
     .filter((ref) => isTsp(ref.name) || isArazzo(ref.name) || isAsyncApi(ref.name) || isYamlOrJson(ref.name))

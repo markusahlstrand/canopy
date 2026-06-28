@@ -1967,7 +1967,11 @@ export class FileService {
         contentRef,
         version.id,
       ]);
-      await this.indexFileDoc(file, text ?? undefined);
+      // Only index the freshly extracted text. If extraction produced nothing,
+      // fall back to reindex(id) so the cached content_ref body is preserved
+      // rather than wiping the doc down to title/metadata.
+      if (text) await this.indexFileDoc(file, text);
+      else await this.reindex(id);
     } else {
       await this.reindex(id);
     }

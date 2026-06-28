@@ -154,6 +154,9 @@ export function buildRefinementMessages(instruction: string, current: GeneratedP
   const isApp = !!current.manifest.contributes?.detailView;
   const system = isApp ? SYSTEM_APP : SYSTEM_VIEWER;
   const manifestJson = JSON.stringify(current.manifest, null, 2);
+  // Plugin manifest/source are arbitrary content and may themselves contain ``` runs;
+  // pick a fence longer than any run inside the payload so it can't be broken out of.
+  const fence = fenceFor(manifestJson, current.source);
   return [
     { role: "system", content: system },
     {
@@ -162,11 +165,20 @@ export function buildRefinementMessages(instruction: string, current: GeneratedP
         `Here is an existing Canopy ${isApp ? "app" : "file-viewer"} plugin. Apply the requested change and ` +
         `return the COMPLETE updated plugin in the same two fenced blocks (a full manifest and a full index.js) ` +
         `— not a diff or only the changed parts. Keep the same manifest id.\n\n` +
-        `Current manifest:\n\`\`\`json\n${manifestJson}\n\`\`\`\n\n` +
-        `Current index.js:\n\`\`\`js\n${current.source}\n\`\`\`\n\n` +
+        `Current manifest:\n${fence}json\n${manifestJson}\n${fence}\n\n` +
+        `Current index.js:\n${fence}js\n${current.source}\n${fence}\n\n` +
         `Change to apply: ${instruction.trim()}\n\nReturn only the two fenced blocks described above.`,
     },
   ];
+}
+
+/** A backtick fence guaranteed not to collide with any backtick run inside the given payloads. */
+function fenceFor(...payloads: string[]): string {
+  let longest = 0;
+  for (const p of payloads) {
+    for (const m of p.matchAll(/`+/g)) longest = Math.max(longest, m[0].length);
+  }
+  return "`".repeat(Math.max(3, longest + 1));
 }
 
 /** A fenced ```lang … ``` block. `lang` is lowercased, "" when the model omitted it. */

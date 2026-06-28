@@ -95,6 +95,10 @@ export function MobileApp() {
   const signOut = async () => {
     await logout();
     setAuth((a) => ({ ...a, user: null }));
+    setSpaces([]);
+    // Remount auth-scoped screens (recent files, space counts) so they refetch
+    // against the now signed-out session instead of showing stale data.
+    setRefreshKey((k) => k + 1);
   };
 
   async function createNote() {

@@ -63,10 +63,11 @@ export function SpecFileViewer({ fileId, fileName, spaceId, filePath }: FileView
       // blocking the first paint on listing + reading every sibling in the directory.
       const seed = await buildProjectGraph(await discoverProject(opened, { siblings: [], readText: () => Promise.resolve("") }));
       if (!alive) return;
-      // Key layout by the project folder so positions are stable across reloads and
-      // shared by every file opened in the same folder.
-      setProjectKey(`${space ?? "personal"}|${dir}`);
-      setProject({ dir, space });
+      // Paint the opened file immediately, but hold off on publishing `projectKey`/
+      // `project`: the directory below is still provisional (the fallback may correct
+      // it), and those drive the layout namespace + commit target. Publishing them now
+      // would let a drag/commit during this window land in the wrong folder. Phase 2
+      // sets them once `dir` is final.
       setGraph(seed);
 
       // ── Phase 2: scan the folder for related files and merge the full graph. ──
