@@ -204,7 +204,7 @@ function AiModelsSection() {
               <span
                 key={m.id}
                 className="inline-flex items-center gap-1.5 rounded-full border bg-background px-2.5 py-1 text-[12px]"
-                title={m.id}
+                title={m.description ? `${m.id}\n\n${m.description}` : m.id}
               >
                 {m.label}
                 <span className="text-muted-foreground">· {m.provider}</span>

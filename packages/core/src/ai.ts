@@ -20,6 +20,8 @@ export interface AiModel {
   provider: string;
   /** True when it accepts inline image (and, where supported, document) input, not just text. */
   vision?: boolean;
+  /** One-line "what it's good for", shown beneath the label in a picker. Optional. */
+  description?: string;
 }
 
 /** One part of a message: plain text, or an inline binary (image / PDF) the model reads. */

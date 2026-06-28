@@ -46,6 +46,8 @@ import {
   setItemOffline,
   reconcilePins,
   moveFile,
+  renameFile,
+  reprocessFile,
   setSpaceMounted,
   syncConnector,
   clearSpaceContent,
@@ -876,6 +878,32 @@ function DesktopApp() {
       setShareTarget({ target, label: f.name });
     } else if (action === "Download" && f.kind !== "folder") {
       downloadFile(f.id, f.name);
+    } else if (action === "Rename") {
+      // Folders are virtual (a derived path, not a row), so there's nothing to rename.
+      if (f.kind === "folder") {
+        toast("Folders can't be renamed yet");
+        return;
+      }
+      const name = window.prompt("Rename file", f.name);
+      if (!name?.trim() || name.trim() === f.name) return;
+      const next = name.trim();
+      setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, name: next } : x))); // optimistic
+      try {
+        await renameFile(f.id, next);
+        reload();
+        toast(`Renamed to “${next}”`);
+      } catch (err) {
+        reload(); // rollback to server truth
+        toast("Couldn't rename", { description: (err as Error).message });
+      }
+    } else if (action === "Reprocess") {
+      if (f.kind === "folder") return; // folders have no content to process
+      try {
+        await reprocessFile(f.id);
+        toast("Reprocessing…", { description: `Re-indexing “${f.name}” and re-running AI labels.` });
+      } catch (err) {
+        toast("Couldn't reprocess", { description: (err as Error).message });
+      }
     } else {
       toast(action, { description: f.name });
     }

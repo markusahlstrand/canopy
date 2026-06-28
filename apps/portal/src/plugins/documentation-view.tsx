@@ -1,4 +1,4 @@
-import { Fragment, isValidElement, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, isValidElement, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@canopy/ui";
@@ -75,6 +75,7 @@ const PLUGIN_GROUPS: { label: string; slugs: string[] }[] = [
     label: "File viewers & editors",
     slugs: ["plugin-image-viewer", "plugin-pdf-viewer", "plugin-markdown-editor", "plugin-univer-office", "plugin-code-editor"],
   },
+  { label: "Model & API editor", slugs: ["plugin-model-editor"] },
 ];
 const PLUGINS_OVERVIEW_SLUG = "built-in-plugins";
 
@@ -160,6 +161,39 @@ function Mermaid({ code }: { code: string }) {
       // svg is produced by mermaid with securityLevel:"strict" (sanitized).
       dangerouslySetInnerHTML={{ __html: svg }}
     />
+  );
+}
+
+/** A doc link that deep-links into the app's drive rather than to another doc page —
+ *  e.g. "open this model file in the Model Editor". Used for query-only hrefs like
+ *  `?space=connector:github&path=examples/specs/petstore&open=main.tsp`. A connected
+ *  space's file ids are assigned at index time, so the target file is resolved live by
+ *  (`path`, `open`) and handed to the app as a `?file=<id>` URL it opens on load. With
+ *  no JS — or on a miss — the plain href still browses the folder. */
+function DocAppLink({ href, children }: { href: string; children?: ReactNode }) {
+  const host = usePluginHost();
+  async function onClick(e: ReactMouseEvent) {
+    const params = new URLSearchParams(href.replace(/^\?/, ""));
+    const space = params.get("space") ?? "";
+    const dir = params.get("path") ?? "";
+    const open = params.get("open") ?? ""; // a filename within `dir` to open in its viewer
+    if (!space || !open) return; // a plain folder link — let the browser navigate
+    e.preventDefault();
+    const next = new URLSearchParams();
+    next.set("space", space);
+    if (dir) next.set("path", dir);
+    try {
+      const file = (await host.listFiles(dir, space)).find((f) => f.name === open);
+      if (file) next.set("file", file.id); // open it; else just land in the folder
+    } catch {
+      // ignore — fall back to browsing the folder
+    }
+    window.location.search = next.toString(); // full navigation; the app opens it on load
+  }
+  return (
+    <a href={href} onClick={onClick}>
+      {children}
+    </a>
   );
 }
 
@@ -264,6 +298,11 @@ export function DocumentationView() {
               {children}
             </a>
           );
+        }
+        // A deep link into the app itself (query-only, e.g. open a model file from a
+        // connected space in its viewer) — never a doc-to-doc link, so it sits here.
+        if (href?.startsWith("?")) {
+          return <DocAppLink href={href}>{children}</DocAppLink>;
         }
         if (href && /^(https?:|mailto:|#)/i.test(href)) {
           const external = /^https?:/i.test(href);

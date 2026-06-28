@@ -11,6 +11,7 @@ import {
   uploadFiles,
   createFile,
   loginUrl,
+  logout,
   type Me,
   type SpaceView,
 } from "@/lib/api";
@@ -91,6 +92,15 @@ export function MobileApp() {
     window.location.href = loginUrl(window.location.pathname + window.location.search);
   };
 
+  const signOut = async () => {
+    await logout();
+    setAuth((a) => ({ ...a, user: null }));
+    setSpaces([]);
+    // Remount auth-scoped screens (recent files, space counts) so they refetch
+    // against the now signed-out session instead of showing stale data.
+    setRefreshKey((k) => k + 1);
+  };
+
   async function createNote() {
     const creator = CREATORS.find((c) => c.extension === ".md");
     if (!creator) return;
@@ -127,11 +137,14 @@ export function MobileApp() {
         {view === "home" && (
           <HomeScreen
             userName={userName}
+            auth={auth}
             spaceCount={spaces.filter((s) => s.kind === "group").length}
             installed={installed}
             refreshKey={refreshKey}
             onOpenFile={openFile}
             onNav={(v) => setView(v as View)}
+            onSignIn={signIn}
+            onSignOut={signOut}
           />
         )}
         {view === "drive" && <DriveScreen refreshKey={refreshKey} onOpenFile={openFile} />}

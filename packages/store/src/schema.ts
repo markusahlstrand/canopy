@@ -471,6 +471,24 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
       `ALTER TABLE spaces ADD COLUMN version_days INTEGER`, // retained-day window when policy = 'days'
     ],
   },
+  {
+    // AI Search item map. The Cloudflare AI Search Items API keys writes by name
+    // (we use the fileId) but `items.delete()` and `items.get()` take the opaque
+    // `id` the API *returns* from `upload()` — there is no delete-by-name and no
+    // way to look an item up by its key. So we persist fileId → itemId here on
+    // every upload, then resolve it back to delete the item (on file delete, or
+    // when a file's body disappears). Best-effort hygiene only: the authoritative
+    // ACL/liveness gate is still the by-id files lookup in `aiQuery`, so a missing
+    // row never surfaces a file the caller can't read — it just risks an orphaned
+    // chunk in the index. See packages/store/src/search-ai.ts.
+    version: 22,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS ai_search_items (
+         file_id TEXT PRIMARY KEY,
+         item_id TEXT NOT NULL
+       )`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

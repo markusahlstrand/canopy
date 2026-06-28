@@ -41,6 +41,25 @@ const sniffAsyncApi = (text: string) => /^\s*("?asyncapi"?\s*:)/m.test(text);
 
 const toTextFile = (ref: SpecFileRef, text: string): TextFile => ({ id: ref.id, name: ref.name, path: ref.path, text });
 
+// Well-known JSON/YAML files that live next to specs but are never one. We skip them so
+// opening a spec in a real project folder doesn't read (and sniff) the package manifest,
+// tsconfig, lockfile, or tool rc files just to discard them. A real OpenAPI/AsyncAPI doc
+// is never named any of these, and the layout sidecar is explicitly kept.
+const NOISE_NAMES = new Set([
+  "package.json", "package-lock.json", "components.json", "turbo.json", "nx.json", "vercel.json",
+  "biome.json", "renovate.json", "pnpm-workspace.yaml", "pnpm-lock.yaml", "yarn.lock", "bun.lockb",
+]);
+const isNoiseFile = (name: string): boolean => {
+  const lower = name.toLowerCase();
+  if (lower === SIDECAR_NAME.toLowerCase()) return false; // the layout sidecar is wanted
+  return (
+    NOISE_NAMES.has(lower) ||
+    /^[jt]sconfig(\.[^/]+)?\.json$/.test(lower) || // tsconfig.json, tsconfig.build.json, jsconfig.json
+    /^\.[^/]+rc(\.(json|ya?ml))?$/.test(lower) || // .eslintrc, .prettierrc.json, .babelrc, …
+    lower.endsWith(".tsbuildinfo")
+  );
+};
+
 /**
  * Assemble the related file set for an opened spec file. The opened file's text is
  * passed in directly (it may hold unsaved edits) and overrides its drive copy.
@@ -54,14 +73,20 @@ export async function discoverProject(
   const openapi = new Map<string, TextFile>();
   const asyncapi = new Map<string, TextFile>();
 
-  // Seed with the opened file so discovery works even before anything is read.
-  if (isTsp(opened.name)) tsp.set(opened.name, { id: opened.id, name: opened.name, path: opened.path, text: opened.text });
-  else if (isArazzo(opened.name)) arazzo.set(opened.name, { id: opened.id, name: opened.name, path: opened.path, text: opened.text });
-  else if (isAsyncApi(opened.name)) asyncapi.set(opened.name, { id: opened.id, name: opened.name, path: opened.path, text: opened.text });
+  // Seed with the opened file so discovery works even before anything is read. The
+  // opened file is excluded from the sibling read below, so it has to be classified
+  // here — including OpenAPI/AsyncAPI YAML/JSON, which are detected by name or by
+  // sniffing the body (sniff AsyncAPI before OpenAPI, mirroring the sibling pass).
+  const openedFile = { id: opened.id, name: opened.name, path: opened.path, text: opened.text };
+  if (isTsp(opened.name)) tsp.set(opened.name, openedFile);
+  else if (isArazzo(opened.name)) arazzo.set(opened.name, openedFile);
+  else if (isAsyncApi(opened.name) || (isYamlOrJson(opened.name) && (looksLikeAsyncApi(opened.name) || sniffAsyncApi(opened.text)))) asyncapi.set(opened.name, openedFile);
+  else if (isYamlOrJson(opened.name) && (looksLikeOpenApi(opened.name) || sniffOpenApi(opened.text))) openapi.set(opened.name, openedFile);
 
   const reads = provider.siblings
     .filter((ref) => isTsp(ref.name) || isArazzo(ref.name) || isAsyncApi(ref.name) || isYamlOrJson(ref.name))
     .filter((ref) => ref.name !== opened.name) // opened file already seeded
+    .filter((ref) => !isNoiseFile(ref.name)) // skip package.json / tsconfig / lockfiles / rc files
     .map(async (ref) => {
       try {
         return { ref, text: await provider.readText(ref) };

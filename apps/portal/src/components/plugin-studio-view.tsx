@@ -11,10 +11,14 @@ import { cn } from "@/lib/utils";
 import { aiGenerate, listAiModels, saveCustomPlugin, type AiModel, type CustomPlugin } from "@/lib/api";
 import {
   buildGenerationMessages,
+  buildRefinementMessages,
   parseGeneratedPlugin,
   type GeneratedPlugin,
   type PluginKind,
 } from "@/lib/plugin-author-prompt";
+
+/** Studio mode: build a fresh plugin, or iterate on the one already in the panel. */
+type StudioMode = "create" | "refine";
 
 /**
  * Plugin Studio — describe an idea, the **core LLM** writes a sandboxed viewer
@@ -38,18 +42,25 @@ export function PluginStudioView({
   const [models, setModels] = useState<AiModel[] | null>(null); // null = still loading
   const [model, setModel] = useState("");
   const [kind, setKind] = useState<PluginKind>("viewer");
+  const [mode, setMode] = useState<StudioMode>("create");
   const [idea, setIdea] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generated, setGenerated] = useState<GeneratedPlugin | null>(null);
+  const [name, setName] = useState(""); // editable display name applied at install
   const [installed, setInstalled] = useState(false);
   const [sample, setSample] = useState<{ name: string; url: string } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const topRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     listAiModels().then((m) => {
       setModels(m);
-      if (m[0]) setModel(m[0].id);
+      // Default to a code model when the host exposes one (Qwen2.5 Coder on
+      // Cloudflare) — it's the task here — else the host's general default.
+      const coder = m.find((x) => /\b(coder|code)\b/i.test(`${x.id} ${x.label}`));
+      const pick = coder ?? m[0];
+      if (pick) setModel(pick.id);
     });
   }, []);
 
@@ -61,13 +72,20 @@ export function PluginStudioView({
   }, [sample]);
 
   async function generate() {
+    // Refine the current plugin (feed its manifest+source back as context) when in
+    // refine mode with something to refine; otherwise build a fresh plugin.
+    const refining = mode === "refine" && !!generated;
     setBusy(true);
     setError(null);
     setInstalled(false);
-    setGenerated(null);
+    if (!refining) setGenerated(null); // keep the current preview while refining
     try {
+      // Carry the current (possibly renamed) name into the refine context so it
+      // survives the round-trip — the model is told to keep the manifest as-is bar
+      // the change.
+      const current = generated && { ...generated, manifest: { ...generated.manifest, name: name.trim() || generated.manifest.name } };
       const text = await aiGenerate({
-        messages: buildGenerationMessages(idea, kind),
+        messages: refining ? buildRefinementMessages(idea, current!) : buildGenerationMessages(idea, kind),
         model: model || undefined,
         // The contract asks for two fenced blocks (manifest + source), not one JSON
         // object — so we don't force strict JSON mode (which not every model supports,
@@ -77,7 +95,12 @@ export function PluginStudioView({
         // their own limit. The server caps at AI_MAX_TOKENS regardless.
         maxTokens: 16384,
       });
-      setGenerated(parseGeneratedPlugin(text));
+      const next = parseGeneratedPlugin(text);
+      setGenerated(next);
+      setName(next.manifest.name);
+      // Once a plugin exists, the natural next step is to iterate on it.
+      setMode("refine");
+      setIdea("");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -87,18 +110,41 @@ export function PluginStudioView({
 
   async function install() {
     if (!generated) return;
+    const finalName = name.trim() || generated.manifest.name;
     setBusy(true);
     setError(null);
     try {
-      await saveCustomPlugin(generated.manifest, generated.source);
+      // The user names the plugin at save time; everything else comes from the manifest.
+      await saveCustomPlugin({ ...generated.manifest, name: finalName }, generated.source);
       setInstalled(true);
       onInstalled?.();
-      toast("Plugin installed", { description: `“${generated.manifest.name}” is now active.` });
+      toast("Plugin installed", { description: `“${finalName}” is now active.` });
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Load an already-generated plugin back into the panel to refine it. */
+  function loadForRefine(p: CustomPlugin) {
+    setGenerated({ manifest: p.manifest, source: p.source });
+    setName(p.manifest.name);
+    setMode("refine");
+    setIdea("");
+    setInstalled(false);
+    setError(null);
+    topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  /** Clear the panel and start a fresh plugin from scratch. */
+  function startNew() {
+    setMode("create");
+    setGenerated(null);
+    setName("");
+    setIdea("");
+    setInstalled(false);
+    setError(null);
   }
 
   function pickSample(f: File | undefined) {
@@ -134,7 +180,7 @@ export function PluginStudioView({
   const previewAsApp = !!detailView;
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-6 py-1">
+    <div ref={topRef} className="mx-auto flex max-w-2xl flex-col gap-6 py-1">
       {/* Header */}
       <div className="flex items-start gap-3.5">
         <div
@@ -152,27 +198,50 @@ export function PluginStudioView({
         </div>
       </div>
 
-      {/* Kind + idea + model */}
+      {/* Mode + kind + idea + model */}
       <div className="flex flex-col gap-2">
-        <div className="inline-flex self-start rounded-md border p-0.5 text-[13px]">
-          {([
-            ["viewer", "File viewer"],
-            ["app", "App"],
-          ] as const).map(([k, label]) => (
-            <button
-              key={k}
-              onClick={() => setKind(k)}
-              className={cn(
-                "rounded-[5px] px-3 py-1 transition-colors",
-                kind === k ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* Refine vs. create — only meaningful once a plugin is in the panel. */}
+        {generated && (
+          <div className="inline-flex self-start rounded-md border p-0.5 text-[13px]">
+            {([
+              ["refine", "Refine current"],
+              ["create", "Create new"],
+            ] as const).map(([mo, label]) => (
+              <button
+                key={mo}
+                onClick={() => (mo === "create" ? startNew() : setMode("refine"))}
+                className={cn(
+                  "rounded-[5px] px-3 py-1 transition-colors",
+                  mode === mo ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {/* Viewer vs. app — only when creating; a refine keeps the existing kind. */}
+        {mode === "create" && (
+          <div className="inline-flex self-start rounded-md border p-0.5 text-[13px]">
+            {([
+              ["viewer", "File viewer"],
+              ["app", "App"],
+            ] as const).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setKind(k)}
+                className={cn(
+                  "rounded-[5px] px-3 py-1 transition-colors",
+                  kind === k ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         <label htmlFor="studio-idea" className="text-[13px] font-medium">
-          What should it do?
+          {mode === "refine" ? "What should change?" : "What should it do?"}
         </label>
         <textarea
           id="studio-idea"
@@ -180,9 +249,11 @@ export function PluginStudioView({
           onChange={(e) => setIdea(e.target.value)}
           rows={3}
           placeholder={
-            kind === "app"
-              ? "e.g. A snake game, a pomodoro timer, or a unit converter"
-              : "e.g. Render .gpx GPS tracks on a small map, or show EXIF metadata for photos"
+            mode === "refine"
+              ? "e.g. Make the snake faster, add a score counter, fix the reset button"
+              : kind === "app"
+                ? "e.g. A snake game, a pomodoro timer, or a unit converter"
+                : "e.g. Render .gpx GPS tracks on a small map, or show EXIF metadata for photos"
           }
           className="w-full resize-y rounded-md border bg-transparent px-3 py-2 text-[14px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
         />
@@ -202,13 +273,21 @@ export function PluginStudioView({
             </Select>
           )}
           <Button onClick={generate} disabled={busy || !idea.trim() || models === null} className="gap-1.5">
-            {busy && !generated ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-            {busy && !generated ? "Generating…" : generated ? "Regenerate" : "Generate plugin"}
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+            {busy
+              ? mode === "refine"
+                ? "Refining…"
+                : "Generating…"
+              : mode === "refine"
+                ? "Refine plugin"
+                : "Generate plugin"}
           </Button>
           <span className="text-[12px] text-muted-foreground">
-            {kind === "app"
-              ? "An app launches from its own section in the sidebar."
-              : "A viewer opens when you preview a matching file."}
+            {mode === "refine"
+              ? "Describe a change — the AI rewrites the current plugin."
+              : kind === "app"
+                ? "An app launches from its own section in the sidebar."
+                : "A viewer opens when you preview a matching file."}
           </span>
         </div>
       </div>
@@ -232,7 +311,7 @@ export function PluginStudioView({
             </div>
             <div className="min-w-0 flex-1">
               <div className="font-medium">
-                {m.name} <span className="font-mono text-[12px] text-muted-foreground">{m.id}</span>
+                {name || m.name} <span className="font-mono text-[12px] text-muted-foreground">{m.id}</span>
               </div>
               {m.description && <p className="text-[12.5px] text-muted-foreground">{m.description}</p>}
               <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -302,9 +381,24 @@ export function PluginStudioView({
             </pre>
           </details>
 
-          {/* Install */}
+          {/* Name + install */}
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="studio-name" className="text-[13px] font-medium">
+              Name
+            </label>
+            <input
+              id="studio-name"
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setInstalled(false); // renaming after install means there's a new version to save
+              }}
+              placeholder={m.name}
+              className="h-9 w-full rounded-md border bg-transparent px-3 text-[14px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
           <div className="flex items-center gap-2">
-            <Button onClick={install} disabled={busy || installed} className="gap-1.5">
+            <Button onClick={install} disabled={busy || installed || !name.trim()} className="gap-1.5">
               {installed ? <Check size={15} /> : busy ? <Loader2 size={15} className="animate-spin" /> : <Icon name="plugin" size={15} />}
               {installed ? "Installed" : "Install plugin"}
             </Button>
@@ -339,6 +433,14 @@ export function PluginStudioView({
                     <div className="truncate text-[13px] font-medium">{p.manifest.name}</div>
                     <div className="truncate font-mono text-[11px] text-muted-foreground">{ms.join(", ")}</div>
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-muted-foreground hover:text-foreground"
+                    onClick={() => loadForRefine(p)}
+                  >
+                    <Sparkles size={14} /> Refine
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"

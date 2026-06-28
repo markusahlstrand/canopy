@@ -54,12 +54,34 @@
 			"database_name": "canopy"
 		}
 	],
-	// Workers AI: the host AI gateway. With this bound, the deployment exposes its
-	// models (e.g. @cf/google/gemma-4-26b-a4b-it) to plugins with no per-user key —
-	// Document AI labels uploads out of the box. Edit the exposed list in src/ai/cloudflare.ts.
+	// Workers AI: the host AI gateway. With this bound, the deployment exposes a curated
+	// menu of models (Gemma 4 26B / Llama 4 Scout / Mistral Small for text+vision, Kimi
+	// K2.7 Code / GLM-5.2 / Qwen2.5 Coder for codegen+extraction, GPT-OSS 120B / Qwen3
+	// for strict-JSON categorization) to plugins with no per-user key — Document AI
+	// labels uploads out of the box. Edit the exposed list in src/ai/cloudflare.ts.
 	"ai": {
 		"binding": "AI"
 	},
+	// AI Search (semantic document search), OPTIONAL and OFF by default so the
+	// zero-setup "Deploy to Cloudflare" path keeps working. When both the binding
+	// below and the AI_SEARCH_INSTANCE var (in `vars`) are present, search becomes
+	// hybrid — Cloudflare AI Search for semantic recall fused with the always-on
+	// D1 FTS leg (filename / exact-term / metadata); otherwise it's FTS-only. The
+	// feed pushes each file's curated text via the Items API (source-independent,
+	// covers connector spaces too), and a by-id DB lookup is the ACL + liveness
+	// gate — see packages/store/src/search-ai.ts.
+	//
+	// To turn it on:
+	//   1. Provision an instance:  `wrangler ai-search create canopy-search`
+	//   2. On that instance, declare a custom metadata attribute named `spaceId`
+	//      (used as the per-space retrieval filter; the DB lookup is the backstop).
+	//   3. Uncomment the binding below AND set AI_SEARCH_INSTANCE in `vars`.
+	// "ai_search_namespaces": [
+	// 	{
+	// 		"binding": "AI_SEARCH",
+	// 		"namespace": "default"
+	// 	}
+	// ],
 	// Document-parser container: heavy PDF/spreadsheet parsing off the isolate, and
 	// the only way to reach a tailnet-only Synology source (a tsnet sidecar joins your
 	// tailnet — see apps/docworker). The Worker offloads to it whenever the DOCWORKER
@@ -144,7 +166,10 @@
 		"GITHUB_BRANCH": "main",
 		"OIDC_ISSUER": "https://canopy.token.sesamy.dev",
 		"OIDC_CLIENT_ID": "canopy",
-		"OIDC_AUDIENCE": "urn:canopy"
+		"OIDC_AUDIENCE": "urn:canopy",
+		// Name of the AI Search instance to query. Uncomment together with the
+		// "ai_search_namespaces" binding above to enable hybrid semantic search.
+		// "AI_SEARCH_INSTANCE": "canopy-search"
 	},
 	// Daily version-retention sweep: thins old snapshots to the retention curve (#11).
 	"triggers": {

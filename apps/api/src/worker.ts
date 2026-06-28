@@ -5,6 +5,7 @@ import { AI_PROVIDER_FIELDS, providersFromUserConfig } from "./ai/user-config";
 import {
   FileService,
   createD1Db,
+  createAiSearchIndex,
   createR2BlobStore,
   createSqlBlobRepo,
   createSqlSearchIndex,
@@ -20,6 +21,7 @@ import {
   type D1Like,
   type FileRecord,
   type FileVersion,
+  type AiSearchInstance,
   type IndexJobs,
   type R2BucketLike,
 } from "@canopy/store";
@@ -43,6 +45,12 @@ interface WorkerEnv {
   DB: D1Like;
   /** Workers AI binding — when bound, the host exposes its models (Gemma) with no key. */
   AI?: WorkersAiBinding;
+  /** Cloudflare AI Search (AutoRAG) namespace binding. When bound *and* `AI_SEARCH_INSTANCE`
+   *  is set, search becomes hybrid (AI Search semantic recall fused with D1 FTS); otherwise
+   *  FTS5 alone. Duck-typed so `apps/api` stays free of `@cloudflare/workers-types`. */
+  AI_SEARCH?: AiSearchNamespace;
+  /** Name of the AI Search instance to query within the bound namespace. */
+  AI_SEARCH_INSTANCE?: string;
   /** GitHub repo ("owner/repo") backing the read-only documentation + demo mounts. */
   GITHUB_REPO?: string;
   GITHUB_BRANCH?: string;
@@ -67,6 +75,11 @@ interface WorkerEnv {
    *  impl). Optional — absent (e.g. Node, or before the Workflow is provisioned) → the
    *  in-process loop runs instead. Duck-typed, like the DO bindings above. */
   CONNECTOR_INDEX?: IndexWorkflowBinding;
+}
+
+/** The slice of the AI Search namespace binding we use: resolve one instance by name. */
+interface AiSearchNamespace {
+  get(name: string): AiSearchInstance;
 }
 
 /** The slice of the connector-index Workflow binding we use (duck-typed). */
@@ -136,7 +149,14 @@ export async function buildDeps(env: WorkerEnv, waitUntil?: (p: Promise<unknown>
   const db = createD1Db(env.DB);
   await (schemaReady ??= runMigrations(db));
   const blobs = createR2BlobStore(env.BUCKET);
-  const search = createSqlSearchIndex(db);
+  // FTS5 is always the feed + title/metadata backend. When an AI Search instance
+  // is bound, wrap it for hybrid (semantic content) recall; the FTS index stays
+  // the source for filename/label/tag matching.
+  const fts = createSqlSearchIndex(db);
+  const search =
+    env.AI_SEARCH && env.AI_SEARCH_INSTANCE
+      ? createAiSearchIndex({ db, instance: env.AI_SEARCH.get(env.AI_SEARCH_INSTANCE), fts })
+      : fts;
   const authConfig = readAuthConfig(env as unknown as EnvVars);
   const { plugins, connectorFor, connectorForUser, readExternal } = connectorWiring(env, db, authConfig);
   const channel = env.SPACE_CHANNEL;

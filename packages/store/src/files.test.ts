@@ -103,6 +103,28 @@ describe("FileService over libsql", () => {
     expect(versions[0]!.n).toBe(1);
   });
 
+  it("rename updates the name column without a new version or losing metadata", async () => {
+    const f = await upload("old.md", "# hi", { metadata: { tag: "x" } });
+    const before = f.currentVersionId;
+
+    const renamed = await svc.patchMetadata({ sub: USER }, f.id, { name: "new.md" });
+    expect(renamed.name).toBe("new.md");
+    expect(renamed.metadata.tag).toBe("x"); // metadata survives
+    expect(renamed.metadata.name).toBeUndefined(); // name lands on the column, not the blob
+    expect(renamed.currentVersionId).toBe(before);
+
+    const versions = await db.all<{ n: number }>("SELECT COUNT(*) AS n FROM file_versions WHERE file_id = ?", [f.id]);
+    expect(versions[0]!.n).toBe(1);
+  });
+
+  it("rejects an empty name or one with a path separator", async () => {
+    const f = await upload("doc.md", "# hi");
+    await expect(svc.patchMetadata({ sub: USER }, f.id, { name: "  " })).rejects.toThrow();
+    await expect(svc.patchMetadata({ sub: USER }, f.id, { name: "a/b.md" })).rejects.toThrow();
+    const still = await svc.getFile({ sub: USER }, f.id);
+    expect(still.name).toBe("doc.md");
+  });
+
   it("rapid same-author edits coalesce into one version, keep metadata, and release the old blob", async () => {
     const f = await upload("notes.md", "v1", { path: "Docs", metadata: { tag: "keep" } });
     const v1Key = f.version!.blobKey!;

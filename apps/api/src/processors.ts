@@ -107,10 +107,16 @@ export const documentAiProcessor: DocumentProcessor = {
   eligible: (_config, ctx) => !!ctx.ai && ctx.ai.models().length > 0,
   async process(file, config, ctx) {
     if (!ctx.ai) return { labels: [], error: "no AI provider configured on this server" };
-    // The user's choice, else the first model the host exposes (zero-config default).
-    const model = config.model?.trim() || ctx.ai.models()[0]?.id;
+    // Pick by task: the user's explicit choice wins; otherwise route images to a
+    // vision-capable model (Llama 3.2 Vision on Cloudflare) and everything else to
+    // the host's general default (`models[0]` — Qwen3 on Cloudflare). Capability-based,
+    // so a single-model provider (e.g. one Gemini model) still resolves correctly.
+    const models = ctx.ai.models();
+    const wantsVision = /^image\//i.test((file.mime || "").toLowerCase());
+    const model =
+      config.model?.trim() || (wantsVision ? models.find((m) => m.vision)?.id : undefined) || models[0]?.id;
     if (!model) return { labels: [], error: "no AI model available" };
-    const vision = ctx.ai.models().find((m) => m.id === model)?.vision ?? false;
+    const vision = models.find((m) => m.id === model)?.vision ?? false;
     const language = config.language?.trim() || DEFAULT_LANGUAGE;
     try {
       const out = await ctx.ai.generate({

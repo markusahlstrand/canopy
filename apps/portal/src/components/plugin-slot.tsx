@@ -132,13 +132,23 @@ const BOOTSTRAP = `<!doctype html>
 
 type Status = "loading" | "ready" | "error";
 
+/** Cheap, stable signature of a string — distinguishes one plugin source from another. */
+function sig(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return `${s.length}.${h >>> 0}`;
+}
+
 /**
  * Mount a plugin-contributed UI slot in the sandbox.
  *
- * Mount with a `key` tied to `${plugin}:${slot}` so switching plugins remounts
- * the frame cleanly. `capabilities` may change identity between renders without
- * re-initialising the frame — the latest map is read from a ref when a call
- * arrives — so the theme/source captured at init stay stable.
+ * The iframe is keyed by `${plugin}:${slot}:${sig(source)}` so switching plugins
+ * — or regenerating the same one with new source — remounts a fresh frame. This
+ * is essential: `srcDoc` is static, so the `canopy:slot-ready` handshake fires
+ * only on (re)load; without a remount a new `source` would never be initialised
+ * and the old plugin would keep running. `capabilities` may change identity
+ * between renders without re-initialising the frame — the latest map is read from
+ * a ref when a call arrives — so the theme/source captured at init stay stable.
  */
 export function PluginSlot({
   plugin,
@@ -228,6 +238,7 @@ export function PluginSlot({
 
   return (
     <iframe
+      key={`${plugin}:${slot}:${sig(source)}`}
       ref={iframeRef}
       title={`${plugin} ${slot}`}
       // No allow-same-origin: the frame gets a unique opaque origin.
