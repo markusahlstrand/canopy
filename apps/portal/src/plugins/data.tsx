@@ -1,5 +1,17 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { getCalendar, getTasks, type CalendarEvent, type Task } from "@/lib/api";
+import {
+  createCalendar,
+  createEvent,
+  createTask,
+  getCalendar,
+  getTasks,
+  listCalendars,
+  type Calendar,
+  type CalendarEvent,
+  type CreateEventInput,
+  type CreateTaskInput,
+  type Task,
+} from "@/lib/api";
 import { SAMPLE_TASKS, sampleEvents } from "./sample-data";
 import type { CapabilityMap } from "@/components/plugin-slot";
 
@@ -10,7 +22,7 @@ import type { CapabilityMap } from "@/components/plugin-slot";
  * via context; the hooks fetch and pick live-vs-sample.
  */
 
-type Source = "github" | "sample";
+type Source = "github" | "sample" | "owned" | "owned+github";
 
 const Ctx = createContext<{ githubInstalled: boolean; nonce: number; refresh: () => void }>({
   githubInstalled: false,
@@ -30,32 +42,29 @@ export function usePluginDataRefresh(): () => void {
 }
 
 export function useTasks(): { tasks: Task[]; source: Source; loading: boolean } {
-  const { githubInstalled, nonce } = useContext(Ctx);
+  const { nonce } = useContext(Ctx);
   const [state, setState] = useState<{ tasks: Task[]; source: Source; loading: boolean }>({
     tasks: SAMPLE_TASKS,
     source: "sample",
-    loading: githubInstalled,
+    loading: true,
   });
 
   useEffect(() => {
-    if (!githubInstalled) {
-      setState({ tasks: SAMPLE_TASKS, source: "sample", loading: false });
-      return;
-    }
     let alive = true;
     setState((s) => ({ ...s, loading: true }));
+    // Always ask the server: it aggregates owned tasks (when signed in) with any
+    // connected source (GitHub). Only when nothing contributed do we show sample.
     getTasks()
       .then((r) => {
         if (!alive) return;
-        // Connected → show live data as-is (even if empty); else sample.
-        if (r.source) setState({ tasks: r.tasks, source: "github", loading: false });
+        if (r.source) setState({ tasks: r.tasks, source: r.source as Source, loading: false });
         else setState({ tasks: SAMPLE_TASKS, source: "sample", loading: false });
       })
       .catch(() => alive && setState({ tasks: SAMPLE_TASKS, source: "sample", loading: false }));
     return () => {
       alive = false;
     };
-  }, [githubInstalled, nonce]);
+  }, [nonce]);
 
   return state;
 }
@@ -63,17 +72,17 @@ export function useTasks(): { tasks: Task[]; source: Source; loading: boolean } 
 /**
  * Calendar fetch + sample fallback, decoupled from React so it can run inside a
  * host capability handler (sandboxed plugins call this via `ctx.call`, not a hook).
- * Connected → live GitHub data as-is; otherwise project-flavored sample events.
+ * The server aggregates the caller's owned calendars/events (#34) with any
+ * connected source (GitHub); only when nothing contributed do we show sample data.
  */
-async function fetchCalendarEvents(githubInstalled: boolean): Promise<{ events: CalendarEvent[]; source: Source }> {
-  if (!githubInstalled) return { events: sampleEvents(), source: "sample" };
+async function fetchCalendarEvents(): Promise<{ events: CalendarEvent[]; source: Source; calendars: Calendar[] }> {
   try {
     const r = await getCalendar();
-    if (r.source) return { events: r.events, source: "github" };
+    if (r.source || r.calendars.length) return { events: r.events, source: (r.source as Source) ?? "owned", calendars: r.calendars };
   } catch {
     // fall through to sample
   }
-  return { events: sampleEvents(), source: "sample" };
+  return { events: sampleEvents(), source: "sample", calendars: [] };
 }
 
 /**
@@ -81,11 +90,20 @@ async function fetchCalendarEvents(githubInstalled: boolean): Promise<{ events: 
  * Each entry is a method the host fulfils with its own credentials — the plugin
  * can only call what's wired here. Keyed by `<domain>.<verb>`; `nonce` lets a
  * settings change re-resolve on the next call.
+ *
+ * The `calendar.*` write verbs back the owned-calendar surface (#34): the plugin
+ * proposes a calendar/event/task and the host performs the credentialed write,
+ * scoped by the drive's folder-grant ACL server-side.
  */
 export function usePluginCapabilities(): CapabilityMap {
-  const { githubInstalled, nonce } = useContext(Ctx);
+  const { nonce } = useContext(Ctx);
   void nonce; // referenced so the map is rebuilt after a refresh()
   return {
-    "calendar.list": () => fetchCalendarEvents(githubInstalled),
+    "calendar.list": () => fetchCalendarEvents(),
+    "calendar.calendars": () => listCalendars(),
+    "calendar.createCalendar": (p) =>
+      createCalendar(p as { name: string; space?: string; path?: string; color?: string | null }),
+    "calendar.createEvent": (p) => createEvent(p as CreateEventInput),
+    "calendar.createTask": (p) => createTask(p as CreateTaskInput),
   };
 }

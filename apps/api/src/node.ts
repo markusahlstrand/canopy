@@ -18,6 +18,7 @@ import {
   inProcessIndexJobs,
   resolveInvites,
   runMigrations,
+  SchedulingStore,
   syncAllConnectors,
   upsertUser,
   type FileRecord,
@@ -179,6 +180,7 @@ const app = createApp({
   authConfig,
   readonlyMounts: { documentation, demo },
   drive: { service, blobs, docWorker: inProcessDocWorker() },
+  scheduling: new SchedulingStore(db),
   dataSources,
   // In-process connector indexing (full crawl + extract drain) for the "Sync now" /
   // on-connect triggers; the periodic sweep below stays the safety net.

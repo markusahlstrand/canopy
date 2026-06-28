@@ -87,6 +87,24 @@ Keeping the tuples in **one store** is deliberate: an authorization check is inh
 cross-cutting, so it stays a single query rather than fanning out across databases. Content
 (files, blobs) can shard per space later; the authz graph stays centralized.
 
+## One model, many item types: calendars
+
+Folders and folder grants aren't just for files. A **calendar is a virtual folder**
+([Calendar](plugin-calendar)): creating a calendar creates a colored folder in a space, and
+its events and tasks are stored at that folder's path. Because the permission unit is the
+folder, **sharing a calendar is exactly sharing a folder** — grant a person (by email) or a
+whole group space `viewer`/`editor` on the calendar folder and they see its events, with the
+same downward inheritance as files.
+
+This is the payoff of keeping one identity + permission model: a single folder can hold a
+team's **documents and its calendar**, and one share covers both. Events and tasks live in
+their own tables (never as files), so they never appear in the file tree — they surface in
+the Calendar app instead — but they answer to the same `pathRole` check every file does. A
+space therefore has 0–n calendars (its calendar folders) plus an implicit root calendar.
+
+Tags on scheduling items (JSCalendar `keywords`) are classification only — for filtering and
+color — and carry no permission meaning; the folder decides who can see an item.
+
 ## Not yet
 
 - **Link sharing** ("anyone with the link") — planned (a tokenized grant with an optional

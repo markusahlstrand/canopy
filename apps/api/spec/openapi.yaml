@@ -138,7 +138,10 @@ paths:
   /api/calendar:
     get:
       operationId: listCalendar
-      description: Calendar events from the caller's configured source. `?from=`/`?to=` are ISO 8601.
+      description: |-
+        The aggregated calendar stream: owned events from the scheduling store plus
+        any data-source provider's (GitHub), with the caller's owned calendars for the
+        aggregator's calendar list. `?from=`/`?to=` are ISO 8601; `?space=` scopes.
       parameters:
         - name: from
           in: query
@@ -147,6 +150,12 @@ paths:
             type: string
           explode: false
         - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: space
           in: query
           required: false
           schema:
@@ -167,6 +176,77 @@ paths:
                 $ref: '#/components/schemas/Error'
       security:
         - {}
+  /api/calendars:
+    get:
+      operationId: listCalendars
+      description: The caller's owned calendars (= virtual folders). `?space=` scopes to one space.
+      parameters:
+        - name: space
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarsList'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createCalendar
+      description: Create a calendar (a colored virtual folder) in a space.
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Calendar'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCalendar'
+  /api/calendars/share:
+    post:
+      operationId: shareCalendar
+      description: Share a calendar (folder) with a person by email.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShareCalendar'
   /api/changes:
     get:
       operationId: changesSince
@@ -509,6 +589,86 @@ paths:
                     type: boolean
                 required:
                   - started
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/events:
+    post:
+      operationId: createEvent
+      description: Create an event in a calendar.
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEvent'
+  /api/events/{id}:
+    patch:
+      operationId: updateEvent
+      description: Patch an event.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    $ref: '#/components/schemas/Event'
+                required:
+                  - updated
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEvent'
+    delete:
+      operationId: deleteEvent
+      description: Soft-delete an event.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
         default:
           description: An unexpected error response.
           content:
@@ -2318,8 +2478,16 @@ paths:
   /api/tasks:
     get:
       operationId: listTasks
-      description: Tasks from the caller's configured source (or the demo default).
-      parameters: []
+      description: |-
+        Tasks the caller can see: owned tasks from the scheduling store plus any
+        data-source provider's (GitHub). `?space=` scopes to one space.
+      parameters:
+        - name: space
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
       responses:
         '200':
           description: The request has succeeded.
@@ -2335,6 +2503,85 @@ paths:
                 $ref: '#/components/schemas/Error'
       security:
         - {}
+    post:
+      operationId: createTask
+      description: Create an owned task in a calendar.
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTask'
+  /api/tasks/{id}:
+    patch:
+      operationId: updateTask
+      description: Patch an owned task.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    $ref: '#/components/schemas/Task'
+                required:
+                  - updated
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTask'
+    delete:
+      operationId: deleteTask
+      description: Soft-delete an owned task.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ok'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/uploads/prepare:
     post:
       operationId: prepareUpload
@@ -2651,6 +2898,38 @@ components:
           items:
             $ref: '#/components/schemas/BranchInfo'
       description: "The connected space's branches, or `supported: false` for a NAS with no branch concept."
+    Calendar:
+      type: object
+      required:
+        - id
+        - spaceId
+        - path
+        - name
+        - role
+      properties:
+        id:
+          type: string
+          description: Stable id = `${spaceId}${path}` (the folder object id).
+        spaceId:
+          type: string
+          x-references: Space
+        path:
+          type: string
+          description: Virtual-folder path within the space ("" = the implicit root calendar).
+        name:
+          type: string
+        color:
+          type: string
+          nullable: true
+          description: Accent color — an HSL triplet like "212 92% 50%", or null to inherit the space color.
+        role:
+          allOf:
+            - $ref: '#/components/schemas/Role'
+          description: The caller's effective role on this calendar (folder grant ∪ space membership).
+        createdAt:
+          type: string
+          format: date-time
+      description: 'A calendar: a shareable virtual folder of scheduling items.'
     CalendarEvent:
       type: object
       required:
@@ -2682,7 +2961,26 @@ components:
         tone:
           type: string
           description: Accent token.
-      description: A calendar event surfaced by a data-source plugin.
+        spaceId:
+          type: string
+          description: 'Owned events: the space the event lives in.'
+        path:
+          type: string
+          description: 'Owned events: the calendar (folder) path within the space ("" = root).'
+        calendarId:
+          type: string
+          description: 'Owned events: the calendar id = `${spaceId}${path}`.'
+        color:
+          type: string
+          description: "Owned events: the calendar's accent color (HSL triplet)."
+        editable:
+          type: boolean
+          description: 'Owned events: whether the caller may edit it.'
+      description: |-
+        A calendar event in the flat view shape the Calendar plugin renders. Either
+        surfaced by a data-source plugin (GitHub milestones/releases) or an owned event
+        projected from the scheduling store (#34) — owned events carry their calendar
+        coordinates so the aggregator can group, color, and toggle by calendar.
     CalendarList:
       type: object
       required:
@@ -2691,11 +2989,27 @@ components:
         source:
           type: string
           nullable: true
+          description: Which sources contributed (e.g. "owned", "github", "owned+github").
         events:
           type: array
           items:
             $ref: '#/components/schemas/CalendarEvent'
-      description: Events from the active source.
+        calendars:
+          type: array
+          items:
+            $ref: '#/components/schemas/Calendar'
+          description: The caller's owned calendars (= virtual folders), for the aggregator's calendar list.
+      description: Events from the active source(s), plus the caller's owned calendars.
+    CalendarsList:
+      type: object
+      required:
+        - calendars
+      properties:
+        calendars:
+          type: array
+          items:
+            $ref: '#/components/schemas/Calendar'
+      description: The caller's owned calendars.
     CapAiGenerate:
       type: object
       required:
@@ -2989,6 +3303,23 @@ components:
         from:
           type: string
       description: Create a branch on the backend (from another ref, default = the current branch).
+    CreateCalendar:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        space:
+          type: string
+          description: Target space; omit for the caller's personal space.
+        path:
+          type: string
+          description: Folder path; defaults to a slug of `name`.
+        color:
+          type: string
+          nullable: true
+      description: Fields to create a calendar (a colored virtual folder) in a space.
     CreateComment:
       type: object
       required:
@@ -3008,6 +3339,34 @@ components:
         source:
           type: string
       description: Submit a Studio-generated plugin (manifest + source).
+    CreateEvent:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+        space:
+          type: string
+          description: Target space; omit for the caller's personal space.
+        path:
+          type: string
+          description: Calendar folder path ("" = the space's root calendar).
+        start:
+          type: string
+        end:
+          type: string
+        allDay:
+          type: boolean
+        description:
+          type: string
+        location:
+          type: string
+        keywords:
+          type: array
+          items:
+            type: string
+      description: Fields to create an event in a calendar.
     CreateFile:
       type: object
       required:
@@ -3084,6 +3443,43 @@ components:
           type: string
           nullable: true
       description: Fields accepted when creating a shared (group) space.
+    CreateTask:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+        space:
+          type: string
+        path:
+          type: string
+        status:
+          type: string
+          enum:
+            - todo
+            - in_progress
+            - blocked
+            - done
+        progress:
+          type: integer
+          format: int32
+          description: JSCalendar percentComplete (0..100).
+        start:
+          type: string
+        due:
+          type: string
+        priority:
+          type: string
+          enum:
+            - low
+            - normal
+            - high
+        keywords:
+          type: array
+          items:
+            type: string
+      description: Fields to create an owned task in a calendar.
     CustomPlugin:
       type: object
       required:
@@ -3175,6 +3571,64 @@ components:
           description: HTTP-aligned error code.
         message:
           type: string
+    Event:
+      type: object
+      required:
+        - id
+        - spaceId
+        - path
+        - uid
+        - title
+        - allDay
+        - keywords
+        - etag
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        spaceId:
+          type: string
+          x-references: Space
+        path:
+          type: string
+          description: The calendar (folder) path within the space.
+        uid:
+          type: string
+          description: JSCalendar logical identity (iCal UID).
+        title:
+          type: string
+        start:
+          type: string
+          nullable: true
+          description: ISO 8601 (date or date-time).
+        end:
+          type: string
+          nullable: true
+          description: ISO 8601; omit for point-in-time / all-day.
+        allDay:
+          type: boolean
+        description:
+          type: string
+          nullable: true
+        location:
+          type: string
+          nullable: true
+        keywords:
+          type: array
+          items:
+            type: string
+          description: Tags (JSCalendar keywords) — classification only, no permission meaning.
+        etag:
+          type: string
+          description: Content hash of the JSCalendar object.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      description: An owned calendar event (JSCalendar-shaped record).
     File:
       type: object
       required:
@@ -3740,6 +4194,35 @@ components:
           type: integer
           format: int64
       description: Request to reserve an upload slot for content with the given hash.
+    Principal:
+      type: object
+      required:
+        - id
+        - kind
+      properties:
+        id:
+          type: string
+        spaceId:
+          type: string
+          nullable: true
+          x-references: Space
+        kind:
+          type: string
+          enum:
+            - person
+        sub:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/Sub'
+          nullable: true
+          description: Links to a Canopy user when known.
+        email:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+      description: A person principal — an identity hub events reference as a participant.
     ProcessingRun:
       type: object
       required:
@@ -3881,6 +4364,25 @@ components:
           format: int32
           nullable: true
       description: Update a connected space's version-retention policy.
+    ShareCalendar:
+      type: object
+      required:
+        - space
+        - path
+        - email
+      properties:
+        space:
+          type: string
+        path:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum:
+            - viewer
+            - editor
+      description: Share a calendar (folder) with a person by email.
     ShareInfo:
       type: object
       required:
@@ -4088,8 +4590,11 @@ components:
         - pending
       properties:
         sub:
-          allOf:
+          anyOf:
             - $ref: '#/components/schemas/Sub'
+            - type: string
+              enum:
+                - ''
           description: The user's sub, or "" for a pending email invite.
         role:
           $ref: '#/components/schemas/Role'
@@ -4191,7 +4696,22 @@ components:
             - high
         url:
           type: string
-      description: A task surfaced by a data-source plugin.
+        spaceId:
+          type: string
+          description: 'Owned tasks: the space the task lives in.'
+        path:
+          type: string
+          description: 'Owned tasks: the calendar (folder) path within the space.'
+        calendarId:
+          type: string
+          description: 'Owned tasks: the calendar id = `${spaceId}${path}`.'
+        editable:
+          type: boolean
+          description: 'Owned tasks: whether the caller may edit it.'
+      description: |-
+        A task in the flat view shape the Tasks plugin renders. Either surfaced by a
+        data-source plugin (GitHub issues) or an owned task projected from the
+        scheduling store (#34) — owned tasks carry their calendar coordinates.
     TaskList:
       type: object
       required:
@@ -4200,11 +4720,68 @@ components:
         source:
           type: string
           nullable: true
+          description: Which sources contributed (e.g. "owned", "github", "owned+github").
         tasks:
           type: array
           items:
             $ref: '#/components/schemas/Task'
-      description: Tasks from the active source.
+      description: Tasks from the active source(s).
+    UpdateEvent:
+      type: object
+      properties:
+        title:
+          type: string
+        start:
+          type: string
+          nullable: true
+        end:
+          type: string
+          nullable: true
+        allDay:
+          type: boolean
+        description:
+          type: string
+          nullable: true
+        location:
+          type: string
+          nullable: true
+        keywords:
+          type: array
+          items:
+            type: string
+      description: Patch for an event — any subset of the editable fields.
+    UpdateTask:
+      type: object
+      properties:
+        title:
+          type: string
+        status:
+          type: string
+          enum:
+            - todo
+            - in_progress
+            - blocked
+            - done
+        progress:
+          type: integer
+          format: int32
+        start:
+          type: string
+          nullable: true
+        due:
+          type: string
+          nullable: true
+        priority:
+          type: string
+          enum:
+            - low
+            - normal
+            - high
+        keywords:
+          type: array
+          items:
+            type: string
+      description: Patch for an owned task — any subset of the editable fields.
     UploadTicket:
       type: object
       required:

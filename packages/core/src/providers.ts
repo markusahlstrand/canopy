@@ -21,6 +21,35 @@ export interface CalendarEvent {
   url?: string;
   /** Optional accent token (matches the host's TONE_COLOR keys). */
   tone?: string;
+  /**
+   * Which calendar this event belongs to — present for owned events (#34) so the
+   * aggregator can group, color, and toggle by calendar. A calendar is a virtual
+   * folder, so the coordinates are the space id + folder path. Absent for external
+   * provider events (GitHub etc.) that aren't space-scoped.
+   */
+  spaceId?: string;
+  /** Calendar folder path within the space ("" = the space's root calendar). */
+  path?: string;
+  /** The calendar (folder) id = `${spaceId}${path}`. */
+  calendarId?: string;
+  /** Per-calendar accent color (HSL triplet) when set on the calendar folder. */
+  color?: string;
+  /** Whether the caller may edit this event (owned + editor on its calendar). */
+  editable?: boolean;
+}
+
+/** A calendar: a shareable virtual folder of scheduling items (#34). */
+export interface Calendar {
+  /** Stable id = `${spaceId}${path}`. */
+  id: string;
+  spaceId: string;
+  /** Virtual-folder path within the space ("" = the implicit root calendar). */
+  path: string;
+  name: string;
+  /** Accent color (HSL triplet), or null to inherit the space color. */
+  color?: string | null;
+  /** The caller's role on this calendar: viewer | editor | owner. */
+  role: "viewer" | "editor" | "owner";
 }
 
 export interface CalendarRange {
@@ -51,6 +80,12 @@ export interface Task {
   priority?: "low" | "normal" | "high";
   /** Deep link back to the source (e.g. the GitHub issue URL). */
   url?: string;
+  /** Owned tasks (#34): the calendar (folder) the task lives in. */
+  spaceId?: string;
+  path?: string;
+  calendarId?: string;
+  /** Whether the caller may edit this task. */
+  editable?: boolean;
 }
 
 export interface TaskProvider {

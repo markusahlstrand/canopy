@@ -911,7 +911,11 @@ model Integrations {
   usingDefault: boolean;
 }
 
-/** A task surfaced by a data-source plugin. */
+/**
+ * A task in the flat view shape the Tasks plugin renders. Either surfaced by a
+ * data-source plugin (GitHub issues) or an owned task projected from the
+ * scheduling store (#34) — owned tasks carry their calendar coordinates.
+ */
 model Task {
   @key id: string;
   title: string;
@@ -921,15 +925,29 @@ model Task {
   labels?: string[];
   priority?: "low" | "normal" | "high";
   url?: string;
+  /** Owned tasks: the space the task lives in. */
+  spaceId?: string;
+  /** Owned tasks: the calendar (folder) path within the space. */
+  path?: string;
+  /** Owned tasks: the calendar id = `${spaceId}${path}`. */
+  calendarId?: string;
+  /** Owned tasks: whether the caller may edit it. */
+  editable?: boolean;
 }
 
-/** Tasks from the active source. */
+/** Tasks from the active source(s). */
 model TaskList {
+  /** Which sources contributed (e.g. "owned", "github", "owned+github"). */
   source?: string | null;
   tasks: Task[];
 }
 
-/** A calendar event surfaced by a data-source plugin. */
+/**
+ * A calendar event in the flat view shape the Calendar plugin renders. Either
+ * surfaced by a data-source plugin (GitHub milestones/releases) or an owned event
+ * projected from the scheduling store (#34) — owned events carry their calendar
+ * coordinates so the aggregator can group, color, and toggle by calendar.
+ */
 model CalendarEvent {
   @key id: string;
   title: string;
@@ -942,12 +960,160 @@ model CalendarEvent {
   url?: string;
   /** Accent token. */
   tone?: string;
+  /** Owned events: the space the event lives in. */
+  spaceId?: string;
+  /** Owned events: the calendar (folder) path within the space ("" = root). */
+  path?: string;
+  /** Owned events: the calendar id = `${spaceId}${path}`. */
+  calendarId?: string;
+  /** Owned events: the calendar's accent color (HSL triplet). */
+  color?: string;
+  /** Owned events: whether the caller may edit it. */
+  editable?: boolean;
 }
 
-/** Events from the active source. */
+/** Events from the active source(s), plus the caller's owned calendars. */
 model CalendarList {
+  /** Which sources contributed (e.g. "owned", "github", "owned+github"). */
   source?: string | null;
   events: CalendarEvent[];
+  /** The caller's owned calendars (= virtual folders), for the aggregator's calendar list. */
+  calendars?: Calendar[];
+}
+
+// ───────────────────────── scheduling (#34) ──────────────────────────────────
+// Owned scheduling entities, modeled on JSCalendar (RFC 8984). A *calendar is a
+// virtual folder*: it reuses the drive's `folders` table and folder-grant ACL, so
+// sharing a calendar is a folder grant and a space has 0–n calendars (+ an implicit
+// root calendar). Events and tasks live in their own tables (never `files`), each
+// carrying `spaceId` + `path` so one folder grant covers a folder's documents *and*
+// its scheduling items.
+
+/** A calendar: a shareable virtual folder of scheduling items. */
+model Calendar {
+  /** Stable id = `${spaceId}${path}` (the folder object id). */
+  @key id: string;
+  @extension("x-references", "Space")
+  spaceId: string;
+  /** Virtual-folder path within the space ("" = the implicit root calendar). */
+  path: string;
+  name: string;
+  /** Accent color — an HSL triplet like "212 92% 50%", or null to inherit the space color. */
+  color?: string | null;
+  /** The caller's effective role on this calendar (folder grant ∪ space membership). */
+  role: Role;
+  createdAt?: utcDateTime;
+}
+
+/** Fields to create a calendar (a colored virtual folder) in a space. */
+model CreateCalendar {
+  name: string;
+  /** Target space; omit for the caller's personal space. */
+  space?: string;
+  /** Folder path; defaults to a slug of `name`. */
+  path?: string;
+  color?: string | null;
+}
+
+/** A person principal — an identity hub events reference as a participant. */
+model Principal {
+  @key id: string;
+  @extension("x-references", "Space")
+  spaceId?: string | null;
+  kind: "person";
+  /** Links to a Canopy user when known. */
+  sub?: Sub | null;
+  email?: string | null;
+  name?: string | null;
+}
+
+/** An owned calendar event (JSCalendar-shaped record). */
+model Event {
+  @key id: string;
+  @extension("x-references", "Space")
+  spaceId: string;
+  /** The calendar (folder) path within the space. */
+  path: string;
+  /** JSCalendar logical identity (iCal UID). */
+  uid: string;
+  title: string;
+  /** ISO 8601 (date or date-time). */
+  start?: string | null;
+  /** ISO 8601; omit for point-in-time / all-day. */
+  end?: string | null;
+  allDay: boolean;
+  description?: string | null;
+  location?: string | null;
+  /** Tags (JSCalendar keywords) — classification only, no permission meaning. */
+  keywords: string[];
+  /** Content hash of the JSCalendar object. */
+  etag: string;
+  createdAt: utcDateTime;
+  updatedAt: utcDateTime;
+}
+
+/** Fields to create an event in a calendar. */
+model CreateEvent {
+  title: string;
+  /** Target space; omit for the caller's personal space. */
+  space?: string;
+  /** Calendar folder path ("" = the space's root calendar). */
+  path?: string;
+  start?: string;
+  end?: string;
+  allDay?: boolean;
+  description?: string;
+  location?: string;
+  keywords?: string[];
+}
+
+/** Patch for an event — any subset of the editable fields. */
+model UpdateEvent {
+  title?: string;
+  start?: string | null;
+  end?: string | null;
+  allDay?: boolean;
+  description?: string | null;
+  location?: string | null;
+  keywords?: string[];
+}
+
+/** Fields to create an owned task in a calendar. */
+model CreateTask {
+  title: string;
+  space?: string;
+  path?: string;
+  status?: "todo" | "in_progress" | "blocked" | "done";
+  /** JSCalendar percentComplete (0..100). */
+  progress?: int32;
+  start?: string;
+  due?: string;
+  priority?: "low" | "normal" | "high";
+  keywords?: string[];
+}
+
+/** Patch for an owned task — any subset of the editable fields. */
+model UpdateTask {
+  title?: string;
+  status?: "todo" | "in_progress" | "blocked" | "done";
+  progress?: int32;
+  start?: string | null;
+  due?: string | null;
+  priority?: "low" | "normal" | "high";
+  keywords?: string[];
+}
+
+/** The caller's owned calendars. */
+model CalendarsList {
+  calendars: Calendar[];
+}
+
+/** Share a calendar (folder) with a person by email. */
+model ShareCalendar {
+  space: string;
+  path: string;
+  email: string;
+  role?: "viewer" | "editor";
 }
 
 // ───────────────────────────── misc ──────────────────────────────────────────

@@ -489,6 +489,93 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    // Scheduling (#34). Calendars, events, and tasks share the drive's identity
+    // and permission model: a "calendar" is just a virtual folder, so it reuses
+    // the `folders` table (here gained a display `name`, `color`, and `kind`) and
+    // the existing folder-grant ACL (`pathRole`/`requirePath`). Events and tasks
+    // live in their own tables (never `files`), so they never appear in drive
+    // listings; each carries `tenant_id` (the space) + `path` (the calendar folder)
+    // so a single folder grant covers a folder's documents *and* its scheduling
+    // items. JSCalendar (RFC 8984) is the canonical record shape — stored verbatim
+    // in `jscal` — with a few columns lifted out for indexed range/status queries.
+    // `principals` are identity hubs (people only for MVP); `event_participants`
+    // attaches them to events. No `space_seq` integration yet (offline mirror
+    // covers files only); scheduling items default to seq 0.
+    version: 23,
+    statements: [
+      // Calendars are folders. `kind`='calendar' marks a folder a user created as a
+      // calendar (so an empty calendar exists before its first event); NULL/'folder'
+      // is an ordinary virtual folder. `name`/`color` give it a display identity.
+      `ALTER TABLE folders ADD COLUMN name TEXT`,
+      `ALTER TABLE folders ADD COLUMN color TEXT`,
+      `ALTER TABLE folders ADD COLUMN kind TEXT`, // NULL | 'folder' | 'calendar'
+      `CREATE TABLE IF NOT EXISTS events (
+         id          TEXT PRIMARY KEY,
+         tenant_id   TEXT NOT NULL,           -- owning space id
+         path        TEXT NOT NULL DEFAULT '',-- calendar folder path ('' = space root)
+         owner_id    TEXT NOT NULL,
+         uid         TEXT NOT NULL,           -- JSCalendar logical identity (iCal UID)
+         title       TEXT NOT NULL,
+         start       TEXT,                    -- ISO 8601 (date or date-time)
+         end         TEXT,                    -- ISO 8601; NULL for point-in-time / all-day
+         all_day     INTEGER NOT NULL DEFAULT 0,
+         description TEXT,
+         location    TEXT,
+         keywords    TEXT,                    -- JSON array of tags (JSCalendar keywords)
+         jscal       TEXT NOT NULL,           -- full JSCalendar Event JSON
+         etag        TEXT NOT NULL,           -- content hash of jscal
+         seq         INTEGER NOT NULL DEFAULT 0,
+         created_at  TEXT NOT NULL,
+         updated_at  TEXT NOT NULL,
+         deleted_at  TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_events_tenant_start ON events (tenant_id, start)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_tenant_path ON events (tenant_id, path)`,
+      `CREATE TABLE IF NOT EXISTS tasks (
+         id          TEXT PRIMARY KEY,
+         tenant_id   TEXT NOT NULL,
+         path        TEXT NOT NULL DEFAULT '',
+         owner_id    TEXT NOT NULL,
+         uid         TEXT NOT NULL,
+         title       TEXT NOT NULL,
+         status      TEXT NOT NULL DEFAULT 'todo', -- todo | in_progress | blocked | done
+         progress    INTEGER,                 -- JSCalendar percentComplete (0..100)
+         start       TEXT,
+         due         TEXT,
+         priority    TEXT,                    -- low | normal | high
+         keywords    TEXT,
+         jscal       TEXT NOT NULL,
+         etag        TEXT NOT NULL,
+         seq         INTEGER NOT NULL DEFAULT 0,
+         created_at  TEXT NOT NULL,
+         updated_at  TEXT NOT NULL,
+         deleted_at  TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_tenant_due ON tasks (tenant_id, due)`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_tenant_status ON tasks (tenant_id, status)`,
+      // Identity hubs. People only for MVP (kind='person'); orgs/resources later.
+      // `sub` links to a Canopy user when known; otherwise an external person is
+      // identified by email. Space-scoped (tenant_id) for MVP — global directory later.
+      `CREATE TABLE IF NOT EXISTS principals (
+         id         TEXT PRIMARY KEY,
+         tenant_id  TEXT,
+         kind       TEXT NOT NULL DEFAULT 'person',
+         sub        TEXT,
+         email      TEXT,
+         name       TEXT,
+         created_at TEXT NOT NULL
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_principals_tenant ON principals (tenant_id)`,
+      `CREATE TABLE IF NOT EXISTS event_participants (
+         event_id     TEXT NOT NULL,
+         principal_id TEXT NOT NULL,
+         role         TEXT,                   -- JSCalendar role: owner | attendee | ...
+         status       TEXT,                   -- needs-action | accepted | declined | tentative
+         PRIMARY KEY (event_id, principal_id)
+       )`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */
