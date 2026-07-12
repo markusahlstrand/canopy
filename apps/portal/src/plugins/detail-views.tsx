@@ -191,7 +191,10 @@ function NewTaskForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =>
 
   useEffect(() => {
     let alive = true;
-    listCalendars().then((cals) => alive && setCalendars(cals));
+    // A failed load degrades to just the root calendar — creating still works.
+    listCalendars()
+      .then((cals) => alive && setCalendars(cals))
+      .catch(() => {});
     return () => {
       alive = false;
     };
