@@ -539,11 +539,12 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
          owner_id    TEXT NOT NULL,
          uid         TEXT NOT NULL,
          title       TEXT NOT NULL,
-         status      TEXT NOT NULL DEFAULT 'todo', -- todo | in_progress | blocked | done
-         progress    INTEGER,                 -- JSCalendar percentComplete (0..100)
+         status      TEXT NOT NULL DEFAULT 'todo'
+                       CHECK (status IN ('todo', 'in_progress', 'blocked', 'done')),
+         progress    INTEGER CHECK (progress IS NULL OR (progress >= 0 AND progress <= 100)), -- JSCalendar percentComplete
          start       TEXT,
          due         TEXT,
-         priority    TEXT,                    -- low | normal | high
+         priority    TEXT CHECK (priority IS NULL OR priority IN ('low', 'normal', 'high')),
          keywords    TEXT,
          jscal       TEXT NOT NULL,
          etag        TEXT NOT NULL,
@@ -567,6 +568,10 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
          created_at TEXT NOT NULL
        )`,
       `CREATE INDEX IF NOT EXISTS idx_principals_tenant ON principals (tenant_id)`,
+      // One person principal per (space, email) — matches upsertPrincipal's lookup so
+      // concurrent inserts can't mint duplicate ids for the same person.
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_principals_person
+         ON principals (tenant_id, email, kind) WHERE email IS NOT NULL AND kind = 'person'`,
       `CREATE TABLE IF NOT EXISTS event_participants (
          event_id     TEXT NOT NULL,
          principal_id TEXT NOT NULL,

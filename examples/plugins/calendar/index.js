@@ -49,11 +49,13 @@ function title(ev, css) {
 }
 
 function sourcePill(source) {
-  if (source === "github") {
+  // Owned scheduling data (and GitHub feeds) are live; only "sample" is placeholder.
+  const liveLabel = { github: "Live from GitHub", owned: "Your calendar", "owned+github": "Your calendar · GitHub" }[source];
+  if (liveLabel) {
     const p = el(
       "span",
       "display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:500;background:hsl(var(--primary) / 0.1);color:hsl(var(--primary))",
-      "Live from GitHub",
+      liveLabel,
     );
     const dot = el("span", "width:6px;height:6px;border-radius:999px;background:hsl(var(--primary))");
     p.prepend(dot);

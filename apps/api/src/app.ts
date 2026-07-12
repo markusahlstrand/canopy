@@ -86,6 +86,15 @@ const SANDBOX_VIEWER_CAPS = new Set(["item:read", "item:write", "net:fetch"]);
  * (The browser validates against the full JSON schema before submitting; this is
  * the server's defense-in-depth copy.)
  */
+/** Reject task status/priority values outside their enums before they reach the store. */
+function invalidTaskField(body: Partial<TaskInput>): string | null {
+  if (body.status !== undefined && !["todo", "in_progress", "blocked", "done"].includes(body.status))
+    return `invalid status: ${body.status}`;
+  if (body.priority != null && !["low", "normal", "high"].includes(body.priority))
+    return `invalid priority: ${body.priority}`;
+  return null;
+}
+
 function validateCustomManifest(m: unknown): string | null {
   if (!m || typeof m !== "object") return "manifest must be an object";
   const man = m as { id?: unknown; name?: unknown; capabilities?: unknown; contributes?: unknown };
@@ -1399,9 +1408,10 @@ export function createApp(deps: AppDeps) {
       if (!caller) return c.json({ error: "unauthorized" }, 401);
       if (!scheduling || !drive) return c.json({ error: "scheduling unavailable" }, 503);
       const body = (await c.req.json()) as { name: string; path?: string; color?: string | null; space?: string };
+      if (!body.name?.trim()) return c.json({ error: "name required" }, 400);
       const spaceId = body.space ?? (await drive.service.personalSpace(caller.sub));
       const created = await scheduling.createCalendar(caller, { spaceId, name: body.name, path: body.path, color: body.color });
-      return c.json({ created }, 201);
+      return c.json(created, 201);
     }),
   );
 
@@ -1432,11 +1442,12 @@ export function createApp(deps: AppDeps) {
         spaceId: t.spaceId,
         path: t.path,
         calendarId: `${t.spaceId}${t.path}`,
-        editable: true,
+        editable: t.role !== "viewer",
       }));
+      // A failing external provider must not sink the caller's own tasks.
       const resolved = await resolveConfig(c, "github");
       const provider = resolved ? providersFor("github", resolved).tasks : undefined;
-      const ghTasks = provider ? await provider.listTasks() : [];
+      const ghTasks = provider ? await provider.listTasks().catch(() => []) : [];
       const source = ownedTasks.length ? (ghTasks.length ? "owned+github" : "owned") : ghTasks.length ? "github" : null;
       return c.json({ source, tasks: [...ownedTasks, ...ghTasks] });
     }),
@@ -1457,29 +1468,33 @@ export function createApp(deps: AppDeps) {
       if (caller && scheduling) {
         calendars = await scheduling.listCalendars(caller, space);
         const colorOf = new Map(calendars.map((cal) => [`${cal.spaceId}${cal.path}`, cal.color ?? undefined]));
-        const editableOf = new Map(calendars.map((cal) => [`${cal.spaceId}${cal.path}`, cal.role !== "viewer"]));
         const events = await scheduling.listEvents(caller, { range: { from, to }, spaceId: space });
-        ownedEvents = events.map((e) => {
-          const calendarId = `${e.spaceId}${e.path}`;
-          return {
-            id: e.id,
-            title: e.title,
-            start: e.start ?? "",
-            end: e.end ?? undefined,
-            allDay: e.allDay,
-            kind: "event",
-            spaceId: e.spaceId,
-            path: e.path,
-            calendarId,
-            color: colorOf.get(calendarId),
-            editable: editableOf.get(calendarId) ?? true,
-          } satisfies CalendarEvent;
-        });
+        // A calendar view can't place a start-less (unscheduled) event, and
+        // CalendarEvent.start must be non-empty, so drop those here.
+        ownedEvents = events
+          .filter((e) => e.start)
+          .map((e) => {
+            const calendarId = `${e.spaceId}${e.path}`;
+            return {
+              id: e.id,
+              title: e.title,
+              start: e.start as string,
+              end: e.end ?? undefined,
+              allDay: e.allDay,
+              kind: "event",
+              spaceId: e.spaceId,
+              path: e.path,
+              calendarId,
+              color: colorOf.get(calendarId),
+              editable: e.role !== "viewer",
+            } satisfies CalendarEvent;
+          });
       }
 
+      // A failing external provider must not sink the caller's own events.
       const resolved = await resolveConfig(c, "github");
       const provider = resolved ? providersFor("github", resolved).calendar : undefined;
-      const ghEvents = provider ? await provider.listEvents({ from, to }) : [];
+      const ghEvents = provider ? await provider.listEvents({ from, to }).catch(() => []) : [];
       const source = ownedEvents.length ? (ghEvents.length ? "owned+github" : "owned") : ghEvents.length ? "github" : null;
       return c.json({ source, events: [...ownedEvents, ...ghEvents], calendars });
     }),
@@ -1505,7 +1520,7 @@ export function createApp(deps: AppDeps) {
         location: body.location,
         keywords: body.keywords,
       });
-      return c.json({ created }, 201);
+      return c.json(created, 201);
     }),
   );
 
@@ -1538,6 +1553,8 @@ export function createApp(deps: AppDeps) {
       const body = (await c.req.json()) as Partial<TaskInput> & { space?: string };
       const spaceId = body.spaceId ?? body.space ?? (await drive.service.personalSpace(caller.sub));
       if (!body.title) return c.json({ error: "title required" }, 400);
+      const invalid = invalidTaskField(body);
+      if (invalid) return c.json({ error: invalid }, 400);
       const created = await scheduling.createTask(caller, {
         spaceId,
         path: body.path,
@@ -1549,7 +1566,7 @@ export function createApp(deps: AppDeps) {
         priority: body.priority,
         keywords: body.keywords,
       });
-      return c.json({ created }, 201);
+      return c.json(created, 201);
     }),
   );
 
@@ -1559,6 +1576,8 @@ export function createApp(deps: AppDeps) {
       if (!caller) return c.json({ error: "unauthorized" }, 401);
       if (!scheduling) return c.json({ error: "scheduling unavailable" }, 503);
       const body = (await c.req.json()) as Partial<TaskInput>;
+      const invalid = invalidTaskField(body);
+      if (invalid) return c.json({ error: invalid }, 400);
       return c.json({ updated: await scheduling.updateTask(caller, c.req.param("id"), body) });
     }),
   );

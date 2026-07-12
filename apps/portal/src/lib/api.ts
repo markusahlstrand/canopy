@@ -1844,9 +1844,9 @@ export async function createCalendar(input: {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
-  const data = (await res.json().catch(() => ({}))) as { created?: Calendar; error?: string };
-  if (!res.ok || !data.created) throw new Error(data.error ?? `create calendar failed: ${res.status}`);
-  return data.created;
+  const data = (await res.json().catch(() => ({}))) as Calendar & { error?: string };
+  if (!res.ok || !data.id) throw new Error(data.error ?? `create calendar failed: ${res.status}`);
+  return data;
 }
 
 /** Share a calendar (folder) with a person by email. */
@@ -1883,9 +1883,9 @@ export async function createEvent(input: CreateEventInput): Promise<{ id: string
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
-  const data = (await res.json().catch(() => ({}))) as { created?: { id: string }; error?: string };
-  if (!res.ok || !data.created) throw new Error(data.error ?? `create event failed: ${res.status}`);
-  return data.created;
+  const data = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
+  if (!res.ok || !data.id) throw new Error(data.error ?? `create event failed: ${res.status}`);
+  return { id: data.id };
 }
 
 export async function updateEvent(id: string, patch: Partial<CreateEventInput>): Promise<void> {
@@ -1921,9 +1921,9 @@ export async function createTask(input: CreateTaskInput): Promise<{ id: string }
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
-  const data = (await res.json().catch(() => ({}))) as { created?: { id: string }; error?: string };
-  if (!res.ok || !data.created) throw new Error(data.error ?? `create task failed: ${res.status}`);
-  return data.created;
+  const data = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
+  if (!res.ok || !data.id) throw new Error(data.error ?? `create task failed: ${res.status}`);
+  return { id: data.id };
 }
 
 export async function updateTask(id: string, patch: Partial<CreateTaskInput>): Promise<void> {

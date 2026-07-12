@@ -54,11 +54,19 @@ describe("events", () => {
     });
     expect(ev.title).toBe("Standup");
     expect(ev.etag).toMatch(/^[0-9a-f]{64}$/);
+    // A point-in-time event (no end) before the window must NOT leak into a later range.
+    const evPoint = await store.createEvent(maya, {
+      spaceId: personal,
+      path: "work",
+      title: "Kickoff",
+      start: "2026-06-15T09:00:00Z",
+    });
     const inRange = await store.listEvents(maya, {
       spaceId: personal,
       range: { from: "2026-07-01T00:00:00Z", to: "2026-07-02T00:00:00Z" },
     });
     expect(inRange.map((e) => e.id)).toContain(ev.id);
+    expect(inRange.map((e) => e.id)).not.toContain(evPoint.id);
     const outOfRange = await store.listEvents(maya, {
       spaceId: personal,
       range: { from: "2026-08-01T00:00:00Z", to: "2026-08-02T00:00:00Z" },

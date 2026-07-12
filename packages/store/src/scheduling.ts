@@ -337,7 +337,7 @@ export class SchedulingStore {
       ...(input.description ? { description: input.description } : {}),
       ...(input.location ? { locations: { l1: { name: input.location } } } : {}),
       ...(input.keywords?.length ? { keywords: Object.fromEntries(input.keywords.map((k) => [k, true])) } : {}),
-      ...(input.jscal ?? {}),
+      ...omit(input.jscal, EVENT_MANAGED_KEYS),
     };
     const etag = await etagOf(jscal);
     await this.db.run(
@@ -366,14 +366,19 @@ export class SchedulingStore {
   async listEvents(
     caller: Caller,
     opts: { range: Range; spaceId?: string; calendars?: string[] },
-  ): Promise<EventRecord[]> {
-    const spaceIds = opts.spaceId ? [opts.spaceId] : await memberSpaceIds(this.db, caller.sub);
-    const out: EventRecord[] = [];
+  ): Promise<(EventRecord & { role: Role })[]> {
+    const spaceIds = await this.aggregateSpaceIds(caller, opts.spaceId);
+    const out: (EventRecord & { role: Role })[] = [];
     for (const sid of spaceIds) {
       const rows = await this.db.all<EventRow>(
+        // Ranged events (end set) overlap the window; point-in-time events (end
+        // NULL) match only when their start itself falls in [from, to). Undated
+        // events always surface.
         `SELECT * FROM events
            WHERE tenant_id = ? AND deleted_at IS NULL
-             AND (start IS NULL OR (start < ? AND (end IS NULL OR end >= ?) OR start >= ? AND start < ?))
+             AND (start IS NULL
+                  OR (end IS NOT NULL AND start < ? AND end >= ?)
+                  OR (end IS NULL AND start >= ? AND start < ?))
            ORDER BY start`,
         [sid, opts.range.to, opts.range.from, opts.range.from, opts.range.to],
       );
@@ -381,10 +386,22 @@ export class SchedulingStore {
         if (opts.calendars && !opts.calendars.includes(r.path)) continue;
         const role = await pathRole(this.db, r.tenant_id, r.path, caller.sub, caller.email ?? "");
         if (!role) continue;
-        out.push(toEvent(r));
+        out.push({ ...toEvent(r), role });
       }
     }
     return out.sort((a, b) => (a.start ?? "").localeCompare(b.start ?? ""));
+  }
+
+  /**
+   * Spaces to scan for an aggregate read: every space the caller belongs to, plus
+   * spaces reachable only through a direct folder share (calendars shared with the
+   * caller who isn't a member). Scoped to one space when `spaceId` is given.
+   */
+  private async aggregateSpaceIds(caller: Caller, spaceId?: string): Promise<string[]> {
+    if (spaceId) return [spaceId];
+    const member = await memberSpaceIds(this.db, caller.sub);
+    const shared = await sharedFolders(this.db, caller.sub);
+    return [...new Set([...member, ...shared.map((s) => s.spaceId)])];
   }
 
   async updateEvent(caller: Caller, id: string, patch: Partial<EventInput>): Promise<EventRecord> {
@@ -397,6 +414,9 @@ export class SchedulingStore {
     if (patch.start !== undefined) jscal.start = patch.start ?? undefined;
     if (patch.end !== undefined) jscal.end = patch.end ?? undefined;
     if (patch.description !== undefined) jscal.description = patch.description ?? undefined;
+    if (patch.location !== undefined)
+      jscal.locations = patch.location ? { l1: { name: patch.location } } : undefined;
+    if (patch.allDay !== undefined) jscal.showWithoutTime = patch.allDay ? true : undefined;
     if (patch.keywords !== undefined)
       jscal.keywords = patch.keywords?.length ? Object.fromEntries(patch.keywords.map((k) => [k, true])) : undefined;
     const etag = await etagOf(jscal);
@@ -438,7 +458,7 @@ export class SchedulingStore {
       ...(input.start ? { start: input.start } : {}),
       ...(input.due ? { due: input.due } : {}),
       ...(input.keywords?.length ? { keywords: Object.fromEntries(input.keywords.map((k) => [k, true])) } : {}),
-      ...(input.jscal ?? {}),
+      ...omit(input.jscal, TASK_MANAGED_KEYS),
     };
     const etag = await etagOf(jscal);
     await this.db.run(
@@ -460,9 +480,12 @@ export class SchedulingStore {
     return toTask(row);
   }
 
-  async listTasks(caller: Caller, opts: { spaceId?: string; calendars?: string[] } = {}): Promise<TaskRecord[]> {
-    const spaceIds = opts.spaceId ? [opts.spaceId] : await memberSpaceIds(this.db, caller.sub);
-    const out: TaskRecord[] = [];
+  async listTasks(
+    caller: Caller,
+    opts: { spaceId?: string; calendars?: string[] } = {},
+  ): Promise<(TaskRecord & { role: Role })[]> {
+    const spaceIds = await this.aggregateSpaceIds(caller, opts.spaceId);
+    const out: (TaskRecord & { role: Role })[] = [];
     for (const sid of spaceIds) {
       const rows = await this.db.all<TaskRow>(
         `SELECT * FROM tasks WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY due`,
@@ -472,7 +495,7 @@ export class SchedulingStore {
         if (opts.calendars && !opts.calendars.includes(r.path)) continue;
         const role = await pathRole(this.db, r.tenant_id, r.path, caller.sub, caller.email ?? "");
         if (!role) continue;
-        out.push(toTask(r));
+        out.push({ ...toTask(r), role });
       }
     }
     return out;
@@ -488,7 +511,10 @@ export class SchedulingStore {
     if (patch.status !== undefined)
       jscal.progress = patch.status === "done" ? "completed" : patch.status === "in_progress" ? "in-process" : "needs-action";
     if (patch.progress !== undefined) jscal.percentComplete = patch.progress ?? undefined;
+    if (patch.start !== undefined) jscal.start = patch.start ?? undefined;
     if (patch.due !== undefined) jscal.due = patch.due ?? undefined;
+    if (patch.keywords !== undefined)
+      jscal.keywords = patch.keywords?.length ? Object.fromEntries(patch.keywords.map((k) => [k, true])) : undefined;
     const etag = await etagOf(jscal);
     await this.db.run(
       `UPDATE tasks SET title = ?, status = ?, progress = ?, start = ?, due = ?, priority = ?, keywords = ?, jscal = ?, etag = ?, updated_at = ?
@@ -547,6 +573,14 @@ export class SchedulingStore {
     );
     if (!ev) throw new Error("event not found");
     await this.requirePath(caller, ev.tenant_id, ev.path, "editor");
+    // The principal must belong to the event's space — otherwise listParticipants
+    // could surface a cross-tenant person's email/name.
+    const principal = await this.db.first<{ tenant_id: string | null }>(
+      `SELECT tenant_id FROM principals WHERE id = ?`,
+      [principalId],
+    );
+    if (!principal) throw new Error("principal not found");
+    if (principal.tenant_id !== ev.tenant_id) throw new PermissionError();
     await this.db.run(
       `INSERT INTO event_participants (event_id, principal_id, role, status) VALUES (?, ?, ?, ?)
          ON CONFLICT(event_id, principal_id) DO UPDATE SET role = excluded.role, status = excluded.status`,
@@ -573,4 +607,19 @@ export class SchedulingStore {
 /** Drop keys whose value is `undefined` so a partial patch doesn't clobber with undefined. */
 function stripUndefined<T extends object>(obj: T): Partial<T> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
+/**
+ * Keys the store manages itself in the canonical JSCalendar object (identity +
+ * indexed columns). User-supplied `input.jscal` must not override these, or the
+ * `jscal` payload would drift from the indexed columns. Anything else in
+ * `input.jscal` is kept as a user extension.
+ */
+const EVENT_MANAGED_KEYS = ["@type", "uid", "title", "start", "end", "showWithoutTime", "description", "locations", "keywords"];
+const TASK_MANAGED_KEYS = ["@type", "uid", "title", "progress", "percentComplete", "start", "due", "keywords"];
+
+function omit(obj: Record<string, unknown> | undefined, keys: string[]): Record<string, unknown> {
+  if (!obj) return {};
+  const drop = new Set(keys);
+  return Object.fromEntries(Object.entries(obj).filter(([k]) => !drop.has(k)));
 }
