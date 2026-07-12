@@ -16,7 +16,7 @@ export interface IndexJobs {
    * Index a whole connector: crawl its tree, upserting external file rows into the DB,
    * and drain text extraction. Idempotent per target — a second call for an in-flight
    * target coalesces (the CF Workflow keys its instance by `spaceId`; the in-process
-   * runner dedups via the `index_runs` cursor). The caller backgrounds this
+   * runner dedups via the `runs` cursor). The caller backgrounds this
    * (`waitUntil` on a Worker, fire-and-forget on Node) — it never blocks a response.
    */
   startConnectorIndex(target: CrawlTarget): Promise<void>;

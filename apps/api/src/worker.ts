@@ -177,7 +177,7 @@ export async function buildDeps(env: WorkerEnv, waitUntil?: (p: Promise<unknown>
   // the `/logs/stream` endpoint subscribes to (the real connector space id), so the
   // workflow's lines reach the open dialog. Awaitable + best-effort: the workflow calls
   // it inside a `step.do` so a line fires when the step runs, not on cache-replay.
-  const indexLog: IndexLog = channel
+  const indexLog: RunLog = channel
     ? async (spaceId, message, level = "info") => {
         try {
           await channel
@@ -200,8 +200,10 @@ export async function buildDeps(env: WorkerEnv, waitUntil?: (p: Promise<unknown>
   return { db, blobs, search, authConfig, plugins, connectorFor, connectorForUser, service, indexLog };
 }
 
-/** Emit one indexing progress line to a space's live channel. Best-effort, never throws. */
-export type IndexLog = (spaceId: string, message: string, level?: "info" | "error") => Promise<void>;
+/** Emit one run progress line to a space's live channel. Best-effort, never throws. */
+export type RunLog = (spaceId: string, message: string, level?: "info" | "error") => Promise<void>;
+/** @deprecated Renamed to {@link RunLog} (jobs rail, T1); alias goes away with the bespoke index path (T6). */
+export type IndexLog = RunLog;
 
 /**
  * The Cloudflare {@link IndexJobs} impl: a durable Workflow runs the connector crawl

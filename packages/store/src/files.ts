@@ -2265,7 +2265,7 @@ export class FileService {
   ): Promise<{ indexing: boolean; pending: number; lastIndexedAt: string | null }> {
     const spaceId = connectorSpaceId(userSub, pluginId);
     const running = await this.db.first<{ id: string }>(
-      "SELECT id FROM index_runs WHERE connection_id = ? AND status = 'running' LIMIT 1",
+      "SELECT id FROM runs WHERE job_name = 'connector-index' AND instance_key = ? AND status = 'running' LIMIT 1",
       [spaceId],
     );
     const pendingRow = await this.db.first<{ n: number }>(
@@ -2274,7 +2274,7 @@ export class FileService {
       [spaceId],
     );
     const last = await this.db.first<{ finished_at: string | null }>(
-      "SELECT finished_at FROM index_runs WHERE connection_id = ? AND status = 'done' ORDER BY finished_at DESC LIMIT 1",
+      "SELECT finished_at FROM runs WHERE job_name = 'connector-index' AND instance_key = ? AND status = 'done' ORDER BY finished_at DESC LIMIT 1",
       [spaceId],
     );
     const pending = pendingRow?.n ?? 0;

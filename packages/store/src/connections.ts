@@ -1,4 +1,5 @@
 import type { Db } from "./db";
+import { failRun, finishRun, startRun } from "./runs";
 import type { Connection } from "./types";
 
 /**
@@ -60,38 +61,28 @@ export async function listAllConnections(db: Db): Promise<Connection[]> {
 }
 
 // ── index runs (resumable crawl bookkeeping) ─────────────────────────────────
-// Each sweep of a connection is an `index_runs` row. The `cursor` carries the
+// Each sweep of a connection is a `runs` row (jobs rail, T1) keyed
+// (connection type, 'connector-index', connection id). The `cursor` carries the
 // high-water change marker (for Synology: the last seen mtime, unix seconds) from
 // the most recent successful run to the next, so an incremental sweep only revisits
-// what changed since.
+// what changed since. These three are thin compatibility wrappers over runs.ts so
+// existing callers compile unchanged; they go away when connector indexing moves
+// onto the generic rail (T6).
 
 /** Start a sweep: record a 'running' run seeded with the last successful cursor. Returns the run id + that cursor. */
 export async function startIndexRun(db: Db, connectionId: string): Promise<{ id: string; cursor: string | null }> {
-  const last = await db.first<{ cursor: string | null }>(
-    "SELECT cursor FROM index_runs WHERE connection_id = ? AND status = 'done' ORDER BY finished_at DESC LIMIT 1",
-    [connectionId],
-  );
-  const id = crypto.randomUUID();
-  await db.run(
-    "INSERT INTO index_runs (id, connection_id, status, cursor, files_seen, started_at) VALUES (?, ?, 'running', ?, 0, ?)",
-    [id, connectionId, last?.cursor ?? null, new Date().toISOString()],
-  );
-  return { id, cursor: last?.cursor ?? null };
+  // plugin_id = the connection's type; '' when the row is gone, matching how the
+  // migration copied orphaned index_runs rows, so their cursor still resolves.
+  const conn = await getConnection(db, connectionId);
+  return startRun(db, { pluginId: conn?.type ?? "", jobName: "connector-index", instanceKey: connectionId });
 }
 
 /** Mark a run done, persisting its new cursor + count. */
 export async function finishIndexRun(db: Db, runId: string, out: { cursor: string | null; filesSeen: number }): Promise<void> {
-  await db.run(
-    "UPDATE index_runs SET status = 'done', cursor = ?, files_seen = ?, finished_at = ? WHERE id = ?",
-    [out.cursor, out.filesSeen, new Date().toISOString(), runId],
-  );
+  await finishRun(db, runId, { cursor: out.cursor, stats: { filesSeen: out.filesSeen } });
 }
 
 /** Mark a run failed (its cursor is not advanced, so the next run retries the same range). */
 export async function failIndexRun(db: Db, runId: string, error: string): Promise<void> {
-  await db.run("UPDATE index_runs SET status = 'error', error = ?, finished_at = ? WHERE id = ?", [
-    String(error ?? "").slice(0, 500),
-    new Date().toISOString(),
-    runId,
-  ]);
+  await failRun(db, runId, error);
 }

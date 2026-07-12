@@ -581,6 +581,41 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    // Background-job runs (jobs rail, T1). `index_runs` generalized: every job on
+    // the rail needs the same triple — a status row, a resume cursor handed from
+    // the last successful run to the next, and counters — not just connector
+    // indexing. A run is keyed by (plugin_id, job_name, instance_key); for the
+    // connector crawl that's (connections.type, 'connector-index', connection_id).
+    // `stats` is a JSON counter bag (replaces the single-purpose `files_seen`).
+    // The table does NOT enforce one running row per key — coalescing is the
+    // dispatcher's contract (T2/T3), and a unique constraint here would block
+    // legitimate re-runs after a crash. Existing `index_runs` rows are copied
+    // across (LEFT JOIN: an orphaned run keeps '' as plugin_id, matching what the
+    // wrapper resolves for a missing connection) so the crawl cursor survives —
+    // the first post-migration sweep stays incremental instead of a full crawl.
+    version: 24,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS runs (
+         id           TEXT PRIMARY KEY,
+         plugin_id    TEXT NOT NULL,
+         job_name     TEXT NOT NULL,
+         instance_key TEXT NOT NULL,
+         status       TEXT NOT NULL,              -- 'queued' | 'running' | 'done' | 'error'
+         cursor       TEXT,
+         stats        TEXT NOT NULL DEFAULT '{}', -- JSON counters (e.g. {"filesSeen": 42})
+         started_at   TEXT NOT NULL,
+         finished_at  TEXT,
+         error        TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_runs_key ON runs (plugin_id, job_name, instance_key, started_at)`,
+      `INSERT INTO runs (id, plugin_id, job_name, instance_key, status, cursor, stats, started_at, finished_at, error)
+         SELECT r.id, COALESCE(c.type, ''), 'connector-index', r.connection_id, r.status, r.cursor,
+                json_object('filesSeen', r.files_seen), r.started_at, r.finished_at, r.error
+           FROM index_runs r LEFT JOIN connections c ON c.id = r.connection_id`,
+      `DROP TABLE index_runs`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */
