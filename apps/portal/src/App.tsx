@@ -75,7 +75,7 @@ import { CreateSpaceDialog } from "@/components/create-space-dialog";
 import { PluginSettingsDialog } from "@canopy/plugin-sdk";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
-import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
+import { createRegistry, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, WELCOME_PLUGIN_ID, PLUGIN_UI } from "@/plugins";
 import { HostApiProvider, type HostApi } from "@/plugins/host";
 import { createHostBridge } from "@/plugins/host-bridge";
 import { PluginHostProvider } from "@canopy/plugin-sdk";
@@ -313,18 +313,18 @@ function DesktopApp() {
     if (canPersist) saveInstalledPlugins(next).catch(() => {});
   }
 
-  // Documentation is the signed-out landing page — for anonymous-with-auth *and*
-  // demo (auth off) visitors. Applied once when auth first resolves; doesn't lock
-  // navigation afterwards. (Whether it's *installed* is server-driven — it ships
-  // only for anonymous/demo visitors.)
+  // Welcome (the marketing page) is the signed-out landing — for anonymous-with-auth
+  // *and* demo (auth off) visitors. Applied once when auth first resolves; doesn't
+  // lock navigation afterwards. (Whether it's *installed* is server-driven — it ships
+  // only for anonymous/demo visitors, alongside Documentation.)
   const initialHadView = useMemo(() => new URLSearchParams(window.location.search).has("view"), []);
-  const docsLandingApplied = useRef(false);
+  const landingApplied = useRef(false);
   useEffect(() => {
-    if (docsLandingApplied.current || !authLoaded) return;
-    docsLandingApplied.current = true;
+    if (landingApplied.current || !authLoaded) return;
+    landingApplied.current = true;
     if (!auth.user && !initialHadView) {
-      setActive(`plugin:${DOCS_PLUGIN_ID}`);
-      setActivePlugin(DOCS_PLUGIN_ID);
+      setActive(`plugin:${WELCOME_PLUGIN_ID}`);
+      setActivePlugin(WELCOME_PLUGIN_ID);
     }
   }, [authLoaded, auth, initialHadView]);
 
