@@ -27,5 +27,6 @@ export * from "./plugin-installs";
 export * from "./custom-plugins";
 export * from "./space-plugins";
 export * from "./files";
+export * from "./scheduling";
 export * from "./db-d1";
 export * from "./blob-r2";

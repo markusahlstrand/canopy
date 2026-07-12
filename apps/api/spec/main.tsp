@@ -689,21 +689,93 @@ interface IntegrationsApi {
 }
 
 @route("/api/tasks")
-@useAuth(NoAuth)
 interface Tasks {
-  /** Tasks from the caller's configured source (or the demo default). */
+  /**
+   * Tasks the caller can see: owned tasks from the scheduling store plus any
+   * data-source provider's (GitHub). `?space=` scopes to one space.
+   */
   @get
+  @useAuth(NoAuth)
   @operationId("listTasks")
-  list(): TaskList | Error;
+  list(@query space?: string): TaskList | Error;
+
+  /** Create an owned task in a calendar. */
+  @post
+  @operationId("createTask")
+  create(@body body: CreateTask): {
+    @statusCode statusCode: 201;
+    @body created: Task;
+  } | Error;
+
+  /** Patch an owned task. */
+  @patch
+  @route("/{id}")
+  @operationId("updateTask")
+  update(@path id: string, @body body: UpdateTask): { updated: Task } | Error;
+
+  /** Soft-delete an owned task. */
+  @delete
+  @route("/{id}")
+  @operationId("deleteTask")
+  remove(@path id: string): Ok | Error;
 }
 
 @route("/api/calendar")
-@useAuth(NoAuth)
-interface Calendar {
-  /** Calendar events from the caller's configured source. `?from=`/`?to=` are ISO 8601. */
+interface CalendarFeed {
+  /**
+   * The aggregated calendar stream: owned events from the scheduling store plus
+   * any data-source provider's (GitHub), with the caller's owned calendars for the
+   * aggregator's calendar list. `?from=`/`?to=` are ISO 8601; `?space=` scopes.
+   */
   @get
+  @useAuth(NoAuth)
   @operationId("listCalendar")
-  list(@query from?: string, @query to?: string): CalendarList | Error;
+  list(@query from?: string, @query to?: string, @query space?: string): CalendarList | Error;
+}
+
+@route("/api/calendars")
+interface Calendars {
+  /** The caller's owned calendars (= virtual folders). `?space=` scopes to one space. */
+  @get
+  @operationId("listCalendars")
+  list(@query space?: string): CalendarsList | Error;
+
+  /** Create a calendar (a colored virtual folder) in a space. */
+  @post
+  @operationId("createCalendar")
+  create(@body body: CreateCalendar): {
+    @statusCode statusCode: 201;
+    @body created: Calendar;
+  } | Error;
+
+  /** Share a calendar (folder) with a person by email. */
+  @post
+  @route("/share")
+  @operationId("shareCalendar")
+  share(@body body: ShareCalendar): Ok | Error;
+}
+
+@route("/api/events")
+interface Events {
+  /** Create an event in a calendar. */
+  @post
+  @operationId("createEvent")
+  create(@body body: CreateEvent): {
+    @statusCode statusCode: 201;
+    @body created: Event;
+  } | Error;
+
+  /** Patch an event. */
+  @patch
+  @route("/{id}")
+  @operationId("updateEvent")
+  update(@path id: string, @body body: UpdateEvent): { updated: Event } | Error;
+
+  /** Soft-delete an event. */
+  @delete
+  @route("/{id}")
+  @operationId("deleteEvent")
+  remove(@path id: string): Ok | Error;
 }
 
 // ───────────────────────────── plugins ───────────────────────────────────────

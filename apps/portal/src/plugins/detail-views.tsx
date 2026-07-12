@@ -12,11 +12,13 @@ const STATUS_META: Record<TaskStatus, { title: string; color: string }> = {
 const STATUS_ORDER: TaskStatus[] = ["todo", "in_progress", "blocked", "done"];
 
 /** A small pill telling the user whether they're seeing live or sample data. */
-function SourcePill({ source }: { source: "github" | "sample" }) {
-  if (source === "github") {
+function SourcePill({ source }: { source: "github" | "sample" | "owned" | "owned+github" }) {
+  if (source !== "sample") {
+    const label =
+      source === "github" ? "Live from GitHub" : source === "owned" ? "Your data" : "Your data + GitHub";
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2 py-0.5 text-[11.5px] font-medium text-primary">
-        <span className="size-1.5 rounded-full bg-primary" /> Live from GitHub
+        <span className="size-1.5 rounded-full bg-primary" /> {label}
       </span>
     );
   }

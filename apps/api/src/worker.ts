@@ -14,6 +14,7 @@ import {
   inProcessIndexJobs,
   resolveInvites,
   runMigrations,
+  SchedulingStore,
   syncAllConnectors,
   upsertUser,
   type CrawlTarget,
@@ -280,6 +281,7 @@ export default {
         blobs,
         docWorker: env.DOCWORKER ? containerDocWorker(env.DOCWORKER, env.DOCWORKER_TOKEN) : inProcessDocWorker(),
       },
+      scheduling: new SchedulingStore(db),
       dataSources,
       // D1 FTS5 search index — the same SQL adapter as libsql on Node.
       search,

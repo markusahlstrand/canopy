@@ -1610,6 +1610,11 @@ export interface Task {
   labels?: string[];
   priority?: "low" | "normal" | "high";
   url?: string;
+  /** Owned tasks (#34): the calendar (folder) the task lives in. */
+  spaceId?: string;
+  path?: string;
+  calendarId?: string;
+  editable?: boolean;
 }
 
 export interface CalendarEvent {
@@ -1621,6 +1626,22 @@ export interface CalendarEvent {
   kind?: "milestone" | "release" | "issue" | "event";
   url?: string;
   tone?: string;
+  /** Owned events (#34): calendar coordinates so the aggregator can group/color/toggle. */
+  spaceId?: string;
+  path?: string;
+  calendarId?: string;
+  color?: string;
+  editable?: boolean;
+}
+
+/** A calendar: a shareable virtual folder of scheduling items (#34). */
+export interface Calendar {
+  id: string;
+  spaceId: string;
+  path: string;
+  name: string;
+  color?: string | null;
+  role: "viewer" | "editor" | "owner";
 }
 
 /** What external sources are connected (e.g. GitHub), so views show live vs. sample. */
@@ -1784,15 +1805,139 @@ export async function getTasks(): Promise<{ source: string | null; tasks: Task[]
   return (await res.json()) as { source: string | null; tasks: Task[] };
 }
 
-/** Calendar events from the connected source. `source` is null when none. */
+/**
+ * The aggregated calendar stream: the caller's owned events plus any connected
+ * source's, with the caller's owned calendars for the aggregator's calendar list.
+ * `source` is null when nothing contributed.
+ */
 export async function getCalendar(range?: { from: string; to: string }): Promise<{
   source: string | null;
   events: CalendarEvent[];
+  calendars: Calendar[];
 }> {
   const q = range ? `?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}` : "";
   const res = await apiFetch(`/api/calendar${q}`);
-  if (!res.ok) return { source: null, events: [] };
-  return (await res.json()) as { source: string | null; events: CalendarEvent[] };
+  if (!res.ok) return { source: null, events: [], calendars: [] };
+  const data = (await res.json()) as { source: string | null; events: CalendarEvent[]; calendars?: Calendar[] };
+  return { source: data.source, events: data.events, calendars: data.calendars ?? [] };
+}
+
+// ── owned scheduling: calendars / events / tasks (#34) ────────────────────────
+
+/** The caller's owned calendars (= virtual folders). `space` scopes to one space. */
+export async function listCalendars(space?: string): Promise<Calendar[]> {
+  const q = space ? `?space=${encodeURIComponent(space)}` : "";
+  const res = await apiFetch(`/api/calendars${q}`);
+  if (!res.ok) return [];
+  return ((await res.json()) as { calendars?: Calendar[] }).calendars ?? [];
+}
+
+/** Create a calendar (a colored virtual folder) in a space. */
+export async function createCalendar(input: {
+  name: string;
+  space?: string;
+  path?: string;
+  color?: string | null;
+}): Promise<Calendar> {
+  const res = await apiFetch("/api/calendars", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = (await res.json().catch(() => ({}))) as Calendar & { error?: string };
+  if (!res.ok || !data.id) throw new Error(data.error ?? `create calendar failed: ${res.status}`);
+  return data;
+}
+
+/** Share a calendar (folder) with a person by email. */
+export async function shareCalendar(input: {
+  space: string;
+  path: string;
+  email: string;
+  role?: "viewer" | "editor";
+}): Promise<void> {
+  const res = await apiFetch("/api/calendars/share", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`share calendar failed: ${res.status}`);
+}
+
+export interface CreateEventInput {
+  title: string;
+  space?: string;
+  path?: string;
+  start?: string;
+  end?: string;
+  allDay?: boolean;
+  description?: string;
+  location?: string;
+  keywords?: string[];
+}
+
+/** Create an owned event in a calendar. Returns the stored event id. */
+export async function createEvent(input: CreateEventInput): Promise<{ id: string }> {
+  const res = await apiFetch("/api/events", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
+  if (!res.ok || !data.id) throw new Error(data.error ?? `create event failed: ${res.status}`);
+  return { id: data.id };
+}
+
+export async function updateEvent(id: string, patch: Partial<CreateEventInput>): Promise<void> {
+  const res = await apiFetch(`/api/events/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`update event failed: ${res.status}`);
+}
+
+export async function deleteEvent(id: string): Promise<void> {
+  const res = await apiFetch(`/api/events/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete event failed: ${res.status}`);
+}
+
+export interface CreateTaskInput {
+  title: string;
+  space?: string;
+  path?: string;
+  status?: TaskStatus;
+  progress?: number;
+  start?: string;
+  due?: string;
+  priority?: "low" | "normal" | "high";
+  keywords?: string[];
+}
+
+/** Create an owned task in a calendar. */
+export async function createTask(input: CreateTaskInput): Promise<{ id: string }> {
+  const res = await apiFetch("/api/tasks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
+  if (!res.ok || !data.id) throw new Error(data.error ?? `create task failed: ${res.status}`);
+  return { id: data.id };
+}
+
+export async function updateTask(id: string, patch: Partial<CreateTaskInput>): Promise<void> {
+  const res = await apiFetch(`/api/tasks/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`update task failed: ${res.status}`);
+}
+
+export async function deleteTask(id: string): Promise<void> {
+  const res = await apiFetch(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete task failed: ${res.status}`);
 }
 
 export function loginUrl(returnTo: string): string {

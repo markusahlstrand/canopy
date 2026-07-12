@@ -7,6 +7,8 @@ import {
   type AiMessage,
   type AiModel,
   type AiProvider,
+  type Calendar,
+  type CalendarEvent,
   type Capability,
   type CacheStore,
   type ConnectorConfigField,
@@ -14,6 +16,7 @@ import {
   type SearchIndex,
   type ServerDataSource,
   type StorageConnector,
+  type Task,
 } from "@canopy/core";
 import {
   BlobHashMismatchError,
@@ -24,8 +27,11 @@ import {
   crawlConnector,
   type BlobStore,
   type Caller,
+  type EventInput,
   type FileService,
   type IndexJobs,
+  type SchedulingStore,
+  type TaskInput,
   type VersionPolicyKind,
 } from "@canopy/store";
 import type { DocWorker } from "@canopy/docworker";
@@ -80,6 +86,15 @@ const SANDBOX_VIEWER_CAPS = new Set(["item:read", "item:write", "net:fetch"]);
  * (The browser validates against the full JSON schema before submitting; this is
  * the server's defense-in-depth copy.)
  */
+/** Reject task status/priority values outside their enums before they reach the store. */
+function invalidTaskField(body: Partial<TaskInput>): string | null {
+  if (body.status !== undefined && !["todo", "in_progress", "blocked", "done"].includes(body.status))
+    return `invalid status: ${body.status}`;
+  if (body.priority != null && !["low", "normal", "high"].includes(body.priority))
+    return `invalid priority: ${body.priority}`;
+  return null;
+}
+
 function validateCustomManifest(m: unknown): string | null {
   if (!m || typeof m !== "object") return "manifest must be an object";
   const man = m as { id?: unknown; name?: unknown; capabilities?: unknown; contributes?: unknown };
@@ -185,6 +200,13 @@ export interface AppDeps {
   readonlyMounts?: Record<string, StorageConnector>;
   /** The user's drive, backed by @canopy/store (D1/libsql + R2/fs). */
   drive?: DriveDeps;
+  /**
+   * The owned scheduling store (#34): calendars (= virtual folders), events, and
+   * tasks the user creates, reusing the drive's space/folder/permission model.
+   * Reads aggregate into `/api/calendar` and `/api/tasks` alongside external
+   * data-source providers; writes go through the dedicated REST routes here.
+   */
+  scheduling?: SchedulingStore;
   /** Connected data-source plugins feeding tasks/calendar. */
   dataSources?: DataSourceDeps;
   /** Server-side document processors run when a file is added (e.g. AI labeling). */
@@ -239,7 +261,7 @@ const ANON_DEFAULT_PLUGINS = ["documentation", ...DEFAULT_PLUGINS];
  */
 export function createApp(deps: AppDeps) {
   const app = new Hono();
-  const { authConfig = null, readonlyMounts = {}, drive, dataSources, processors = [], ai } = deps;
+  const { authConfig = null, readonlyMounts = {}, drive, scheduling, dataSources, processors = [], ai } = deps;
   // Run background work via the host's keep-alive (Worker ctx.waitUntil) if given;
   // on Node a bare promise survives because the process stays up.
   const runBackground = (p: Promise<unknown>) => (deps.waitUntil ? deps.waitUntil(p) : void p);
@@ -1362,25 +1384,211 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
+  // ── scheduling: calendars, events, tasks (owned + aggregated) ───────────────
+  // Reads aggregate the owned scheduling store (#34) with external data-source
+  // providers (GitHub etc.) into one stream the calendar/tasks plugins render.
+  // Owned items carry their calendar coordinates (spaceId/path/calendarId/color)
+  // so the aggregator can group, color, and toggle by calendar; provider items
+  // don't (they aren't space-scoped). Writes go through the dedicated routes below
+  // and reuse the drive's folder-grant ACL via the scheduling store.
+
+  /** Owned calendars the caller can see (= virtual folders), optionally one space. */
+  app.get("/api/calendars", (c) =>
+    handle(c, async () => {
+      const caller = await callerOf(c);
+      if (!caller || !scheduling) return c.json({ calendars: [] });
+      return c.json({ calendars: await scheduling.listCalendars(caller, c.req.query("space") ?? undefined) });
+    }),
+  );
+
+  /** Create a calendar in a space (a colored virtual folder). */
+  app.post("/api/calendars", (c) =>
+    handle(c, async () => {
+      const caller = await callerOf(c);
+      if (!caller) return c.json({ error: "unauthorized" }, 401);
+      if (!scheduling || !drive) return c.json({ error: "scheduling unavailable" }, 503);
+      const body = (await c.req.json()) as { name: string; path?: string; color?: string | null; space?: string };
+      if (!body.name?.trim()) return c.json({ error: "name required" }, 400);
+      const spaceId = body.space ?? (await drive.service.personalSpace(caller.sub));
+      const created = await scheduling.createCalendar(caller, { spaceId, name: body.name, path: body.path, color: body.color });
+      return c.json(created, 201);
+    }),
+  );
+
+  /** Share a calendar (folder) with a person by email. */
+  app.post("/api/calendars/share", (c) =>
+    handle(c, async () => {
+      const caller = await callerOf(c);
+      if (!caller) return c.json({ error: "unauthorized" }, 401);
+      if (!scheduling) return c.json({ error: "scheduling unavailable" }, 503);
+      const body = (await c.req.json()) as { space: string; path: string; email: string; role?: "viewer" | "editor" };
+      await scheduling.shareCalendar(caller, body.space, body.path, body.email, body.role ?? "viewer");
+      return c.json({ ok: true });
+    }),
+  );
+
   app.get("/api/tasks", (c) =>
     handle(c, async () => {
+      const caller = await callerOf(c);
+      // Owned tasks first (when signed in), then the GitHub provider's, so both
+      // surface in the Tasks plugin. `source` reflects what contributed.
+      const owned = caller && scheduling ? await scheduling.listTasks(caller, { spaceId: c.req.query("space") ?? undefined }) : [];
+      const ownedTasks: Task[] = owned.map((t) => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        due: t.due ?? undefined,
+        labels: t.keywords,
+        spaceId: t.spaceId,
+        path: t.path,
+        calendarId: `${t.spaceId}${t.path}`,
+        editable: t.role !== "viewer",
+      }));
+      // A failing external provider must not sink the caller's own tasks.
       const resolved = await resolveConfig(c, "github");
       const provider = resolved ? providersFor("github", resolved).tasks : undefined;
-      if (!provider) return c.json({ source: null, tasks: [] });
-      return c.json({ source: "github", tasks: await provider.listTasks() });
+      const ghTasks = provider ? await provider.listTasks().catch(() => []) : [];
+      const source = ownedTasks.length ? (ghTasks.length ? "owned+github" : "owned") : ghTasks.length ? "github" : null;
+      return c.json({ source, tasks: [...ownedTasks, ...ghTasks] });
     }),
   );
 
   app.get("/api/calendar", (c) =>
     handle(c, async () => {
-      const resolved = await resolveConfig(c, "github");
-      const provider = resolved ? providersFor("github", resolved).calendar : undefined;
-      if (!provider) return c.json({ source: null, events: [] });
       // Default window: 30 days back through 90 days ahead (covers releases + milestones).
       const now = Date.now();
       const from = c.req.query("from") ?? new Date(now - 30 * 864e5).toISOString();
       const to = c.req.query("to") ?? new Date(now + 90 * 864e5).toISOString();
-      return c.json({ source: "github", events: await provider.listEvents({ from, to }) });
+      const caller = await callerOf(c);
+      const space = c.req.query("space") ?? undefined;
+
+      // Owned events, projected to the flat view shape with calendar coordinates.
+      let ownedEvents: CalendarEvent[] = [];
+      let calendars: Calendar[] = [];
+      if (caller && scheduling) {
+        calendars = await scheduling.listCalendars(caller, space);
+        const colorOf = new Map(calendars.map((cal) => [`${cal.spaceId}${cal.path}`, cal.color ?? undefined]));
+        const events = await scheduling.listEvents(caller, { range: { from, to }, spaceId: space });
+        // A calendar view can't place a start-less (unscheduled) event, and
+        // CalendarEvent.start must be non-empty, so drop those here.
+        ownedEvents = events
+          .filter((e) => e.start)
+          .map((e) => {
+            const calendarId = `${e.spaceId}${e.path}`;
+            return {
+              id: e.id,
+              title: e.title,
+              start: e.start as string,
+              end: e.end ?? undefined,
+              allDay: e.allDay,
+              kind: "event",
+              spaceId: e.spaceId,
+              path: e.path,
+              calendarId,
+              color: colorOf.get(calendarId),
+              editable: e.role !== "viewer",
+            } satisfies CalendarEvent;
+          });
+      }
+
+      // A failing external provider must not sink the caller's own events.
+      const resolved = await resolveConfig(c, "github");
+      const provider = resolved ? providersFor("github", resolved).calendar : undefined;
+      const ghEvents = provider ? await provider.listEvents({ from, to }).catch(() => []) : [];
+      const source = ownedEvents.length ? (ghEvents.length ? "owned+github" : "owned") : ghEvents.length ? "github" : null;
+      return c.json({ source, events: [...ownedEvents, ...ghEvents], calendars });
+    }),
+  );
+
+  /** Create an event in a calendar. */
+  app.post("/api/events", (c) =>
+    handle(c, async () => {
+      const caller = await callerOf(c);
+      if (!caller) return c.json({ error: "unauthorized" }, 401);
+      if (!scheduling || !drive) return c.json({ error: "scheduling unavailable" }, 503);
+      const body = (await c.req.json()) as Partial<EventInput> & { space?: string };
+      const spaceId = body.spaceId ?? body.space ?? (await drive.service.personalSpace(caller.sub));
+      if (!body.title) return c.json({ error: "title required" }, 400);
+      const created = await scheduling.createEvent(caller, {
+        spaceId,
+        path: body.path,
+        title: body.title,
+        start: body.start,
+        end: body.end,
+        allDay: body.allDay,
+        description: body.description,
+        location: body.location,
+        keywords: body.keywords,
+      });
+      return c.json(created, 201);
+    }),
+  );
+
+  app.patch("/api/events/:id", (c) =>
+    handle(c, async () => {
+      const caller = await callerOf(c);
+      if (!caller) return c.json({ error: "unauthorized" }, 401);
+      if (!scheduling) return c.json({ error: "scheduling unavailable" }, 503);
+      const body = (await c.req.json()) as Partial<EventInput>;
+      return c.json({ updated: await scheduling.updateEvent(caller, c.req.param("id"), body) });
+    }),
+  );
+
+  app.delete("/api/events/:id", (c) =>
+    handle(c, async () => {
+      const caller = await callerOf(c);
+      if (!caller) return c.json({ error: "unauthorized" }, 401);
+      if (!scheduling) return c.json({ error: "scheduling unavailable" }, 503);
+      await scheduling.deleteEvent(caller, c.req.param("id"));
+      return c.json({ ok: true });
+    }),
+  );
+
+  /** Create a task in a calendar. */
+  app.post("/api/tasks", (c) =>
+    handle(c, async () => {
+      const caller = await callerOf(c);
+      if (!caller) return c.json({ error: "unauthorized" }, 401);
+      if (!scheduling || !drive) return c.json({ error: "scheduling unavailable" }, 503);
+      const body = (await c.req.json()) as Partial<TaskInput> & { space?: string };
+      const spaceId = body.spaceId ?? body.space ?? (await drive.service.personalSpace(caller.sub));
+      if (!body.title) return c.json({ error: "title required" }, 400);
+      const invalid = invalidTaskField(body);
+      if (invalid) return c.json({ error: invalid }, 400);
+      const created = await scheduling.createTask(caller, {
+        spaceId,
+        path: body.path,
+        title: body.title,
+        status: body.status,
+        progress: body.progress,
+        start: body.start,
+        due: body.due,
+        priority: body.priority,
+        keywords: body.keywords,
+      });
+      return c.json(created, 201);
+    }),
+  );
+
+  app.patch("/api/tasks/:id", (c) =>
+    handle(c, async () => {
+      const caller = await callerOf(c);
+      if (!caller) return c.json({ error: "unauthorized" }, 401);
+      if (!scheduling) return c.json({ error: "scheduling unavailable" }, 503);
+      const body = (await c.req.json()) as Partial<TaskInput>;
+      const invalid = invalidTaskField(body);
+      if (invalid) return c.json({ error: invalid }, 400);
+      return c.json({ updated: await scheduling.updateTask(caller, c.req.param("id"), body) });
+    }),
+  );
+
+  app.delete("/api/tasks/:id", (c) =>
+    handle(c, async () => {
+      const caller = await callerOf(c);
+      if (!caller) return c.json({ error: "unauthorized" }, 401);
+      if (!scheduling) return c.json({ error: "scheduling unavailable" }, 503);
+      await scheduling.deleteTask(caller, c.req.param("id"));
+      return c.json({ ok: true });
     }),
   );
 
