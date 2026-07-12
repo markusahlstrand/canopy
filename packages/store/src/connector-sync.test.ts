@@ -289,8 +289,8 @@ describe("sweep (syncConnection)", () => {
     nas.set("new.md", "fresh", { mtime: 2000 }); // changed since the cursor below
     // Seed a prior successful run so syncConnection takes the incremental path.
     await db.run(
-      "INSERT INTO index_runs (id, connection_id, status, cursor, files_seen, started_at, finished_at) VALUES ('r0', ?, 'done', '1500', 0, ?, ?)",
-      [space, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+      "INSERT INTO runs (id, plugin_id, job_name, instance_key, status, cursor, stats, started_at, finished_at) VALUES ('r0', ?, 'connector-index', ?, 'done', '1500', '{}', ?, ?)",
+      [PLUGIN, space, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
     );
     await syncConnection(deps(true), conn());
     // Root was reconciled (it held a changed file) → both root files indexed...
@@ -303,7 +303,7 @@ describe("sweep (syncConnection)", () => {
     nas.set("a.md", "x");
     await syncConnection(deps(true), conn());
     const run = await db.first<{ cursor: string | null; status: string }>(
-      "SELECT cursor, status FROM index_runs WHERE connection_id = ? ORDER BY finished_at DESC LIMIT 1",
+      "SELECT cursor, status FROM runs WHERE job_name = 'connector-index' AND instance_key = ? ORDER BY finished_at DESC LIMIT 1",
       [space],
     );
     expect(run?.status).toBe("done");

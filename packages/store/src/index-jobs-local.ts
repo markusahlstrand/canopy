@@ -11,7 +11,7 @@ import type { IndexJobs } from "./index-jobs";
  * Unlike the bounded safety-net sweep ({@link import("./connector-sync").syncConnection}),
  * this does a FULL crawl — Node isn't subrequest/CPU-constrained, so we index the whole
  * tree in one pass — then drains extraction in batches until the pending queue is empty.
- * It records progress as an `index_runs` row, exactly like the sweep, so the two share
+ * It records progress as a `runs` row, exactly like the sweep, so the two share
  * the cursor and re-runs stay idempotent (reconcile is an etag diff).
  */
 export function inProcessIndexJobs(deps: SweepDeps): IndexJobs {

@@ -15,6 +15,7 @@ export * from "./authz";
 export * from "./users";
 export * from "./spaces";
 export * from "./connections";
+export * from "./runs";
 export * from "./connector-sync";
 export * from "./index-jobs";
 export * from "./index-jobs-local";
