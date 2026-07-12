@@ -5,6 +5,7 @@ import { TasksView } from "./detail-views";
 import { GithubView } from "./github-view";
 import { SynologyView } from "./synology-view";
 import { DocumentAiView } from "./document-ai-view";
+import { WelcomeView } from "./welcome-view";
 
 // Lazy-loaded: pulls react-markdown + remark-gfm into a separate chunk.
 const DocumentationView = lazy(() => import("./documentation-view").then((m) => ({ default: m.DocumentationView })));
@@ -51,6 +52,7 @@ export interface PluginUI {
 }
 
 export const PLUGIN_UI: Record<string, PluginUI> = {
+  welcome: { DetailView: WelcomeView },
   documentation: { DetailView: DocumentationView },
   tasks: { DetailView: TasksView },
   github: { DetailView: GithubView },
@@ -77,4 +79,4 @@ export function createRegistry(installedIds: string[], customManifests: PluginMa
   return registry;
 }
 
-export { DEFAULT_INSTALLED, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID } from "./manifests";
+export { DEFAULT_INSTALLED, ANON_DEFAULT_INSTALLED, DOCS_PLUGIN_ID, WELCOME_PLUGIN_ID } from "./manifests";
