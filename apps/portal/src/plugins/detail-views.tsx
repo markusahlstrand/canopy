@@ -1,7 +1,20 @@
-import { useState } from "react";
-import { PersonAvatar, Checkbox, Badge, Icon, cn } from "@canopy/ui";
-import type { Task, TaskStatus } from "@/lib/api";
-import { useTasks } from "./data";
+import { useEffect, useState } from "react";
+import {
+  PersonAvatar,
+  Checkbox,
+  Badge,
+  Icon,
+  cn,
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@canopy/ui";
+import { createTask, listCalendars, type Calendar, type Task, type TaskStatus } from "@/lib/api";
+import { usePluginDataRefresh, useTasks } from "./data";
 
 const STATUS_META: Record<TaskStatus, { title: string; color: string }> = {
   todo: { title: "To do", color: "212 70% 48%" },
@@ -161,6 +174,105 @@ function TasksBoard({ tasks }: { tasks: Task[] }) {
   );
 }
 
+/**
+ * Inline create form (#6) — mirrors the calendar plugin's "New event" card:
+ * title + target calendar (the personal root by default) + optional due date.
+ * Owned tasks land via the same `/api/tasks` write the capability bridge uses,
+ * so the folder-grant ACL applies server-side.
+ */
+function NewTaskForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const [title, setTitle] = useState("");
+  const [due, setDue] = useState("");
+  // "root" = the personal root calendar (no folder); real calendars use their `${spaceId}${path}` id.
+  const [calendarId, setCalendarId] = useState("root");
+  const [calendars, setCalendars] = useState<Calendar[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    // A failed load degrades to just the root calendar — creating still works.
+    listCalendars()
+      .then((cals) => alive && setCalendars(cals))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const t = title.trim();
+    if (!t || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const cal = calendars.find((c) => c.id === calendarId);
+      await createTask({
+        title: t,
+        space: cal?.spaceId,
+        path: cal?.path,
+        due: due ? new Date(due).toISOString() : undefined,
+      });
+      onDone();
+    } catch (err) {
+      const msg = (err as Error).message;
+      setError(msg === "unauthorized" ? "Sign in to create tasks." : msg);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(e) => void handleSubmit(e)}
+      className="flex max-w-3xl flex-col gap-2.5 rounded-lg border bg-card p-3.5"
+    >
+      <div className="text-[13.5px] font-semibold">New task</div>
+      <Input
+        autoFocus
+        value={title}
+        onChange={(e) => {
+          setTitle(e.target.value);
+          setError(null);
+        }}
+        placeholder="Task title"
+        disabled={busy}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Select value={calendarId} onValueChange={setCalendarId}>
+          <SelectTrigger className="w-[160px]" size="sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="root">My tasks</SelectItem>
+            {calendars.map((cal) => (
+              <SelectItem key={cal.id} value={cal.id}>
+                {cal.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          type="date"
+          value={due}
+          onChange={(e) => setDue(e.target.value)}
+          disabled={busy}
+          className="w-[150px]"
+          aria-label="Due date"
+        />
+        <div className="flex-1" />
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+        <Button type="submit" size="sm" disabled={busy || !title.trim()}>
+          {busy ? "Creating…" : "Create task"}
+        </Button>
+      </div>
+      {error && <p className="text-[12.5px] text-destructive">{error}</p>}
+    </form>
+  );
+}
+
 /** Toggle between the flat list and the Kanban board. */
 function ViewToggle({ value, onChange }: { value: "list" | "board"; onChange: (v: "list" | "board") => void }) {
   return (
@@ -184,9 +296,11 @@ function ViewToggle({ value, onChange }: { value: "list" | "board"; onChange: (v
 
 export function TasksView() {
   const { tasks, source, loading } = useTasks();
+  const refresh = usePluginDataRefresh();
   // List by default: GitHub issues are a flat open/closed list, so the board's
   // status columns are only meaningful when issues carry status labels.
   const [mode, setMode] = useState<"list" | "board">("list");
+  const [creating, setCreating] = useState(false);
   return (
     <div className="flex flex-col gap-3.5">
       <div className="flex items-center gap-2">
@@ -194,7 +308,19 @@ export function TasksView() {
         {loading && <span className="text-[12px] text-muted-foreground">Loading…</span>}
         <div className="flex-1" />
         <ViewToggle value={mode} onChange={setMode} />
+        <Button size="sm" onClick={() => setCreating((v) => !v)}>
+          <Icon name="plus" size={15} /> New task
+        </Button>
       </div>
+      {creating && (
+        <NewTaskForm
+          onDone={() => {
+            setCreating(false);
+            refresh(); // useTasks refetches, so the new task appears in list/board
+          }}
+          onCancel={() => setCreating(false)}
+        />
+      )}
       {mode === "board" ? <TasksBoard tasks={tasks} /> : <TasksList tasks={tasks} />}
     </div>
   );
