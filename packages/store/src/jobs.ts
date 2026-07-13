@@ -90,7 +90,7 @@ export type JobHandlers = (pluginId: string, name: string) => JobHandler | null;
  * class instances (Date, Map, …), bigints, symbols, undefined, and non-finite
  * numbers all throw with the offending path — ids, never bytes.
  */
-export function assertJobPayload(value: unknown, path = "payload"): void {
+export function assertJobPayload(value: unknown, path = "payload", ancestors = new WeakSet<object>()): void {
   if (value === null) return;
   const t = typeof value;
   if (t === "string" || t === "boolean") return;
@@ -102,13 +102,22 @@ export function assertJobPayload(value: unknown, path = "payload"): void {
   if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
     throw new Error(`${path} contains raw bytes — job payloads carry ids/config only, never bytes`);
   }
-  if (Array.isArray(value)) {
-    value.forEach((v, i) => assertJobPayload(v, `${path}[${i}]`));
-    return;
+  // Track the ancestor chain only (removed on the way out): a true cycle throws
+  // cleanly with its path, while a shared-but-acyclic reference stays legal —
+  // JSON.stringify duplicates those, it doesn't reject them.
+  if (ancestors.has(value as object)) throw new Error(`${path} contains a circular reference`);
+  ancestors.add(value as object);
+  try {
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => assertJobPayload(v, `${path}[${i}]`, ancestors));
+      return;
+    }
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      throw new Error(`${path} is not a plain JSON object (got ${value?.constructor?.name ?? "unknown"})`);
+    }
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) assertJobPayload(v, `${path}.${k}`, ancestors);
+  } finally {
+    ancestors.delete(value as object);
   }
-  const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) {
-    throw new Error(`${path} is not a plain JSON object (got ${value?.constructor?.name ?? "unknown"})`);
-  }
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) assertJobPayload(v, `${path}.${k}`);
 }

@@ -43,15 +43,6 @@ export function inProcessJobs(deps: LocalJobsDeps): Jobs {
       }
     };
 
-    const handler = deps.handlers(req.pluginId, req.name);
-    if (!handler) {
-      // A runtime condition (stale schedule, uninstalled plugin), not a caller bug:
-      // record it where the dashboard can see it instead of throwing into a
-      // fire-and-forget caller.
-      await failRun(deps.db, run.id, `no job handler registered for ${req.pluginId}:${req.name}`);
-      return;
-    }
-
     let nextCursor = run.cursor; // unset by the handler → carried forward
     const ctx: JobContext = {
       payload,
@@ -77,12 +68,19 @@ export function inProcessJobs(deps: LocalJobsDeps): Jobs {
       log,
     };
 
+    // Failures are runtime conditions (stale schedule, uninstalled plugin, a
+    // backend down), not caller bugs: they're recorded on the run — where the
+    // dashboard and the next scheduled attempt can see them — and NEVER thrown
+    // into the fire-and-forget caller. This also matches the CF adapter, whose
+    // `start` resolves at dispatch: completion is read from `runs`, not the promise.
     try {
+      const handler = deps.handlers(req.pluginId, req.name);
+      if (!handler) throw new Error(`no job handler registered for ${req.pluginId}:${req.name}`);
       await handler(ctx);
       await finishRun(deps.db, run.id, { cursor: nextCursor });
     } catch (err) {
       await failRun(deps.db, run.id, (err as Error).message);
-      throw err;
+      await log(`Error: ${(err as Error).message}`, "error");
     }
   }
 

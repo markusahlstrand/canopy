@@ -109,7 +109,7 @@ describe("in-process Jobs adapter", () => {
       ctx.setCursor("done-cursor");
     });
     const j = jobs();
-    await expect(j.start(req)).rejects.toThrow("backend down");
+    await j.start(req); // resolves — the failure lives on the run, never in the caller's promise
     let run = await latestRun(db, key);
     expect(run?.status).toBe("error");
     expect(run?.error).toBe("backend down");
@@ -128,6 +128,20 @@ describe("in-process Jobs adapter", () => {
     const run = await latestRun(db, { ...key, jobName: "nope" });
     expect(run?.status).toBe("error");
     expect(run?.error).toContain("sync:nope");
+  });
+
+  it("a throwing handler lookup still lands the run in a terminal state", async () => {
+    const broken = inProcessJobs({
+      db,
+      sleep,
+      handlers: () => {
+        throw new Error("registry exploded");
+      },
+    });
+    await broken.start(req); // no rejection into the caller
+    const run = await latestRun(db, key);
+    expect(run?.status).toBe("error");
+    expect(run?.error).toBe("registry exploded");
   });
 
   it("rejects payloads that would not survive a queue message (bytes, functions)", async () => {
@@ -185,5 +199,14 @@ describe("assertJobPayload", () => {
     expect(() => assertJobPayload({ big: 1n })).toThrow(/payload\.big/);
     expect(() => assertJobPayload({ list: [undefined] })).toThrow(/payload\.list\[0\]/);
     expect(() => assertJobPayload({ n: Infinity })).toThrow(/payload\.n/);
+  });
+
+  it("rejects a circular payload cleanly, but allows shared acyclic references (like JSON.stringify)", () => {
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    expect(() => assertJobPayload(loop)).toThrow(/payload\.self.*circular/);
+
+    const shared = { id: "x" };
+    expect(() => assertJobPayload({ a: shared, b: shared })).not.toThrow();
   });
 });
