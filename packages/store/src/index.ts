@@ -16,6 +16,8 @@ export * from "./users";
 export * from "./spaces";
 export * from "./connections";
 export * from "./runs";
+export * from "./jobs";
+export * from "./jobs-local";
 export * from "./connector-sync";
 export * from "./index-jobs";
 export * from "./index-jobs-local";
