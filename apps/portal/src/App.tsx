@@ -72,6 +72,7 @@ import { SpaceMembersDialog } from "@/components/space-members-dialog";
 import { SpaceCacheDialog } from "@/components/space-cache-dialog";
 import { ConnectorSettingsDialog } from "@/components/connector-settings-dialog";
 import { CreateSpaceDialog } from "@/components/create-space-dialog";
+import { NameDialog, type NamePrompt } from "@/components/name-dialog";
 import { PluginSettingsDialog } from "@canopy/plugin-sdk";
 import { InviteGate } from "@/components/invite-gate";
 import { ConnectDeviceDialog } from "@/components/connect-device-dialog";
@@ -366,6 +367,8 @@ function DesktopApp() {
   const [connectorSettings, setConnectorSettings] = useState<{ pluginId: string; name: string } | null>(null);
   const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  // The single-name modal currently asked of the user (new folder, renames, new file), or null.
+  const [namePrompt, setNamePrompt] = useState<NamePrompt | null>(null);
   const [overview, setOverview] = useState<Overview>({ files: 0, bytes: 0 });
   const [sharedCount, setSharedCount] = useState(0);
   const [dragOver, setDragOver] = useState(false);
@@ -601,20 +604,22 @@ function DesktopApp() {
     setCreateSpaceOpen(true);
   }
 
-  async function renameSpaceFlow(id: string) {
+  function renameSpaceFlow(id: string) {
     const current = spaces.find((s) => s.id === id);
-    const name = window.prompt("Rename space", current?.name ?? "");
-    if (!name?.trim() || name.trim() === current?.name) return;
-    try {
-      await renameSpace(id, name.trim());
-      setSpaces(await listSpaces());
-      toast(`Renamed to “${name.trim()}”`);
-    } catch (err) {
-      toast("Couldn't rename space", { description: (err as Error).message });
-    }
+    setNamePrompt({
+      title: "Rename space",
+      initial: current?.name ?? "",
+      submitLabel: "Rename",
+      onSubmit: async (name) => {
+        if (name === current?.name) return;
+        await renameSpace(id, name);
+        setSpaces(await listSpaces());
+        toast(`Renamed to “${name}”`);
+      },
+    });
   }
 
-  async function createFolderFlow() {
+  function createFolderFlow() {
     if (!online) {
       toast("You're offline", { description: "You can't create folders until you're back online." });
       return;
@@ -627,18 +632,19 @@ function DesktopApp() {
       toast("This space is read-only");
       return;
     }
-    const name = window.prompt("Folder name");
-    if (!name?.trim()) return;
-    try {
-      await createFolder([path, name.trim()].filter(Boolean).join("/"), space || undefined);
-      reload();
-      toast(`Created “${name.trim()}”`);
-    } catch (err) {
-      toast("Couldn't create folder", { description: (err as Error).message });
-    }
+    setNamePrompt({
+      title: "New folder",
+      placeholder: "Folder name",
+      submitLabel: "Create",
+      onSubmit: async (name) => {
+        await createFolder([path, name].filter(Boolean).join("/"), space || undefined);
+        reload();
+        toast(`Created “${name}”`);
+      },
+    });
   }
 
-  async function createFileFlow(creator: InstalledCreator) {
+  function createFileFlow(creator: InstalledCreator) {
     if (!online) {
       toast("You're offline", { description: "You can't create files until you're back online." });
       return;
@@ -651,17 +657,18 @@ function DesktopApp() {
       toast("This space is read-only");
       return;
     }
-    const input = window.prompt(`${creator.label} name`, creator.defaultName);
-    if (!input?.trim()) return;
-    const base = input.trim();
-    const name = base.toLowerCase().endsWith(creator.extension) ? base : base + creator.extension;
-    try {
-      const file = await createFile(path, name, creator.template ?? "", creator.mime, space || undefined);
-      reload();
-      setPreviewFile(file); // open straight in the matching viewer/editor
-    } catch (err) {
-      toast("Couldn't create file", { description: (err as Error).message });
-    }
+    setNamePrompt({
+      title: `New ${creator.label.toLowerCase()}`,
+      placeholder: `${creator.label} name`,
+      initial: creator.defaultName,
+      submitLabel: "Create",
+      onSubmit: async (base) => {
+        const name = base.toLowerCase().endsWith(creator.extension) ? base : base + creator.extension;
+        const file = await createFile(path, name, creator.template ?? "", creator.mime, space || undefined);
+        reload();
+        setPreviewFile(file); // open straight in the matching viewer/editor
+      },
+    });
   }
 
   // Generic host bridge handed to trusted, first-party plugin UI (the Model Editor
@@ -884,18 +891,23 @@ function DesktopApp() {
         toast("Folders can't be renamed yet");
         return;
       }
-      const name = window.prompt("Rename file", f.name);
-      if (!name?.trim() || name.trim() === f.name) return;
-      const next = name.trim();
-      setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, name: next } : x))); // optimistic
-      try {
-        await renameFile(f.id, next);
-        reload();
-        toast(`Renamed to “${next}”`);
-      } catch (err) {
-        reload(); // rollback to server truth
-        toast("Couldn't rename", { description: (err as Error).message });
-      }
+      setNamePrompt({
+        title: "Rename file",
+        initial: f.name,
+        submitLabel: "Rename",
+        onSubmit: async (next) => {
+          if (next === f.name) return;
+          setFiles((fs) => fs.map((x) => (x.id === f.id ? { ...x, name: next } : x))); // optimistic
+          try {
+            await renameFile(f.id, next);
+            reload();
+            toast(`Renamed to “${next}”`);
+          } catch (err) {
+            reload(); // rollback to server truth
+            throw err; // surfaces inline in the dialog
+          }
+        },
+      });
     } else if (action === "Reprocess") {
       if (f.kind === "folder") return; // folders have no content to process
       try {
@@ -1376,6 +1388,10 @@ function DesktopApp() {
           open={!!shareTarget}
           onOpenChange={(o) => !o && setShareTarget(null)}
         />
+      )}
+
+      {namePrompt && (
+        <NameDialog prompt={namePrompt} onOpenChange={(o) => !o && setNamePrompt(null)} />
       )}
 
       {createSpaceOpen && (
