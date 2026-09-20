@@ -87,6 +87,44 @@ export interface DocumentProcessor {
   process(file: ProcessorFile, config: Record<string, string>, ctx: ProcessorContext): Promise<ProcessorResult>;
 }
 
+/* ── Jobs role ─────────────────────────────────────────────────────────────── */
+
+/**
+ * What a job handler runs against. Structurally identical to `JobContext` in
+ * `@canopy/store` (deliberately NOT imported — the store keeps its ports free of
+ * `@canopy/core` types and vice versa; the two are joined at composition time in
+ * apps/api, which imports both). `step` is the durability seam: names must be a
+ * pure function of the payload + prior step results so a crash-resume replays
+ * the same sequence; results must be JSON-serializable.
+ */
+export interface JobRunContext {
+  payload: Record<string, unknown>;
+  /** The last successful run's cursor for this job instance, or null. */
+  cursor: string | null;
+  /** Cursor persisted on success; unset carries the previous one forward. */
+  setCursor(next: string | null): void;
+  step<T>(
+    name: string,
+    fn: () => Promise<T>,
+    opts?: { retries?: { limit: number; delayMs: number; backoff?: "constant" | "exponential" } },
+  ): Promise<T>;
+  /** One live progress line to the run's channel (best-effort, never persisted). */
+  log(message: string, level?: "info" | "error"): Promise<void>;
+}
+
+/**
+ * One named background job a plugin provides. `schedule` is a 5-field cron
+ * expression evaluated by the HOST's tick (T5) — a plugin declares when it wants
+ * to run but never owns a trigger. Dispatch is keyed `pluginId:name`; two jobs
+ * with the same key fail fast at composition.
+ */
+export interface JobDefinition {
+  name: string;
+  /** 5-field cron (e.g. "0 2 * * *"). Omit for on-demand-only jobs. */
+  schedule?: string;
+  handler: (ctx: JobRunContext) => Promise<void>;
+}
+
 /* ── The plugin: one package, the roles it fills ───────────────────────────── */
 
 /**
@@ -107,4 +145,6 @@ export interface ServerPlugin {
   connectors?: StorageConnectorPlugin[];
   dataSource?: ServerDataSource;
   processors?: DocumentProcessor[];
+  /** Background jobs on the rail (trusted first-party path — see deviation 1 in the jobs plan). */
+  jobs?: JobDefinition[];
 }
