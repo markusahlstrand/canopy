@@ -22,6 +22,7 @@ import { DemoBanner } from "@/components/demo-banner";
 import { InviteBanner } from "@/components/invite-banner";
 import { OfflineBanner } from "@/components/offline-banner";
 import { PullToRefresh } from "@/components/pull-to-refresh";
+import { NameDialog, type NamePrompt } from "@/components/name-dialog";
 import { HomeScreen, DriveScreen, SpacesScreen, AppsScreen } from "./screens";
 import { NewActionSheet, FileDetailSheet } from "./sheets";
 
@@ -43,6 +44,8 @@ export function MobileApp() {
   const [installed, setInstalled] = useState<string[]>(ANON_DEFAULT_INSTALLED);
   // Bumped on pull-to-refresh; screens fold it into their fetch deps to reload.
   const [refreshKey, setRefreshKey] = useState(0);
+  // The single-name modal currently asked of the user (new note), or null.
+  const [namePrompt, setNamePrompt] = useState<NamePrompt | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -101,19 +104,20 @@ export function MobileApp() {
     setRefreshKey((k) => k + 1);
   };
 
-  async function createNote() {
+  function createNote() {
     const creator = CREATORS.find((c) => c.extension === ".md");
     if (!creator) return;
-    const input = window.prompt(`${creator.label} name`, creator.defaultName);
-    if (!input?.trim()) return;
-    const base = input.trim();
-    const name = base.toLowerCase().endsWith(creator.extension) ? base : base + creator.extension;
-    try {
-      const file = await createFile("", name, creator.template ?? "", creator.mime);
-      openFile(file); // opens in the detail sheet, which mounts the markdown editor
-    } catch (e) {
-      toast("Couldn't create note", { description: (e as Error).message });
-    }
+    setNamePrompt({
+      title: `New ${creator.label.toLowerCase()}`,
+      placeholder: `${creator.label} name`,
+      initial: creator.defaultName,
+      submitLabel: "Create",
+      onSubmit: async (base) => {
+        const name = base.toLowerCase().endsWith(creator.extension) ? base : base + creator.extension;
+        const file = await createFile("", name, creator.template ?? "", creator.mime);
+        openFile(file); // opens in the detail sheet, which mounts the markdown editor
+      },
+    });
   }
 
   async function doUpload(list: FileList | null) {
@@ -203,6 +207,10 @@ export function MobileApp() {
         onNewNote={createNote}
       />
       <FileDetailSheet file={selFile} open={sheet === "file"} onOpenChange={(o) => setSheet(o ? "file" : null)} installedPluginIds={installed} />
+
+      {namePrompt && (
+        <NameDialog prompt={namePrompt} onOpenChange={(o) => !o && setNamePrompt(null)} />
+      )}
 
       <input
         ref={uploadRef}
