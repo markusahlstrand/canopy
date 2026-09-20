@@ -1,12 +1,14 @@
 # Canopy onto the scope model
 
 *S1 of the convergence rail ([#42](https://github.com/markusahlstrand/canopy/issues/42)),
-written against `@substrat-run/*` 0.114.0 and proved by `packages/scope-drive`.*
+written against `@substrat-run/*` 0.114.0 and proved by `packages/scope-drive`.
+This is the canopy half of that ticket; the platform half — the open questions — is filed
+there, and §4 says why the split is deliberate rather than a shortcut.*
 
 The July rail asked for this document to be written first, against the kernel design.
 It is written differently: against a **running module**. `packages/scope-drive` models the
 drive's core triple — folder → file → file_version — as a Substrat module, runs it on
-`adapter-sqlite`, and passes seven assertions about the move. Everything below is what
+`adapter-sqlite`, and passes eight assertions about the move. Everything below is what
 that cost, and it is a more honest mapping than a reading of the design docs would have
 produced, because four of the six findings only appear when the code runs.
 
@@ -73,6 +75,7 @@ module that compiles and one that nearly does.
 - a folder is created, a file written into it, and the listing is one hop then a local query
 - writing the same name again supersedes: one file, two versions, newest first
 - a member reads the space drive (membership is the grant), and is refused the write nobody granted
+- a name carrying a path separator is refused rather than concatenated into a path
 - another tenant's scope shares no rows, not even at the same path
 
 It does **not** prove: shares to outsiders, connector-backed spaces, WebDAV, the bytes
