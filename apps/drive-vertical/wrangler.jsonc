@@ -1,0 +1,21 @@
+// Local `wrangler dev` only. The hosted deploy authors no wrangler config:
+// `substrat push` derives it from `substrat.runtimeNeeds` in package.json, so
+// anything added here is invisible to a pushed install by design.
+{
+  "name": "canopy-drive",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  // vertical-auth pulls in a password hasher that imports node:crypto and
+  // node:async_hooks. The hosted deploy gets this from runtimeNeeds.needsNodeCompat.
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SCOPE", "class_name": "ScopeDO" },
+      { "name": "AUTH", "class_name": "IdentityDO" },
+      { "name": "SWEEPER", "class_name": "SweeperDO" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ScopeDO", "IdentityDO", "SweeperDO"] }]
+  // No `vars`: with no OIDC_ISSUER this worker authenticates nobody, which is the
+  // state a deploy should be in until an install is given an issuer.
+}

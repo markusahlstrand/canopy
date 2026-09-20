@@ -1,0 +1,62 @@
+{
+  "name": "@canopy/drive-vertical",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Canopy's drive as a deployable Substrat vertical \u2014 one scope per space.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "wrangler dev --var ALLOW_DEV_NODE:true",
+    "check": "substrat push --check",
+    "push": "substrat push"
+  },
+  "dependencies": {
+    "@canopy/scope-drive": "workspace:*",
+    "@substrat-run/adapter-cloudflare": "^0.114.0",
+    "@substrat-run/contracts": "^0.114.0",
+    "@substrat-run/kernel": "^0.114.0",
+    "@substrat-run/vertical-auth": "^0.14.3",
+    "@substrat-run/vertical-host": "^0.114.0",
+    "hono": "^4.12.30",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
+    "typescript": "~6.0.3",
+    "wrangler": "^4.42.0"
+  },
+  "substrat": {
+    "slug": "canopy-drive",
+    "name": "Canopy Drive",
+    "permissions": "src/provision.ts",
+    "entitlements": [
+      "drive"
+    ],
+    "requires": [
+      "oidc-issuer"
+    ],
+    "ownerGrants": [
+      "drive:read",
+      "drive:write",
+      "drive:manage"
+    ],
+    "runtimeNeeds": {
+      "entry": "src/worker.ts",
+      "stores": [
+        {
+          "binding": "SCOPE",
+          "class": "ScopeDO"
+        },
+        {
+          "binding": "AUTH",
+          "class": "IdentityDO"
+        },
+        {
+          "binding": "SWEEPER",
+          "class": "SweeperDO"
+        }
+      ],
+      "needsNodeCompat": true
+    }
+  }
+}
