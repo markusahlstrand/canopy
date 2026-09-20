@@ -36,6 +36,19 @@ export const driveManifest = moduleManifest.parse({
   ...manifestEntities(driveEntities, {
     searchables: [{ entityType: 'file', fields: ['name'] }],
   }),
+  /**
+   * Bytes bind to a FILE, and the kernel gates them with the same keys the operations
+   * use — `list`/`open` check `drive:read`, `upload`/`remove` check `drive:write`,
+   * both per-entity, so a grant narrowed to one folder reaches the bytes under it and
+   * nothing else. The drive holds no second rule about who may download what.
+   */
+  attachmentTargets: [
+    {
+      entityType: 'file',
+      readPermission: DRIVE_PERM.read,
+      writePermission: DRIVE_PERM.write,
+    },
+  ],
   lists: listsDeclaredBy(driveOperations, driveEntities),
   entitlementKey: 'drive',
 });

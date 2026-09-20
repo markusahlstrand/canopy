@@ -1,0 +1,15 @@
+@import "tailwindcss";
+/* The enter/exit utilities `@canopy/ui`'s Dialog is built on (animate-in,
+   fade-in-0, zoom-in-95). Without it the dialog still opens, but unstyled
+   transitions — the portal loads the same plugin for the same reason. */
+@import "tw-animate-css";
+
+/* The Canopy palette, fonts, @theme mapping and dark variant — the same token
+   set the portal loads, so a component rendered here and the same component
+   rendered in the portal are the same component, not two that resemble each
+   other. */
+@import "../../../../packages/ui/src/tokens.css";
+
+/* Tailwind's content detection is rooted at this app, so the class names that
+   live inside @canopy/ui would generate no utilities without this. */
+@source "../../../../packages/ui/src";

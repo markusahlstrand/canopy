@@ -124,20 +124,23 @@ const operations = {
     return row;
   },
 
-  'drive/put-file': async (ctx, input) => {
+  'drive/ensure-file': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(input.folderId)));
     if (!ctx.sql.query<FolderRow>('SELECT id FROM drive_folders WHERE id = ?', [input.folderId])[0]) {
       throw substratError('not_found', `folder not found: ${input.folderId}`);
     }
-    const now = ctx.now();
-    // Create-or-supersede, keyed by (folder, name) — the same identity the store's
-    // UNIQUE index has, so an overwrite is a new VERSION and never a second file.
+
+    // Create-or-return, keyed by (folder, name) — the same identity the UNIQUE index
+    // has, so writing the same name twice is a new VERSION of one file rather than a
+    // second file. Idempotent, because the upload that follows it may be retried.
     const existing = ctx.sql.query<FileRow>(
       'SELECT * FROM drive_files WHERE folder_id = ? AND name = ?',
       [input.folderId, input.name],
     )[0];
+    if (existing) return existing;
 
-    const file: FileRow = existing ?? {
+    const now = ctx.now();
+    const row: FileRow = {
       id: ulid(),
       folder_id: input.folderId,
       name: input.name,
@@ -146,18 +149,69 @@ const operations = {
       updated_at: now,
       deleted_at: null,
     };
-    if (!existing) {
-      ctx.sql.exec(
-        'INSERT INTO drive_files (id, folder_id, name, current_version_id, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
-        [file.id, file.folder_id, file.name, null, file.created_at, file.updated_at],
-      );
-      ctx.link(fileRef(file.id), folderRef(file.folder_id));
+    ctx.sql.exec(
+      'INSERT INTO drive_files (id, folder_id, name, current_version_id, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
+      [row.id, row.folder_id, row.name, null, row.created_at, row.updated_at],
+    );
+    ctx.link(fileRef(row.id), folderRef(row.folder_id));
+    ctx.emit({
+      type: 'drive.file-created',
+      schemaVersion: 1,
+      entity: { entityType: 'file', entityId: row.id },
+      piiClass: 'none',
+      payload: { id: row.id, folder_id: row.folder_id },
+    });
+    return row;
+  },
+
+  'drive/record-version': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
+    if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
+
+    // One location, guaranteed by the declaration's discriminated union: the columns
+    // the other source would use stay null because there is nothing to read them
+    // from, not because a check remembered to blank them.
+    const loc = input.location;
+
+    /**
+     * A blob version is verified against the attachment, never taken on the caller's
+     * word. This operation carries a URL, so "the worker route always passes what it
+     * just uploaded" is not a property of the system — it is a property of one caller.
+     *
+     * Two things are checked here and they fail differently on purpose: an id naming
+     * no attachment is `not_found`, and an id naming an attachment on ANOTHER file is
+     * refused outright. Without the second, a writer could point their file at someone
+     * else's bytes; the attachment surface would still gate the read by the owning
+     * entity, so nothing leaks, but the version chain would be a record of something
+     * that never happened.
+     *
+     * `size` and `mime` then come from the row rather than the request — a version
+     * cannot describe the bytes as something they are not.
+     */
+    let mime: string;
+    let size: number;
+    if (loc.source === 'blob') {
+      const attachment = ctx.sql.query<{ entity_id: string; content_type: string; size: number }>(
+        `SELECT entity_id, content_type, size FROM _substrat_attachments
+         WHERE id = ? AND entity_type = 'file'`,
+        [loc.blobRef],
+      )[0];
+      if (!attachment) throw substratError('not_found', `no attachment: ${loc.blobRef}`);
+      if (attachment.entity_id !== file.id) {
+        throw substratError(
+          'validation_failed',
+          `attachment ${loc.blobRef} belongs to another file — a version names bytes uploaded against its own file`,
+        );
+      }
+      mime = attachment.content_type;
+      size = attachment.size;
+    } else {
+      mime = loc.mime;
+      size = loc.size;
     }
 
-    // One location, guaranteed by the declaration's discriminated union: the
-    // columns the other source would use stay null because there is nothing to
-    // read them from, not because a check remembered to blank them.
-    const loc = input.location;
+    const now = ctx.now();
     const version: VersionRow = {
       id: ulid(),
       file_id: file.id,
@@ -165,8 +219,8 @@ const operations = {
       blob_ref: loc.source === 'blob' ? loc.blobRef : null,
       external_key: loc.source === 'external' ? loc.externalKey : null,
       etag: loc.source === 'external' ? (loc.etag ?? null) : null,
-      mime: input.mime,
-      size: input.size,
+      mime,
+      size,
       created_at: now,
       created_by: ctx.principal,
     };
@@ -200,6 +254,18 @@ const operations = {
       payload: { id: written.id, folder_id: written.folder_id, current_version_id: version.id },
     });
     return written;
+  },
+
+  'drive/get-file': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
+    if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
+    const version = file.current_version_id
+      ? (ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [
+          file.current_version_id,
+        ])[0] ?? null)
+      : null;
+    return { file, version };
   },
 
   'drive/file-versions': async (ctx, input) => {

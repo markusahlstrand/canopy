@@ -19,6 +19,10 @@
     "./routes": {
       "types": "./dist/src/routes.d.ts",
       "default": "./dist/src/routes.js"
+    },
+    "./spec/model": {
+      "types": "./dist/spec/model.d.ts",
+      "default": "./dist/spec/model.js"
     }
   },
   "scripts": {
