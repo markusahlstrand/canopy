@@ -11,31 +11,23 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
-import {
-  principalId,
-  platformActorId,
-  scopeId,
-  tenantId,
-  type RoleDefinition,
-} from '@substrat-run/contracts';
+import { principalId, platformActorId, scopeId, tenantId } from '@substrat-run/contracts';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
 import { driveModule, driveManifest, DRIVE_PERM, ROOT_FOLDER_ID, driveMigrations } from '../src/index.js';
+import { ROLES } from '../src/provision.js';
 
 /**
- * The role table, and the first real mapping decision of the conversion.
+ * Everyone below is assigned `member` from the SHIPPED role table above, which holds
+ * `drive:read` and nothing else: canopy's space membership already means "you see this
+ * space's drive" — a family space is shared by being a space, not by granting every
+ * folder in it.
  *
- * Canopy's space membership already means "you see this space's drive" — a family
- * space is shared by being a space, not by granting every folder in it. So `read`
- * is the role's, held scope-wide by every member, and the kernel refuses an empty
- * permission list anyway.
- *
- * `write` and `manage` are NOT in the role. They are granted on a folder entity and
- * reach everything beneath it through the declared parent edge, which is what
- * canopy's `folder_grants` + `pathRole` walk did by hand, one ancestor at a time.
+ * Write comes from a grant on a folder entity, reaching everything beneath it through
+ * the declared parent edge — what `folder_grants` + the `pathRole` walk did by hand,
+ * one ancestor at a time. The `owner` role beside `member` is the PROVISIONING path,
+ * exercised by a deploy; these tests are about the SHARING path, where a permission has
+ * to travel down an edge to mean anything.
  */
-const ROLES: RoleDefinition[] = [
-  { key: 'member', permissions: [DRIVE_PERM.read], source: 'vertical' },
-];
 
 let dir: string;
 let host: ScopeHost;

@@ -1,0 +1,253 @@
+/**
+ * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
+ * the shape `substrat push` deploys into the platform's dispatch namespace.
+ *
+ * Its only durable stores are its own DO classes: `SCOPE` (kernel + the drive module,
+ * bundled — one per space), `AUTH` (the tenant's identity directory) and `SWEEPER`
+ * (this deployment's own timer). No control-plane binding, no service bindings — the
+ * platform refuses those, and a vertical that needed one would be asking to reach
+ * outside its own tenancy.
+ *
+ * `substrat push` derives the deploy config from `substrat.runtimeNeeds` in
+ * package.json; no wrangler config is authored for the hosted path. `wrangler.jsonc`
+ * exists for local `wrangler dev` only.
+ *
+ * ── The auth seam ───────────────────────────────────────────────────────────────
+ * One path, in every environment: the configured OIDC issuer verifies the request
+ * and hands back a subject; the tenant's `IdentityDO` maps that subject to a
+ * principal in THIS scope. There is deliberately no dev header — a header naming the
+ * caller is an impersonation bypass one environment variable away from being live,
+ * and canopy already learned that lesson on its own API.
+ *
+ * The issuer is per-install configuration, not code: an install points this at
+ * authhero (canopy's own issuer) or at anything else that speaks OIDC.
+ * ─────────────────────────────────────────────────────────────────────────────────
+ */
+import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+import { principalId, scopeId, tenantId, type PrincipalId, type ScopeId, type TenantId } from '@substrat-run/contracts';
+import {
+  CloudflareScopeHost,
+  defineScopeDO,
+  defineScopeSweeperDO,
+  SCOPE_SWEEPER_NAME,
+  type ScopeSweeperDo,
+} from '@substrat-run/adapter-cloudflare';
+import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
+import { readRoutedNode, RouterAssertionError, type ScopeStub } from '@substrat-run/kernel';
+import { mountPlatformSurface } from '@substrat-run/vertical-host';
+import {
+  AuthConfigError,
+  IdentityDO,
+  instanceAuthFor,
+  mintOwnerClaimLink,
+  type AuthProvider,
+  type IdentityStub,
+} from '@substrat-run/vertical-auth';
+import { mountApi } from '@canopy/scope-drive/routes';
+import { MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
+
+/**
+ * The scope-DO class = the app binary: kernel + the drive module, bundled. One
+ * instance per space, and the reason a space's data is reachable only through it.
+ */
+export const ScopeDO = defineScopeDO(MODULES, {});
+
+/** The tenant's identity directory: subject → principal, and the owner seat. */
+export { IdentityDO };
+
+/**
+ * This deployment's own timer: a roster-keeping singleton whose alarm runs each
+ * provisioned scope's due recurring work. Empty roster costs nothing, and the drive
+ * will need it the moment indexing arrives.
+ */
+export const SweeperDO = defineScopeSweeperDO<Env>({
+  versionId: (env) => env.SUBSTRAT_VERSION_ID ?? null,
+  intervalMs: 120_000,
+  host: hostFor,
+});
+
+export interface Env {
+  SUBSTRAT_VERSION_ID?: string;
+  /** One DO per scope — a space's whole database. */
+  SCOPE: DurableObjectNamespace;
+  /** Per-tenant identity directory. */
+  AUTH: DurableObjectNamespace<IdentityDO>;
+  /** The roster-keeping sweep singleton. */
+  SWEEPER: DurableObjectNamespace;
+  /** Local `wrangler dev` only: address an instance when no router asserted one. */
+  ALLOW_DEV_NODE?: string;
+  ROUTER_SECRET?: string;
+  PLATFORM_SECRET?: string;
+  /** The install's issuer. Absent ⇒ nothing authenticates, which is the honest default. */
+  OIDC_ISSUER?: string;
+  OIDC_CLIENT_ID?: string;
+  OIDC_CLIENT_SECRET?: string;
+}
+
+/** The sweep singleton's stub — one roster and one alarm per deployment. */
+function sweeper(env: Env): DurableObjectStub & ScopeSweeperDo {
+  return env.SWEEPER.get(env.SWEEPER.idFromName(SCOPE_SWEEPER_NAME)) as DurableObjectStub &
+    ScopeSweeperDo;
+}
+
+interface Node {
+  tenantId: TenantId;
+  scopeId: ScopeId;
+}
+
+/**
+ * The local-dev node. An ADDRESS, not an identity: it says which instance an
+ * un-routed request belongs to and grants nobody anything.
+ */
+const DEV_NODE: Node = {
+  tenantId: tenantId.parse('01JZ00000000000000000DEV01'),
+  scopeId: scopeId.parse('01JZ00000000000000000DEV02'),
+};
+
+function nodeFor(req: Request, env: Env): Node {
+  let routed;
+  try {
+    routed = readRoutedNode(req.headers, {
+      expectedSecret: env.ROUTER_SECRET,
+      allowUnsigned: env.ALLOW_DEV_NODE === 'true',
+    });
+  } catch (e) {
+    if (e instanceof RouterAssertionError) throw new HTTPException(400, { message: e.message });
+    throw e;
+  }
+  if (routed) return { tenantId: routed.tenantId, scopeId: routed.scopeId };
+  if (env.ALLOW_DEV_NODE === 'true') return DEV_NODE;
+  throw new HTTPException(503, { message: 'no scope was asserted for this request' });
+}
+
+function hostFor(env: Env): CloudflareScopeHost {
+  const host = new CloudflareScopeHost({ scope: env.SCOPE });
+  for (const m of MODULES) host.registerModule(m);
+  return host;
+}
+
+const identityDo = (env: Env, node: Node): IdentityStub =>
+  env.AUTH.get(env.AUTH.idFromName(node.tenantId)) as unknown as IdentityStub;
+
+/**
+ * The provider this INSTALL's configuration selects.
+ *
+ * The identity choice is delivered as ONE JSON value under `substrat:auth` — issuer,
+ * client id and secret, audience, cookie domain — so parsing it is the platform's job
+ * and not ours: `instanceAuthFor` reads the delivered map and the tenant's DO-minted
+ * session secret in a single hop, and `provider()` selects from them. Reading
+ * `env.OIDC_ISSUER` directly instead is the bug this replaces — a binding is shared by
+ * every install of one serving script, so it would be the same issuer for all of them
+ * no matter what any tenant saved.
+ *
+ * A deployment-level `AUTH_PROVIDER=oidc` + `OIDC_ISSUER` remains the standalone
+ * fallback, and nothing configured at all throws `AuthConfigError`, which is the honest
+ * answer: a fresh install authenticates nobody until it is given an issuer.
+ */
+async function providerFor(env: Env, node: Node): Promise<AuthProvider> {
+  const instance = await instanceAuthFor({
+    directory: identityDo(env, node),
+    scopeId: node.scopeId,
+    // No declared settings of our own yet; the auth choice rides the same map.
+    envSpec: [],
+    env: env as unknown as Record<string, unknown>,
+  });
+  try {
+    return instance.provider();
+  } catch (e) {
+    if (e instanceof AuthConfigError) throw new HTTPException(e.status, { message: e.message });
+    throw e;
+  }
+}
+
+/** Subject → principal in this scope, or null for nobody. */
+async function principalFor(env: Env, req: Request): Promise<PrincipalId | null> {
+  const provider = await providerFor(env, nodeFor(req, env));
+  const subject = await provider.resolve(req.headers);
+  if (!subject) return null;
+  const node = nodeFor(req, env);
+  const principal = await identityDo(env, node).resolvePrincipal(node.scopeId, subject.sub);
+  return principal ? principalId.parse(principal) : null;
+}
+
+const app = new Hono<{ Bindings: Env }>();
+
+/**
+ * The platform's side of the contract: provision, configure, reconcile, export,
+ * restore, delete. Generic — the only vertical-specific facts it needs are the role
+ * table and which role an installing owner holds.
+ */
+mountPlatformSurface<Env>(app, {
+  platformSecret: (env) => env.PLATFORM_SECRET,
+  hostFor,
+  roles: ROLES,
+  ownerRoleKey: OWNER_ROLE_KEY,
+  /**
+   * Two facts a new install cannot discover for itself.
+   *
+   * The **pending owner** is the one the platform names at provision. Without it the
+   * identity DO has no subject mapping to claim on first sign-in, so the installer
+   * signs in successfully and resolves to nobody — a scope only its creator should
+   * reach, that its creator cannot.
+   *
+   * The **roster** is what this deployment's alarm walks. A scope that never joins it
+   * has no retry drain and no schedules; the sweeper sits with an empty roster and
+   * nothing ever arms it.
+   */
+  onProvision: async (env, b) => {
+    const node = { tenantId: b.tenantId, scopeId: b.scopeId };
+    await identityDo(env, node).setPendingOwner(b.scopeId, b.owner);
+    await sweeper(env).noteScope(b.tenantId, b.scopeId);
+  },
+  onDeleteScope: async (env, s) => {
+    await sweeper(env).forgetScope(s);
+  },
+  // Per-instance config delivery (the dashboard's Env and Identity tabs). WITHOUT this
+  // hook `/internal/configure` answers 501 for the life of the app: the dashboard saves
+  // the issuer, reports `delivered: false`, and the worker 401s on everything forever.
+  onConfigure: (env, b) =>
+    identityDo(env, { tenantId: b.tenantId, scopeId: b.scopeId }).setScopeConfig(b.scopeId, b.entries),
+  // Who the install belongs to, read from the directory the provision hook writes —
+  // never from the role table, which says what an owner may do, not which person they are.
+  resolveOwner: async (env, ref) => {
+    const owner = await identityDo(env, ref).getOwnerOfRecord(ref.scopeId);
+    return owner ? principalId.parse(owner) : null;
+  },
+  ownerSeat: (env, ref) => identityDo(env, ref).ownerSeat(ref.scopeId),
+  // The recovery path once the first-sign-in window has closed. Without it an install
+  // whose owner never signed in is unclaimable, and the seat stays empty forever.
+  mintOwnerClaim: (env, ref, input) =>
+    mintOwnerClaimLink(identityDo(env, ref), ref.scopeId, input.origin),
+});
+
+/**
+ * The relying-party flow: login, callback, logout. This vertical runs no credential
+ * store and hosts no sign-up — the issuer owns the password — but the cookie session
+ * every other route reads is established HERE, and without these three routes there is
+ * no way for a browser to acquire one.
+ */
+app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
+  (await providerFor(c.env, nodeFor(c.req.raw, c.env))).handle(c.req.raw),
+);
+
+/** Who am I — the first call every client makes. */
+app.get('/api/me', async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  return principal ? c.json({ principal }) : c.json({ error: 'unauthorized' }, 401);
+});
+
+/**
+ * The drive's own API: one hop to the space's scope, then the operation. A caller
+ * who resolves to no principal never reaches a stub, so an unauthenticated request
+ * is refused before any scope is touched.
+ */
+mountApi(app, async (c): Promise<ScopeStub> => {
+  const env = c.env as Env;
+  const principal = await principalFor(env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = nodeFor(c.req.raw, env);
+  return hostFor(env).getScope(principal, node.tenantId, node.scopeId);
+});
+
+export default app;

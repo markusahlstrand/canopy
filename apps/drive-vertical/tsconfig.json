@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // A worker is bundled, never consumed as a package: no .d.ts, so an inferred
+    // DO class type naming an adapter-internal env shape is not a problem here.
+    "declaration": false,
+    "declarationMap": false,
+    "lib": ["ES2023"],
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src"]
+}
