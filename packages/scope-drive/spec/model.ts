@@ -28,6 +28,26 @@
  */
 import { defineEntities, defineOperations, z } from '@substrat-run/contracts';
 
+/**
+ * One path segment: a folder or file name, never a path.
+ *
+ * `@canopy/store` enforces exactly this on a rename (`files.ts`, "a non-empty name
+ * with no path separators") and it has to hold here too, harder — a name is
+ * concatenated into `drive_folders.path`, so a name containing `/` would occupy a
+ * path that belongs to a real nested folder while carrying the parent edge of a
+ * root child. The permission hierarchy and the path hierarchy would then disagree,
+ * which is the one thing the parent edge exists to prevent. Trimmed, because a
+ * trailing space is invisible in every UI that renders it.
+ */
+export const segment = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((v) => !v.includes('/') && !v.includes('\\'), {
+    message: 'a name is one path segment: no / or \\',
+  })
+  .refine((v) => v !== '.' && v !== '..', { message: 'a name cannot be . or ..' });
+
 export const driveEntities = defineEntities({
   /**
    * A folder. Explicit rather than derived: canopy's folders are virtual —
@@ -138,7 +158,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   'drive/create-folder': {
     summary: 'Create a folder inside another',
     permission: { key: 'drive:write', entity: 'folder', idFrom: 'parentId' },
-    input: z.object({ parentId: z.string(), name: z.string().min(1) }),
+    input: z.object({ parentId: z.string(), name: segment }),
     output: driveEntities.folder.fields,
     http: { method: 'POST', path: '/folders/{parentId}/folders' },
     emits: {
@@ -160,18 +180,30 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   'drive/put-file': {
     summary: 'Create or supersede a file, recording a new version',
     permission: { key: 'drive:write', entity: 'folder', idFrom: 'folderId' },
+    // A version has exactly ONE location, and the declaration is where that is
+    // made true: a discriminated union rejects `{ source: 'blob', externalKey }`
+    // at the boundary rather than leaving a handler to notice. It also reads
+    // correctly in the generated document, which a flat shape with four optional
+    // fields does not.
     input: z.object({
       folderId: z.string(),
-      name: z.string().min(1),
-      source: z.enum(['blob', 'external']),
-      blobRef: z.string().nullable().optional(),
-      externalKey: z.string().nullable().optional(),
-      etag: z.string().nullable().optional(),
+      name: segment,
       mime: z.string().min(1),
       size: z.number().int().nonnegative(),
+      location: z.discriminatedUnion('source', [
+        z.object({ source: z.literal('blob'), blobRef: z.string().min(1) }),
+        z.object({
+          source: z.literal('external'),
+          externalKey: z.string().min(1),
+          etag: z.string().nullable().optional(),
+        }),
+      ]),
     }),
     output: driveEntities.file.fields,
-    http: { method: 'PUT', path: '/folders/{folderId}/files' },
+    // POST, not PUT: every call records a NEW version and emits an event, so the
+    // second identical request is not the first one again. PUT on a collection URL
+    // would promise an idempotence this operation does not have.
+    http: { method: 'POST', path: '/folders/{folderId}/files' },
     emits: {
       entity: 'file',
       entityIdFrom: 'id',

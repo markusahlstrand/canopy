@@ -130,10 +130,9 @@ describe('a space is a scope', () => {
     const file = await stub.invoke<FileRow>('drive/put-file', {
       folderId: documents,
       name: 'readme.md',
-      source: 'blob',
-      blobRef: 'sha256:aaa',
       mime: 'text/markdown',
       size: 12,
+      location: { source: 'blob', blobRef: 'sha256:aaa' },
     });
     readme = file.id;
     expect(file.current_version_id).toBeTruthy();
@@ -144,10 +143,9 @@ describe('a space is a scope', () => {
     const again = await stub.invoke<FileRow>('drive/put-file', {
       folderId: documents,
       name: 'readme.md',
-      source: 'blob',
-      blobRef: 'sha256:bbb',
       mime: 'text/markdown',
       size: 20,
+      location: { source: 'blob', blobRef: 'sha256:bbb' },
     });
     expect(again.id).toBe(readme);
 
@@ -181,10 +179,28 @@ describe('a space is a scope', () => {
       stub.invoke('drive/put-file', {
         folderId: documents,
         name: 'notes.md',
-        source: 'blob',
-        blobRef: 'sha256:ccc',
         mime: 'text/markdown',
         size: 4,
+        location: { source: 'blob', blobRef: 'sha256:ccc' },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('a name carrying a path separator is refused, not concatenated', async () => {
+    const stub = await host.getScope(ada, tenant, scope);
+    // Without this rule "A/B" under the root would occupy the path of a real B
+    // inside A while carrying the root's parent edge — the permission hierarchy
+    // and the path hierarchy disagreeing, which is what the edge exists to prevent.
+    await expect(
+      stub.invoke('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'A/B' }),
+    ).rejects.toThrow();
+    await expect(
+      stub.invoke('drive/put-file', {
+        folderId: documents,
+        name: '  ',
+        mime: 'text/plain',
+        size: 1,
+        location: { source: 'blob', blobRef: 'sha256:ddd' },
       }),
     ).rejects.toThrow();
   });

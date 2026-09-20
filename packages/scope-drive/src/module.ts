@@ -10,9 +10,11 @@
  *
  * 1. **`ctx.sql` only.** No connection, no adapter, no `Db` handle — so the same
  *    handler runs on SQLite in a test and in a Durable Object in production.
- * 2. **The kernel decides who may do this.** A handler never reads a grant table.
- *    `permission` on the declaration is checked before the handler runs; a check
- *    inside one is for the rows the declaration could not name.
+ * 2. **The kernel decides who may do this — when the handler asks it.** The
+ *    `permission` on an operation's declaration feeds the registry, the routes and
+ *    the generated document; it does NOT gate `invoke`. Every handler below opens
+ *    with `assertAllowed(await ctx.check(...))`, and one that forgets is a handler
+ *    with no authorization at all. A handler never reads a grant table.
  * 3. **Facts leave as events**, not as writes into someone else's table.
  */
 import {
@@ -127,13 +129,6 @@ const operations = {
     if (!ctx.sql.query<FolderRow>('SELECT id FROM drive_folders WHERE id = ?', [input.folderId])[0]) {
       throw substratError('not_found', `folder not found: ${input.folderId}`);
     }
-    if (input.source === 'blob' && !input.blobRef) {
-      throw substratError('validation_failed', 'a blob-sourced version needs a blobRef');
-    }
-    if (input.source === 'external' && !input.externalKey) {
-      throw substratError('validation_failed', 'an external version needs an externalKey');
-    }
-
     const now = ctx.now();
     // Create-or-supersede, keyed by (folder, name) — the same identity the store's
     // UNIQUE index has, so an overwrite is a new VERSION and never a second file.
@@ -159,13 +154,17 @@ const operations = {
       ctx.link(fileRef(file.id), folderRef(file.folder_id));
     }
 
+    // One location, guaranteed by the declaration's discriminated union: the
+    // columns the other source would use stay null because there is nothing to
+    // read them from, not because a check remembered to blank them.
+    const loc = input.location;
     const version: VersionRow = {
       id: ulid(),
       file_id: file.id,
-      source: input.source,
-      blob_ref: input.blobRef ?? null,
-      external_key: input.externalKey ?? null,
-      etag: input.etag ?? null,
+      source: loc.source,
+      blob_ref: loc.source === 'blob' ? loc.blobRef : null,
+      external_key: loc.source === 'external' ? loc.externalKey : null,
+      etag: loc.source === 'external' ? (loc.etag ?? null) : null,
       mime: input.mime,
       size: input.size,
       created_at: now,

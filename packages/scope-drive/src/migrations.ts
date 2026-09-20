@@ -23,7 +23,11 @@ export const driveMigrations: SqlMigration[] = [
     sql: `
       CREATE TABLE drive_folders (
         id TEXT PRIMARY KEY NOT NULL,
-        parent_id TEXT NOT NULL,
+        -- The declared \`parents: ['folder']\` edge, as a constraint. Self-referencing,
+        -- which the root row uses: SQLite checks a foreign key after the row lands, so
+        -- a row that is its own parent inserts cleanly. Without it an orphan parent id
+        -- is a permission walk that ends nowhere, discovered at check time.
+        parent_id TEXT NOT NULL REFERENCES drive_folders(id),
         path TEXT NOT NULL,
         name TEXT NOT NULL,
         created_at TEXT NOT NULL,

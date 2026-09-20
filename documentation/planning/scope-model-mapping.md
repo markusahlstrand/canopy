@@ -15,7 +15,8 @@ produced, because four of the six findings only appear when the code runs.
 | Canopy | Substrat | Note |
 |---|---|---|
 | user | tenant (personal tenant) | unchanged from the July reading |
-| **space** | **scope** (Shape A) | the crux: the space id stops being a column and becomes the database |
+| **space** | **scope**, `kind: 'space'`, Shape A | the crux: the space id stops being a column and becomes the database |
+| space residency | scope `jurisdiction` | `'eu'` is the intent. The type is now `'eu' \| 'us' \| 'global'`, non-null, defaulting to `global`, and `eu`/`us` are **refused at the provisioning boundary today** — accepting one would record a residency guarantee with no mechanism behind it. So a scope provisions as `global` until that gate opens, and the drive must not claim otherwise in a UI |
 | portal + plugins | vertical | |
 | `spaces.kind = 'personal' \| 'group'` | scope `kind`, tenant shape | a group space is a scope with more than one member, not a different type |
 | `files` + `folders` + `file_versions` | module-owned tables inside the scope | no `tenant_id` anywhere; the assertion is in the suite |
@@ -79,7 +80,23 @@ seam, search, the changes feed, or anything about migrating existing data. Those
 rest of S9/S10, and the order in the rail still holds — reads, then metadata writes, then
 blob writes, then WebDAV.
 
-## 4. The mismatches that remain open
+## 4. Where the two halves of this ticket live
+
+S1's acceptance asks for the mapping to be merged platform-side with its open questions
+filed against the kernel-design list. It lands as two halves, because it has to:
+
+- **The open questions are filed platform-side** and are in flight there — cross-scope
+  reads and the absent subscribe surface, a tuple whose subject is another scope, and the
+  blob-key dedup trade (`scope/<scopeId>/<attachmentId>` is write-once by construction,
+  right for entity-attached files, a storage bill for a documents product). The
+  jurisdiction correction above rides the same change.
+- **This document stays here**, and that is deliberate rather than a shortcut. The
+  platform repo is public and its own conventions say to write the *shape* and never the
+  identity of a product built on it. A mapping table whose left column is canopy's schema
+  cannot go there without breaking that rule, and the part that is genuinely
+  platform-shaped — the gaps — is the part already filed.
+
+## 5. The mismatches that remain open
 
 - **A cross-space read has no home.** Canopy's drive lists *every* space a person can see,
   merged. Inside the scope model that is N hops, and the platform's own open question (a
@@ -94,7 +111,7 @@ blob writes, then WebDAV.
   "mounted" — a per-user presentation fact about another scope, which nothing in the scope
   model holds today.
 
-## 5. Next
+## 6. Next
 
 Per the rail: S2 ([#43](https://github.com/markusahlstrand/canopy/issues/43)) before any
 further jobs work, then the read path widens (search, then the bytes seam) rather than
