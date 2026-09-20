@@ -483,6 +483,28 @@ importers:
         specifier: ~6.0.3
         version: 6.0.3
 
+  packages/scope-drive:
+    dependencies:
+      '@substrat-run/contracts':
+        specifier: ^0.114.0
+        version: 0.114.0(zod@4.4.3)
+      '@substrat-run/kernel':
+        specifier: ^0.114.0
+        version: 0.114.0(zod@4.4.3)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@substrat-run/adapter-sqlite':
+        specifier: ^0.114.0
+        version: 0.114.0(zod@4.4.3)
+      typescript:
+        specifier: ~6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@25.9.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3)(yaml@2.9.0)
+
   packages/store:
     dependencies:
       '@canopy/mirror':
@@ -3179,6 +3201,17 @@ packages:
   '@speed-highlight/core@1.2.15':
     resolution: {integrity: sha512-BMq1K3DsElxDWawkX6eLg9+CKJrTVGCBAWVuHXVUV2u0s2711qiChLSId6ikYPfxhdYocLNt3wWwSvDiTvFabw==}
 
+  '@substrat-run/adapter-sqlite@0.114.0':
+    resolution: {integrity: sha512-+HzdK6uD08D5SbpYxDWEzeUlasnKtKvuYUDpOd4NC86xnuOmxK2fzydv7Oy+KvT0uNlgx+xYuTAyhXV259CKsA==}
+
+  '@substrat-run/contracts@0.114.0':
+    resolution: {integrity: sha512-84eFs5FYjS05/SPnkqsijyt0saM7f5UA7upSRajASf/wL5z3ijOK3hnfTCCSqLXoccFcXZWj0xN4q3XVberhTQ==}
+    peerDependencies:
+      zod: ^4.4.0
+
+  '@substrat-run/kernel@0.114.0':
+    resolution: {integrity: sha512-3xKLKsvfHbITUKXWFnZOq56iDXal7SF/XLVcvKyTelPDnZWx3FV5xvbKLbH9CL8Q7XqPpoG+wnBfd6Xa84HECg==}
+
   '@tailwindcss/node@4.3.0':
     resolution: {integrity: sha512-aFb4gUhFOgdh9AXo4IzBEOzBkkAxm9VigwDJnMIYv3lcfXCJVesNfbEaBl4BNgVRyid92AmdviqwBUBRKSeY3g==}
 
@@ -3835,6 +3868,10 @@ packages:
     resolution: {integrity: sha512-MujYO3eP72uvmSE0i4wltsodRfIpZATP3jvzRNRGGxgzId7aVocVJJV3nf01qnzzKFGxQVC9bpWxl5cjxTr/7Q==}
     engines: {node: '>=6.0.0'}
     hasBin: true
+
+  better-sqlite3@13.0.3:
+    resolution: {integrity: sha512-RbOBxmLBG8uvFUc15X9+9SFemKcQ0WBuISBVkpuiaUB2qblC8UWlHEjdWVoZ8AdhSwmoEgsiXKfopX0CQxaACQ==}
+    engines: {node: '>=22'}
 
   binaryextensions@6.11.0:
     resolution: {integrity: sha512-sXnYK/Ij80TO3lcqZVV2YgfKN5QjUWIRk/XSm2J/4bd/lPko3lvk0O4ZppH6m+6hB2/GTu+ptNwVFe1xh+QLQw==}
@@ -5613,6 +5650,10 @@ packages:
 
   node-addon-api@4.3.0:
     resolution: {integrity: sha512-73sE9+3UaLYYFmDsFZnqCInzPyh3MqIwZO9cw58yIqAZhONrrabrYyYe3TuIqtIiOuTXVhsGau8hcrhhwSsDIQ==}
+
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
+    engines: {node: ^18 || ^20 || >= 21}
 
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
@@ -9527,6 +9568,24 @@ snapshots:
 
   '@speed-highlight/core@1.2.15': {}
 
+  '@substrat-run/adapter-sqlite@0.114.0(zod@4.4.3)':
+    dependencies:
+      '@substrat-run/contracts': 0.114.0(zod@4.4.3)
+      '@substrat-run/kernel': 0.114.0(zod@4.4.3)
+      better-sqlite3: 13.0.3
+    transitivePeerDependencies:
+      - zod
+
+  '@substrat-run/contracts@0.114.0(zod@4.4.3)':
+    dependencies:
+      zod: 4.4.3
+
+  '@substrat-run/kernel@0.114.0(zod@4.4.3)':
+    dependencies:
+      '@substrat-run/contracts': 0.114.0(zod@4.4.3)
+    transitivePeerDependencies:
+      - zod
+
   '@tailwindcss/node@4.3.0':
     dependencies:
       '@jridgewell/remapping': 2.3.5
@@ -10260,6 +10319,10 @@ snapshots:
     optional: true
 
   baseline-browser-mapping@2.10.31: {}
+
+  better-sqlite3@13.0.3:
+    dependencies:
+      node-addon-api: 8.9.2
 
   binaryextensions@6.11.0:
     dependencies:
@@ -12415,6 +12478,8 @@ snapshots:
 
   node-addon-api@4.3.0:
     optional: true
+
+  node-addon-api@8.9.2: {}
 
   node-domexception@1.0.0: {}
 
