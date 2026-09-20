@@ -39,8 +39,8 @@ status *built*), an **invocation log** (#1237), a **denial log** (K-35), **imper
 **Canopy, today.** `main` @ `b2178e2`, last commit **2026-07-12** — static for two months.
 Jobs rail T1 (runs table) is merged; T2 (jobs port + in-process adapter) sits on the
 unmerged `feat/jobs-port` / `feat/jobs-role`; **T3 (the CF Workflow dispatcher) was never
-started**. The working tree holds the jobs-role WIP (`plugin-roles.ts`, `plugins.ts`,
-`canopy-plugin.schema.json`) plus this untracked planning directory.
+started**. The jobs-role WIP (`plugin-roles.ts`, `plugins.ts`,
+`canopy-plugin.schema.json`) is still uncommitted in the working tree.
 
 **The inversion.** July's rail was written from "canopy has proven adapters, substrat has
 designed contracts." That premise is gone: substrat built its own Cloudflare adapter, its
@@ -106,7 +106,11 @@ would be a foreign body in the kernel.
 ## 2. The rail, re-cut
 
 Status per ticket: **live** (as written, or close), **re-aimed** (same intent, wrong
-target in the July text), **dead** (substrat solved it).
+target in the July text), **dead** (substrat solved it). Those three are the whole
+vocabulary; a heading may add a prose rider saying *how* — "live, inverted" (still live,
+but the direction of contribution reverses), "live, larger target", "partly dead, partly
+re-aimed" — and one ticket, S11, is a decision rather than work, so it reads **open
+question** instead.
 
 ### S1 — Mapping doc: canopy onto the scope model · **live, re-aimed** · [#42](https://github.com/markusahlstrand/canopy/issues/42)
 
