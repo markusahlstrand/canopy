@@ -27,6 +27,9 @@ on:
     # or remove the filter to build on every merge.
     paths:
       - 'apps/drive-vertical/**'
+      # The workspace package the vertical bundles. The generator cannot know about it,
+      # and without this line a change to the drive itself deploys nothing.
+      - 'packages/scope-drive/**'
       - '.github/workflows/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -41,6 +44,9 @@ on:
     # or remove the filter to build on every merge.
     paths:
       - 'apps/drive-vertical/**'
+      # The workspace package the vertical bundles. The generator cannot know about it,
+      # and without this line a change to the drive itself deploys nothing.
+      - 'packages/scope-drive/**'
       - '.github/workflows/**'
       - 'package.json'
       - 'pnpm-lock.yaml'

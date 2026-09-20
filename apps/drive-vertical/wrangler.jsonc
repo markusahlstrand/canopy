@@ -4,7 +4,12 @@
 {
   "name": "canopy-drive",
   "main": "src/worker.ts",
-  "compatibility_date": "2026-09-01",
+  // MUST NOT exceed the platform's RUNTIME_BASELINE (@substrat-run/contracts), which is
+  // what `substrat push` derives a hosted worker's config from. A later date here would
+  // move the deployed worker's compatibility date BACKWARDS at push time — silently
+  // switching off runtime defaults between the two dates — so the push refuses it.
+  // Advancing this means advancing the platform baseline first.
+  "compatibility_date": "2026-06-01",
   // vertical-auth pulls in a password hasher that imports node:crypto and
   // node:async_hooks. The hosted deploy gets this from runtimeNeeds.needsNodeCompat.
   "compatibility_flags": ["nodejs_compat"],
