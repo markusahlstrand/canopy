@@ -21,6 +21,7 @@ import {
   LOGIN_URL,
   LOGOUT_URL,
   ROOT_FOLDER_ID,
+  claimOwner,
   createFolder,
   ensureFile,
   fileVersions,
@@ -38,9 +39,53 @@ export default function App() {
   const [files, setFiles] = useState<DriveFile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * Boot: redeem an owner-claim link if this page was opened as one, then ask who we are.
+   *
+   * Order matters. Until the seat is bound, `whoami` is exactly the 401 the claim exists
+   * to fix, so asking first renders the signed-out shell and its Sign in button — which
+   * is the loop this closes: sign in, resolve to nobody, get offered the button again.
+   *
+   * A claim needs a session (it binds whoever is signed in), so a 401 from it means "not
+   * signed in yet" rather than "bad token" — send them through login still carrying the
+   * token and they land back on this effect with a session. The token stays in the URL
+   * for exactly that hop and is stripped on every other path: it is live until consumed,
+   * and an address bar is the easiest place to leak one from.
+   */
   useEffect(() => {
-    whoami()
-      .then((me) => setSession({ state: 'in', principal: me.principal }))
+    const url = new URL(window.location.href);
+    const token = url.searchParams.get('claim');
+
+    const strip = () => {
+      url.searchParams.delete('claim');
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    };
+
+    const boot = async () => {
+      if (token) {
+        try {
+          await claimOwner(token);
+          strip();
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 401) {
+            window.location.assign(`${LOGIN_URL}?returnTo=${encodeURIComponent(`/?claim=${token}`)}`);
+            return null;
+          }
+          // A dead link is worth SAYING — the person followed one the dashboard told them
+          // to open. Strip it anyway, because retrying the same dead token on every
+          // reload only makes the app look broken, and fall through to `whoami`: the seat
+          // may have been claimed from another tab, and that is the call which knows.
+          strip();
+          setError(e instanceof ApiError ? e.message : String(e));
+        }
+      }
+      return whoami();
+    };
+
+    boot()
+      .then((me) => {
+        if (me) setSession({ state: 'in', principal: me.principal });
+      })
       // A 401 is the logged-out state, not a failure — anything else is.
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 401) return setSession({ state: 'out' });
