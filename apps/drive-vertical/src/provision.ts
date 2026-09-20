@@ -9,7 +9,6 @@ export {
   ENTITY_GRANTS,
   MODULES,
   OWNER_ROLE_KEY,
-  OWNER_ROOT_GRANTS,
   ROLES,
   permissions,
 } from '@canopy/scope-drive/provision';

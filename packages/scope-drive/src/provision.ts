@@ -29,28 +29,37 @@ export const ENTITLEMENT_KEYS = ['drive'];
 /**
  * The role table, identical in every tenant.
  *
- * `member` is deliberately thin. Every other key is entity-narrowed, which is what
- * keeps a folder nobody shared unreachable — including to a member of the space it
- * lives in, once sharing narrows below the root.
+ * Two roles, because a space has two kinds of people in it and they differ in what
+ * they may do to the WHOLE space:
+ *
+ * - **`owner`** holds all three keys scope-wide. That is not a weakening: the owner of
+ *   a space may write anywhere in their own space, which is the same thing said in the
+ *   kernel's vocabulary. It is also the only way the installer can use what they just
+ *   installed — `/internal/provision` assigns a scope-level ROLE and nothing else, so a
+ *   permission that exists only as an entity grant is a permission a fresh install's
+ *   owner does not have.
+ * - **`member`** reads. Writing for a member is granted per folder, which keeps one
+ *   member from editing another's folders — the distinction canopy's viewer/editor
+ *   ladder already draws, and the reason `drive:write` is not in this role.
  */
 export const ROLES: RoleDefinition[] = [
+  {
+    key: 'owner',
+    permissions: [DRIVE_PERM.read, DRIVE_PERM.write, DRIVE_PERM.manage],
+    source: 'vertical',
+  },
   { key: 'member', permissions: [DRIVE_PERM.read], source: 'vertical' },
 ];
 
 /** The role the installing owner holds — what `/internal/provision` assigns. */
-export const OWNER_ROLE_KEY = 'member';
+export const OWNER_ROLE_KEY = 'owner';
 
 /**
- * What the owner is additionally granted on the ROOT folder at provision time.
- * Scope-level roles cannot carry these: a scope-wide `drive:write` would make every
- * member an editor of every folder, which is the permission model canopy is leaving.
- */
-export const OWNER_ROOT_GRANTS: PermissionKey[] = [DRIVE_PERM.write, DRIVE_PERM.manage];
-
-/**
- * The entity-narrowed grant SHAPES — which keys are reachable outside the role
- * table. The grants themselves are per-principal and minted at runtime, so they can
- * never be a build artifact; this is what a reviewer reads instead.
+ * The entity-narrowed grant SHAPES — which keys are reachable outside the role table.
+ * This is sharing: `drive:write` on ONE folder for ONE person, reaching everything
+ * beneath it through the declared parent edge. The grants themselves are per-principal
+ * and minted at runtime, so they can never be a build artifact; the shape is what a
+ * reviewer reads instead.
  */
 export const ENTITY_GRANTS: { entityType: string; permissions: PermissionKey[] }[] = [
   { entityType: 'folder', permissions: [DRIVE_PERM.write, DRIVE_PERM.manage] },

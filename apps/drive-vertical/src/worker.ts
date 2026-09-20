@@ -33,10 +33,17 @@ import {
   SCOPE_SWEEPER_NAME,
   type ScopeSweeperDo,
 } from '@substrat-run/adapter-cloudflare';
+import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
 import { readRoutedNode, RouterAssertionError, type ScopeStub } from '@substrat-run/kernel';
 import { mountPlatformSurface } from '@substrat-run/vertical-host';
-import { IdentityDO, type IdentityStub } from '@substrat-run/vertical-auth';
-import { oidcRpAuthProvider } from '@substrat-run/vertical-auth/oidc-rp-provider';
+import {
+  AuthConfigError,
+  IdentityDO,
+  instanceAuthFor,
+  mintOwnerClaimLink,
+  type AuthProvider,
+  type IdentityStub,
+} from '@substrat-run/vertical-auth';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
@@ -76,6 +83,12 @@ export interface Env {
   OIDC_ISSUER?: string;
   OIDC_CLIENT_ID?: string;
   OIDC_CLIENT_SECRET?: string;
+}
+
+/** The sweep singleton's stub — one roster and one alarm per deployment. */
+function sweeper(env: Env): DurableObjectStub & ScopeSweeperDo {
+  return env.SWEEPER.get(env.SWEEPER.idFromName(SCOPE_SWEEPER_NAME)) as DurableObjectStub &
+    ScopeSweeperDo;
 }
 
 interface Node {
@@ -118,34 +131,39 @@ const identityDo = (env: Env, node: Node): IdentityStub =>
   env.AUTH.get(env.AUTH.idFromName(node.tenantId)) as unknown as IdentityStub;
 
 /**
- * The scope's auth provider, built from what this INSTALL was configured with.
+ * The provider this INSTALL's configuration selects.
  *
- * `authWiring` is one DO hop for both halves: the config the platform delivered to
- * this scope (the Identity tab's `substrat:auth` choice) and the tenant's own
- * session-signing secret, minted in the DO on first use and never a worker binding —
- * one serving script runs every install, so a shared binding would be the same
- * secret for all of them. Env vars are the local-dev fallback only.
+ * The identity choice is delivered as ONE JSON value under `substrat:auth` — issuer,
+ * client id and secret, audience, cookie domain — so parsing it is the platform's job
+ * and not ours: `instanceAuthFor` reads the delivered map and the tenant's DO-minted
+ * session secret in a single hop, and `provider()` selects from them. Reading
+ * `env.OIDC_ISSUER` directly instead is the bug this replaces — a binding is shared by
+ * every install of one serving script, so it would be the same issuer for all of them
+ * no matter what any tenant saved.
  *
- * Absent issuer ⇒ no provider ⇒ nobody authenticates. That is the honest state for
- * a fresh deploy, and it fails closed rather than inventing a caller.
+ * A deployment-level `AUTH_PROVIDER=oidc` + `OIDC_ISSUER` remains the standalone
+ * fallback, and nothing configured at all throws `AuthConfigError`, which is the honest
+ * answer: a fresh install authenticates nobody until it is given an issuer.
  */
-async function providerFor(env: Env, node: Node) {
-  const wiring = await identityDo(env, node).authWiring(node.scopeId);
-  const delivered = wiring.config;
-  const issuer = delivered['substrat:auth:issuer'] ?? env.OIDC_ISSUER;
-  if (!issuer) return null;
-  return oidcRpAuthProvider({
-    issuer,
-    clientId: delivered['substrat:auth:clientId'] ?? env.OIDC_CLIENT_ID ?? '',
-    clientSecret: delivered['substrat:auth:clientSecret'] ?? env.OIDC_CLIENT_SECRET ?? '',
-    sessionSecret: wiring.sessionSecret,
+async function providerFor(env: Env, node: Node): Promise<AuthProvider> {
+  const instance = await instanceAuthFor({
+    directory: identityDo(env, node),
+    scopeId: node.scopeId,
+    // No declared settings of our own yet; the auth choice rides the same map.
+    envSpec: [],
+    env: env as unknown as Record<string, unknown>,
   });
+  try {
+    return instance.provider();
+  } catch (e) {
+    if (e instanceof AuthConfigError) throw new HTTPException(e.status, { message: e.message });
+    throw e;
+  }
 }
 
 /** Subject → principal in this scope, or null for nobody. */
 async function principalFor(env: Env, req: Request): Promise<PrincipalId | null> {
   const provider = await providerFor(env, nodeFor(req, env));
-  if (!provider) return null;
   const subject = await provider.resolve(req.headers);
   if (!subject) return null;
   const node = nodeFor(req, env);
@@ -165,17 +183,53 @@ mountPlatformSurface<Env>(app, {
   hostFor,
   roles: ROLES,
   ownerRoleKey: OWNER_ROLE_KEY,
-  // Who the install belongs to, read from the same directory the platform's
-  // provision hook writes — never from a role table, which says what an owner may
-  // do and not which person they are.
+  /**
+   * Two facts a new install cannot discover for itself.
+   *
+   * The **pending owner** is the one the platform names at provision. Without it the
+   * identity DO has no subject mapping to claim on first sign-in, so the installer
+   * signs in successfully and resolves to nobody — a scope only its creator should
+   * reach, that its creator cannot.
+   *
+   * The **roster** is what this deployment's alarm walks. A scope that never joins it
+   * has no retry drain and no schedules; the sweeper sits with an empty roster and
+   * nothing ever arms it.
+   */
+  onProvision: async (env, b) => {
+    const node = { tenantId: b.tenantId, scopeId: b.scopeId };
+    await identityDo(env, node).setPendingOwner(b.scopeId, b.owner);
+    await sweeper(env).noteScope(b.tenantId, b.scopeId);
+  },
+  onDeleteScope: async (env, s) => {
+    await sweeper(env).forgetScope(s);
+  },
+  // Per-instance config delivery (the dashboard's Env and Identity tabs). WITHOUT this
+  // hook `/internal/configure` answers 501 for the life of the app: the dashboard saves
+  // the issuer, reports `delivered: false`, and the worker 401s on everything forever.
+  onConfigure: (env, b) =>
+    identityDo(env, { tenantId: b.tenantId, scopeId: b.scopeId }).setScopeConfig(b.scopeId, b.entries),
+  // Who the install belongs to, read from the directory the provision hook writes —
+  // never from the role table, which says what an owner may do, not which person they are.
   resolveOwner: async (env, ref) => {
     const owner = await identityDo(env, ref).getOwnerOfRecord(ref.scopeId);
     return owner ? principalId.parse(owner) : null;
   },
-  onConfigure: (env, b) =>
-    identityDo(env, { tenantId: b.tenantId, scopeId: b.scopeId }).setScopeConfig(b.scopeId, b.entries),
   ownerSeat: (env, ref) => identityDo(env, ref).ownerSeat(ref.scopeId),
+  // The recovery path once the first-sign-in window has closed. Without it an install
+  // whose owner never signed in is unclaimable, and the seat stays empty forever.
+  mintOwnerClaim: (env, ref, input) =>
+    mintOwnerClaimLink(identityDo(env, ref), ref.scopeId, input.origin),
 });
+
+/**
+ * The relying-party flow: login, callback, logout. This vertical runs no credential
+ * store and hosts no sign-up — the issuer owns the password — but the cookie session
+ * every other route reads is established HERE, and without these three routes there is
+ * no way for a browser to acquire one.
+ */
+app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
+  (await providerFor(c.env, nodeFor(c.req.raw, c.env))).handle(c.req.raw),
+);
 
 /** Who am I — the first call every client makes. */
 app.get('/api/me', async (c) => {

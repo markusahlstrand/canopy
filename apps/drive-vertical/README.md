@@ -33,10 +33,24 @@ A fresh install **authenticates nobody**. There is no dev header and no fallback
 a header naming the caller is an impersonation bypass one environment variable from being
 live, so the worker resolves a principal exactly one way: the configured OIDC issuer
 verifies the request, and the tenant's `IdentityDO` maps that subject to a principal in
-this scope. Until an install is given an issuer (delivered per-instance, or `OIDC_ISSUER`
-for local dev), every `/api/*` call is 401 and that is the correct state.
+this scope. Until an install is given an issuer, every `/api/*` call is 401 and that is
+the correct state.
 
-Point it at authhero, or at anything else that speaks OIDC. That is configuration.
+The issuer arrives as one delivered value (`substrat:auth`, written by the dashboard's
+Identity tab and read through `instanceAuthFor`), so one serving script runs many issuers
+and a tenant's choice is a tenant's. `AUTH_PROVIDER=oidc` + `OIDC_ISSUER` is the
+standalone fallback. Point it at authhero, or anything else that speaks OIDC — that is
+configuration, not code.
+
+The browser session is established at `/api/auth/login|callback|logout`, which the
+provider itself serves; this vertical runs no credential store and hosts no sign-up.
+
+At provision the platform names an owner: the worker records it in `IdentityDO` (so the
+first sign-in claims the seat), adds the scope to this deployment's sweep roster, and
+assigns the `owner` role — which holds all three drive keys scope-wide, because the owner
+of a space may write anywhere in their own space. A `member` reads; write below the root
+is a grant on a folder. If the owner never signs in, the platform can mint a claim link
+once the first-sign-in window closes.
 
 ## Local
 
