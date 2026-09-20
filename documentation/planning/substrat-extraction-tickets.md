@@ -108,7 +108,7 @@ would be a foreign body in the kernel.
 Status per ticket: **live** (as written, or close), **re-aimed** (same intent, wrong
 target in the July text), **dead** (substrat solved it).
 
-### S1 — Mapping doc: canopy onto the scope model · **live, re-aimed**
+### S1 — Mapping doc: canopy onto the scope model · **live, re-aimed** · [#42](https://github.com/markusahlstrand/canopy/issues/42)
 
 Still the first thing, and now cheaper to get right because there is more to map onto.
 Target directory moved: `docs/design/` no longer exists — kernel design lives in
@@ -122,7 +122,7 @@ vs K-15's build-time composition, canopy's list endpoints vs K-41 paging.
 *Acceptance:* mapping doc merged in substrat `docs/architecture/`; open questions filed
 against kernel-design's open-question list, not resolved ad hoc.
 
-### S2 — Converge the jobs port · **re-aimed (was: merge canopy's Jobs into the contract)**
+### S2 — Converge the jobs port · **re-aimed** · [#43](https://github.com/markusahlstrand/canopy/issues/43)
 
 Substrat did not wait. Read `ExecutorHandler`/`ExecutorRetryPolicy`/`drainDue`,
 `ScheduleRegistration`/`runDueSchedules`, and `platform-sweep.ts` first, then state in one
@@ -133,7 +133,7 @@ tickets T3–T13 get re-scoped against that answer; T3 as specified is dead.
 *Acceptance:* a gap statement, not a port; every canopy job either maps to a shipped kernel
 driver or is named as a proposed kernel addition with the consumer that needs it.
 
-### S3 — Contract-tests bridge in canopy CI · **live, inverted**
+### S3 — Contract-tests bridge in canopy CI · **live, inverted** · [#44](https://github.com/markusahlstrand/canopy/issues/44)
 
 July had canopy *donating* suites. Now canopy *consumes* them: `@substrat-run/contract-tests`
 ships 22 suites, and canopy's job is to run the relevant ones against its own
@@ -142,19 +142,19 @@ implementations as they converge. Donation is limited to whatever S2 proves is m
 *Acceptance:* canopy CI runs at least `scope-host`, `permission` and `search` suites against
 canopy adapters as those land; failures are canopy's bug, not substrat's.
 
-### S4 — Runs + scheduling convergence · **partly dead, partly re-aimed**
+### S4 — Runs + scheduling convergence · **partly dead, partly re-aimed** · folded into [#43](https://github.com/markusahlstrand/canopy/issues/43) and [#48](https://github.com/markusahlstrand/canopy/issues/48)
 
 Dead half: `scheduling.ts` is JSCalendar, not cron; there is no `engine-scheduling` to seed,
 and `booking`/`absence` already occupy that space. Live half: `runs.ts` retention and run
 bookkeeping ride along with S2's gap statement and land, if at all, with S9.
 
-### S5 — Contribute the Cloudflare adapter · **dead**
+### S5 — Contribute the Cloudflare adapter · **dead** · absorbed by [#49](https://github.com/markusahlstrand/canopy/issues/49)
 
 `@substrat-run/adapter-cloudflare` was built without canopy. The ticket inverts: canopy
 *adopts* it and deletes `db-d1.ts` / `blob-r2.ts` / the libsql and fs halves as the
 re-platform reaches each. Book that as part of S10.
 
-### S6 — Identity + permissions convergence · **live, larger target**
+### S6 — Identity + permissions convergence · **live, larger target** · [#45](https://github.com/markusahlstrand/canopy/issues/45)
 
 Unchanged in intent; the surface to converge onto is much bigger (`vertical-auth`, `oidc-rp`,
 identity pools K-23/K-25, `engines/invites`, the required permission registry D-47, denial
@@ -164,7 +164,7 @@ cases against it before assuming it does.
 *Acceptance:* canopy auth flows unchanged end-to-end; permission checks route through the
 kernel checker; mismatches filed as kernel amendments, not canopy forks.
 
-### S7 — Module manifest convergence · **live, with one correction**
+### S7 — Module manifest convergence · **live, with one correction** · [#46](https://github.com/markusahlstrand/canopy/issues/46)
 
 The July acceptance bar ("the agent-loop test §11.4") **no longer exists**: D-57 retired the
 benchmark on 2026-08-19; the eight run records stay as historical evidence. Use the mechanical
@@ -173,13 +173,13 @@ migration replay, contract tests on both adapters. And carry the honest conflict
 mapping: canopy's trusted-vs-sandboxed plugin distinction has no counterpart in a manifest
 built for build-time composition (K-15).
 
-### S8 — Event spine adoption · **live, cheaper**
+### S8 — Event spine adoption · **live, cheaper** · [#47](https://github.com/markusahlstrand/canopy/issues/47)
 
 The spine now carries what canopy would have had to ask for: envelopes recording what
 authorized them (K-34), per-event invocation linkage (#1237), the outbox drain, the lake.
 The mirror becomes a spine consumer; audit arrives free.
 
-### S9 — Documents service extraction (D-17 proper) · **live, and now the main event**
+### S9 — Documents service extraction (D-17 proper) · **live, and now the main event** · [#48](https://github.com/markusahlstrand/canopy/issues/48)
 
 Unchanged in scope, much better landed: attachments (#473) give the metadata-row-inside-the-
 scope / bytes-in-a-platform-store split; per-tenant blob stores exist; `attachmentBlobKey`
@@ -191,14 +191,14 @@ not block on it.
 *Acceptance:* documents service passes contract tests on both adapters; canopy is its first
 consumer for at least one operation class (versioned write + read).
 
-### S10 — Re-platform canopy piecemeal · **live, unchanged, still the long tail**
+### S10 — Re-platform canopy piecemeal · **live, unchanged, still the long tail** · [#49](https://github.com/markusahlstrand/canopy/issues/49)
 
 Reads → metadata writes → blob writes → WebDAV, one class at a time into scope-stub
 operations. `apps/api/src/app.ts` (1.8k) decomposes as operations migrate. Integrations now
 *can* move earlier than July assumed — the connector framework shipped — but they should
 still follow the documents service, not precede it.
 
-### S11 — *(new)* Decide whether canopy becomes a hosted vertical · **open question**
+### S11 — *(new)* Decide whether canopy becomes a hosted vertical · **open question** · [#50](https://github.com/markusahlstrand/canopy/issues/50)
 
 Substrat's near milestone is the hosted product, and D-60 makes even the dashboard "an
 ordinary sandbox-clean vertical." That creates an option that did not exist in July: canopy
