@@ -78,8 +78,6 @@ async function write(who: typeof ada, folderId: string, name: string, text: stri
   });
   return stub.invoke<FileRow>('drive/record-version', {
     fileId: file.id,
-    mime: 'text/markdown',
-    size: attachment.size,
     location: { source: 'blob', blobRef: attachment.id },
   });
 }
@@ -139,6 +137,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('a space is a scope', () => {
   let documents: string;
+  let scratch: string;
   let readme: string;
 
   it('the schema carries no space id — the conversion, in one assertion', () => {
@@ -191,6 +190,61 @@ describe('a space is a scope', () => {
     const attachments = await host.attachments(ada, tenant, scope);
     const previous = await attachments.open(versions.entries[1]!.blob_ref!);
     expect(new TextDecoder().decode(previous!.body)).toBe('first draft');
+  });
+
+  it('a version cannot name another file\'s bytes, or bytes that do not exist', async () => {
+    const stub = await host.getScope(ada, tenant, scope);
+    scratch = (
+      await stub.invoke<FolderRow>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Scratch' })
+    ).id;
+    const other = await write(ada, scratch, 'other.md', 'someone else\'s bytes');
+    const { version: otherVersion } = await stub.invoke<{ version: VersionRow | null }>(
+      'drive/get-file',
+      { fileId: other.id },
+    );
+
+    // Ada may write to both files, so nothing here is about access — it is about a
+    // version chain that records what actually happened. Pointing readme at other.md's
+    // attachment would make its history a fiction.
+    await expect(
+      stub.invoke('drive/record-version', {
+        fileId: readme,
+        location: { source: 'blob', blobRef: otherVersion!.blob_ref! },
+      }),
+    ).rejects.toThrow(/another file/);
+
+    await expect(
+      stub.invoke('drive/record-version', {
+        fileId: readme,
+        location: { source: 'blob', blobRef: '01JZZZZZZZZZZZZZZZZZZZZZZZ' },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('a version describes the bytes that were stored, not what the caller claimed', async () => {
+    const stub = await host.getScope(ada, tenant, scope);
+    const file = await stub.invoke<FileRow>('drive/ensure-file', {
+      folderId: scratch,
+      name: 'derived.txt',
+    });
+    const body = new TextEncoder().encode('exactly twenty-one!!!');
+    const attachment = await (await host.attachments(ada, tenant, scope)).upload({
+      entity: { entityType: 'file', entityId: file.id },
+      filename: 'derived.txt',
+      contentType: 'text/plain',
+      visibility: 'internal',
+      body,
+    });
+    await stub.invoke('drive/record-version', {
+      fileId: file.id,
+      location: { source: 'blob', blobRef: attachment.id },
+    });
+
+    const { version } = await stub.invoke<{ version: VersionRow }>('drive/get-file', {
+      fileId: file.id,
+    });
+    expect(version.size).toBe(body.byteLength);
+    expect(version.mime).toBe('text/plain');
   });
 
   it('the folder listing is one hop, then a local query', async () => {

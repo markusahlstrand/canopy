@@ -70,7 +70,7 @@ ride `invoke` — a structured-clone pipe under per-scope serialization is the w
 for megabytes.
 
 ```
-POST /api/folders/{folderId}/content?name=report.pdf   (raw body)
+POST /api/folders/{folderId}/content?name=report.pdf   (raw body, ≤ 25 MB)
   → drive/ensure-file          the row bytes will hang off
   → attachments.upload         bytes to the per-tenant store, sha256 at rest
   → drive/record-version       the version names the attachment
@@ -88,6 +88,18 @@ Access is the kernel's too — `attachmentTargets` in the manifest binds file by
 `drive:read` / `drive:write`, per entity, so a grant narrowed to one folder reaches the
 bytes under it and nothing else. The drive holds no second rule about who may download
 what.
+
+An upload is **bounded at 25 MB**, checked against `content-length` and again while
+reading, because the header can be absent or wrong. The attachment surface takes bytes
+rather than a stream — it hashes them and records the length — so an upload is
+materialized in an isolate that has 128 MB for everything it is doing, while Cloudflare
+will happily hand a worker a 100 MB body. Raising the ceiling is a decision about isolate
+memory, not a config tweak.
+
+`record-version` **verifies rather than trusts**: it carries a URL, so it reads the
+attachment row itself, refuses an id belonging to another file, and takes `size` and
+`mime` from the row. A version cannot describe bytes as something they are not, and a
+file's history cannot record a write that never happened.
 
 A version whose source is a connected system refuses with a 501 that says so, rather than
 serving an empty body that reads as an empty file.

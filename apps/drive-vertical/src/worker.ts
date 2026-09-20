@@ -258,6 +258,56 @@ app.get('/api/me', async (c) => {
 });
 
 /**
+ * The largest upload this vertical accepts, and why there is a number at all.
+ *
+ * The attachment surface takes bytes, not a stream — it hashes them and records the
+ * length — so an upload is materialized in the isolate before it is stored. A Worker
+ * isolate has 128 MB of memory for everything it is doing, and Cloudflare will hand a
+ * worker a request body far larger than that (100 MB on the lower plans, more above),
+ * so an unbounded read is an out-of-memory waiting for the first person who drags a
+ * video in. 25 MB is a document store's honest ceiling; raising it is a decision about
+ * isolate memory, not a config tweak.
+ */
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Read the body, refusing anything past the cap — WITHOUT trusting `content-length`.
+ *
+ * The header is checked first because it turns the common case into a refusal that
+ * costs nothing. It is not sufficient: it can be absent on a chunked upload and it can
+ * lie, and a cap that a lying header defeats is not a cap. So the read is bounded too,
+ * and stops the moment the accumulated length passes the limit rather than after.
+ */
+async function readBounded(req: Request): Promise<Uint8Array> {
+  const declared = Number(req.headers.get('content-length') ?? '');
+  if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) {
+    throw new HTTPException(413, { message: `upload exceeds ${MAX_UPLOAD_BYTES} bytes` });
+  }
+  if (!req.body) return new Uint8Array();
+
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_UPLOAD_BYTES) {
+      await reader.cancel();
+      throw new HTTPException(413, { message: `upload exceeds ${MAX_UPLOAD_BYTES} bytes` });
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return body;
+}
+
+/**
  * Bytes in. Three hops, in the order the seam forces: ensure the file row exists (an
  * attachment binds to an entity, so the entity has to be there first), put the bytes
  * through the attachment surface — which never touches the scope's invoke pipe — then
@@ -284,7 +334,7 @@ app.post('/api/folders/:folderId/content', async (c) => {
   });
 
   const contentType = c.req.header('content-type') ?? 'application/octet-stream';
-  const body = new Uint8Array(await c.req.arrayBuffer());
+  const body = await readBounded(c.req.raw);
   const attachments = await hostFor(env).attachments(principal, node.tenantId, node.scopeId);
   const attachment = await attachments.upload({
     entity: { entityType: 'file', entityId: file.id },
@@ -294,12 +344,11 @@ app.post('/api/folders/:folderId/content', async (c) => {
     body,
   });
 
-  // `size` is the length the store recorded, not a number the caller asserted.
+  // No mime or size passed: `record-version` reads both off the attachment row, so
+  // the version describes the bytes that were actually stored.
   return c.json(
     await stub.invoke('drive/record-version', {
       fileId: file.id,
-      mime: contentType,
-      size: attachment.size,
       location: { source: 'blob', blobRef: attachment.id },
     }),
     201,

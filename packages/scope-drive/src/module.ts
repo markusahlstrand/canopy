@@ -173,6 +173,44 @@ const operations = {
     // the other source would use stay null because there is nothing to read them
     // from, not because a check remembered to blank them.
     const loc = input.location;
+
+    /**
+     * A blob version is verified against the attachment, never taken on the caller's
+     * word. This operation carries a URL, so "the worker route always passes what it
+     * just uploaded" is not a property of the system — it is a property of one caller.
+     *
+     * Two things are checked here and they fail differently on purpose: an id naming
+     * no attachment is `not_found`, and an id naming an attachment on ANOTHER file is
+     * refused outright. Without the second, a writer could point their file at someone
+     * else's bytes; the attachment surface would still gate the read by the owning
+     * entity, so nothing leaks, but the version chain would be a record of something
+     * that never happened.
+     *
+     * `size` and `mime` then come from the row rather than the request — a version
+     * cannot describe the bytes as something they are not.
+     */
+    let mime: string;
+    let size: number;
+    if (loc.source === 'blob') {
+      const attachment = ctx.sql.query<{ entity_id: string; content_type: string; size: number }>(
+        `SELECT entity_id, content_type, size FROM _substrat_attachments
+         WHERE id = ? AND entity_type = 'file'`,
+        [loc.blobRef],
+      )[0];
+      if (!attachment) throw substratError('not_found', `no attachment: ${loc.blobRef}`);
+      if (attachment.entity_id !== file.id) {
+        throw substratError(
+          'validation_failed',
+          `attachment ${loc.blobRef} belongs to another file — a version names bytes uploaded against its own file`,
+        );
+      }
+      mime = attachment.content_type;
+      size = attachment.size;
+    } else {
+      mime = loc.mime;
+      size = loc.size;
+    }
+
     const now = ctx.now();
     const version: VersionRow = {
       id: ulid(),
@@ -181,8 +219,8 @@ const operations = {
       blob_ref: loc.source === 'blob' ? loc.blobRef : null,
       external_key: loc.source === 'external' ? loc.externalKey : null,
       etag: loc.source === 'external' ? (loc.etag ?? null) : null,
-      mime: input.mime,
-      size: input.size,
+      mime,
+      size,
       created_at: now,
       created_by: ctx.principal,
     };

@@ -211,10 +211,16 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   'drive/record-version': {
     summary: 'Record a new version and make it current',
     permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    /**
+     * `mime` and `size` live on the EXTERNAL branch only, and that asymmetry is the
+     * point. For a blob version both are read off the attachment row the id names —
+     * a row cannot claim a size or a type the stored bytes do not have, and a caller
+     * reaching this operation directly (it carries a URL) cannot make it. For an
+     * external version there is no local row to read, so the connector that holds the
+     * bytes supplies them.
+     */
     input: z.object({
       fileId: z.string(),
-      mime: z.string().min(1),
-      size: z.number().int().nonnegative(),
       location: z.discriminatedUnion('source', [
         // The attachment id. The bytes are already in the platform's per-tenant blob
         // store under a key derived from (scopeId, attachmentId), with a sha256
@@ -224,6 +230,8 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
           source: z.literal('external'),
           externalKey: z.string().min(1),
           etag: z.string().nullable().optional(),
+          mime: z.string().min(1),
+          size: z.number().int().nonnegative(),
         }),
       ]),
     }),

@@ -1,0 +1,19 @@
+// The SPA half. Separate from tsconfig.json because the two halves cannot share a
+// lib: the worker compiles against @cloudflare/workers-types with no DOM, and a
+// browser app needs the DOM and nothing Cloudflare.
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // `vite/client` is what types a side-effect CSS import.
+    "types": ["vite/client"],
+    "jsx": "react-jsx",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true
+  },
+  "include": ["app/src", "vite.config.ts"]
+}
