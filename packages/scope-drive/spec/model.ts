@@ -26,7 +26,7 @@
  *   module-owned permission table would be the second enforcement system D-17
  *   exists to prevent.
  */
-import { defineEntities, defineOperations, z } from '@substrat-run/contracts';
+import { defineEntities, defineOperations, emitModel, z } from '@substrat-run/contracts';
 
 /**
  * One path segment: a folder or file name, never a path.
@@ -177,20 +177,48 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * pipe with per-scope serialization is the wrong path for megabytes. The version
    * row names where the bytes are; putting them there is a separate seam.
    */
-  'drive/put-file': {
-    summary: 'Create or supersede a file, recording a new version',
+  /**
+   * Create the file row, or return the one already at this (folder, name).
+   *
+   * Split from recording a version because bytes need somewhere to attach BEFORE
+   * they exist: an attachment binds to an entity, and the entity has to be there to
+   * bind to. So a write is three hops — ensure the file, put the bytes against it,
+   * record the version that points at them — and each hop is honest about what it
+   * did. A single `put-file` could only have pretended, by taking bytes through
+   * `invoke`, which is the one thing the scope pipe must not carry.
+   */
+  'drive/ensure-file': {
+    summary: 'Create a file, or return the existing one at this name',
     permission: { key: 'drive:write', entity: 'folder', idFrom: 'folderId' },
-    // A version has exactly ONE location, and the declaration is where that is
-    // made true: a discriminated union rejects `{ source: 'blob', externalKey }`
-    // at the boundary rather than leaving a handler to notice. It also reads
-    // correctly in the generated document, which a flat shape with four optional
-    // fields does not.
+    input: z.object({ folderId: z.string(), name: segment }),
+    output: driveEntities.file.fields,
+    http: { method: 'POST', path: '/folders/{folderId}/files' },
+    emits: {
+      entity: 'file',
+      entityIdFrom: 'id',
+      type: 'drive.file-created',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['id', 'folder_id'],
+    },
+  },
+
+  /**
+   * Point a file at a new version. For a `blob` version the caller has already put
+   * the bytes in the scope's attachment store and hands the id back here; for an
+   * `external` one a connector holds them and `externalKey` identifies them there.
+   */
+  'drive/record-version': {
+    summary: 'Record a new version and make it current',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
     input: z.object({
-      folderId: z.string(),
-      name: segment,
+      fileId: z.string(),
       mime: z.string().min(1),
       size: z.number().int().nonnegative(),
       location: z.discriminatedUnion('source', [
+        // The attachment id. The bytes are already in the platform's per-tenant blob
+        // store under a key derived from (scopeId, attachmentId), with a sha256
+        // computed at upload — so a version can never be re-pointed at other content.
         z.object({ source: z.literal('blob'), blobRef: z.string().min(1) }),
         z.object({
           source: z.literal('external'),
@@ -200,10 +228,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       ]),
     }),
     output: driveEntities.file.fields,
-    // POST, not PUT: every call records a NEW version and emits an event, so the
-    // second identical request is not the first one again. PUT on a collection URL
-    // would promise an idempotence this operation does not have.
-    http: { method: 'POST', path: '/folders/{folderId}/files' },
+    http: { method: 'POST', path: '/files/{fileId}/versions' },
     emits: {
       entity: 'file',
       entityIdFrom: 'id',
@@ -212,6 +237,22 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       piiClass: 'none',
       payload: ['id', 'folder_id', 'current_version_id'],
     },
+  },
+
+  /**
+   * One file and the version it currently points at — what a download resolves
+   * through before it asks the attachment store for bytes.
+   */
+  'drive/get-file': {
+    summary: 'A file and its current version',
+    permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }),
+    output: z.object({
+      file: driveEntities.file.fields,
+      /** Null while a file exists but nothing has been written to it yet. */
+      version: driveEntities.file_version.fields.nullable(),
+    }),
+    http: { method: 'GET', path: '/files/{fileId}' },
   },
 
   'drive/file-versions': {
@@ -223,3 +264,22 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     http: { method: 'GET', path: '/files/{fileId}/versions' },
   },
 });
+
+/**
+ * The registry rendered to plain JSON — the artifact of record.
+ *
+ * `substrat push` reads the `model.json` this emits beside the vertical's
+ * package.json, and a version pushed without one records no entity model at all:
+ * the dashboard's Model tab is then empty for code that plainly has a model. The
+ * TypeScript above stays the only declaration; this export is what makes it
+ * readable by everything that is not a TypeScript compiler.
+ *
+ * Emitted from HERE rather than from the vertical, because the entities are
+ * declared here — the vertical bundles this package and owns no model of its own.
+ * `apps/drive-vertical/scripts/emit-model.mjs` renders it to the package root the
+ * push actually reads.
+ *
+ * No `version` is passed: that field is a claim a module makes about its own
+ * schema version, and the drive does not make one yet. Omitted beats defaulted.
+ */
+export const driveModel = emitModel(driveEntities);

@@ -6,6 +6,8 @@
   "description": "Canopy's drive as a deployable Substrat vertical \u2014 one scope per space.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "model:emit": "node scripts/emit-model.mjs",
+    "lint:model": "node scripts/emit-model.mjs --check",
     "dev": "wrangler dev --var ALLOW_DEV_NODE:true",
     "check": "substrat push --check",
     "push": "substrat push",
@@ -57,7 +59,12 @@
           "class": "SweeperDO"
         }
       ],
-      "needsNodeCompat": true
+      "needsNodeCompat": true,
+      "blobStores": [
+        {
+          "binding": "BLOBS"
+        }
+      ]
     },
     "tenant": "t-5ra4yxscep"
   }

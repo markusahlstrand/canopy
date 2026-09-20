@@ -25,7 +25,15 @@
  */
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { principalId, scopeId, tenantId, type PrincipalId, type ScopeId, type TenantId } from '@substrat-run/contracts';
+import {
+  blobStoreBindingName,
+  principalId,
+  scopeId,
+  tenantId,
+  type PrincipalId,
+  type ScopeId,
+  type TenantId,
+} from '@substrat-run/contracts';
 import {
   CloudflareScopeHost,
   defineScopeDO,
@@ -71,6 +79,12 @@ export interface Env {
   SUBSTRAT_VERSION_ID?: string;
   /** One DO per scope — a space's whole database. */
   SCOPE: DurableObjectNamespace;
+  /**
+   * The per-tenant blob stores attachment bytes live in, bound as `BLOBS__<tenantId>`
+   * — one bucket per tenant, minted in the tenant lifecycle rather than at deploy,
+   * which is why this is an index signature and not a named binding.
+   */
+  [blobBinding: string]: unknown;
   /** Per-tenant identity directory. */
   AUTH: DurableObjectNamespace<IdentityDO>;
   /** The roster-keeping sweep singleton. */
@@ -122,7 +136,13 @@ function nodeFor(req: Request, env: Env): Node {
 }
 
 function hostFor(env: Env): CloudflareScopeHost {
-  const host = new CloudflareScopeHost({ scope: env.SCOPE });
+  const host = new CloudflareScopeHost({
+    scope: env.SCOPE,
+    // The byte side. The vertical never names a bucket: the platform mints one per
+    // tenant and attaches it under a derived name, and this resolves that name. The
+    // per-SCOPE isolation inside the store is the kernel's key prefix, not ours.
+    attachmentBuckets: (tid) => env[blobStoreBindingName('BLOBS', tid)] as R2Bucket | undefined,
+  });
   for (const m of MODULES) host.registerModule(m);
   return host;
 }
@@ -235,6 +255,93 @@ app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
 app.get('/api/me', async (c) => {
   const principal = await principalFor(c.env, c.req.raw);
   return principal ? c.json({ principal }) : c.json({ error: 'unauthorized' }, 401);
+});
+
+/**
+ * Bytes in. Three hops, in the order the seam forces: ensure the file row exists (an
+ * attachment binds to an entity, so the entity has to be there first), put the bytes
+ * through the attachment surface — which never touches the scope's invoke pipe — then
+ * record the version that names the attachment.
+ *
+ * The permission is checked twice and that is not redundant: `ensure-file` checks
+ * `drive:write` on the folder, and the upload checks the declared target's write key
+ * against the FILE. A caller who could create a row but not attach to it is refused
+ * between the two, with the row already there — harmless, because a file with no
+ * version is exactly what "created, nothing written yet" means.
+ */
+app.post('/api/folders/:folderId/content', async (c) => {
+  const env = c.env;
+  const principal = await principalFor(env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = nodeFor(c.req.raw, env);
+  const name = c.req.query('name');
+  if (!name) throw new HTTPException(400, { message: 'name is required' });
+
+  const stub = await hostFor(env).getScope(principal, node.tenantId, node.scopeId);
+  const file = await stub.invoke<{ id: string }>('drive/ensure-file', {
+    folderId: c.req.param('folderId'),
+    name,
+  });
+
+  const contentType = c.req.header('content-type') ?? 'application/octet-stream';
+  const body = new Uint8Array(await c.req.arrayBuffer());
+  const attachments = await hostFor(env).attachments(principal, node.tenantId, node.scopeId);
+  const attachment = await attachments.upload({
+    entity: { entityType: 'file', entityId: file.id },
+    filename: name,
+    contentType,
+    visibility: 'internal',
+    body,
+  });
+
+  // `size` is the length the store recorded, not a number the caller asserted.
+  return c.json(
+    await stub.invoke('drive/record-version', {
+      fileId: file.id,
+      mime: contentType,
+      size: attachment.size,
+      location: { source: 'blob', blobRef: attachment.id },
+    }),
+    201,
+  );
+});
+
+/**
+ * Bytes out. The version says where they are; the attachment surface decides whether
+ * this caller may have them, checking the declared target's read key against the
+ * owning file — the same key that let them see the row.
+ */
+app.get('/api/files/:fileId/content', async (c) => {
+  const env = c.env;
+  const principal = await principalFor(env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = nodeFor(c.req.raw, env);
+
+  const stub = await hostFor(env).getScope(principal, node.tenantId, node.scopeId);
+  const { file, version } = await stub.invoke<{
+    file: { name: string };
+    version: { source: string; blob_ref: string | null; mime: string } | null;
+  }>('drive/get-file', { fileId: c.req.param('fileId') });
+  if (!version) throw new HTTPException(404, { message: 'this file has no content yet' });
+
+  // A connector-backed version's bytes are not ours: they live in the source system,
+  // and resolving them means a connector this vertical does not have yet. Say that
+  // plainly rather than serving an empty body that reads as an empty file.
+  if (version.source !== 'blob' || !version.blob_ref) {
+    throw new HTTPException(501, {
+      message: 'this version lives in a connected source, and connector reads are not wired yet',
+    });
+  }
+
+  const attachments = await hostFor(env).attachments(principal, node.tenantId, node.scopeId);
+  const opened = await attachments.open(version.blob_ref);
+  if (!opened) throw new HTTPException(404, { message: 'the bytes this version names are gone' });
+  return new Response(opened.body, {
+    headers: {
+      'content-type': opened.contentType || version.mime,
+      'content-disposition': `inline; filename="${encodeURIComponent(file.name)}"`,
+    },
+  });
 });
 
 /**

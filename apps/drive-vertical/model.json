@@ -1,0 +1,180 @@
+{
+  "entities": {
+    "file": {
+      "table": "drive_files",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "folder_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "current_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "folder_id",
+          "name",
+          "current_version_id",
+          "created_at",
+          "updated_at",
+          "deleted_at"
+        ],
+        "additionalProperties": false
+      },
+      "parents": [
+        "folder"
+      ],
+      "key": [
+        "folder_id",
+        "name"
+      ]
+    },
+    "file_version": {
+      "table": "drive_file_versions",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "blob_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "external_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "etag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime": {
+            "type": "string"
+          },
+          "size": {
+            "type": "number"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "file_id",
+          "source",
+          "blob_ref",
+          "external_key",
+          "etag",
+          "mime",
+          "size",
+          "created_at",
+          "created_by"
+        ],
+        "additionalProperties": false
+      },
+      "parents": [
+        "file"
+      ]
+    },
+    "folder": {
+      "table": "drive_folders",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "parent_id",
+          "path",
+          "name",
+          "created_at",
+          "created_by"
+        ],
+        "additionalProperties": false
+      },
+      "parents": [
+        "folder"
+      ],
+      "key": [
+        "path"
+      ]
+    }
+  }
+}

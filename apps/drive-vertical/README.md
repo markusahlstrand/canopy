@@ -62,8 +62,38 @@ pnpm --filter @canopy/drive-vertical dev    # wrangler dev with ALLOW_DEV_NODE=t
 not an identity** — it says which space an un-routed request belongs to and grants nobody
 anything.
 
+## Bytes
+
+A write is three hops, and the shape is forced rather than chosen: an attachment binds to
+an entity, so the file row must exist before bytes can attach to it, and bytes must not
+ride `invoke` — a structured-clone pipe under per-scope serialization is the wrong path
+for megabytes.
+
+```
+POST /api/folders/{folderId}/content?name=report.pdf   (raw body)
+  → drive/ensure-file          the row bytes will hang off
+  → attachments.upload         bytes to the per-tenant store, sha256 at rest
+  → drive/record-version       the version names the attachment
+
+GET  /api/files/{fileId}/content
+  → drive/get-file             which version is current
+  → attachments.open           gated by the declared target's read key
+```
+
+The store is platform-minted, one bucket per tenant, bound as `BLOBS__<tenantId>` and
+declared in `substrat.runtimeNeeds.blobStores`. The vertical never names a bucket and
+never builds a key: per-scope isolation inside the store is the kernel's derived prefix.
+
+Access is the kernel's too — `attachmentTargets` in the manifest binds file bytes to
+`drive:read` / `drive:write`, per entity, so a grant narrowed to one folder reaches the
+bytes under it and nothing else. The drive holds no second rule about who may download
+what.
+
+A version whose source is a connected system refuses with a 501 that says so, rather than
+serving an empty body that reads as an empty file.
+
 ## Not yet wired
 
-Bytes (the blob seam — operations record where bytes are, nothing moves them yet),
-search, the changes feed, WebDAV, and any migration of existing canopy spaces. See
+Content extraction and search, the changes feed, WebDAV, connector-backed reads, and any
+migration of existing canopy spaces. See
 [`documentation/planning/scope-model-mapping.md`](../../documentation/planning/scope-model-mapping.md) §3.

@@ -51,6 +51,38 @@ interface FolderRow {
   id: string;
   path: string;
 }
+interface VersionRow {
+  id: string;
+  source: string;
+  blob_ref: string | null;
+  mime: string;
+  size: number;
+}
+
+/**
+ * One write, as the drive actually performs one: ensure the file row exists, put the
+ * bytes against it through the attachment surface, then record the version that names
+ * them. Three hops rather than one because bytes must not ride `invoke` — and an
+ * attachment binds to an entity, so the entity has to exist before the bytes can.
+ */
+async function write(who: typeof ada, folderId: string, name: string, text: string): Promise<FileRow> {
+  const stub = await host.getScope(who, tenant, scope);
+  const file = await stub.invoke<FileRow>('drive/ensure-file', { folderId, name });
+  const body = new TextEncoder().encode(text);
+  const attachment = await (await host.attachments(who, tenant, scope)).upload({
+    entity: { entityType: 'file', entityId: file.id },
+    filename: name,
+    contentType: 'text/markdown',
+    visibility: 'internal',
+    body,
+  });
+  return stub.invoke<FileRow>('drive/record-version', {
+    fileId: file.id,
+    mime: 'text/markdown',
+    size: attachment.size,
+    location: { source: 'blob', blobRef: attachment.id },
+  });
+}
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'scope-drive-'));
@@ -68,6 +100,11 @@ beforeAll(async () => {
     });
     await host.admin.grantEntitlement(staff, t, driveManifest.entitlementKey as string);
     await host.provisionScope(staff, { tenantId: t, scopeId: s, vertical: 'drive' });
+    // The byte side of the attachment surface: one store per tenant, minted by the
+    // platform and handed over — the vertical never names a bucket. Declared in
+    // apps/drive-vertical's runtimeNeeds.blobStores as BLOBS; here the harness plays
+    // the part the control plane plays in a deployment.
+    await host.provisionBlobStore(staff, { tenantId: t, vertical: 'drive', binding: 'BLOBS' });
     await host.admin.activateScope(staff, t, s);
     for (const role of ROLES) await host.admin.defineRole(staff, t, role);
     for (const p of people) {
@@ -110,43 +147,50 @@ describe('a space is a scope', () => {
   });
 
   it('Ada creates a folder and writes a file into it', async () => {
-    const stub = await host.getScope(ada, tenant, scope);
-
-    const folder = await stub.invoke<FolderRow>('drive/create-folder', {
-      parentId: ROOT_FOLDER_ID,
-      name: 'Documents',
-    });
+    const folder = await (await host.getScope(ada, tenant, scope)).invoke<FolderRow>(
+      'drive/create-folder',
+      { parentId: ROOT_FOLDER_ID, name: 'Documents' },
+    );
     documents = folder.id;
     expect(folder.path).toBe('Documents');
 
-    const file = await stub.invoke<FileRow>('drive/put-file', {
-      folderId: documents,
-      name: 'readme.md',
-      mime: 'text/markdown',
-      size: 12,
-      location: { source: 'blob', blobRef: 'sha256:aaa' },
-    });
+    const file = await write(ada, documents, 'readme.md', 'first draft');
     readme = file.id;
     expect(file.current_version_id).toBeTruthy();
   });
 
+  it('the bytes come back, through the attachment the version names', async () => {
+    const { version } = await (await host.getScope(ada, tenant, scope)).invoke<{
+      version: VersionRow | null;
+    }>('drive/get-file', { fileId: readme });
+    expect(version?.source).toBe('blob');
+
+    const attachments = await host.attachments(ada, tenant, scope);
+    const opened = await attachments.open(version!.blob_ref!);
+    expect(new TextDecoder().decode(opened!.body)).toBe('first draft');
+    // The version's size is the byte length that was actually stored, not a number
+    // the caller asserted — the two agreeing is what makes the row trustworthy.
+    expect(version!.size).toBe(opened!.record.size);
+  });
+
   it('writing the same name again supersedes: one file, two versions', async () => {
-    const stub = await host.getScope(ada, tenant, scope);
-    const again = await stub.invoke<FileRow>('drive/put-file', {
-      folderId: documents,
-      name: 'readme.md',
-      mime: 'text/markdown',
-      size: 20,
-      location: { source: 'blob', blobRef: 'sha256:bbb' },
-    });
+    const again = await write(ada, documents, 'readme.md', 'second draft, longer');
     expect(again.id).toBe(readme);
 
-    const versions = await stub.invoke<{ entries: { id: string; blob_ref: string | null }[] }>(
-      'drive/file-versions',
-      { fileId: readme },
-    );
+    const versions = await (await host.getScope(ada, tenant, scope)).invoke<{
+      entries: VersionRow[];
+    }>('drive/file-versions', { fileId: readme });
     expect(versions.entries).toHaveLength(2);
-    expect(versions.entries[0]!.blob_ref).toBe('sha256:bbb'); // newest first
+
+    // Newest first, and the two versions name DIFFERENT attachments: a write is never
+    // an overwrite of the bytes the previous version points at, which is what makes
+    // the version chain worth having.
+    expect(versions.entries[0]!.id).toBe(again.current_version_id);
+    expect(versions.entries[0]!.blob_ref).not.toBe(versions.entries[1]!.blob_ref);
+
+    const attachments = await host.attachments(ada, tenant, scope);
+    const previous = await attachments.open(versions.entries[1]!.blob_ref!);
+    expect(new TextDecoder().decode(previous!.body)).toBe('first draft');
   });
 
   it('the folder listing is one hop, then a local query', async () => {
@@ -168,12 +212,27 @@ describe('a space is a scope', () => {
   it('…and is refused the write nobody granted him', async () => {
     const stub = await host.getScope(bjorn, tenant, scope);
     await expect(
-      stub.invoke('drive/put-file', {
-        folderId: documents,
-        name: 'notes.md',
-        mime: 'text/markdown',
-        size: 4,
-        location: { source: 'blob', blobRef: 'sha256:ccc' },
+      stub.invoke('drive/ensure-file', { folderId: documents, name: 'notes.md' }),
+    ).rejects.toThrow();
+  });
+
+  it('a reader may open the bytes; a member without write may not upload any', async () => {
+    const { version } = await (await host.getScope(bjorn, tenant, scope)).invoke<{
+      version: VersionRow | null;
+    }>('drive/get-file', { fileId: readme });
+    // Björn holds drive:read scope-wide, so the SAME key that lets him see the row
+    // lets him open its bytes — the kernel checks the target's readPermission against
+    // the owning file, and the drive holds no second rule about downloads.
+    const readerBytes = await (await host.attachments(bjorn, tenant, scope)).open(version!.blob_ref!);
+    expect(new TextDecoder().decode(readerBytes!.body)).toBe('second draft, longer');
+
+    await expect(
+      (await host.attachments(bjorn, tenant, scope)).upload({
+        entity: { entityType: 'file', entityId: readme },
+        filename: 'sneaky.md',
+        contentType: 'text/markdown',
+        visibility: 'internal',
+        body: new TextEncoder().encode('nope'),
       }),
     ).rejects.toThrow();
   });
@@ -187,13 +246,7 @@ describe('a space is a scope', () => {
       stub.invoke('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'A/B' }),
     ).rejects.toThrow();
     await expect(
-      stub.invoke('drive/put-file', {
-        folderId: documents,
-        name: '  ',
-        mime: 'text/plain',
-        size: 1,
-        location: { source: 'blob', blobRef: 'sha256:ddd' },
-      }),
+      stub.invoke('drive/ensure-file', { folderId: documents, name: '  ' }),
     ).rejects.toThrow();
   });
 
