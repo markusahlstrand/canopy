@@ -109,6 +109,11 @@ jobs:
         # Runs the gates apps/drive-vertical/package.json declares — a violation fails the job before anything
         # is uploaded. Add `test`, `typecheck` and `lint:boundaries` scripts to gate more;
         # `lint:boundaries` is `substrat-boundary-lint` from @substrat-run/boundary-lint.
+        #
+        # `lint:model` re-emits model.json and fails on drift, so a changed table or a renamed
+        # field appears in the PR diff rather than in the dashboard's Model tab after a deploy.
+        # It runs BEFORE the upload for that reason — push reads the checked-in artifact, so a
+        # stale one ships silently and a missing one records no model at all.
         run: |
           set -euo pipefail
           if [ -f pnpm-lock.yaml ]; then PM=pnpm
@@ -117,13 +122,13 @@ jobs:
           fi
           declares() { node -e "const s=require(process.cwd()+'/'+process.argv[1]).scripts||{};process.exit(s[process.argv[2]]?0:1)" 'apps/drive-vertical/package.json' "$1"; }
           RAN=''
-          for s in typecheck test lint:boundaries; do
+          for s in typecheck test lint:model lint:boundaries; do
             if declares "$s"; then ( cd apps/drive-vertical && $PM run "$s" ); RAN="$RAN $s"
             else echo "no '$s' script in apps/drive-vertical/package.json — skipped"
             fi
           done
           if [ -z "$RAN" ]; then
-            echo "::warning::no typecheck, test or lint:boundaries script in apps/drive-vertical/package.json — this push is UNGATED. See https://substrat.net/guide/deploying"
+            echo "::warning::no typecheck, test, lint:model or lint:boundaries script in apps/drive-vertical/package.json — this push is UNGATED. See https://substrat.net/guide/deploying"
           else
             echo "gates passed:$RAN"
           fi
@@ -212,6 +217,11 @@ jobs:
         # Runs the gates apps/drive-vertical/package.json declares — a violation fails the job before anything
         # is uploaded. Add `test`, `typecheck` and `lint:boundaries` scripts to gate more;
         # `lint:boundaries` is `substrat-boundary-lint` from @substrat-run/boundary-lint.
+        #
+        # `lint:model` re-emits model.json and fails on drift, so a changed table or a renamed
+        # field appears in the PR diff rather than in the dashboard's Model tab after a deploy.
+        # It runs BEFORE the upload for that reason — push reads the checked-in artifact, so a
+        # stale one ships silently and a missing one records no model at all.
         run: |
           set -euo pipefail
           if [ -f pnpm-lock.yaml ]; then PM=pnpm
@@ -220,13 +230,13 @@ jobs:
           fi
           declares() { node -e "const s=require(process.cwd()+'/'+process.argv[1]).scripts||{};process.exit(s[process.argv[2]]?0:1)" 'apps/drive-vertical/package.json' "$1"; }
           RAN=''
-          for s in typecheck test lint:boundaries; do
+          for s in typecheck test lint:model lint:boundaries; do
             if declares "$s"; then ( cd apps/drive-vertical && $PM run "$s" ); RAN="$RAN $s"
             else echo "no '$s' script in apps/drive-vertical/package.json — skipped"
             fi
           done
           if [ -z "$RAN" ]; then
-            echo "::warning::no typecheck, test or lint:boundaries script in apps/drive-vertical/package.json — this push is UNGATED. See https://substrat.net/guide/deploying"
+            echo "::warning::no typecheck, test, lint:model or lint:boundaries script in apps/drive-vertical/package.json — this push is UNGATED. See https://substrat.net/guide/deploying"
           else
             echo "gates passed:$RAN"
           fi

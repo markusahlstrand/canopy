@@ -127,6 +127,9 @@ importers:
       '@canopy/scope-drive':
         specifier: workspace:*
         version: link:../../packages/scope-drive
+      '@canopy/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@substrat-run/adapter-cloudflare':
         specifier: ^0.114.0
         version: 0.114.0(zod@4.6.5)
@@ -145,6 +148,12 @@ importers:
       hono:
         specifier: ^4.12.30
         version: 4.13.8
+      react:
+        specifier: ^19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: ^19.2.6
+        version: 19.2.6(react@19.2.6)
       zod:
         specifier: ^4.4.3
         version: 4.6.5
@@ -152,9 +161,30 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^5.20260908.1
         version: 5.20260920.1
+      '@tailwindcss/vite':
+        specifier: ^4.3.0
+        version: 4.3.0(vite@8.0.13(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.47.1)(tsx@4.22.3)(yaml@2.9.0))
+      '@types/react':
+        specifier: ^19.2.15
+        version: 19.2.15
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.15)
+      '@vitejs/plugin-react':
+        specifier: ^6.0.2
+        version: 6.0.2(vite@8.0.13(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.47.1)(tsx@4.22.3)(yaml@2.9.0))
+      tailwindcss:
+        specifier: ^4.3.0
+        version: 4.3.0
+      tw-animate-css:
+        specifier: ^1.4.0
+        version: 1.4.0
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
+      vite:
+        specifier: ^8.0.13
+        version: 8.0.13(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.47.1)(tsx@4.22.3)(yaml@2.9.0)
       wrangler:
         specifier: ^4.42.0
         version: 4.93.0(@cloudflare/workers-types@5.20260920.1)
@@ -5618,7 +5648,6 @@ packages:
 
   libsql@0.5.29:
     resolution: {integrity: sha512-8lMP8iMgiBzzoNbAPQ59qdVcj6UaE/Vnm+fiwX4doX4Narook0a4GPKWBEv+CR8a1OwbfkgL18uBfBjWdF0Fzg==}
-    cpu: [x64, arm64, wasm32, arm]
     os: [darwin, linux, win32]
 
   lightningcss-android-arm64@1.32.0:
