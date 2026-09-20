@@ -7,6 +7,7 @@
     "dev": "tsx watch src/node.ts",
     "start": "tsx src/node.ts",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "spec": "tsp compile spec"
   },
   "dependencies": {
@@ -30,7 +31,9 @@
     "@typespec/http": "^1.13.0",
     "@typespec/openapi": "^1.13.0",
     "@typespec/openapi3": "^1.13.0",
+    "ajv": "^8.20.0",
     "tsx": "^4.20.6",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "vitest": "^3.2.4"
   }
 }

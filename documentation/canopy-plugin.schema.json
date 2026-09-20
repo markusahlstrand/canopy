@@ -52,7 +52,41 @@
       "description": "Server-side hooks the plugin implements. Runs inside the (planned) server sandbox.",
       "items": { "type": "string", "enum": ["enrichItem", "transformUpload"] }
     },
+    "jobs": {
+      "type": "array",
+      "description": "Declared background jobs (name + optional cron, evaluated by the host tick — a plugin never owns a trigger). Requires the \"jobs\" capability. Runs server-side; trusted first-party roles today, the planned plugin sandbox later.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "Job name, unique within the plugin. Dispatch is keyed pluginId:name."
+          },
+          "schedule": {
+            "type": "string",
+            "description": "5-field cron expression (e.g. \"0 2 * * *\"). Omit for on-demand-only jobs."
+          }
+        }
+      }
+    },
     "contributes": { "$ref": "#/definitions/contributions" }
+  },
+  "dependencies": {
+    "jobs": {
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "contains": {
+            "type": "object",
+            "properties": { "kind": { "const": "jobs" } },
+            "required": ["kind"]
+          }
+        }
+      }
+    }
   },
   "definitions": {
     "capability": {
@@ -128,6 +162,13 @@
             }
           },
           "description": "Run text/vision inference through the host's AI gateway — the plugin never holds a provider key; the host routes to whichever provider owns the model."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "jobs" } },
+          "description": "Run declared background jobs on the host's jobs rail (durable runs, cursors, schedules). Trusted first-party roles today, the planned plugin sandbox later."
         }
       ]
     },
@@ -225,6 +266,24 @@
             }
           }
         },
+        "creators": {
+          "type": "array",
+          "description": "File types the plugin can create from the host's \"New\" menu. Choosing one creates a file in the current folder (seeded with template, if any) and opens it.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "label", "defaultName", "extension"],
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string", "description": "Menu label, e.g. \"Markdown document\"." },
+              "icon": { "type": "string", "description": "lucide icon name for the menu entry." },
+              "defaultName": { "type": "string", "description": "Default base name (without extension), e.g. \"Untitled\"." },
+              "extension": { "type": "string", "description": "Extension appended to the name, including the dot, e.g. \".md\"." },
+              "mime": { "type": "string", "description": "MIME type stored on the file's first version." },
+              "template": { "type": "string", "description": "Optional starter content for the new file (UTF-8 text)." }
+            }
+          }
+        },
         "store": {
           "type": "object",
           "additionalProperties": false,
@@ -267,8 +326,36 @@
       "properties": {
         "key": { "type": "string" },
         "label": { "type": "string" },
-        "type": { "type": "string", "enum": ["string", "secret", "url", "boolean"] },
-        "required": { "type": "boolean" }
+        "type": { "type": "string", "enum": ["string", "secret", "url", "boolean", "select"] },
+        "required": { "type": "boolean" },
+        "options": {
+          "type": "array",
+          "description": "Choices for a \"select\" field. Either provided statically, or left empty and filled by the host when serving the schema (see optionsFrom).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "label"],
+            "properties": {
+              "value": { "type": "string" },
+              "label": { "type": "string" }
+            }
+          }
+        },
+        "optionsFrom": {
+          "type": "string",
+          "enum": ["ai-models"],
+          "description": "Ask the host to populate options from a named, dynamic source when it serves the settings schema. \"ai-models\" = the models the AI gateway currently exposes."
+        },
+        "showWhen": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field", "in"],
+          "description": "Show this field only when another field (typically a \"select\" mode) currently holds one of these values. Fields without showWhen always show.",
+          "properties": {
+            "field": { "type": "string" },
+            "in": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+          }
+        }
       }
     }
   }

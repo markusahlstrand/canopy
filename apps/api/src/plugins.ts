@@ -1,4 +1,5 @@
 import type { DocumentProcessor, ServerDataSource, ServerPlugin } from "@canopy/core";
+import type { JobHandler, JobHandlers } from "@canopy/store";
 import { synologyConnectorPlugin } from "@canopy/connector-synology";
 import { githubDataSource, synologyDataSource } from "./data-sources";
 import { documentAiProcessor } from "./processors";
@@ -24,3 +25,22 @@ export const dataSourcesOf = (plugins: ServerPlugin[]): ServerDataSource[] =>
 /** The processor roles across all plugins. */
 export const processorsOf = (plugins: ServerPlugin[]): DocumentProcessor[] =>
   plugins.flatMap((p) => p.processors ?? []);
+
+/**
+ * The jobs roles across all plugins, as the `JobHandlers` lookup the Jobs
+ * adapters take (keyed `pluginId:name`). This is where `@canopy/core`'s
+ * `JobDefinition` meets `@canopy/store`'s structurally-identical handler type —
+ * the two packages never import each other. Duplicate registrations fail fast
+ * here, at composition, not at dispatch time.
+ */
+export const jobsOf = (plugins: ServerPlugin[]): JobHandlers => {
+  const byKey = new Map<string, JobHandler>();
+  for (const p of plugins) {
+    for (const job of p.jobs ?? []) {
+      const key = `${p.id}:${job.name}`;
+      if (byKey.has(key)) throw new Error(`duplicate job registration: ${key}`);
+      byKey.set(key, job.handler);
+    }
+  }
+  return (pluginId, name) => byKey.get(`${pluginId}:${name}`) ?? null;
+};

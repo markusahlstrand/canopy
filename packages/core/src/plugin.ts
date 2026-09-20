@@ -11,7 +11,8 @@ export type Capability =
   | { kind: "storage:read"; connectors?: string[] }
   | { kind: "net:fetch"; hosts: string[] }
   | { kind: "kv" }
-  | { kind: "ai:generate"; models?: string[] };
+  | { kind: "ai:generate"; models?: string[] }
+  | { kind: "jobs" };
 
 /** Server-side hooks a plugin can implement; these run inside the sandbox. */
 export type ServerHook = "enrichItem" | "transformUpload";
@@ -29,6 +30,13 @@ export interface PluginManifest {
   entry?: string;
   capabilities: Capability[];
   serverHooks?: ServerHook[];
+  /**
+   * Declared background jobs (name + optional host-evaluated cron). Requires the
+   * `jobs` capability. Runs server-side: trusted first-party roles today (the
+   * `jobs` field on ServerPlugin), the planned plugin sandbox later — the same
+   * declared-now/enforced-later posture as `serverHooks`.
+   */
+  jobs?: { name: string; schedule?: string }[];
   contributes?: Contributions;
 }
 
