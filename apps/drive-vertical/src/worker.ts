@@ -25,6 +25,7 @@
  */
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { z } from 'zod';
 import {
   blobStoreBindingName,
   principalId,
@@ -49,6 +50,7 @@ import {
   IdentityDO,
   instanceAuthFor,
   mintOwnerClaimLink,
+  sha256Hex,
   type AuthProvider,
   type IdentityStub,
 } from '@substrat-run/vertical-auth';
@@ -255,6 +257,47 @@ app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
 app.get('/api/me', async (c) => {
   const principal = await principalFor(c.env, c.req.raw);
   return principal ? c.json({ principal }) : c.json({ error: 'unauthorized' }, 401);
+});
+
+/** The claim token rides in the body, so it is never a query string. See the route below. */
+const claimBody = z.object({ token: z.string().min(1) });
+
+/**
+ * Redeem an owner-claim link — the only way into an install whose first-sign-in window
+ * has closed, and the missing half of a path the platform already builds.
+ *
+ * `mintOwnerClaim` above hands the platform a link (`/?claim=<token>`), the dashboard
+ * shows it with a copy button and tells the installer to open it. Nothing consumed it:
+ * `vertical-auth` ships `claimOwner` on the directory and a mounted route for the INVITE
+ * half (`mountInviteRoutes` → `/api/accept-invite`), but the owner half has no mounted
+ * route upstream, in any vertical. So the link was inert, and an install whose window
+ * closed was unreachable — sign in, resolve to nobody, get the signed-out shell, sign in
+ * again. Filed as substrat-run/substrat#1626, which proposes `mountOwnerClaimRoute` beside
+ * `mountInviteRoutes`; DELETE this in favour of that once it lands.
+ *
+ * The caller MUST already be signed in. A claim does not authenticate anybody — it binds
+ * an already-verified subject to the pending seat, so the token decides *which* signed-in
+ * subject is bound, never *that* someone is. This is also why the subject comes from the
+ * provider directly and not from `principalFor`: that resolves to nobody for precisely
+ * the person who needs to claim, which is the whole situation.
+ */
+app.post('/api/claim-owner', async (c) => {
+  const node = nodeFor(c.req.raw, c.env);
+  const subject = await (await providerFor(c.env, node)).resolve(c.req.raw.headers);
+  if (!subject) throw new HTTPException(401, { message: 'sign in before claiming this space' });
+
+  const { token } = claimBody.parse(await c.req.json());
+  const principal = await identityDo(c.env, node).claimOwner(
+    node.scopeId,
+    subject.sub,
+    await sha256Hex(token),
+  );
+
+  // ONE answer for invalid, expired, already used, and nothing-to-claim. The directory
+  // refuses to distinguish them on purpose, so a probe with a guessed token learns
+  // nothing about whether this scope has a seat standing — and neither does this route.
+  if (!principal) throw new HTTPException(403, { message: 'this claim link is not valid for this space' });
+  return c.json({ principal: principalId.parse(principal) });
 });
 
 /**

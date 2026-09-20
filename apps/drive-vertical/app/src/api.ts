@@ -87,6 +87,20 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export const whoami = () => call<{ principal: string }>('/me');
 
 /**
+ * Redeem an owner-claim link. The token arrives in the URL as `?claim=` (the platform
+ * mints the link, the dashboard hands it over) and leaves in a POST body — a credential
+ * in a query string lands in logs, history and the `Referer` of everything the page
+ * loads next, and this one is live until it is consumed.
+ *
+ * Requires a session: the claim binds whoever is signed in to the seat it opens.
+ */
+export const claimOwner = (token: string) =>
+  call<{ principal: string }>('/claim-owner', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
+
+/**
  * The files directly inside a folder.
  *
  * A paged read's BODY is a bare array — the walk rides in a `Link` header, which

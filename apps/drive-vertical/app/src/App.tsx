@@ -21,6 +21,7 @@ import {
   LOGIN_URL,
   LOGOUT_URL,
   ROOT_FOLDER_ID,
+  claimOwner,
   createFolder,
   ensureFile,
   fileVersions,
@@ -33,14 +34,124 @@ import {
 /** Nobody is signed in yet, somebody is, or we have not asked. */
 type Session = { state: 'loading' } | { state: 'out' } | { state: 'in'; principal: string };
 
+/**
+ * Where an owner-claim token waits out a login round-trip.
+ *
+ * NOT `returnTo`. The token is a live credential until it is consumed, and a login URL
+ * carrying it is one more address bar, history entry and request log to leak it from —
+ * on top of the `/?claim=` link the platform already mints. `sessionStorage` is
+ * same-origin and per-tab, reaches no server, and dies with the tab.
+ */
+const CLAIM_STASH = 'canopy.drive.pending-claim';
+
+const readStash = (): string | null => {
+  try {
+    return window.sessionStorage.getItem(CLAIM_STASH);
+  } catch {
+    return null;
+  }
+};
+
+/** False when storage refused us — private mode, blocked site data. The caller has a plan. */
+const stash = (token: string): boolean => {
+  try {
+    window.sessionStorage.setItem(CLAIM_STASH, token);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const clearStash = () => {
+  try {
+    window.sessionStorage.removeItem(CLAIM_STASH);
+  } catch {
+    // Nothing to clear if we could never write.
+  }
+};
+
+/**
+ * One claim per token, however many times the effect runs.
+ *
+ * `StrictMode` mounts every effect twice, and both passes read the same token before
+ * either request finishes. A claim is single-use: one would consume it and the other
+ * would take the 403, leaving a signed-in page wearing a "this link is not valid" error
+ * about a claim that in fact succeeded. Sharing the in-flight promise makes the second
+ * pass await the first's answer instead of racing it.
+ */
+let inFlight: { token: string; result: Promise<unknown> } | null = null;
+
+const claimOnce = (token: string): Promise<unknown> => {
+  if (inFlight?.token !== token) inFlight = { token, result: claimOwner(token) };
+  return inFlight.result;
+};
+
 export default function App() {
   const [session, setSession] = useState<Session>({ state: 'loading' });
   const [files, setFiles] = useState<DriveFile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * Boot: redeem an owner-claim link if this page was opened as one, then ask who we are.
+   *
+   * Order matters. Until the seat is bound, `whoami` is exactly the 401 the claim exists
+   * to fix, so asking first renders the signed-out shell and its Sign in button — which
+   * is the loop this closes: sign in, resolve to nobody, get offered the button again.
+   *
+   * A claim needs a session (it binds whoever is signed in), so a 401 from it means "not
+   * signed in yet" rather than "bad token" — park the token, send them through login, and
+   * they land back on this effect with a session and the claim still pending. The token
+   * itself never waits in a URL; see `CLAIM_STASH`.
+   */
   useEffect(() => {
-    whoami()
-      .then((me) => setSession({ state: 'in', principal: me.principal }))
+    const boot = async () => {
+      // Out of the URL on sight, before anything can await: a token in the address bar
+      // is one screenshot or pasted link from being someone else's.
+      const url = new URL(window.location.href);
+      const fromUrl = url.searchParams.get('claim');
+      if (fromUrl) {
+        url.searchParams.delete('claim');
+        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+
+      const token = fromUrl ?? readStash();
+      if (!token) return whoami();
+
+      try {
+        await claimOnce(token);
+        clearStash();
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) {
+          // Not signed in yet, so go get a session — but only on the way IN from a link.
+          // A STASHED token that still 401s means the round-trip already happened without
+          // producing one (the person backed out at the issuer), and bouncing them again
+          // is a loop. The stash outlives that, so signing in by hand still completes the
+          // claim on the next load.
+          if (fromUrl) {
+            window.location.assign(
+              // `returnTo` is where the token would otherwise have to ride. It only does
+              // so when storage refused to hold it, which is one more URL than we want
+              // and still better than an install nobody can claim.
+              stash(token) ? LOGIN_URL : `${LOGIN_URL}?returnTo=${encodeURIComponent(`/?claim=${token}`)}`,
+            );
+            return null;
+          }
+        } else {
+          // A dead link is worth SAYING — the person followed one the dashboard told them
+          // to open. Drop it so a reload stops retrying a token that cannot work, and
+          // fall through to `whoami`: the seat may have been claimed in another tab, and
+          // that is the call which knows.
+          clearStash();
+          setError(e instanceof ApiError ? e.message : String(e));
+        }
+      }
+      return whoami();
+    };
+
+    boot()
+      .then((me) => {
+        if (me) setSession({ state: 'in', principal: me.principal });
+      })
       // A 401 is the logged-out state, not a failure — anything else is.
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 401) return setSession({ state: 'out' });
