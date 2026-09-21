@@ -12,7 +12,6 @@
     "dev:web": "vite",
     "check": "substrat push --check",
     "push": "substrat push",
-    "test": "pnpm --filter @canopy/scope-drive test",
     "build": "vite build"
   },
   "dependencies": {
