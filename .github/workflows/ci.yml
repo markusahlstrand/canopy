@@ -1,0 +1,51 @@
+name: CI
+
+# Until now canopy had no CI that ran a test. There was a deploy workflow and a
+# vscode-extension release, and 629 tests across eight packages that ran only on
+# whichever laptop remembered to run them — which is also why S3 (#44) could not
+# be satisfied by adding suites alone: "canopy CI runs the contract suites"
+# needed a canopy CI first.
+#
+# What it guards, in the order a failure is cheapest to read:
+#
+#   build      — `canopy-model-editor` publishes from `dist/` and gitignores it,
+#                so a fresh checkout has no types for `apps/vscode-model-editor`
+#                to typecheck against. `--if-present` skips the rest.
+#   typecheck  — every package, `tsc --noEmit`.
+#   test       — every package with a test script, which since #44 includes the
+#                kernel contract suites. A red `kernel-contract.test.ts` means
+#                the substrat version canopy pinned changed under it; a red
+#                `conformance.test.ts` means a drive handler stopped honouring
+#                the entity check its operation declares. The two files say so
+#                in their headers, because the right first question differs.
+
+# The default GITHUB_TOKEN narrowed to what these steps use: they read the repo
+# and nothing else.
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A superseded PR run is wasted work, so it is cancelled. A run on `main` is the
+# record of whether that commit was green and is always allowed to finish.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      # `--frozen-lockfile`: CI proves the committed lockfile is the one that
+      # resolves, rather than quietly resolving a different tree than anyone ran.
+      - run: corepack enable && pnpm install --frozen-lockfile
+      - run: pnpm -r --if-present build
+      - run: pnpm -r typecheck
+      - run: pnpm -r test

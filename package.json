@@ -22,6 +22,7 @@
     "docworker:dev": "pnpm --filter @canopy/docworker-service dev",
     "docworker:build": "docker build --platform linux/amd64 -f apps/docworker/Dockerfile -t canopy-docworker .",
     "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
     "lint": "pnpm -r lint"
   },
   "devDependencies": {
