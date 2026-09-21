@@ -15,6 +15,7 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@canopy/docworker": "workspace:*",
     "@canopy/scope-drive": "workspace:*",
     "@canopy/ui": "workspace:*",
     "@substrat-run/adapter-cloudflare": "^0.116.0",

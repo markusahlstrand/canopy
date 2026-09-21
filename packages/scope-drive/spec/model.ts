@@ -117,6 +117,51 @@ export const driveEntities = defineEntities({
     }),
     parents: ['file'],
   },
+
+  /**
+   * A file's extracted text, and — just as important — the STATE of having tried.
+   *
+   * A separate entity rather than a column on `file` for two reasons. The text is
+   * unbounded and the file row is the hot read, so a `SELECT *` in the folder
+   * listing must not drag a novel through it. And the kernel's FTS index is
+   * maintained by triggers generated over a table's columns (#827), so what is
+   * indexed is exactly this table and nothing on the path of an ordinary read.
+   *
+   * `status` is the half that makes the feature honest. "Indexed and matched
+   * nothing" and "never looked at" are different answers, and a search UI that
+   * conflates them lies to the person reading it:
+   *
+   *   indexed      text was extracted and is in `text`
+   *   empty        the extractor ran and the document genuinely has no text layer
+   *                (a scanned page with no OCR, an empty sheet)
+   *   unsupported  no extractor handles this content type at all
+   *   failed       an extractor ran and threw; `detail` says what
+   *
+   * NO ROW AT ALL is the fifth state and the one that cannot be a column value:
+   * never extracted. Everything uploaded before this landed is in it.
+   *
+   * One row per FILE, not per version: search answers "which file", and keeping
+   * every superseded version's text would grow the index without a reader. The
+   * `version_id` records WHICH version the text came from, so a stale row is
+   * detectable rather than merely old.
+   */
+  file_text: {
+    table: 'drive_file_text',
+    fields: z.object({
+      id: z.string(),
+      file_id: z.string(),
+      version_id: z.string(),
+      status: z.string(),
+      /** Empty for every status but `indexed` — the index has nothing to hold. */
+      text: z.string(),
+      chars: z.number(),
+      extracted_at: z.string(),
+      /** Why, for `failed` and `unsupported`. Null otherwise. */
+      detail: z.string().nullable(),
+    }),
+    key: ['file_id'],
+    parents: ['file'],
+  },
 });
 
 /**
@@ -270,6 +315,94 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     output: driveEntities.file_version.fields,
     paged: { sortKey: 'id' },
     http: { method: 'GET', path: '/files/{fileId}/versions' },
+  },
+
+  /**
+   * Record what extraction found — including that it found nothing, and why.
+   *
+   * Written by the host's extraction driver rather than by a person, but an
+   * ordinary permission-checked operation all the same: it writes a row in this
+   * scope, so it goes through the same door as every other write. `drive:write`
+   * on the FILE, because that is exactly the authority "supersede this file's
+   * content" already carries, and the text is a fact about the content.
+   *
+   * Idempotent per file: re-extracting replaces the row, so a re-run after a
+   * failure heals rather than accumulating.
+   */
+  'drive/record-text': {
+    summary: 'Record the extracted text of a file, or why there is none',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({
+      fileId: z.string(),
+      /** The version the text was read from — a stale row is detectable, not just old. */
+      versionId: z.string(),
+      status: z.enum(['indexed', 'empty', 'unsupported', 'failed']),
+      /** Present for `indexed`; ignored otherwise, because nothing else has text. */
+      text: z.string().optional(),
+      detail: z.string().nullable().optional(),
+    }),
+    output: driveEntities.file_text.fields,
+    emits: {
+      entity: 'file',
+      entityIdFrom: 'file_id',
+      type: 'drive.file-text-recorded',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['file_id', 'version_id', 'status', 'chars'],
+    },
+  },
+
+  /**
+   * What extraction found in a file — or `null`, which is its own answer.
+   *
+   * This read is what makes the state vocabulary usable rather than merely
+   * recorded. `null` is "never extracted"; a row with `status: 'empty'` is "we
+   * looked and there is no text layer". A UI that cannot tell those apart shows
+   * "no results" for both and is lying about one of them.
+   *
+   * The text itself is deliberately NOT here: it is the document, the caller can
+   * already download it, and a status read that drags a novel along is a status
+   * read nobody puts in a list view.
+   */
+  'drive/file-text': {
+    summary: 'What extraction found in a file, or null if it was never tried',
+    permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }),
+    output: driveEntities.file_text.fields.omit({ text: true }).nullable(),
+    http: { method: 'GET', path: '/files/{fileId}/text' },
+  },
+
+  /**
+   * Find files by NAME or by what is inside them, in one ranked list.
+   *
+   * Two searchable entities feed this — `file.name` since the drive existed, and
+   * `file_text.text` since extraction — and `SearchHit.rank` exists precisely so
+   * a caller can merge two entity types into one list. A filename match and a
+   * body match are the same question asked by the person typing.
+   *
+   * The node-level `drive:read` here is the gate on ASKING; it is not the gate on
+   * what comes back. Every hit is re-checked against the file it belongs to
+   * before it joins the result, so a principal holding a grant on one folder
+   * cannot learn from a ranked list that a document exists in another. The
+   * kernel's index answers ids and says to hydrate through your own read path —
+   * this is that read path, and the check is what makes it one.
+   */
+  'drive/search': {
+    summary: 'Find files by name or by content',
+    permission: 'drive:read',
+    input: z.object({
+      term: z.string().min(2),
+      limit: z.number().int().positive().max(50).optional(),
+    }),
+    output: z.object({
+      hits: z.array(
+        driveEntities.file.fields.extend({
+          /** Which index matched — the UI says "in the name" or "in the document". */
+          via: z.enum(['name', 'content']),
+        }),
+      ),
+    }),
+    http: { method: 'GET', path: '/search' },
   },
 });
 

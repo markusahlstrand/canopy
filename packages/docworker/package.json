@@ -1,13 +1,14 @@
 {
   "name": "@canopy/docworker",
   "version": "0.0.0",
-  "description": "Document parsing adapter for Canopy — ranged PDF text, PDF outline, and spreadsheet tables behind a runtime-agnostic interface (pure-Node in-process impl; a Cloudflare Container is just another backend).",
+  "description": "Document parsing adapter for Canopy \u2014 ranged PDF text, PDF outline, and spreadsheet tables behind a runtime-agnostic interface (pure-Node in-process impl; a Cloudflare Container is just another backend).",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./pdf": "./src/pdf.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
