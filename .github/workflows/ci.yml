@@ -12,6 +12,9 @@ name: CI
 #                so a fresh checkout has no types for `apps/vscode-model-editor`
 #                to typecheck against. `--if-present` skips the rest.
 #   typecheck  — every package, `tsc --noEmit`.
+#   lint:model — the emitted `model.json` matches `spec/model.ts`. An artifact of
+#                record rather than a build output, so a stale one is a wrong
+#                entity model shipped, not a rebuild away.
 #   test       — every package with a test script, which since #44 includes the
 #                kernel contract suites. A red `kernel-contract.test.ts` means
 #                the substrat version canopy pinned changed under it; a red
@@ -49,3 +52,9 @@ jobs:
       - run: pnpm -r --if-present build
       - run: pnpm -r typecheck
       - run: pnpm -r test
+      # The emitted model is an ARTIFACT OF RECORD, not a build output: `substrat
+      # push` reads `model.json`, and a version pushed with a stale one records the
+      # wrong entity model. It was the deploy preview that caught the first stale
+      # one, which is too late to be useful — by then the branch is already being
+      # pushed at the platform.
+      - run: pnpm -r --if-present lint:model

@@ -52,6 +52,58 @@
         "name"
       ]
     },
+    "file_text": {
+      "table": "drive_file_text",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "chars": {
+            "type": "number"
+          },
+          "extracted_at": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "file_id",
+          "version_id",
+          "status",
+          "text",
+          "chars",
+          "extracted_at",
+          "detail"
+        ],
+        "additionalProperties": false
+      },
+      "parents": [
+        "file"
+      ],
+      "key": [
+        "file_id"
+      ]
+    },
     "file_version": {
       "table": "drive_file_versions",
       "fields": {
