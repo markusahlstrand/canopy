@@ -28,6 +28,7 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import {
   blobStoreBindingName,
+  errorCodeOf,
   principalId,
   scopeId,
   tenantId,
@@ -385,7 +386,17 @@ async function extractAndRecord(
   bytes: Uint8Array,
 ): Promise<void> {
   const record = async (body: Record<string, unknown>) => {
-    await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, ...body });
+    try {
+      await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, ...body });
+    } catch (e) {
+      // The file moved on while this was parsing — a newer upload is already
+      // current, and its own extraction owns the text now. Extraction runs off
+      // the request, so a 20 MB PDF uploaded first can still be working when a
+      // 4 KB one lands after it; the slow one finishing last is ORDINARY, not a
+      // failure, and the scope refusing its stale answer is the thing working.
+      if (errorCodeOf(e) === 'conflict') return;
+      throw e;
+    }
   };
 
   try {

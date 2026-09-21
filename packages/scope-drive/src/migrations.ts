@@ -78,8 +78,18 @@ export const driveMigrations: SqlMigration[] = [
       -- table's columns — what is indexed is this table, off the path of an
       -- ordinary listing.
       --
-      -- ON DELETE CASCADE, unlike the other edges here: text is not a record of
-      -- anything once the file it describes is gone, and an orphan row would keep
+      -- ON DELETE CASCADE states the intent — text is not a record of anything once
+      -- the file it describes is gone — but it does NOT currently enforce it, and
+      -- saying so here is the point. SQLite leaves foreign keys off unless
+      -- \`PRAGMA foreign_keys = ON\`, and the adapters set only
+      -- \`defer_foreign_keys\` (ordering inside a transaction, not enforcement), so
+      -- no cascade fires. It costs nothing and it is what a future enforcement
+      -- switch would honour.
+      --
+      -- Nothing relies on it today because the drive has NO hard-delete path: a
+      -- file is retired with \`deleted_at\`, and \`drive/search\` filters those out
+      -- when it hydrates. Whoever adds one must delete the text row in the same
+      -- operation rather than trusting this line — an orphan row would keep
       -- answering searches for a document nobody can open.
       CREATE TABLE drive_file_text (
         id TEXT PRIMARY KEY NOT NULL,

@@ -302,8 +302,39 @@ const operations = {
 
   'drive/record-text': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
-    if (!ctx.sql.query<FileRow>('SELECT id FROM drive_files WHERE id = ?', [input.fileId])[0]) {
-      throw substratError('not_found', `file not found: ${input.fileId}`);
+    const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
+    if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
+
+    /**
+     * The text must describe the version the file is AT, or it is not recorded.
+     *
+     * Extraction runs off the request, so two uploads in quick succession race:
+     * a 20 MB PDF uploaded first can still be parsing when a 4 KB one lands
+     * after it, and the slow one finishes last. Without this, the older text
+     * overwrites the newer by `file_id` and both the search index and
+     * `drive/file-text` silently regress to a superseded version — a wrong
+     * answer that looks exactly like a right one.
+     *
+     * `current_version_id` is the comparison rather than "newest id wins",
+     * because the question is which version the file points AT. A rollback to an
+     * earlier version must make that earlier version's text current again, and a
+     * monotonic id comparison would refuse it.
+     *
+     * A CONFLICT rather than a quiet no-op, and rather than a nullable return:
+     * `emits.entityIdFrom` reads a field off this operation's output, so a
+     * nullable output has no fields to resolve and the registry's inference
+     * degrades. It is also the more honest answer — the caller asked to record a
+     * fact about a version this file is not at, and 409 is what that is. The
+     * extraction path treats it as the expected outcome it usually is.
+     *
+     * A file with no current version at all falls here too: there are no bytes
+     * for text to be about.
+     */
+    if (file.current_version_id !== input.versionId) {
+      throw substratError(
+        'conflict',
+        `file ${input.fileId} is at version ${file.current_version_id ?? 'none'}, not ${input.versionId}`,
+      );
     }
 
     // Only `indexed` carries text. Taking the caller's word for it would let a

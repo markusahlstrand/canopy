@@ -54,6 +54,27 @@ interface Hits {
 
 const as = (who: typeof ada) => host.getScope(who, tenant, scope);
 
+/**
+ * A file with bytes behind it — which is what extraction is ever about.
+ *
+ * `drive/record-text` only accepts text describing the file's CURRENT version, so
+ * a test that skipped the version would be recording against nothing and would
+ * pass for the wrong reason. `external` rather than `blob`: no attachment store
+ * is involved in what these tests assert.
+ */
+async function fileWithVersion(
+  stub: Awaited<ReturnType<typeof as>>,
+  folderId: string,
+  name: string,
+): Promise<{ id: string; versionId: string }> {
+  const file = await stub.invoke<FileRow>('drive/ensure-file', { folderId, name });
+  const written = await stub.invoke<{ current_version_id: string }>('drive/record-version', {
+    fileId: file.id,
+    location: { source: 'external', externalKey: name, mime: 'application/pdf', size: 1 },
+  });
+  return { id: file.id, versionId: written.current_version_id };
+}
+
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'canopy-drive-search-'));
   host = new SqliteScopeHost({ dir });
@@ -92,29 +113,31 @@ describe('a file is findable by what is inside it', () => {
     shared = (await stub.invoke<FolderRow>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Shared' })).id;
     secret = (await stub.invoke<FolderRow>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Secret' })).id;
 
-    quarterly = (await stub.invoke<FileRow>('drive/ensure-file', { folderId: shared, name: 'quarterly.pdf' })).id;
+    const q = await fileWithVersion(stub, shared, 'quarterly.pdf');
+    quarterly = q.id;
     await stub.invoke('drive/record-text', {
       fileId: quarterly,
-      versionId: ulid(),
+      versionId: q.versionId,
       status: 'indexed',
       text: 'Revenue grew by eleven percent across the Nordic region.',
     });
 
     // Same phrase, in a folder Bjorn cannot reach. If a hit leaks, this is what
     // it leaks — the existence of a document, which is the whole of the risk.
-    const hidden = (await stub.invoke<FileRow>('drive/ensure-file', { folderId: secret, name: 'board.pdf' })).id;
+    const hidden = await fileWithVersion(stub, secret, 'board.pdf');
     await stub.invoke('drive/record-text', {
-      fileId: hidden,
-      versionId: ulid(),
+      fileId: hidden.id,
+      versionId: hidden.versionId,
       status: 'indexed',
       text: 'Revenue grew by eleven percent, and the board was not pleased.',
     });
 
     // Extraction ran and found nothing — a scan with no OCR.
-    scanned = (await stub.invoke<FileRow>('drive/ensure-file', { folderId: shared, name: 'scanned.pdf' })).id;
+    const sc = await fileWithVersion(stub, shared, 'scanned.pdf');
+    scanned = sc.id;
     await stub.invoke('drive/record-text', {
       fileId: scanned,
-      versionId: ulid(),
+      versionId: sc.versionId,
       status: 'empty',
       detail: 'no text layer',
     });
@@ -193,7 +216,11 @@ describe('a file is findable by what is inside it', () => {
   });
   it('replaces a file\'s text rather than accumulating it', async () => {
     const stub = await as(ada);
-    const v2 = ulid();
+    const written = await stub.invoke<{ current_version_id: string }>('drive/record-version', {
+      fileId: quarterly,
+      location: { source: 'external', externalKey: 'q2', mime: 'application/pdf', size: 1 },
+    });
+    const v2 = written.current_version_id;
     await stub.invoke('drive/record-text', {
       fileId: quarterly,
       versionId: v2,
@@ -210,5 +237,42 @@ describe('a file is findable by what is inside it', () => {
 
     const fresh = await stub.invoke<Hits>('drive/search', { term: 'Baltic' });
     expect(fresh.hits.find((h) => h.id === quarterly)?.via).toBe('content');
+  });
+
+  it('refuses text about a version the file has moved off', async () => {
+    // The race the upload path makes real: extraction runs off the request, so a
+    // big file uploaded first can still be parsing when a small one lands after
+    // it. Without the guard the slow, OLDER extraction lands last and silently
+    // replaces the newer text — a wrong answer shaped exactly like a right one.
+    const stub = await as(ada);
+    const f = await fileWithVersion(stub, shared, 'raced.pdf');
+    await stub.invoke('drive/record-text', {
+      fileId: f.id,
+      versionId: f.versionId,
+      status: 'indexed',
+      text: 'The second version, which is the one that counts.',
+    });
+
+    // A v1 extraction finishing late, after v2 already became current. Refused,
+    // and refused as a CONFLICT — the upload path reads that code and treats it
+    // as the ordinary outcome it is rather than as an extraction failure.
+    await expect(
+      stub.invoke('drive/record-text', {
+        fileId: f.id,
+        versionId: ulid(),
+        status: 'indexed',
+        text: 'The first version, which arrived late and must not win.',
+      }),
+    ).rejects.toThrow();
+
+    const now = await stub.invoke<TextRow & { version_id: string }>('drive/file-text', {
+      fileId: f.id,
+    });
+    expect(now.version_id).toBe(f.versionId);
+
+    const hits = await stub.invoke<Hits>('drive/search', { term: 'arrived late' });
+    expect(hits.hits.map((h) => h.id)).not.toContain(f.id);
+    const kept = await stub.invoke<Hits>('drive/search', { term: 'one that counts' });
+    expect(kept.hits.find((h) => h.id === f.id)?.via).toBe('content');
   });
 });
