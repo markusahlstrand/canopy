@@ -68,4 +68,37 @@ export const driveMigrations: SqlMigration[] = [
       VALUES ('${ROOT_FOLDER_ID}', '${ROOT_FOLDER_ID}', '', '', '1970-01-01T00:00:00.000Z', 'system');
     `,
   },
+  {
+    version: '0002',
+    sql: `
+      -- A file's extracted text, and the state of having tried (S9b, #56).
+      --
+      -- Separate from drive_files because the text is unbounded and the file row is
+      -- the hot read, and because the kernel's FTS triggers are generated over a
+      -- table's columns — what is indexed is this table, off the path of an
+      -- ordinary listing.
+      --
+      -- ON DELETE CASCADE, unlike the other edges here: text is not a record of
+      -- anything once the file it describes is gone, and an orphan row would keep
+      -- answering searches for a document nobody can open.
+      CREATE TABLE drive_file_text (
+        id TEXT PRIMARY KEY NOT NULL,
+        -- UNIQUE, not just indexed: one row per file is the model, and enforcing it
+        -- here is what makes the upsert in \`drive/record-text\` a fact rather than a
+        -- convention two code paths have to agree on.
+        file_id TEXT NOT NULL UNIQUE REFERENCES drive_files(id) ON DELETE CASCADE,
+        version_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        -- Empty for every status but 'indexed'. NOT NULL so the FTS trigger always
+        -- has a string to index rather than a NULL to special-case.
+        text TEXT NOT NULL DEFAULT '',
+        chars INTEGER NOT NULL DEFAULT 0,
+        extracted_at TEXT NOT NULL,
+        detail TEXT
+      );
+
+      -- The sweep a backfill needs: "which files have no text row, or a stale one".
+      CREATE INDEX drive_file_text_by_status ON drive_file_text (status, file_id);
+    `,
+  },
 ];

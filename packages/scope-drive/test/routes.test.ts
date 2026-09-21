@@ -20,8 +20,10 @@ describe('the derived route table', () => {
     // reaches a router. Pinning what it actually mounted is the point.
     expect(mounted.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
       'GET /api/files/:fileId',
+      'GET /api/files/:fileId/text',
       'GET /api/files/:fileId/versions',
       'GET /api/folders/:folderId/files',
+      'GET /api/search',
       'POST /api/files/:fileId/versions',
       'POST /api/folders/:folderId/files',
       'POST /api/folders/:parentId/folders',

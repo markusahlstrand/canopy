@@ -62,10 +62,22 @@ interface VersionRow {
   created_by: string;
 }
 
-/** The entity refs the checks narrow onto — the drive's two pointable things. */
+interface FileTextRow {
+  id: string;
+  file_id: string;
+  version_id: string;
+  status: string;
+  text: string;
+  chars: number;
+  extracted_at: string;
+  detail: string | null;
+}
+
+/** The entity refs the checks narrow onto. */
 const folderRef = (id: string) => ({ entityType: 'folder', entityId: id }) as const;
 const fileRef = (id: string) => ({ entityType: 'file', entityId: id }) as const;
 const versionRef = (id: string) => ({ entityType: 'file_version', entityId: id }) as const;
+const fileTextRef = (id: string) => ({ entityType: 'file_text', entityId: id }) as const;
 
 const operations = {
   'drive/list-folder': async (ctx, input) => {
@@ -286,6 +298,126 @@ const operations = {
     return { entries: rows, nextCursor: next } as unknown as HandlerOutput<
       (typeof driveOperations)['drive/file-versions']
     >;
+  },
+
+  'drive/record-text': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    if (!ctx.sql.query<FileRow>('SELECT id FROM drive_files WHERE id = ?', [input.fileId])[0]) {
+      throw substratError('not_found', `file not found: ${input.fileId}`);
+    }
+
+    // Only `indexed` carries text. Taking the caller's word for it would let a
+    // `failed` row sit in the FTS index answering searches, which is the exact
+    // confusion `status` exists to prevent.
+    const text = input.status === 'indexed' ? (input.text ?? '') : '';
+    const existing = ctx.sql.query<FileTextRow>(
+      'SELECT id FROM drive_file_text WHERE file_id = ?',
+      [input.fileId],
+    )[0];
+
+    const row: FileTextRow = {
+      // The id is STABLE across re-extraction: it is an entity in its own right,
+      // and a grant or a link naming it must not be orphaned by a second run.
+      id: existing?.id ?? ulid(),
+      file_id: input.fileId,
+      version_id: input.versionId,
+      status: input.status,
+      text,
+      chars: text.length,
+      extracted_at: ctx.now(),
+      detail: input.detail ?? null,
+    };
+
+    if (existing) {
+      ctx.sql.exec(
+        'UPDATE drive_file_text SET version_id = ?, status = ?, text = ?, chars = ?, extracted_at = ?, detail = ? WHERE file_id = ?',
+        [row.version_id, row.status, row.text, row.chars, row.extracted_at, row.detail, row.file_id],
+      );
+    } else {
+      ctx.sql.exec(
+        'INSERT INTO drive_file_text (id, file_id, version_id, status, text, chars, extracted_at, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [row.id, row.file_id, row.version_id, row.status, row.text, row.chars, row.extracted_at, row.detail],
+      );
+      // Only on insert: the edge is a fact about this row's identity, and
+      // re-linking an existing one on every re-extraction would be a write with
+      // nothing to say.
+      ctx.link(fileTextRef(row.id), fileRef(row.file_id));
+    }
+
+    ctx.emit({
+      type: 'drive.file-text-recorded',
+      schemaVersion: 1,
+      entity: fileRef(row.file_id),
+      piiClass: 'none',
+      payload: {
+        file_id: row.file_id,
+        version_id: row.version_id,
+        status: row.status,
+        chars: row.chars,
+      },
+    });
+    return row;
+  },
+
+  'drive/file-text': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    const row = ctx.sql.query<FileTextRow>(
+      'SELECT id, file_id, version_id, status, chars, extracted_at, detail FROM drive_file_text WHERE file_id = ?',
+      [input.fileId],
+    )[0];
+    // Null is the answer, not the absence of one: it says nobody has looked yet.
+    return row ?? null;
+  },
+
+  'drive/search': async (ctx, input) => {
+    // The gate on ASKING. What comes back is gated per hit, below.
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+
+    const limit = input.limit ?? 20;
+    // Over-fetch: hits the caller may not read are dropped after the check, and a
+    // page that returns three results because seventeen were filtered reads as a
+    // broken search. Bounded so a principal who can read nothing still does O(1)
+    // work rather than walking the scope.
+    const reach = Math.min(limit * 3, 100);
+
+    const [byName, byText] = await Promise.all([
+      ctx.search('file', input.term, { limit: reach }),
+      ctx.search('file_text', input.term, { limit: reach }),
+    ]);
+
+    // A file_text hit is an id in ITS table; what the caller wants is the file.
+    const textFileIds = new Map<string, number>();
+    for (const hit of byText) {
+      const row = ctx.sql.query<FileTextRow>('SELECT file_id FROM drive_file_text WHERE id = ?', [
+        hit.id,
+      ])[0];
+      if (row && !textFileIds.has(row.file_id)) textFileIds.set(row.file_id, hit.rank);
+    }
+
+    // bm25: lower is better. A name match and a body match are the same question,
+    // so they merge into one list — and a file matching BOTH is reported once, as
+    // a name hit, because that is the stronger thing to say about it.
+    const merged = new Map<string, { rank: number; via: 'name' | 'content' }>();
+    for (const [id, rank] of textFileIds) merged.set(id, { rank, via: 'content' });
+    for (const hit of byName) merged.set(hit.id, { rank: hit.rank, via: 'name' });
+
+    const ranked = [...merged.entries()].sort((a, b) => a[1].rank - b[1].rank);
+
+    const hits: (FileRow & { via: 'name' | 'content' })[] = [];
+    for (const [fileId, { via }] of ranked) {
+      if (hits.length === limit) break;
+      // Per hit, and deliberately not a bulk filter: the checker's answer is the
+      // only thing that knows about a grant three folders up. A principal with a
+      // grant on one folder must not learn from a ranked list that a document
+      // exists in another — an index that leaks existence is still a leak.
+      if (!(await ctx.check(DRIVE_PERM.read, fileRef(fileId))).allowed) continue;
+      const file = ctx.sql.query<FileRow>(
+        'SELECT * FROM drive_files WHERE id = ? AND deleted_at IS NULL',
+        [fileId],
+      )[0];
+      if (file) hits.push({ ...file, via });
+    }
+    return { hits };
   },
 } satisfies {
   [K in keyof typeof driveOperations]: OperationHandler<

@@ -351,6 +351,83 @@ async function readBounded(req: Request): Promise<Uint8Array> {
 }
 
 /**
+ * How much of a document's text the index will hold.
+ *
+ * There is a number because a 25 MB PDF is a lot of prose, the text lands in the
+ * scope's own SQLite, and the FTS index over it is a second copy. 200k characters
+ * is roughly a 400-page book — past the point where "find the document" stops
+ * being the question and "find the passage" starts, which is the semantic half
+ * (#57) and a different index. A document longer than this is still findable by
+ * everything in its first 200k characters, and `chars` records what was kept.
+ */
+const MAX_INDEXED_CHARS = 200_000;
+
+/**
+ * Extract a file's text and record what came of it — INCLUDING nothing.
+ *
+ * Runs after the upload's response, never inside it. Extraction is slow enough to
+ * notice on a large PDF and it must never be the reason a file failed to store:
+ * the bytes and the version are the upload, and the text is a thing we learn
+ * about them afterwards. So every path here ends in a `drive/record-text` call —
+ * there is no branch that stays quiet, because "never extracted" is a state the
+ * drive already has a meaning for (no row at all) and it must keep meaning that.
+ *
+ * PDFs only for now, deliberately. `@canopy/docworker` also parses spreadsheets,
+ * but a spreadsheet's content is TABLES, and flattening a sheet into a prose blob
+ * indexes a shape it does not have. DOCX has no extractor here at all. Both are
+ * recorded as `unsupported` with the reason, which is exactly what that status is
+ * for — and what makes adding an extractor later a visible change rather than a
+ * silent one.
+ */
+async function extractAndRecord(
+  stub: ScopeStub,
+  file: { id: string; versionId: string; name: string; mime: string },
+  bytes: Uint8Array,
+): Promise<void> {
+  const record = async (body: Record<string, unknown>) => {
+    await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, ...body });
+  };
+
+  try {
+    // Imported HERE, not at the top. `@canopy/docworker/pdf` pulls in pdf.js —
+    // about 570 KB gzipped of the worker's 1.26 MB — and this function runs on an
+    // upload, never on a read. A static import would instantiate that module graph
+    // in every isolate that serves a folder listing. The bytes are in the bundle
+    // either way; what this saves is the startup cost of evaluating them.
+    const { isPdf, pdfText } = await import('@canopy/docworker/pdf');
+
+    if (!isPdf(file.name, file.mime)) {
+      await record({ status: 'unsupported', detail: `no text extractor for ${file.mime || file.name}` });
+      return;
+    }
+
+    const out = await pdfText(bytes, file.name, file.mime, { limit: MAX_INDEXED_CHARS });
+    // A PDF of scanned pages parses perfectly and yields nothing. That is a fact
+    // about the document, not a failure, and the two must not look alike.
+    if (!out || out.text.trim() === '') {
+      await record({ status: 'empty', detail: 'the document has no text layer' });
+      return;
+    }
+    await record({ status: 'indexed', text: out.text });
+  } catch (e) {
+    // The extractor threw — a malformed file, an unsupported encoding, a bug.
+    // Recorded rather than swallowed: a search that silently never covers one
+    // document is indistinguishable from one that covers it and finds nothing.
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error('drive.extract.failed', { fileId: file.id, detail });
+    await record({ status: 'failed', detail }).catch((inner: unknown) => {
+      // If even the recording fails the scope keeps "never extracted", which is
+      // honest — a backfill sweep is what picks it up, and it is the same state
+      // every file uploaded before this feature is already in.
+      console.error('drive.extract.unrecorded', {
+        fileId: file.id,
+        detail: inner instanceof Error ? inner.message : String(inner),
+      });
+    });
+  }
+}
+
+/**
  * Bytes in. Three hops, in the order the seam forces: ensure the file row exists (an
  * attachment binds to an entity, so the entity has to be there first), put the bytes
  * through the attachment surface — which never touches the scope's invoke pipe — then
@@ -389,13 +466,27 @@ app.post('/api/folders/:folderId/content', async (c) => {
 
   // No mime or size passed: `record-version` reads both off the attachment row, so
   // the version describes the bytes that were actually stored.
-  return c.json(
-    await stub.invoke('drive/record-version', {
-      fileId: file.id,
-      location: { source: 'blob', blobRef: attachment.id },
-    }),
-    201,
+  const written = await stub.invoke<{ id: string; current_version_id: string | null }>(
+    'drive/record-version',
+    { fileId: file.id, location: { source: 'blob', blobRef: attachment.id } },
   );
+
+  // After the response, on the bytes already in this isolate — re-reading them
+  // from the store would be a second full download of something we are holding.
+  // `waitUntil` is what keeps the runtime alive for it without the caller waiting.
+  if (written.current_version_id) {
+    const work = extractAndRecord(
+      stub,
+      { id: file.id, versionId: written.current_version_id, name, mime: contentType },
+      body,
+    );
+    // No execution context in a test harness or a direct invocation; awaiting is
+    // the honest fallback there, and it is never the deployed path.
+    if (c.executionCtx) c.executionCtx.waitUntil(work);
+    else await work;
+  }
+
+  return c.json(written, 201);
 });
 
 /**

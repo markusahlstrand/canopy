@@ -138,5 +138,8 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
     'drive/record-version': {
       location: { source: 'external', externalKey: 'conformance', mime: 'text/plain', size: 1 },
     },
+    // `unsupported` rather than `indexed`: the pair measures the permission check,
+    // and a status carrying no text is the branch with the least else going on.
+    'drive/record-text': { versionId: 'conformance', status: 'unsupported' },
   },
 });
