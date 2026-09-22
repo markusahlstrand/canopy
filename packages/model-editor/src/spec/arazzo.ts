@@ -3,7 +3,7 @@
 // between steps (`$steps.x.outputs…`) become DAG edges; `onSuccess`/`onFailure`
 // become labelled control-flow branches.
 
-import yaml from "js-yaml";
+import { loadYaml } from "../yaml";
 import type { Diagnostic, FlowBranch, SpecFlow, SpecSource, SpecStep } from "./graph-types";
 
 export interface ArazzoResult {
@@ -54,7 +54,7 @@ function readBranches(on: "success" | "failure", value: unknown): FlowBranch[] {
 export function parseArazzo(text: string, fileName: string): ArazzoResult {
   let doc: unknown;
   try {
-    doc = yaml.load(text);
+    doc = loadYaml(text);
   } catch (e) {
     return { ...empty, diagnostics: [{ severity: "error", layer: "arazzo", message: `Invalid YAML in ${fileName}: ${e instanceof Error ? e.message : "parse error"}`, file: fileName }] };
   }

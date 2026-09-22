@@ -1,4 +1,4 @@
-import yaml from "js-yaml";
+import { dumpYaml } from "./yaml";
 import type { DomainModel, Entity, Property, PropertyType } from "./types";
 
 /** Turn an entity/property name into a safe identifier for code/DDL output. */
@@ -375,7 +375,7 @@ export interface ExportTarget {
   render: (model: DomainModel) => string;
 }
 
-const yamlDump = (obj: unknown) => yaml.dump(obj, { noRefs: true, lineWidth: 100, sortKeys: false });
+const yamlDump = (obj: unknown) => dumpYaml(obj, { noRefs: true, lineWidth: 100, sortKeys: false });
 
 export const EXPORT_TARGETS: ExportTarget[] = [
   {

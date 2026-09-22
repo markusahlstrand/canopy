@@ -32,17 +32,18 @@
     "prepare": "pnpm build"
   },
   "dependencies": {
-    "@substrat-run/contracts": "^0.117.0",
-    "@substrat-run/kernel": "^0.117.0",
-    "zod": "^4.4.3",
-    "@substrat-run/vertical-host": "^0.117.0",
-    "hono": "^4.12.30"
+    "@substrat-run/contracts": "^0.118.0",
+    "@substrat-run/kernel": "^0.118.0",
+    "@substrat-run/vertical-host": "^0.118.0",
+    "hono": "^4.13.8",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@substrat-run/adapter-sqlite": "^0.117.0",
-    "@substrat-run/contract-tests": "^0.117.0",
-    "typescript": "~6.0.3",
-    "vitest": "^3.2.7"
+    "@substrat-run/adapter-sqlite": "^0.118.0",
+    "@substrat-run/contract-tests": "^0.118.0",
+    "@types/node": "^26.6.2",
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.1"
   },
   "files": [
     "dist"

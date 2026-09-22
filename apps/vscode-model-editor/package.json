@@ -14,7 +14,11 @@
   "engines": {
     "vscode": "^1.95.0"
   },
-  "categories": ["Visualization", "Programming Languages", "Other"],
+  "categories": [
+    "Visualization",
+    "Programming Languages",
+    "Other"
+  ],
   "keywords": [
     "prisma",
     "typespec",
@@ -32,16 +36,36 @@
         "viewType": "canopy.modelEditor",
         "displayName": "Canopy Model Editor",
         "selector": [
-          { "filenamePattern": "*.prisma" },
-          { "filenamePattern": "*.tsp" },
-          { "filenamePattern": "*.arazzo" },
-          { "filenamePattern": "*.arazzo.yaml" },
-          { "filenamePattern": "*.arazzo.yml" },
-          { "filenamePattern": "*.arazzo.json" },
-          { "filenamePattern": "*.asyncapi" },
-          { "filenamePattern": "*.asyncapi.yaml" },
-          { "filenamePattern": "*.asyncapi.yml" },
-          { "filenamePattern": "*.asyncapi.json" }
+          {
+            "filenamePattern": "*.prisma"
+          },
+          {
+            "filenamePattern": "*.tsp"
+          },
+          {
+            "filenamePattern": "*.arazzo"
+          },
+          {
+            "filenamePattern": "*.arazzo.yaml"
+          },
+          {
+            "filenamePattern": "*.arazzo.yml"
+          },
+          {
+            "filenamePattern": "*.arazzo.json"
+          },
+          {
+            "filenamePattern": "*.asyncapi"
+          },
+          {
+            "filenamePattern": "*.asyncapi.yaml"
+          },
+          {
+            "filenamePattern": "*.asyncapi.yml"
+          },
+          {
+            "filenamePattern": "*.asyncapi.json"
+          }
         ],
         "priority": "default"
       }
@@ -68,14 +92,22 @@
             "id": "createSample",
             "title": "Create a sample project",
             "description": "Generate a ready-to-edit Pet Store project (.prisma, .tsp, .arazzo and .asyncapi) in a folder.\n[Create Sample Project](command:canopy.modelEditor.createSample)",
-            "media": { "image": "icon.png", "altText": "Canopy Model Editor" },
-            "completionEvents": ["onCommand:canopy.modelEditor.createSample"]
+            "media": {
+              "image": "icon.png",
+              "altText": "Canopy Model Editor"
+            },
+            "completionEvents": [
+              "onCommand:canopy.modelEditor.createSample"
+            ]
           },
           {
             "id": "openFile",
             "title": "Open a model file",
             "description": "Open any .prisma, .tsp, .arazzo or .asyncapi file — it opens in the visual editor automatically. To see the raw text, right-click the tab → Reopen Editor With… → Text Editor.",
-            "media": { "image": "icon.png", "altText": "Canopy Model Editor" }
+            "media": {
+              "image": "icon.png",
+              "altText": "Canopy Model Editor"
+            }
           }
         ]
       }
@@ -95,18 +127,18 @@
     "@canopy/model-editor": "workspace:*",
     "@canopy/plugin-sdk": "workspace:*",
     "@canopy/ui": "workspace:*",
-    "@tailwindcss/vite": "^4.3.0",
-    "@types/node": "^25.9.1",
-    "@types/react": "^19.2.15",
-    "@types/react-dom": "^19.2.3",
-    "@types/vscode": "^1.95.0",
-    "@vitejs/plugin-react": "^6.0.2",
-    "@vscode/vsce": "^3.6.0",
-    "concurrently": "^9.2.1",
-    "esbuild": "^0.25.0",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6",
-    "typescript": "~6.0.3",
-    "vite": "^8.0.13"
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/vscode": "^1.138.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "@vscode/vsce": "^4.0.0",
+    "concurrently": "^10.0.5",
+    "esbuild": "^0.28.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.0"
   }
 }

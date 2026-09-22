@@ -9,7 +9,7 @@
 // `publish`/`subscribe`. The 2.x→3.x action mapping follows the application's point
 // of view: `subscribe` ⇒ the app receives, `publish` ⇒ the app sends.
 
-import yaml from "js-yaml";
+import { loadYaml } from "../yaml";
 import type { Diagnostic, SpecChannel, SpecChannelOp, SpecMessage } from "./graph-types";
 
 export interface AsyncApiResult {
@@ -76,7 +76,7 @@ const messageKey = (doc: Record<string, any>, fallbackKey: string, node: any): s
 export function parseAsyncApi(text: string, fileName: string): AsyncApiResult {
   let doc: unknown;
   try {
-    doc = yaml.load(text);
+    doc = loadYaml(text);
   } catch (e) {
     // Flag as AsyncAPI so the graph builder keeps these diagnostics (it skips results
     // where `isAsyncApi` is false) and the parse error reaches the UI.

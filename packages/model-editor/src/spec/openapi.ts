@@ -3,7 +3,7 @@
 // declares, so a flow step's `operationId` can be validated even when the originating
 // `.tsp` isn't present. Entity/endpoint detail comes from TypeSpec, not here.
 
-import yaml from "js-yaml";
+import { loadYaml } from "../yaml";
 
 const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
 
@@ -18,7 +18,7 @@ export function parseOpenApi(text: string): OpenApiInfo {
   const empty: OpenApiInfo = { isOpenApi: false, operations: new Map(), schemas: [] };
   let doc: unknown;
   try {
-    doc = yaml.load(text);
+    doc = loadYaml(text);
   } catch {
     return empty;
   }
