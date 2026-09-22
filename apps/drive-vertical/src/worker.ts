@@ -268,13 +268,16 @@ const claimBody = z.object({ token: z.string().min(1) });
  * has closed, and the missing half of a path the platform already builds.
  *
  * `mintOwnerClaim` above hands the platform a link (`/?claim=<token>`), the dashboard
- * shows it with a copy button and tells the installer to open it. Nothing consumed it:
+ * shows it with a copy button and tells the installer to open it. Until this route, this
+ * vertical never consumed it, so the link was inert and an install whose window closed
+ * was unreachable — sign in, resolve to nobody, get the signed-out shell, sign in again.
+ *
  * `vertical-auth` ships `claimOwner` on the directory and a mounted route for the INVITE
- * half (`mountInviteRoutes` → `/api/accept-invite`), but the owner half has no mounted
- * route upstream, in any vertical. So the link was inert, and an install whose window
- * closed was unreachable — sign in, resolve to nobody, get the signed-out shell, sign in
- * again. Filed as substrat-run/substrat#1626, which proposes `mountOwnerClaimRoute` beside
- * `mountInviteRoutes`; DELETE this in favour of that once it lands.
+ * half (`mountInviteRoutes` → `/api/accept-invite`), but no shared route for the owner
+ * half, so each vertical hand-rolls this one. Substrat's own demos do exactly that
+ * (callout, manyfold, meridian, ticket0 each serve `POST /api/claim-owner`), and this
+ * follows the same shape. substrat-run/substrat#1686 plans to move owner claims onto a
+ * `become` capability; when it lands, replace this with whatever that exposes.
  *
  * The caller MUST already be signed in. A claim does not authenticate anybody — it binds
  * an already-verified subject to the pending seat, so the token decides *which* signed-in
