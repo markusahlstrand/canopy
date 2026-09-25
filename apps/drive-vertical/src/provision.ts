@@ -4,6 +4,8 @@
  * `@canopy/scope-drive`, and a copy here would be the drift the checkpoint exists
  * to catch.
  */
+export { DRIVE_VERTICAL_ENV as envSpec } from './env-spec.js';
+
 export {
   ENTITLEMENT_KEYS,
   ENTITY_GRANTS,

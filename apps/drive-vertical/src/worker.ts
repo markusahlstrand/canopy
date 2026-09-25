@@ -61,6 +61,8 @@ import {
 } from '@substrat-run/vertical-auth';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
+import { allowedOrigin } from './cors.js';
+import { DRIVE_VERTICAL_ENV } from './env-spec.js';
 import { MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
@@ -195,8 +197,7 @@ function instanceFor(env: Env, node: Node): Promise<InstanceAuth> {
   return instanceAuthFor({
     directory: identityDo(env, node),
     scopeId: node.scopeId,
-    // No declared settings of our own yet; the auth choice rides the same map.
-    envSpec: [],
+    envSpec: DRIVE_VERTICAL_ENV,
     env: env as unknown as Record<string, unknown>,
   });
 }
@@ -293,6 +294,55 @@ mountPlatformSurface<Env>(app, {
   // whose owner never signed in is unclaimable, and the seat stays empty forever.
   mintOwnerClaim: (env, ref, input) =>
     mintOwnerClaimLink(identityDo(env, ref), ref.scopeId, input.origin),
+});
+
+/**
+ * The one door another origin may come through, and only the one an install names.
+ *
+ * The portal is a separate service on its own hostname — canopy serves its UI and its
+ * API from one worker, and so does this vertical — so a portal reading this drive is a
+ * cross-origin, credentialed request. That needs CORS, and CORS with credentials is the
+ * setting most worth being strict about: it is what lets another site read this drive
+ * as whoever is visiting it.
+ *
+ * So: the exact origin an install configured, never a wildcard (which the browser
+ * refuses with credentials anyway, and which would be wrong even if it did not), and
+ * nothing at all when `PORTAL_ORIGIN` is unset. `Vary: Origin` because the answer
+ * depends on the request's origin and a cache must not serve one origin's answer to
+ * another.
+ *
+ * The cookie the browser sends is the vertical's own, host-only and `SameSite=Lax` —
+ * so this works only when the portal is SAME-SITE with this install (a sibling host
+ * under one registrable domain). A portal on an unrelated domain gets no cookie, and
+ * no amount of CORS changes that; the request simply arrives anonymous.
+ */
+app.use('/api/*', async (c, next) => {
+  const origin = c.req.header('origin');
+  if (!origin) return next(); // same-origin or a non-browser caller
+
+  const configured = (await instanceFor(c.env, nodeFor(c.req.raw, c.env))).settings.PORTAL_ORIGIN;
+  const allowed = allowedOrigin(origin, configured);
+  if (!allowed) {
+    // Not refused outright — answered WITHOUT the header, which is how CORS says no.
+    // A preflight still ends here rather than reaching a route.
+    return c.req.method === 'OPTIONS' ? c.body(null, 204) : next();
+  }
+
+  if (c.req.method === 'OPTIONS') {
+    return c.body(null, 204, {
+      'access-control-allow-origin': allowed,
+      'access-control-allow-credentials': 'true',
+      'access-control-allow-methods': 'GET, POST, OPTIONS',
+      'access-control-allow-headers': c.req.header('access-control-request-headers') ?? 'content-type',
+      'access-control-max-age': '600',
+      vary: 'Origin',
+    });
+  }
+
+  await next();
+  c.res.headers.set('access-control-allow-origin', allowed);
+  c.res.headers.set('access-control-allow-credentials', 'true');
+  c.res.headers.append('vary', 'Origin');
 });
 
 /**
