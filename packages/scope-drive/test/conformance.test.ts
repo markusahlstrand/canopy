@@ -142,4 +142,15 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
     // and a status carrying no text is the branch with the least else going on.
     'drive/record-text': { versionId: 'conformance', status: 'unsupported' },
   },
+  /**
+   * The kit drives an entity check by putting an id in the input. `drive/folder-by-path`
+   * takes a PATH, so there is no id to put — it is declared `resolved` and the kit
+   * reports it here rather than letting it pass as covered. `search.test.ts` drives it
+   * by hand instead, including the refusal.
+   */
+  uncovered: {
+    'drive/folder-by-path':
+      "declares 'resolved' (addressed by path, not id — the handler resolves the row and checks it)"
+      + ' — the entity id is not in the input, so the harness cannot reach the entity',
+  },
 });

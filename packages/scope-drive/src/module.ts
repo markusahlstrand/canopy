@@ -300,6 +300,29 @@ const operations = {
     >;
   },
 
+  'drive/list-folders': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
+    return ctx.page<FolderRow>('folder', {
+      ...input,
+      filters: { parent_id: input.folderId },
+    }) as Page<FolderRow>;
+  },
+
+  'drive/folder-by-path': async (ctx, input) => {
+    // The path is UNIQUE per scope, so this is one row or none.
+    const row = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE path = ?', [
+      input.path,
+    ])[0];
+    if (!row) return null;
+    // A REFUSAL ANSWERS NULL TOO, rather than raising. A path lookup is the one read
+    // where the two answers must be indistinguishable: "no such folder" and "not
+    // yours" differ only in whether the path exists, and a caller that can tell them
+    // apart can walk the tree it may not read, one guess at a time. The denial is
+    // still recorded by `ctx.check` — it is the CALLER who learns nothing.
+    const decision = await ctx.check(DRIVE_PERM.read, folderRef(row.id));
+    return decision.allowed ? row : null;
+  },
+
   'drive/record-text': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
     const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];

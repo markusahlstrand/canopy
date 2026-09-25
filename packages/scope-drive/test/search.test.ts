@@ -42,6 +42,8 @@ interface FileRow {
 }
 interface FolderRow {
   id: string;
+  path: string;
+  name: string;
 }
 interface TextRow {
   status: string;
@@ -274,5 +276,52 @@ describe('a file is findable by what is inside it', () => {
     expect(hits.hits.map((h) => h.id)).not.toContain(f.id);
     const kept = await stub.invoke<Hits>('drive/search', { term: 'one that counts' });
     expect(kept.hits.find((h) => h.id === f.id)?.via).toBe('content');
+  });
+
+  /**
+   * The two reads a path-addressed caller needs (S12). The portal browses by path and
+   * shows folders beside files; the drive had neither read, because its own front end
+   * navigates by id and lists only files.
+   */
+  it('lists the folders directly inside a folder', async () => {
+    const stub = await as(ada);
+    const parent = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Projects',
+    });
+    await stub.invoke('drive/create-folder', { parentId: parent.id, name: 'Alpha' });
+    await stub.invoke('drive/create-folder', { parentId: parent.id, name: 'Beta' });
+    // A folder elsewhere, to prove the filter is the parent and not "every folder".
+    await stub.invoke('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Elsewhere' });
+
+    const page = await stub.invoke<{ entries: { name: string }[] }>('drive/list-folders', {
+      folderId: parent.id,
+    });
+    expect(page.entries.map((f) => f.name).sort()).toEqual(['Alpha', 'Beta']);
+  });
+
+  it('resolves a folder by its path', async () => {
+    const stub = await as(ada);
+    const found = await stub.invoke<FolderRow | null>('drive/folder-by-path', { path: 'Shared' });
+    expect(found?.id).toBe(shared);
+    expect(found?.path).toBe('Shared');
+  });
+
+  it('answers null for a path that is not there', async () => {
+    const stub = await as(ada);
+    expect(await stub.invoke('drive/folder-by-path', { path: 'Nowhere/At/All' })).toBeNull();
+  });
+
+  it('answers the same null for a folder the caller may not read', async () => {
+    // The point of the pair: Cleo holds a grant on `Shared` and nothing else. If a
+    // refusal raised while a miss answered null, she could walk the tree she cannot
+    // read one guess at a time — "Secret" would answer differently from "Nowhere".
+    const stub = await as(cleo);
+    expect(await stub.invoke('drive/folder-by-path', { path: 'Shared' })).not.toBeNull();
+
+    const refused = await stub.invoke('drive/folder-by-path', { path: 'Secret' });
+    const missing = await stub.invoke('drive/folder-by-path', { path: 'Nowhere' });
+    expect(refused).toBeNull();
+    expect(refused).toEqual(missing);
   });
 });
