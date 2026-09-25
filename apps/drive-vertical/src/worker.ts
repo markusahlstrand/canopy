@@ -62,8 +62,7 @@ import {
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
 import { allowedOrigin } from './cors.js';
-import { DRIVE_VERTICAL_ENV } from './env-spec.js';
-import { MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
+import { envSpec, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
  * The scope-DO class = the app binary: kernel + the drive module, bundled. One
@@ -197,7 +196,7 @@ function instanceFor(env: Env, node: Node): Promise<InstanceAuth> {
   return instanceAuthFor({
     directory: identityDo(env, node),
     scopeId: node.scopeId,
-    envSpec: DRIVE_VERTICAL_ENV,
+    envSpec,
     env: env as unknown as Record<string, unknown>,
   });
 }
