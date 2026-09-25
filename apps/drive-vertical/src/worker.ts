@@ -60,6 +60,7 @@ import {
   type InstanceAuth,
 } from '@substrat-run/vertical-auth';
 import { mountApi } from '@canopy/scope-drive/routes';
+import { placesFetch } from './places-fetch.js';
 import { MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
@@ -177,6 +178,14 @@ async function providerFor(env: Env, node: Node): Promise<AuthProvider> {
 }
 
 /**
+ * The reporter for this install, or null when it has no issuer to report to. The
+ * guard above rides with it, so no call site can forget it.
+ */
+function reporterFor(identity: InstanceAuth['identity']) {
+  return identity?.issuer ? placesReporter({ identity, fetch: placesFetch(identity.issuer) }) : null;
+}
+
+/**
  * The install's delivered identity, read once. Split from `providerFor` because two
  * callers need more than the provider: `/api/me` and the provision hook both hand
  * `instance.identity` to the places reporter, and reading the config twice would be
@@ -263,7 +272,7 @@ mountPlatformSurface<Env>(app, {
     // one-off. A no-op before the install has an issuer, and for an issuer that keeps no
     // index; it never throws.
     const { identity } = await instanceFor(env, node);
-    await reportScopeMembers(identityDo(env, node), placesReporter({ identity }), b.scopeId);
+    await reportScopeMembers(identityDo(env, node), reporterFor(identity), b.scopeId);
   },
   onDeleteScope: async (env, s) => {
     await sweeper(env).forgetScope(s);
@@ -313,7 +322,7 @@ app.get('/api/me', async (c) => {
   // login bound to NOTHING as absent, which is how a stale entry drops off. Once per
   // login per isolate, and it never throws.
   if (subject) {
-    await defer(c, observePlace(placesReporter({ identity: instance.identity }), node.scopeId, subject.sub, principal));
+    await defer(c, observePlace(reporterFor(instance.identity), node.scopeId, subject.sub, principal));
   }
 
   return principal ? c.json({ principal: principalId.parse(principal) }) : c.json({ error: 'unauthorized' }, 401);
