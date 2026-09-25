@@ -354,6 +354,10 @@ app.use('/api/*', async (c, next) => {
   await next();
   c.res.headers.set('access-control-allow-origin', allowed);
   c.res.headers.set('access-control-allow-credentials', 'true');
+  // A paged read hides its walk in `Link`, and a browser hands script NO response
+  // header it was not told to expose — so without this a cross-origin caller reads
+  // null, stops after the first page, and is never told it saw part of a folder.
+  c.res.headers.set('access-control-expose-headers', 'Link, X-Total-Count');
   c.res.headers.append('vary', 'Origin');
 });
 

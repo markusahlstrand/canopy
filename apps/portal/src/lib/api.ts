@@ -6,7 +6,7 @@ export type { PluginConfigField, PluginPlace, PluginSettings };
 import type { MirrorFile } from "@canopy/mirror";
 import type { FileItem, ProcessingEntry } from "@/lib/mock-data";
 import { fmtDate, kindForName } from "@/lib/file-format";
-import { listVerticalFolder, verticalBacks } from "@/lib/vertical-drive";
+import { listVerticalFolder, verticalBacks, verticalContentUrl } from "@/lib/vertical-drive";
 import { apiFetch, isBackendReachable } from "@/lib/connectivity";
 import { MIRROR_ENABLED, mirrorFilesUnder, mirrorFolder } from "@/lib/sync";
 import {
@@ -301,6 +301,10 @@ export async function fetchFileText(id: string): Promise<string> {
 }
 
 export function contentUrl(id: string): string {
+  // A vertical-backed file's bytes live on the VERTICAL's origin, not here — its id
+  // means nothing to canopy's own store. Same idea as the connector case below.
+  const fromVertical = verticalContentUrl(id);
+  if (fromVertical) return fromVertical;
   // A connected space's file id is "connector:<plugin>:<repo-path>"; its bytes are
   // streamed live through the connector via the path-keyed /api/file route.
   if (id.startsWith("connector:")) {

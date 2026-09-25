@@ -45,6 +45,15 @@ const SPACE = import.meta.env.VITE_DRIVE_VERTICAL_SPACE ?? "";
  */
 const ROOT = "root";
 
+/** Marks an id as belonging to the vertical's store rather than canopy's own. */
+export const VERTICAL_ID_PREFIX = "vertical:";
+
+/** The vertical's bytes route for one of its file ids, or null if this is not one. */
+export function verticalContentUrl(id: string): string | null {
+  if (!BASE || !id.startsWith(VERTICAL_ID_PREFIX)) return null;
+  return `${BASE}/api/files/${encodeURIComponent(id.slice(VERTICAL_ID_PREFIX.length))}/content`;
+}
+
 export const verticalBacks = (spaceId?: string): boolean =>
   Boolean(BASE && SPACE && spaceId === SPACE);
 
@@ -60,16 +69,89 @@ interface DriveFile {
   updated_at: string;
 }
 
-/** A paged read answers a bare array; the walk rides a `Link` header we do not follow yet. */
-async function get<T>(path: string): Promise<T> {
+/**
+ * The next page's URL from an RFC 8288 `Link`, or null when the walk is over.
+ *
+ * Exported because it is the one piece of this file that can be wrong silently: a
+ * parser that returns null too eagerly truncates a folder and looks like an empty
+ * one. Follow the URL verbatim — it carries the request's page size and filters.
+ */
+export function nextLink(header: string | null): string | null {
+  if (!header) return null;
+  for (const part of header.split(",")) {
+    const m = /^\s*<([^>]+)>\s*;\s*(.+)$/.exec(part);
+    // The quote is optional, so `next` must be anchored — an unanchored `"?next"?`
+    // also matches `rel="nextish"`, which is a different relation.
+    if (m && /\brel\s*=\s*(?:"next"|'next'|next(?![\w-]))/i.test(m[2]!)) return m[1]!;
+  }
+  return null;
+}
+
+/** Thrown when the vertical does not know this visitor. The caller can offer a sign-in. */
+export class VerticalSignInRequired extends Error {
+  readonly signInUrl: string;
+  constructor(signInUrl: string) {
+    super("sign in to this space");
+    this.name = "VerticalSignInRequired";
+    this.signInUrl = signInUrl;
+  }
+}
+
+/**
+ * Where to send someone who is signed in to the portal but not to the vertical.
+ *
+ * Two services, two sessions: `credentials: "include"` SENDS a cookie, it cannot
+ * create one. Even with a shared issuer the visitor must complete the vertical's own
+ * relying-party round trip once, after which the issuer's live session makes it
+ * invisible. `returnTo` is a path on the VERTICAL, so it lands on its own origin;
+ * coming back here is the browser's back button until the portal owns that flow.
+ */
+export const verticalSignInUrl = (): string => `${BASE}/api/auth/login`;
+
+/**
+ * Read one list endpoint to the END, following `Link` pages.
+ *
+ * A paged read answers a bare array and hides the walk in a header, and the platform's
+ * default page is 20 — so the first response is the first 20 rows of a folder, not the
+ * folder. Reading only it would silently drop the 21st file, which is the kind of wrong
+ * that looks like a working feature.
+ *
+ * `limit=200` (the platform ceiling) to keep an ordinary folder to one round trip, and
+ * a page cap so a server that kept answering with a next link could not spin here
+ * forever.
+ */
+async function getAll<T>(path: string): Promise<T[]> {
+  const sep = path.includes("?") ? "&" : "?";
+  let url: string | null = `${BASE}/api${path}${sep}limit=200`;
+  const rows: T[] = [];
+
+  for (let page = 0; url && page < 50; page++) {
+    const res: Response = await fetch(url, {
+      // The whole point: send the vertical's own session cookie. Without this every
+      // read is anonymous, which looks exactly like "the space is empty".
+      credentials: "include",
+      headers: { accept: "application/json" },
+    });
+    // 401 is not a failure of this request, it is the absence of a session HERE.
+    if (res.status === 401) throw new VerticalSignInRequired(verticalSignInUrl());
+    if (!res.ok) throw new Error(`vertical ${res.status}`);
+    rows.push(...((await res.json()) as T[]));
+    // Needs `Access-Control-Expose-Headers` on the vertical, or a browser hands us
+    // null here and the walk stops after one page with no sign anything was missed.
+    url = nextLink(res.headers.get("link"));
+  }
+  return rows;
+}
+
+/** A single (unpaged) read — `drive/folder-by-path` answers one row or null. */
+async function getOne<T>(path: string): Promise<T | null> {
   const res = await fetch(`${BASE}/api${path}`, {
-    // The whole point: send the vertical's own session cookie. Without this every
-    // read is anonymous, which looks exactly like "the space is empty".
     credentials: "include",
     headers: { accept: "application/json" },
   });
+  if (res.status === 401) throw new VerticalSignInRequired(verticalSignInUrl());
   if (!res.ok) throw new Error(`vertical ${res.status}`);
-  return (await res.json()) as T;
+  return (await res.json()) as T | null;
 }
 
 const join = (dir: string, name: string) => [dir, name].filter(Boolean).join("/");
@@ -80,7 +162,7 @@ const join = (dir: string, name: string) => [dir, name].filter(Boolean).join("/"
  */
 async function folderIdFor(dir: string): Promise<string | null> {
   if (!dir) return ROOT;
-  const folder = await get<DriveFolder | null>(`/folders/by-path?path=${encodeURIComponent(dir)}`);
+  const folder = await getOne<DriveFolder>(`/folders/by-path?path=${encodeURIComponent(dir)}`);
   // Null covers both "no such folder" and "not yours" — the drive answers the same
   // either way, on purpose, so a path lookup cannot map a tree you cannot read.
   return folder?.id ?? null;
@@ -97,8 +179,8 @@ export async function listVerticalFolder(dir: string): Promise<FileItem[]> {
   if (!folderId) return [];
 
   const [folders, files] = await Promise.all([
-    get<DriveFolder[]>(`/folders/${encodeURIComponent(folderId)}/folders`),
-    get<DriveFile[]>(`/folders/${encodeURIComponent(folderId)}/files`),
+    getAll<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/folders`),
+    getAll<DriveFile>(`/folders/${encodeURIComponent(folderId)}/files`),
   ]);
 
   const asFolders: FileItem[] = folders.map((f) => ({
@@ -111,7 +193,12 @@ export async function listVerticalFolder(dir: string): Promise<FileItem[]> {
   }));
 
   const asFiles: FileItem[] = files.map((f) => ({
-    id: f.id,
+    // NAMESPACED, the way a connector-backed id already is (`connector:<plugin>:<path>`).
+    // A bare id would be handed to `/api/files/:id/content` on the PORTAL's origin,
+    // which resolves ids in canopy's own store — a different store, where this id means
+    // nothing. Prefixing makes every other action fail loudly on an unknown id rather
+    // than quietly addressing the wrong drive.
+    id: `${VERTICAL_ID_PREFIX}${f.id}`,
     name: f.name,
     kind: kindForName(f.name),
     modified: fmtDate(f.updated_at),
