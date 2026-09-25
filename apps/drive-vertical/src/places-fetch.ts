@@ -1,4 +1,5 @@
-import type { ConnectorResponse, FetchLike } from '@substrat-run/kernel';
+import { globalFetch } from '@substrat-run/kernel';
+import type { ConnectorRequestInit, ConnectorResponse, FetchLike } from '@substrat-run/kernel';
 
 /**
  * The only fetch the places reporter is allowed to make.
@@ -32,10 +33,23 @@ export const isLoopback = (host: string) => host === 'localhost' || host === '12
 
 type RuntimeFetch = (url: string, init: RequestInit) => Promise<unknown>;
 
+/**
+ * `globalFetch`, never the bare global. Boundary-lint's R3 refuses a call to the global
+ * in a vertical's own source — capabilities come from the platform, not from the global
+ * — and the kernel's wrapper is where that cast is sanctioned once. It forwards `init`
+ * verbatim, so `redirect` still reaches the runtime even though `ConnectorRequestInit`
+ * does not name it; that gap is in the upstream issue.
+ *
+ * R3 matches the source TEXT, comments included, so naming the banned call here — even
+ * in prose, even to say we are not making it — trips the rule. Hence the circumlocution.
+ */
+const viaKernel: RuntimeFetch = (url, init) =>
+  globalFetch(url, init as unknown as ConnectorRequestInit);
+
 export function placesFetch(
   issuer: string,
-  /** Injectable for the tests; the runtime's own `fetch` everywhere else. */
-  runtimeFetch: RuntimeFetch = (url, init) => fetch(url, init),
+  /** Injectable for the tests; the kernel's bound fetch everywhere else. */
+  runtimeFetch: RuntimeFetch = viaKernel,
 ): FetchLike {
   const issuerOrigin = URL.canParse(issuer) ? new URL(issuer).origin : null;
   return async (input, init) => {
