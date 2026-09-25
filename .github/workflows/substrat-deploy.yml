@@ -155,7 +155,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ( cd apps/drive-vertical && npx @substrat-run/cli push . --slug drive-vertical ) | tee push.out
+          npx @substrat-run/cli push apps/drive-vertical --slug drive-vertical | tee push.out
           VID=$(grep -F '✓ pushed' push.out | grep -oE 'version [A-Za-z0-9]+' | head -1 | cut -d' ' -f2 || true)
           if [ -z "$VID" ]; then echo "could not read the pushed version id from:" >&2; cat push.out >&2; exit 1; fi
           # Promote only while this commit is still the branch tip. Queued runs resume in
@@ -182,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           BASE=$(node -p "require('./apps/drive-vertical/package.json').version")
-          ( cd apps/drive-vertical && npx @substrat-run/cli push . --slug drive-vertical --version "$BASE-test.${{ github.run_number }}" ) | tee push.out
+          npx @substrat-run/cli push apps/drive-vertical --slug drive-vertical --version "$BASE-test.${{ github.run_number }}" | tee push.out
           # '|| true' so an unmatched grep does not trip pipefail before the message below —
           # "could not read the pushed version id" beats a bare exit 1 from grep.
           VID=$(grep -F '✓ pushed' push.out | grep -oE 'version [A-Za-z0-9]+' | head -1 | cut -d' ' -f2 || true)
@@ -262,7 +262,7 @@ jobs:
           SUBSTRAT_CP_URL: https://console.substrat.net/api
         run: |
           set -euo pipefail
-          ( cd apps/drive-vertical && npx @substrat-run/cli preview create . --slug drive-vertical --tag pr-${{ github.event.number }} ) | tee preview.out
+          npx @substrat-run/cli preview create apps/drive-vertical --slug drive-vertical --tag pr-${{ github.event.number }} | tee preview.out
           # Take the URL from the CLI success line (the ✓ marker) only — the push it runs
           # first also prints an https:// *deploy endpoint* we must never mistake for a preview.
           grep -F '✓ preview' preview.out | grep -oE 'https://[a-zA-Z0-9.:/_-]+' | tail -1 > preview.url || true
@@ -276,8 +276,8 @@ jobs:
           # A FRESH scope, bound once and never rebound, so this URL is frozen to this build
           # forever. Clean-room (--empty) rather than a fork: a throwaway per build should not
           # copy prod data every push. Short TTL — the sticky preview is the one that lives.
-          ( cd apps/drive-vertical && npx @substrat-run/cli preview create . --slug drive-vertical \
-            --tag pr-${{ github.event.number }}-${{ github.run_id }} --empty --ttl 24h ) | tee build.out
+          npx @substrat-run/cli preview create apps/drive-vertical --slug drive-vertical \
+            --tag pr-${{ github.event.number }}-${{ github.run_id }} --empty --ttl 24h | tee build.out
           grep -F '✓ preview' build.out | grep -oE 'https://[a-zA-Z0-9.:/_-]+' | tail -1 > build.url || true
       - name: Comment the preview URLs
         env:
