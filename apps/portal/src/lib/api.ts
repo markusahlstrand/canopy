@@ -4,7 +4,9 @@ import type { AiMessage, Page, PluginManifest, StorageEntry } from "@canopy/core
 import type { PluginConfigField, PluginPlace, PluginSettings } from "@canopy/plugin-sdk";
 export type { PluginConfigField, PluginPlace, PluginSettings };
 import type { MirrorFile } from "@canopy/mirror";
-import type { FileItem, FileKind, ProcessingEntry } from "@/lib/mock-data";
+import type { FileItem, ProcessingEntry } from "@/lib/mock-data";
+import { fmtDate, kindForName } from "@/lib/file-format";
+import { listVerticalFolder, verticalBacks, verticalContentUrl } from "@/lib/vertical-drive";
 import { apiFetch, isBackendReachable } from "@/lib/connectivity";
 import { MIRROR_ENABLED, mirrorFilesUnder, mirrorFolder } from "@/lib/sync";
 import {
@@ -36,34 +38,6 @@ export {
   setCacheLimit,
 } from "@/lib/offline-cache";
 
-const EXT_KIND: Record<string, FileKind> = {
-  pdf: "pdf",
-  png: "image",
-  jpg: "image",
-  jpeg: "image",
-  gif: "image",
-  webp: "image",
-  heic: "image",
-  svg: "image",
-  md: "note",
-  txt: "note",
-  doc: "doc",
-  docx: "doc",
-  pages: "doc",
-  mp3: "audio",
-  wav: "audio",
-  flac: "audio",
-  m4a: "audio",
-  mp4: "video",
-  mov: "video",
-  mkv: "video",
-};
-
-function kindForName(name: string): FileKind {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  return EXT_KIND[ext] ?? "doc";
-}
-
 export function humanSize(bytes?: number): string {
   if (bytes == null) return "—";
   if (bytes < 1000) return `${bytes} B`;
@@ -75,11 +49,6 @@ export function humanSize(bytes?: number): string {
     i++;
   }
   return `${n < 10 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
-}
-
-function fmtDate(iso?: string): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
 }
 
 const join = (dir: string, name: string) => [dir, name].filter(Boolean).join("/");
@@ -258,6 +227,11 @@ export async function searchFiles(q: string, limit = 8): Promise<SearchResult[]>
 
 /** List a virtual folder of a space (default: personal). Folders first, then files. */
 export async function listFiles(dir = "", spaceId?: string, opts?: { fresh?: boolean }): Promise<FileItem[]> {
+  // S12 slice: one space may be served by the Substrat vertical instead of this API.
+  // First, and without the mirror: the vertical is not on canopy's change feed yet
+  // (S8), so a flagged space is live-only rather than pretending to be synced.
+  if (verticalBacks(spaceId)) return listVerticalFolder(dir);
+
   const key = listingKey(spaceId, dir);
   const isConnector = String(spaceId ?? "").startsWith("connector:");
   // `fresh` (an explicit user refresh) tells the backend to skip its reconcile debounce
@@ -327,6 +301,10 @@ export async function fetchFileText(id: string): Promise<string> {
 }
 
 export function contentUrl(id: string): string {
+  // A vertical-backed file's bytes live on the VERTICAL's origin, not here — its id
+  // means nothing to canopy's own store. Same idea as the connector case below.
+  const fromVertical = verticalContentUrl(id);
+  if (fromVertical) return fromVertical;
   // A connected space's file id is "connector:<plugin>:<repo-path>"; its bytes are
   // streamed live through the connector via the path-keyed /api/file route.
   if (id.startsWith("connector:")) {

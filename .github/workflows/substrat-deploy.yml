@@ -19,6 +19,15 @@ name: Deploy to Substrat
 permissions:
   contents: read
 
+# PINNED, and the pin is the point. This workflow ran the CLI unpinned,
+# so the CLI it used was whatever had been published most recently — and when 0.35.0
+# landed it could no longer bundle this vertical's permissions module, which failed the
+# production deploy of a commit that had already passed CI. A deploy pipeline whose
+# tooling changes under it reports a break in the platform as a break in your code.
+# Raise this deliberately, after a preview proves the new one works.
+env:
+  SUBSTRAT_CLI: '@substrat-run/cli@0.34.1'
+
 on:
   push:
     branches: [main]
@@ -155,7 +164,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          npx @substrat-run/cli push apps/drive-vertical --slug drive-vertical | tee push.out
+          npx "$SUBSTRAT_CLI" push apps/drive-vertical --slug drive-vertical | tee push.out
           VID=$(grep -F '✓ pushed' push.out | grep -oE 'version [A-Za-z0-9]+' | head -1 | cut -d' ' -f2 || true)
           if [ -z "$VID" ]; then echo "could not read the pushed version id from:" >&2; cat push.out >&2; exit 1; fi
           # Promote only while this commit is still the branch tip. Queued runs resume in
@@ -168,7 +177,7 @@ jobs:
             echo "::warning::main has moved past $GITHUB_SHA (tip is $TIP) — pushed version $VID without promoting prod; the tip commit's run owns the pointer."
             exit 0
           fi
-          npx @substrat-run/cli promote drive-vertical --version "$VID"
+          npx "$SUBSTRAT_CLI" promote drive-vertical --version "$VID"
       - name: Update the test environment
         if: vars.SUBSTRAT_TEST_SCOPE_ID != ''
         env:
@@ -182,12 +191,12 @@ jobs:
         run: |
           set -euo pipefail
           BASE=$(node -p "require('./apps/drive-vertical/package.json').version")
-          npx @substrat-run/cli push apps/drive-vertical --slug drive-vertical --version "$BASE-test.${{ github.run_number }}" | tee push.out
+          npx "$SUBSTRAT_CLI" push apps/drive-vertical --slug drive-vertical --version "$BASE-test.${{ github.run_number }}" | tee push.out
           # '|| true' so an unmatched grep does not trip pipefail before the message below —
           # "could not read the pushed version id" beats a bare exit 1 from grep.
           VID=$(grep -F '✓ pushed' push.out | grep -oE 'version [A-Za-z0-9]+' | head -1 | cut -d' ' -f2 || true)
           if [ -z "$VID" ]; then echo "could not read the pushed version id from:" >&2; cat push.out >&2; exit 1; fi
-          npx @substrat-run/cli scope bind "$SUBSTRAT_TEST_SCOPE_ID" --version "$VID" --snapshot
+          npx "$SUBSTRAT_CLI" scope bind "$SUBSTRAT_TEST_SCOPE_ID" --version "$VID" --snapshot
 
   preview:
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
@@ -262,7 +271,7 @@ jobs:
           SUBSTRAT_CP_URL: https://console.substrat.net/api
         run: |
           set -euo pipefail
-          npx @substrat-run/cli preview create apps/drive-vertical --slug drive-vertical --tag pr-${{ github.event.number }} | tee preview.out
+          npx "$SUBSTRAT_CLI" preview create apps/drive-vertical --slug drive-vertical --tag pr-${{ github.event.number }} | tee preview.out
           # Take the URL from the CLI success line (the ✓ marker) only — the push it runs
           # first also prints an https:// *deploy endpoint* we must never mistake for a preview.
           grep -F '✓ preview' preview.out | grep -oE 'https://[a-zA-Z0-9.:/_-]+' | tail -1 > preview.url || true
@@ -276,7 +285,7 @@ jobs:
           # A FRESH scope, bound once and never rebound, so this URL is frozen to this build
           # forever. Clean-room (--empty) rather than a fork: a throwaway per build should not
           # copy prod data every push. Short TTL — the sticky preview is the one that lives.
-          npx @substrat-run/cli preview create apps/drive-vertical --slug drive-vertical \
+          npx "$SUBSTRAT_CLI" preview create apps/drive-vertical --slug drive-vertical \
             --tag pr-${{ github.event.number }}-${{ github.run_id }} --empty --ttl 24h | tee build.out
           grep -F '✓ preview' build.out | grep -oE 'https://[a-zA-Z0-9.:/_-]+' | tail -1 > build.url || true
       - name: Comment the preview URLs
@@ -314,4 +323,4 @@ jobs:
         env:
           SUBSTRAT_SERVICE_TOKEN: ${{ secrets.SUBSTRAT_SERVICE_TOKEN }}
           SUBSTRAT_CP_URL: https://console.substrat.net/api
-        run: npx @substrat-run/cli preview delete --slug drive-vertical --tag pr-${{ github.event.number }}
+        run: npx "$SUBSTRAT_CLI" preview delete --slug drive-vertical --tag pr-${{ github.event.number }}
