@@ -61,8 +61,7 @@ import {
 } from '@substrat-run/vertical-auth';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
-import { allowedOrigin } from './cors.js';
-import { envSpec, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
+import { MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
  * The scope-DO class = the app binary: kernel + the drive module, bundled. One
@@ -104,12 +103,6 @@ export interface Env {
   PLATFORM_SECRET?: string;
   /** The install's issuer. Absent ⇒ nothing authenticates, which is the honest default. */
   OIDC_ISSUER?: string;
-  /**
-   * Standalone-deploy fallback for the portal's origin. The hosted path delivers
-   * `PORTAL_ORIGIN` per install instead — a binding is one value for every install of
-   * this serving script, which is the wrong grain for "who may read this drive".
-   */
-  PORTAL_ORIGIN?: string;
   OIDC_CLIENT_ID?: string;
   OIDC_CLIENT_SECRET?: string;
 }
@@ -134,7 +127,14 @@ const DEV_NODE: Node = {
   scopeId: scopeId.parse('01JZ00000000000000000DEV02'),
 };
 
-function nodeFor(req: Request, env: Env): Node {
+/**
+ * The (tenant, HOME space) the router asserted — no app-level selection applied.
+ *
+ * This is what identity keys on: one `IdentityDO` per TENANT, and the delivered auth
+ * config belongs to the install the hostname routed to. It is also the registry the
+ * space switcher reads, which is why it must not move when the app selects a space.
+ */
+function baseNode(req: Request, env: Env): Node {
   let routed;
   try {
     routed = readRoutedNode(req.headers, {
@@ -150,6 +150,39 @@ function nodeFor(req: Request, env: Env): Node {
   throw new HTTPException(503, { message: 'no scope was asserted for this request' });
 }
 
+/**
+ * Which (tenant, SPACE) this request is for — the routed one, or another of the SAME
+ * tenant that the app selected.
+ *
+ * Canopy's spaces are scopes, and a person is usually in several. One install therefore
+ * has to serve more than the space its hostname named, or every space needs its own
+ * hostname. The platform's answer (`multi-scope-manyfold.md`, epic #360) is this: the
+ * app names the space it wants, by scope id (`x-scope`) or by the slug its own registry
+ * knows (`x-site`).
+ *
+ * What makes it safe is what it does NOT do. The tenant always comes from the router's
+ * assertion and is never taken from a header, the slug is resolved through the
+ * PER-TENANT registry, and `getScope` re-checks the (tenant, scope) pair — so the worst
+ * a forged header can name is another space of the same tenant, which the kernel's
+ * checker then refuses unless the caller holds a role in it. A header cannot reach
+ * another tenant, and it grants nothing anywhere.
+ */
+async function nodeFor(req: Request, env: Env): Promise<Node> {
+  const base = baseNode(req, env);
+
+  const byId = req.headers.get('x-scope');
+  const parsed = byId ? scopeId.safeParse(byId) : null;
+  if (parsed?.success) return { tenantId: base.tenantId, scopeId: parsed.data };
+
+  const slug = req.headers.get('x-site');
+  if (slug) {
+    const resolved = await identityDo(env, base).resolveSiteScope(slug);
+    const bySlug = resolved ? scopeId.safeParse(resolved) : null;
+    if (bySlug?.success) return { tenantId: base.tenantId, scopeId: bySlug.data };
+  }
+  return base;
+}
+
 function hostFor(env: Env): CloudflareScopeHost {
   const host = new CloudflareScopeHost({
     scope: env.SCOPE,
@@ -162,8 +195,23 @@ function hostFor(env: Env): CloudflareScopeHost {
   return host;
 }
 
-const identityDo = (env: Env, node: Node): IdentityStub =>
-  env.AUTH.get(env.AUTH.idFromName(node.tenantId)) as unknown as IdentityStub;
+/**
+ * The identity DO's callable surface, widened by the four site-registry methods.
+ *
+ * `IdentityDO` implements and documents them; the exported `IdentityStub` TYPE just does
+ * not list them, so a consumer outside the platform repo cannot call them without this.
+ * Nothing here adds a capability — it names one the class already has. Filed as
+ * substrat-run/substrat#1802; delete the intersection when the exported type carries them.
+ */
+type SiteRegistry = {
+  recordSite(scopeId: string, slug: string, name: string): Promise<void>;
+  forgetSite(scopeId: string): Promise<void>;
+  listSites(): Promise<{ scopeId: string; slug: string; name: string }[]>;
+  resolveSiteScope(slug: string): Promise<string | null>;
+};
+
+const identityDo = (env: Env, node: Node): IdentityStub & SiteRegistry =>
+  env.AUTH.get(env.AUTH.idFromName(node.tenantId)) as unknown as IdentityStub & SiteRegistry;
 
 /**
  * The provider this INSTALL's configuration selects.
@@ -202,7 +250,8 @@ function instanceFor(env: Env, node: Node): Promise<InstanceAuth> {
   return instanceAuthFor({
     directory: identityDo(env, node),
     scopeId: node.scopeId,
-    envSpec,
+    // No declared settings of our own; the auth choice rides the delivered map.
+    envSpec: [],
     env: env as unknown as Record<string, unknown>,
   });
 }
@@ -235,10 +284,10 @@ async function defer(c: Pick<Context, 'executionCtx'>, work: Promise<unknown>): 
 
 /** Subject → principal in this scope, or null for nobody. */
 async function principalFor(env: Env, req: Request): Promise<PrincipalId | null> {
-  const provider = await providerFor(env, nodeFor(req, env));
+  const provider = await providerFor(env, baseNode(req, env));
   const subject = await provider.resolve(req.headers);
   if (!subject) return null;
-  const node = nodeFor(req, env);
+  const node = await nodeFor(req, env);
   const principal = await identityDo(env, node).resolvePrincipal(node.scopeId, subject.sub);
   return principal ? principalId.parse(principal) : null;
 }
@@ -270,6 +319,11 @@ mountPlatformSurface<Env>(app, {
   onProvision: async (env, b) => {
     const node = { tenantId: b.tenantId, scopeId: b.scopeId };
     await identityDo(env, node).setPendingOwner(b.scopeId, b.owner);
+    // This space, in the vertical's OWN per-tenant registry (M2 of
+    // `multi-scope-manyfold.md`). It is what lets the app list and switch spaces
+    // without reaching the control plane — which a sandbox-clean vertical cannot do.
+    // Idempotent, and re-run by every reconcile, so a lost record repairs itself.
+    if (b.slug && b.name) await identityDo(env, node).recordSite(b.scopeId, b.slug, b.name);
     await sweeper(env).noteScope(b.tenantId, b.scopeId);
     // The places repair (substrat#1670): the WHOLE set of logins bound in this space,
     // sent to the identity pool it signs in at, so a login's "Your places" list on the
@@ -282,6 +336,11 @@ mountPlatformSurface<Env>(app, {
   },
   onDeleteScope: async (env, s) => {
     await sweeper(env).forgetScope(s);
+    // NOT dropped from the space registry here, and it cannot be: this hook is handed a
+    // scope id and no tenant, and the registry lives in the per-TENANT identity DO. A
+    // deleted space therefore lingers in the switcher until something with a tenant in
+    // hand removes it — an archive route, which canopy does not have yet. Manyfold's
+    // equivalent calls `forgetSite` from exactly such a route.
   },
   // Per-instance config delivery (the dashboard's Env and Identity tabs). WITHOUT this
   // hook `/internal/configure` answers 501 for the life of the app: the dashboard saves
@@ -302,78 +361,37 @@ mountPlatformSurface<Env>(app, {
 });
 
 /**
- * The one door another origin may come through, and only the one an install names.
- *
- * The portal is a separate service on its own hostname — canopy serves its UI and its
- * API from one worker, and so does this vertical — so a portal reading this drive is a
- * cross-origin, credentialed request. That needs CORS, and CORS with credentials is the
- * setting most worth being strict about: it is what lets another site read this drive
- * as whoever is visiting it.
- *
- * So: the exact origin an install configured, never a wildcard (which the browser
- * refuses with credentials anyway, and which would be wrong even if it did not), and
- * nothing at all when `PORTAL_ORIGIN` is unset. `Vary: Origin` because the answer
- * depends on the request's origin and a cache must not serve one origin's answer to
- * another.
- *
- * The cookie the browser sends is the vertical's own, host-only and `SameSite=Lax` —
- * so this works only when the portal is SAME-SITE with this install (a sibling host
- * under one registrable domain). A portal on an unrelated domain gets no cookie, and
- * no amount of CORS changes that; the request simply arrives anonymous.
- */
-app.use('/api/*', async (c, next) => {
-  const origin = c.req.header('origin');
-  if (!origin) return next(); // same-origin or a non-browser caller
-
-  const instance = await instanceFor(c.env, nodeFor(c.req.raw, c.env));
-  // Delivered per install first; the binding is the standalone-deploy fallback and is
-  // shared by every install of one serving script, so it must never win over the
-  // per-scope value.
-  // Declared per install (the dashboard's Env tab) first; the binding is the
-  // standalone-deploy fallback and is shared by every install of one serving script,
-  // so it must never win over the per-scope value.
-  const configured = instance.settings.PORTAL_ORIGIN ?? (c.env.PORTAL_ORIGIN as string | undefined);
-  const allowed = allowedOrigin(origin, configured);
-  if (!allowed) {
-    // Not refused outright — answered WITHOUT the header, which is how CORS says no.
-    // A preflight still ends here rather than reaching a route.
-    return c.req.method === 'OPTIONS' ? c.body(null, 204) : next();
-  }
-
-  if (c.req.method === 'OPTIONS') {
-    return c.body(null, 204, {
-      'access-control-allow-origin': allowed,
-      'access-control-allow-credentials': 'true',
-      'access-control-allow-methods': 'GET, POST, OPTIONS',
-      'access-control-allow-headers': c.req.header('access-control-request-headers') ?? 'content-type',
-      'access-control-max-age': '600',
-      vary: 'Origin',
-    });
-  }
-
-  await next();
-  c.res.headers.set('access-control-allow-origin', allowed);
-  c.res.headers.set('access-control-allow-credentials', 'true');
-  // A paged read hides its walk in `Link`, and a browser hands script NO response
-  // header it was not told to expose — so without this a cross-origin caller reads
-  // null, stops after the first page, and is never told it saw part of a folder.
-  c.res.headers.set('access-control-expose-headers', 'Link, X-Total-Count');
-  c.res.headers.append('vary', 'Origin');
-});
-
-/**
  * The relying-party flow: login, callback, logout. This vertical runs no credential
  * store and hosts no sign-up — the issuer owns the password — but the cookie session
  * every other route reads is established HERE, and without these three routes there is
  * no way for a browser to acquire one.
  */
 app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
-  (await providerFor(c.env, nodeFor(c.req.raw, c.env))).handle(c.req.raw),
+  (await providerFor(c.env, baseNode(c.req.raw, c.env))).handle(c.req.raw),
 );
+
+/**
+ * The spaces this tenant has in this install — the switcher's list.
+ *
+ * Read from the BASE node's registry, never the selected one: the registry is per
+ * tenant, and reading it through a selected space would make the list depend on which
+ * space you happen to be looking at.
+ *
+ * Slug and name only. The scope id is the address, and a caller that does not need it
+ * should not be handed it; `x-site` takes the slug.
+ */
+app.get('/api/sites', async (c) => {
+  // Behind the same door as the rest: the list of a tenant's spaces is not public.
+  if (!(await principalFor(c.env, c.req.raw))) {
+    throw new HTTPException(401, { message: 'unauthorized' });
+  }
+  const sites = await identityDo(c.env, baseNode(c.req.raw, c.env)).listSites();
+  return c.json(sites.map((site) => ({ slug: site.slug, name: site.name })));
+});
 
 /** Who am I — the first call every client makes. */
 app.get('/api/me', async (c) => {
-  const node = nodeFor(c.req.raw, c.env);
+  const node = await nodeFor(c.req.raw, c.env);
   // One instance, read once — `principalFor` would read the config a second time for
   // the identity the places reporter needs.
   const instance = await instanceFor(c.env, node);
@@ -420,7 +438,7 @@ const claimBody = z.object({ token: z.string().min(1) });
  * the person who needs to claim, which is the whole situation.
  */
 app.post('/api/claim-owner', async (c) => {
-  const node = nodeFor(c.req.raw, c.env);
+  const node = await nodeFor(c.req.raw, c.env);
   const subject = await (await providerFor(c.env, node)).resolve(c.req.raw.headers);
   if (!subject) throw new HTTPException(401, { message: 'sign in before claiming this space' });
 
@@ -591,7 +609,7 @@ app.post('/api/folders/:folderId/content', async (c) => {
   const env = c.env;
   const principal = await principalFor(env, c.req.raw);
   if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
-  const node = nodeFor(c.req.raw, env);
+  const node = await nodeFor(c.req.raw, env);
   const name = c.req.query('name');
   if (!name) throw new HTTPException(400, { message: 'name is required' });
 
@@ -643,7 +661,7 @@ app.get('/api/files/:fileId/content', async (c) => {
   const env = c.env;
   const principal = await principalFor(env, c.req.raw);
   if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
-  const node = nodeFor(c.req.raw, env);
+  const node = await nodeFor(c.req.raw, env);
 
   const stub = await hostFor(env).getScope(principal, node.tenantId, node.scopeId);
   const { file, version } = await stub.invoke<{
@@ -681,7 +699,7 @@ mountApi(app, async (c): Promise<ScopeStub> => {
   const env = c.env as Env;
   const principal = await principalFor(env, c.req.raw);
   if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
-  const node = nodeFor(c.req.raw, env);
+  const node = await nodeFor(c.req.raw, env);
   return hostFor(env).getScope(principal, node.tenantId, node.scopeId);
 });
 
