@@ -318,6 +318,50 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
 
   /**
+   * The folders directly inside a folder.
+   *
+   * The drive had no way to list them: its own front end renders one folder of
+   * FILES and navigates by id, so nothing ever asked what was underneath. A
+   * caller that browses a tree — the portal, which addresses folders by path and
+   * shows folders beside files — needs both halves, and this is the missing one.
+   */
+  'drive/list-folders': {
+    summary: 'The folders directly inside a folder',
+    permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({ folderId: z.string() }),
+    output: driveEntities.folder.fields,
+    paged: { over: { entity: 'folder', sortable: ['name'], filterable: ['parent_id'] } },
+    http: { method: 'GET', path: '/folders/{folderId}/folders' },
+  },
+
+  /**
+   * The folder at a path — the read that lets a path-addressed caller in.
+   *
+   * Canopy's portal addresses a folder BY PATH ("Documents/2026"); this drive
+   * addresses it by id, on purpose, so a rename stops rewriting every descendant.
+   * Something has to bridge the two, and doing it in the caller would mean walking
+   * the tree a segment at a time over the network.
+   *
+   * `resolved` rather than `idFrom`, because the id is not in the input: the
+   * handler finds the row and then checks the folder it found, which is the same
+   * authority `drive/list-folder` would have demanded for that id. The declaration
+   * says so out loud, and the conformance kit records it as undrivable rather than
+   * letting it read as a node check.
+   */
+  'drive/folder-by-path': {
+    summary: 'The folder at a path, or null',
+    permission: {
+      key: 'drive:read',
+      entity: 'folder',
+      resolved: 'addressed by path, not id — the handler resolves the row and checks it',
+    },
+    input: z.object({ path: z.string() }),
+    /** Null when nothing is there — indistinguishable from a folder you may not read. */
+    output: driveEntities.folder.fields.nullable(),
+    http: { method: 'GET', path: '/folders/by-path' },
+  },
+
+  /**
    * Record what extraction found — including that it found nothing, and why.
    *
    * Written by the host's extraction driver rather than by a person, but an

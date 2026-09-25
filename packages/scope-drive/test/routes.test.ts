@@ -23,6 +23,8 @@ describe('the derived route table', () => {
       'GET /api/files/:fileId/text',
       'GET /api/files/:fileId/versions',
       'GET /api/folders/:folderId/files',
+      'GET /api/folders/:folderId/folders',
+      'GET /api/folders/by-path',
       'GET /api/search',
       'POST /api/files/:fileId/versions',
       'POST /api/folders/:folderId/files',
