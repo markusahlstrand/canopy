@@ -62,7 +62,7 @@ import {
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
 import { allowedOrigin } from './cors.js';
-import { MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
+import { envSpec, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
  * The scope-DO class = the app binary: kernel + the drive module, bundled. One
@@ -202,15 +202,7 @@ function instanceFor(env: Env, node: Node): Promise<InstanceAuth> {
   return instanceAuthFor({
     directory: identityDo(env, node),
     scopeId: node.scopeId,
-    // EMPTY, and not by preference: a declared spec would put a labelled field in the
-    // dashboard's Env tab, but declaring one makes `substrat push` take the
-    // code-declared-env-keys path (#1206), which cannot bundle this vertical's
-    // permissions module — it emits the module path as a bare specifier and the push
-    // dies with `Cannot find package 'src'`. Filed upstream; restore the spec when it
-    // is fixed. Until then the value is read from the delivered map below, which is
-    // what `InstanceAuth.config` is for: "the whole delivered map — for a vertical's
-    // own non-declared keys".
-    envSpec: [],
+    envSpec,
     env: env as unknown as Record<string, unknown>,
   });
 }
@@ -337,7 +329,10 @@ app.use('/api/*', async (c, next) => {
   // Delivered per install first; the binding is the standalone-deploy fallback and is
   // shared by every install of one serving script, so it must never win over the
   // per-scope value.
-  const configured = instance.config.PORTAL_ORIGIN ?? (c.env.PORTAL_ORIGIN as string | undefined);
+  // Declared per install (the dashboard's Env tab) first; the binding is the
+  // standalone-deploy fallback and is shared by every install of one serving script,
+  // so it must never win over the per-scope value.
+  const configured = instance.settings.PORTAL_ORIGIN ?? (c.env.PORTAL_ORIGIN as string | undefined);
   const allowed = allowedOrigin(origin, configured);
   if (!allowed) {
     // Not refused outright — answered WITHOUT the header, which is how CORS says no.
