@@ -26,8 +26,8 @@
     "lint": "pnpm -r lint"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1",
-    "typescript": "~6.0.3",
-    "wrangler": "^4.42.0"
+    "concurrently": "^10.0.5",
+    "typescript": "~7.0.2",
+    "wrangler": "^4.136.2"
   }
 }

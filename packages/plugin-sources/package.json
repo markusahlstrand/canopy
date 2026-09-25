@@ -15,9 +15,9 @@
   },
   "dependencies": {
     "@canopy/core": "workspace:*",
-    "fflate": "^0.8.2"
+    "fflate": "^0.8.3"
   },
   "devDependencies": {
-    "typescript": "~6.0.3"
+    "typescript": "~7.0.2"
   }
 }

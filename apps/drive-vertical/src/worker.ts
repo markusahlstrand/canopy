@@ -23,7 +23,7 @@
  * authhero (canopy's own issuer) or at anything else that speaks OIDC.
  * ─────────────────────────────────────────────────────────────────────────────────
  */
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import {
@@ -51,11 +51,16 @@ import {
   IdentityDO,
   instanceAuthFor,
   mintOwnerClaimLink,
+  observePlace,
+  placesReporter,
+  reportScopeMembers,
   sha256Hex,
   type AuthProvider,
   type IdentityStub,
+  type InstanceAuth,
 } from '@substrat-run/vertical-auth';
 import { mountApi } from '@canopy/scope-drive/routes';
+import { placesFetch } from './places-fetch.js';
 import { MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
@@ -169,19 +174,57 @@ const identityDo = (env: Env, node: Node): IdentityStub =>
  * answer: a fresh install authenticates nobody until it is given an issuer.
  */
 async function providerFor(env: Env, node: Node): Promise<AuthProvider> {
-  const instance = await instanceAuthFor({
+  return providerOf(await instanceFor(env, node));
+}
+
+/**
+ * The reporter for this install, or null when it has no issuer to report to. The
+ * guard above rides with it, so no call site can forget it.
+ */
+function reporterFor(identity: InstanceAuth['identity']) {
+  return identity?.issuer ? placesReporter({ identity, fetch: placesFetch(identity.issuer) }) : null;
+}
+
+/**
+ * The install's delivered identity, read once. Split from `providerFor` because two
+ * callers need more than the provider: `/api/me` and the provision hook both hand
+ * `instance.identity` to the places reporter, and reading the config twice would be
+ * a second identity-DO round trip on the request every screen makes first.
+ */
+function instanceFor(env: Env, node: Node): Promise<InstanceAuth> {
+  return instanceAuthFor({
     directory: identityDo(env, node),
     scopeId: node.scopeId,
     // No declared settings of our own yet; the auth choice rides the same map.
     envSpec: [],
     env: env as unknown as Record<string, unknown>,
   });
+}
+
+function providerOf(instance: InstanceAuth): AuthProvider {
   try {
     return instance.provider();
   } catch (e) {
     if (e instanceof AuthConfigError) throw new HTTPException(e.status, { message: e.message });
     throw e;
   }
+}
+
+/**
+ * Run `work` after the response where the runtime allows it, and inline where it does
+ * not. Hono's `c.executionCtx` is a getter that THROWS when there is no execution
+ * context (a test harness, a direct `app.fetch`) rather than returning undefined, so
+ * `if (c.executionCtx)` is not a check — it is the throw.
+ */
+async function defer(c: Pick<Context, 'executionCtx'>, work: Promise<unknown>): Promise<void> {
+  let ctx: Context['executionCtx'] | undefined;
+  try {
+    ctx = c.executionCtx;
+  } catch {
+    ctx = undefined;
+  }
+  if (ctx) ctx.waitUntil(work);
+  else await work;
 }
 
 /** Subject → principal in this scope, or null for nobody. */
@@ -222,6 +265,14 @@ mountPlatformSurface<Env>(app, {
     const node = { tenantId: b.tenantId, scopeId: b.scopeId };
     await identityDo(env, node).setPendingOwner(b.scopeId, b.owner);
     await sweeper(env).noteScope(b.tenantId, b.scopeId);
+    // The places repair (substrat#1670): the WHOLE set of logins bound in this space,
+    // sent to the identity pool it signs in at, so a login's "Your places" list on the
+    // issuer's own origin is right again after any report that went missing. This hook
+    // also runs on `/internal/reconcile`, which is what makes it a repair rather than a
+    // one-off. A no-op before the install has an issuer, and for an issuer that keeps no
+    // index; it never throws.
+    const { identity } = await instanceFor(env, node);
+    await reportScopeMembers(identityDo(env, node), reporterFor(identity), b.scopeId);
   },
   onDeleteScope: async (env, s) => {
     await sweeper(env).forgetScope(s);
@@ -256,8 +307,25 @@ app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
 
 /** Who am I — the first call every client makes. */
 app.get('/api/me', async (c) => {
-  const principal = await principalFor(c.env, c.req.raw);
-  return principal ? c.json({ principal }) : c.json({ error: 'unauthorized' }, 401);
+  const node = nodeFor(c.req.raw, c.env);
+  // One instance, read once — `principalFor` would read the config a second time for
+  // the identity the places reporter needs.
+  const instance = await instanceFor(c.env, node);
+  const subject = await providerOf(instance).resolve(c.req.raw.headers);
+  const principal = subject
+    ? await identityDo(c.env, node).resolvePrincipal(node.scopeId, subject.sub)
+    : null;
+
+  // Tell the identity pool what this resolve established, after the response. Every
+  // screen asks `/api/me` first, so this one call catches every way a login becomes
+  // bound here — the owner's first sign-in, a claim link — and reports a signed-in
+  // login bound to NOTHING as absent, which is how a stale entry drops off. Once per
+  // login per isolate, and it never throws.
+  if (subject) {
+    await defer(c, observePlace(reporterFor(instance.identity), node.scopeId, subject.sub, principal));
+  }
+
+  return principal ? c.json({ principal: principalId.parse(principal) }) : c.json({ error: 'unauthorized' }, 401);
 });
 
 /** The claim token rides in the body, so it is never a query string. See the route below. */
@@ -494,10 +562,7 @@ app.post('/api/folders/:folderId/content', async (c) => {
       { id: file.id, versionId: written.current_version_id, name, mime: contentType },
       body,
     );
-    // No execution context in a test harness or a direct invocation; awaiting is
-    // the honest fallback there, and it is never the deployed path.
-    if (c.executionCtx) c.executionCtx.waitUntil(work);
-    else await work;
+    await defer(c, work);
   }
 
   return c.json(written, 201);

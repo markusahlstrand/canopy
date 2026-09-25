@@ -15,14 +15,14 @@
     "@canopy/connector-synology": "workspace:*",
     "@canopy/core": "workspace:*",
     "@canopy/docworker": "workspace:*",
-    "@hono/node-server": "^1.14.4",
-    "hono": "^4.10.3",
-    "undici": "^7.16.0"
+    "@hono/node-server": "^2.1.1",
+    "hono": "^4.13.8",
+    "undici": "^8.11.0"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
-    "tsx": "^4.20.6",
-    "typescript": "~6.0.3",
-    "vitest": "^3.2.4"
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.1"
   }
 }
