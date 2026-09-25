@@ -27,6 +27,14 @@ on:
     # or remove the filter to build on every merge.
     paths:
       - 'apps/drive-vertical/**'
+      # The workspace packages the vertical BUNDLES. Without them a change to the drive
+      # module itself — its operations, its schema — is neither previewed nor deployed,
+      # and the worker keeps serving the last bundle until something under
+      # apps/drive-vertical happens to change. Found when a PR adding two operations to
+      # @canopy/scope-drive produced no preview at all.
+      - 'packages/scope-drive/**'
+      - 'packages/docworker/**'
+      - 'packages/ui/**'
       - '.github/workflows/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -41,6 +49,14 @@ on:
     # or remove the filter to build on every merge.
     paths:
       - 'apps/drive-vertical/**'
+      # The workspace packages the vertical BUNDLES. Without them a change to the drive
+      # module itself — its operations, its schema — is neither previewed nor deployed,
+      # and the worker keeps serving the last bundle until something under
+      # apps/drive-vertical happens to change. Found when a PR adding two operations to
+      # @canopy/scope-drive produced no preview at all.
+      - 'packages/scope-drive/**'
+      - 'packages/docworker/**'
+      - 'packages/ui/**'
       - '.github/workflows/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
