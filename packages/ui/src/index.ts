@@ -8,5 +8,5 @@ export * from "./select";
 export * from "./tabs";
 export * from "./person-avatar";
 export { cn } from "./utils";
-export { Icon } from "./icon";
+export { Icon, hasIcon } from "./icon";
 export { toast } from "sonner";

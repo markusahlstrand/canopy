@@ -17,6 +17,37 @@
 const API = '/api';
 
 /**
+ * Which space this tab is looking at, as a slug the install's own registry knows.
+ *
+ * It rides as `x-site` on every call rather than living in the URL. The worker takes
+ * the TENANT from the router's assertion and never from a header, and re-checks the
+ * (tenant, scope) pair, so the worst a tampered value can name is another space of the
+ * same tenant — which the checker then refuses unless the caller holds a role there.
+ *
+ * `null` means "whatever the hostname routed to", which is the right default: a person
+ * with one space should never see a switcher decide anything.
+ */
+let site: string | null = null;
+const SITE_KEY = 'canopy.site';
+try {
+  site = localStorage.getItem(SITE_KEY);
+} catch {
+  // Private mode, blocked site data: the hostname's own space is the fallback.
+}
+
+export const currentSite = (): string | null => site;
+
+export function selectSite(slug: string | null): void {
+  site = slug;
+  try {
+    if (slug) localStorage.setItem(SITE_KEY, slug);
+    else localStorage.removeItem(SITE_KEY);
+  } catch {
+    // Selection still applies to this tab; it just will not survive a reload.
+  }
+}
+
+/**
  * The root folder's id, created with the schema rather than by a first write, so
  * a fresh scope always has somewhere to read. Mirrors `ROOT_FOLDER_ID` in
  * `packages/scope-drive/src/migrations.ts`.
@@ -38,6 +69,11 @@ export interface DriveFolder {
   parent_id: string;
   name: string;
   path: string;
+}
+
+export interface Site {
+  slug: string;
+  name: string;
 }
 
 export interface FileVersion {
@@ -62,13 +98,19 @@ export class ApiError extends Error {
   }
 }
 
+export function siteHeaders(extra?: HeadersInit): HeadersInit {
+  return { ...(site ? { 'x-site': site } : {}), ...extra };
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     ...init,
     // The session is a cookie the worker set on /api/auth/callback; without this
     // every call is anonymous and the app renders a permanent logged-out state.
     credentials: 'same-origin',
-    headers: init?.body ? { 'content-type': 'application/json', ...init?.headers } : init?.headers,
+    headers: siteHeaders(
+      init?.body ? { 'content-type': 'application/json', ...init?.headers } : init?.headers,
+    ),
   });
   if (!res.ok) {
     // The platform answers errors as RFC 9457 problem documents; fall back to the
@@ -126,6 +168,81 @@ export const ensureFile = (folderId: string, name: string) =>
 /** A file's versions, newest first. Paged, so again a bare array. */
 export const fileVersions = (fileId: string) =>
   call<FileVersion[]>(`/files/${encodeURIComponent(fileId)}/versions`);
+
+/** The spaces this login is bound in — empty when the install has only the routed one. */
+export const listSites = () => call<Site[]>('/sites');
+
+/** The folders directly inside a folder. Paged, so a bare array like the file listing. */
+export const listFolders = (folderId: string) =>
+  call<DriveFolder[]>(`/folders/${encodeURIComponent(folderId)}/folders`);
+
+/**
+ * A folder by its path, or null. `null` is also the answer for a folder the caller may
+ * not read — the worker refuses indistinguishably on purpose, so a path cannot be used
+ * to probe the tree one guess at a time.
+ */
+export const folderByPath = (path: string) =>
+  call<DriveFolder | null>(`/folders/by-path?path=${encodeURIComponent(path)}`);
+
+export const renameFile = (fileId: string, name: string) =>
+  call<DriveFile>(`/files/${encodeURIComponent(fileId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+  });
+
+export const renameFolder = (folderId: string, name: string) =>
+  call<DriveFolder>(`/folders/${encodeURIComponent(folderId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+  });
+
+/** Recoverable: the bytes stay, and `restoreFile` puts it back under the same name. */
+export const trashFile = (fileId: string) =>
+  call<DriveFile>(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
+
+export const restoreFile = (fileId: string) =>
+  call<DriveFile>(`/files/${encodeURIComponent(fileId)}/restore`, { method: 'POST' });
+
+/** What is in the trash, scope-wide — a trashed file's folder is where it goes back to. */
+export const listTrash = () => call<DriveFile[]>('/trash');
+
+/**
+ * Upload bytes and record the version that names them, in one call the worker
+ * composes: ensure-file → attachment upload → record-version. The size and type the
+ * version records come from the stored bytes, not from anything said here.
+ */
+export async function uploadFile(folderId: string, file: File): Promise<DriveFile> {
+  const res = await fetch(
+    `${API}/folders/${encodeURIComponent(folderId)}/content?name=${encodeURIComponent(file.name)}`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: siteHeaders({ 'content-type': file.type || 'application/octet-stream' }),
+      body: file,
+    },
+  );
+  if (!res.ok) {
+    const problem = await res.json().catch(() => null);
+    const detail =
+      problem && typeof problem === 'object' && 'detail' in problem
+        ? String((problem as { detail: unknown }).detail)
+        : res.statusText;
+    throw new ApiError(res.status, detail);
+  }
+  return (await res.json()) as DriveFile;
+}
+
+/**
+ * Where a file's bytes are, as a URL the browser can follow directly.
+ *
+ * A plain link, so the browser streams it rather than the app buffering it — which
+ * also means the `x-site` header cannot ride along. The query parameter is the same
+ * selection said in the one place a link can carry it.
+ */
+export function contentUrl(fileId: string): string {
+  const q = site ? `?site=${encodeURIComponent(site)}` : '';
+  return `${API}/files/${encodeURIComponent(fileId)}/content${q}`;
+}
 
 /** The relying-party routes the worker mounts. Full page loads: the issuer owns the redirect. */
 export const LOGIN_URL = `${API}/auth/login`;
