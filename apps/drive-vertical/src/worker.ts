@@ -382,19 +382,48 @@ app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
  */
 app.get('/api/sites', async (c) => {
   // Behind the same door as the rest: the list of a tenant's spaces is not public.
-  if (!(await principalFor(c.env, c.req.raw))) {
-    throw new HTTPException(401, { message: 'unauthorized' });
-  }
-  const sites = await identityDo(c.env, baseNode(c.req.raw, c.env)).listSites();
-  return c.json(sites.map((site) => ({ slug: site.slug, name: site.name })));
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const base = baseNode(c.req.raw, c.env);
+  const sites = await identityDo(c.env, base).listSites();
+
+  /**
+   * Dropped: an entry whose scope no longer resolves.
+   *
+   * The registry is written at provision and there is no hook that can remove an entry
+   * when a space is deleted — `onDeleteScope` is handed a scope id and no tenant, and
+   * the registry is per tenant. So a deleted space would sit in the switcher forever.
+   *
+   * Selecting one was never DANGEROUS: `getScope` validates the (tenant, scope) pair
+   * against the directory and refuses an unknown or inactive scope (K-3), so the data
+   * path already fails closed. What was wrong is the list — offering a space that
+   * cannot be opened. Minting a stub is exactly the question "does this still resolve",
+   * so that is what filters it. A tenant has tens of spaces, not thousands; if that
+   * changes, this wants a real liveness read rather than N stubs.
+   */
+  const host = hostFor(c.env);
+  const live = await Promise.all(
+    sites.map(async (site) => {
+      try {
+        await host.getScope(principal, base.tenantId, scopeId.parse(site.scopeId));
+        return site;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return c.json(live.filter((site) => site !== null).map((site) => ({ slug: site.slug, name: site.name })));
 });
 
 /** Who am I — the first call every client makes. */
 app.get('/api/me', async (c) => {
   const node = await nodeFor(c.req.raw, c.env);
-  // One instance, read once — `principalFor` would read the config a second time for
-  // the identity the places reporter needs.
-  const instance = await instanceFor(c.env, node);
+  // The auth config belongs to the INSTALL the hostname routed to, so it is read
+  // through `baseNode` — never through the selected space. A selected space carries no
+  // `substrat:auth` of its own, so reading it there would answer 503 for a caller whose
+  // base session is perfectly good. Identity is the install's; membership is the
+  // space's, and `node` below is what resolves that.
+  const instance = await instanceFor(c.env, baseNode(c.req.raw, c.env));
   const subject = await providerOf(instance).resolve(c.req.raw.headers);
   const principal = subject
     ? await identityDo(c.env, node).resolvePrincipal(node.scopeId, subject.sub)
@@ -439,7 +468,9 @@ const claimBody = z.object({ token: z.string().min(1) });
  */
 app.post('/api/claim-owner', async (c) => {
   const node = await nodeFor(c.req.raw, c.env);
-  const subject = await (await providerFor(c.env, node)).resolve(c.req.raw.headers);
+  // Same rule as `/api/me`: who you ARE comes from the install, what you may claim is
+  // the selected space's seat.
+  const subject = await (await providerFor(c.env, baseNode(c.req.raw, c.env))).resolve(c.req.raw.headers);
   if (!subject) throw new HTTPException(401, { message: 'sign in before claiming this space' });
 
   const { token } = claimBody.parse(await c.req.json());
