@@ -23,6 +23,7 @@ import {
 } from '@canopy/ui';
 import {
   ROOT_FOLDER_ID,
+  SEARCH_MIN,
   contentUrl,
   createFolder,
   listFolder,
@@ -31,10 +32,12 @@ import {
   renameFile,
   renameFolder,
   restoreFile,
+  search,
   trashFile,
   uploadFile,
   type DriveFile,
   type DriveFolder,
+  type SearchHit,
 } from './api';
 
 /**
@@ -53,6 +56,7 @@ export const DRIVE_ICONS = [
   'plus',
   'upload',
   'more',
+  'search',
 ] as const;
 export type IconName = (typeof DRIVE_ICONS)[number];
 
@@ -72,7 +76,9 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const [folders, setFolders] = useState<DriveFolder[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<'drive' | 'trash'>('drive');
+  const [view, setView] = useState<'drive' | 'trash' | 'search'>('drive');
+  const [term, setTerm] = useState('');
+  const [hits, setHits] = useState<SearchHit[]>([]);
   const [trash, setTrash] = useState<DriveFile[]>([]);
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
@@ -81,7 +87,10 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const refresh = useCallback(async () => {
     setBusy(true);
     try {
-      if (view === 'trash') {
+      if (view === 'search') {
+        // Below the floor there is nothing to ask for, and asking would be a 400.
+        setHits(term.trim().length >= SEARCH_MIN ? (await search(term.trim())).hits : []);
+      } else if (view === 'trash') {
         setTrash(await listTrash());
       } else {
         const [subfolders, contents] = await Promise.all([listFolders(folderId), listFolder(folderId)]);
@@ -94,11 +103,14 @@ export function DriveScreen({ onError }: DriveScreenProps) {
     } finally {
       setBusy(false);
     }
-  }, [folderId, view, onError]);
+  }, [folderId, view, term, onError]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    // A pause, not a keystroke: the index is per scope and cheap, but a request per
+    // character still races its own answers and the last one to land wins.
+    const t = setTimeout(() => void refresh(), view === 'search' ? 200 : 0);
+    return () => clearTimeout(t);
+  }, [refresh, view]);
 
   const open = (folder: DriveFolder) => {
     setCrumbs((c) => [...c, { id: folder.id, name: folder.name }]);
@@ -162,10 +174,36 @@ export function DriveScreen({ onError }: DriveScreenProps) {
           ))}
         </nav>
 
+        <div className="relative">
+          <Icon
+            name="search"
+            className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            value={term}
+            placeholder="Search this space"
+            aria-label="Search this space"
+            className="h-8 w-44 pl-8 sm:w-56"
+            onChange={(e) => {
+              const next = e.currentTarget.value;
+              setTerm(next);
+              // Emptying the box returns to where you were, rather than leaving an
+              // empty result list that looks like "nothing here".
+              setView(next.trim() ? 'search' : 'drive');
+            }}
+          />
+        </div>
+
         <Button
           variant={view === 'trash' ? 'default' : 'outline'}
           size="sm"
-          onClick={() => setView((v) => (v === 'trash' ? 'drive' : 'trash'))}
+          onClick={() =>
+            setView((v) => {
+              if (v === 'trash') return 'drive';
+              setTerm('');
+              return 'trash';
+            })
+          }
         >
           <Icon name="trash" className="size-4" />
           Trash
@@ -187,7 +225,42 @@ export function DriveScreen({ onError }: DriveScreenProps) {
         ) : null}
       </div>
 
-      {view === 'trash' ? (
+      {view === 'search' ? (
+        <Rows
+          empty={
+            term.trim().length < SEARCH_MIN
+              ? `Type at least ${SEARCH_MIN} characters.`
+              : `No matches for “${term.trim()}”.`
+          }
+          busy={busy}
+          rows={hits.map((hit) => ({
+            key: hit.id,
+            icon: 'file-text' as const,
+            name: hit.name,
+            // The distinction extraction bought: matching a document's text is a
+            // different answer to matching its name, and saying which is the feature.
+            meta: hit.via === 'content' ? 'Matched inside the document' : 'Matched in the name',
+            onOpen: hit.current_version_id
+              ? () => window.open(contentUrl(hit.id), '_blank', 'noopener')
+              : undefined,
+            actions: [
+              ...(hit.current_version_id
+                ? [
+                    {
+                      label: 'Download',
+                      onSelect: () => window.open(contentUrl(hit.id), '_blank', 'noopener'),
+                    },
+                  ]
+                : []),
+              {
+                label: 'Rename',
+                onSelect: () => setRenaming({ kind: 'file', id: hit.id, name: hit.name }),
+              },
+              { label: 'Move to trash', danger: true, onSelect: () => void act(() => trashFile(hit.id)) },
+            ],
+          }))}
+        />
+      ) : view === 'trash' ? (
         <Rows
           empty="The trash is empty."
           busy={busy}

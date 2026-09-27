@@ -203,6 +203,27 @@ export const trashFile = (fileId: string) =>
 export const restoreFile = (fileId: string) =>
   call<DriveFile>(`/files/${encodeURIComponent(fileId)}/restore`, { method: 'POST' });
 
+/**
+ * Find files by name or by what is inside them.
+ *
+ * `via` is the half that content extraction bought: a hit that matched the document's
+ * text reads differently to one that matched its name, and a result list that hides the
+ * difference is back to being a filename search with extra steps.
+ *
+ * The term has a two-character floor in the declaration, so a caller below it is a 400
+ * rather than a scan of the whole index — the screen holds its request until then.
+ */
+export const SEARCH_MIN = 2;
+
+export const search = (term: string, limit?: number) =>
+  call<{ hits: SearchHit[] }>(
+    `/search?term=${encodeURIComponent(term)}${limit ? `&limit=${limit}` : ''}`,
+  );
+
+export interface SearchHit extends DriveFile {
+  via: 'name' | 'content';
+}
+
 /** What is in the trash, scope-wide — a trashed file's folder is where it goes back to. */
 export const listTrash = () => call<DriveFile[]>('/trash');
 
