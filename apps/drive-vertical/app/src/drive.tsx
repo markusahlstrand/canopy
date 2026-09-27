@@ -519,7 +519,15 @@ function NameDialog({
         }}
       >
         <h2 className="mb-3 text-sm font-medium">{title}</h2>
-        <Input autoFocus value={name} onChange={(e) => setName(e.currentTarget.value)} />
+        {/* Named, because a dialog whose only field has no accessible name is one a
+            screen reader announces as "edit text" — and one a test cannot address
+            unambiguously when the toolbar also holds an input. */}
+        <Input
+          autoFocus
+          aria-label={title}
+          value={name}
+          onChange={(e) => setName(e.currentTarget.value)}
+        />
         <p className="mt-2 text-xs text-muted-foreground">
           A name is one segment: no slashes, and not <code>.</code> or <code>..</code>
         </p>
