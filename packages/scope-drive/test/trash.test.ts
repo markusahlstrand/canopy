@@ -252,6 +252,16 @@ describe('trash is recoverable, and leaves every other read', () => {
     ).rejects.toThrow(/in the trash/);
   });
 
+  it('refuses a rename of something in the trash', async () => {
+    const stub = await as(ada);
+    // `ctx.check` says nothing about state, so without the `liveFile` guard a writer
+    // could rename a trashed row and emit `drive.file-renamed` about it. Restore is the
+    // only write that reaches through the trash.
+    await expect(
+      stub.invoke('drive/rename-file', { fileId: doomed, name: 'renamed-in-the-bin.md' }),
+    ).rejects.toThrow(/not found/);
+  });
+
   it('a trashed file is not a search hit', async () => {
     const stub = await as(ada);
     const hits = await stub.invoke<{ hits: { id: string }[] }>('drive/search', { term: 'oops' });
@@ -347,6 +357,39 @@ describe('the trash walk does not end at other people\'s files', () => {
       if (!cursor) break;
     }
     expect(seen).toContain(hers.id);
+    expect(cursor).toBeNull();
+  });
+
+  it('walks every readable row when the page fills before the batch ends', async () => {
+    const stub = await as(ada);
+    // The other half of the same walk, and the one the sparse test cannot reach: with
+    // `limit: 1` the page fills on the FIRST row while the batch (four) is not
+    // saturated, so a cursor keyed on saturation alone would drop the rest.
+    const folder = (
+      await stub.invoke<FolderRow>('drive/create-folder', {
+        parentId: ROOT_FOLDER_ID,
+        name: 'Dense',
+      })
+    ).id;
+    const ids: string[] = [];
+    for (const name of ['one.md', 'two.md', 'three.md']) {
+      const f = await stub.invoke<FileRow>('drive/ensure-file', { folderId: folder, name });
+      await stub.invoke('drive/trash-file', { fileId: f.id });
+      ids.push(f.id);
+    }
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 12; page++) {
+      const res: { entries: FileRow[]; nextCursor?: string | null } = await stub.invoke(
+        'drive/list-trash',
+        cursor ? { limit: 1, cursor } : { limit: 1 },
+      );
+      seen.push(...res.entries.map((f) => f.id));
+      cursor = res.nextCursor ?? null;
+      if (!cursor) break;
+    }
+    for (const id of ids) expect(seen).toContain(id);
     expect(cursor).toBeNull();
   });
 });

@@ -327,8 +327,9 @@ const operations = {
 
   'drive/rename-file': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
-    const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
-    if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
+    // Through `liveFile`, so renaming something in the trash is `not_found` like every
+    // other read of it. `restore-file` stays the only write that reaches through.
+    const file = liveFile(ctx, input.fileId);
     if (file.name === input.name) return file;
 
     const taken = ctx.sql.query<{ id: string }>(
@@ -488,24 +489,31 @@ const operations = {
         );
 
     const visible: FileRow[] = [];
-    let scanned: FileRow | undefined;
+    let examined = 0;
     for (const row of rows) {
       if (visible.length === limit) break;
-      scanned = row;
+      examined += 1;
       if ((await ctx.check(DRIVE_PERM.read, fileRef(row.id))).allowed) visible.push(row);
     }
 
     /**
-     * The cursor is where the SCAN stopped, not where the page ended.
+     * The cursor is the last row EXAMINED — readable or not — and it is handed back
+     * whenever anything might remain. Two ways something can:
      *
-     * A page can come back short because the rows this caller may see are sparse, and
-     * a short page whose cursor was the last VISIBLE row — or absent — would end the
-     * walk at the first dense patch of other people's files. Someone whose only
-     * readable trashed file sits past the first batch could never reach it. So: the
-     * walk continues whenever the scan filled its batch, and the cursor is the last row
-     * examined, readable or not.
+     * - the loop stopped early because the page filled, leaving rows in this batch
+     *   (`examined < rows.length`);
+     * - the loop examined everything AND the batch was saturated, so the next rows are
+     *   behind the `LIMIT` (`rows.length === scan`).
+     *
+     * Either alone is a walk that ends too early, and they do not imply each other:
+     * three readable rows with `limit: 1` fills the page on row one while the batch is
+     * not saturated, and four unreadable rows saturates the batch while the page never
+     * fills. Both dropped rows before — the first because the cursor was absent, the
+     * second because the walk stopped at the first dense patch of other people's files.
      */
-    const next = rows.length === scan ? (scanned?.id ?? null) : null;
+    const last = examined > 0 ? rows[examined - 1] : undefined;
+    const more = examined < rows.length || rows.length === scan;
+    const next = last && more ? last.id : null;
     return { entries: visible, nextCursor: next } as unknown as HandlerOutput<
       (typeof driveOperations)['drive/list-trash']
     >;
