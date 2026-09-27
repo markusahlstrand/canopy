@@ -6,7 +6,6 @@ export type { PluginConfigField, PluginPlace, PluginSettings };
 import type { MirrorFile } from "@canopy/mirror";
 import type { FileItem, ProcessingEntry } from "@/lib/mock-data";
 import { fmtDate, kindForName } from "@/lib/file-format";
-import { listVerticalFolder, verticalBacks, verticalContentUrl } from "@/lib/vertical-drive";
 import { apiFetch, isBackendReachable } from "@/lib/connectivity";
 import { MIRROR_ENABLED, mirrorFilesUnder, mirrorFolder } from "@/lib/sync";
 import {
@@ -227,11 +226,6 @@ export async function searchFiles(q: string, limit = 8): Promise<SearchResult[]>
 
 /** List a virtual folder of a space (default: personal). Folders first, then files. */
 export async function listFiles(dir = "", spaceId?: string, opts?: { fresh?: boolean }): Promise<FileItem[]> {
-  // S12 slice: one space may be served by the Substrat vertical instead of this API.
-  // First, and without the mirror: the vertical is not on canopy's change feed yet
-  // (S8), so a flagged space is live-only rather than pretending to be synced.
-  if (verticalBacks(spaceId)) return listVerticalFolder(dir);
-
   const key = listingKey(spaceId, dir);
   const isConnector = String(spaceId ?? "").startsWith("connector:");
   // `fresh` (an explicit user refresh) tells the backend to skip its reconcile debounce
@@ -301,10 +295,6 @@ export async function fetchFileText(id: string): Promise<string> {
 }
 
 export function contentUrl(id: string): string {
-  // A vertical-backed file's bytes live on the VERTICAL's origin, not here — its id
-  // means nothing to canopy's own store. Same idea as the connector case below.
-  const fromVertical = verticalContentUrl(id);
-  if (fromVertical) return fromVertical;
   // A connected space's file id is "connector:<plugin>:<repo-path>"; its bytes are
   // streamed live through the connector via the path-keyed /api/file route.
   if (id.startsWith("connector:")) {
