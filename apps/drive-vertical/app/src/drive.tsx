@@ -68,14 +68,27 @@ export type IconName = (typeof DRIVE_ICONS)[number];
  * the screen shows hits for `lea` under a box reading `lease`. The same race moves a
  * folder listing: click into a folder, click back, and the deeper listing can land last.
  *
- * So every read takes a ticket and only writes if it is still the current one. Kept as a
- * named thing rather than an inline counter so the rule can be asserted.
+ * So every read takes a ticket and only writes if it is still the current one.
+ *
+ * `invalidate` is the other half, and it is not decoration: taking a ticket only when a
+ * read STARTS leaves a window. The search box is debounced by 200ms, so between a
+ * keystroke and the request it triggers, the previous term's request still holds the
+ * current ticket — and if it answers inside that window it writes hits for a term the
+ * box no longer holds, below the minimum length, having cleared `busy` on the way out.
+ * So the context changing invalidates immediately, before anything is scheduled.
  */
 export function latestOnly() {
   let issued = 0;
   return {
     /** Claim the screen for this read, invalidating every earlier one. */
     take: () => ++issued,
+    /**
+     * The screen's context changed — a term, a folder, a view. Nothing already in
+     * flight may write, and no ticket is claimed: the next read takes its own.
+     */
+    invalidate: () => {
+      issued += 1;
+    },
     /** May this read still write? */
     current: (ticket: number) => ticket === issued,
   };
@@ -104,6 +117,15 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const reads = useRef(latestOnly());
+  /**
+   * The CURRENT refresh, not the one an action closed over.
+   *
+   * An action started in folder A resolves after the user has opened folder B. Calling
+   * the refresh it captured would read folder A — and, worse, claim the screen's ticket
+   * while doing it, so folder B's own read could no longer correct the result. A ref
+   * keeps "refresh what is on screen" true at the moment it is called.
+   */
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async () => {
@@ -141,6 +163,10 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   }, [folderId, view, term, onError]);
 
   useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  useEffect(() => {
     // A pause, not a keystroke: the index is per scope and cheap, but a request per
     // character still races its own answers and the last one to land wins.
     const t = setTimeout(() => void refresh(), view === 'search' ? 200 : 0);
@@ -148,11 +174,15 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   }, [refresh, view]);
 
   const open = (folder: DriveFolder) => {
+    // The listing on screen belongs to the folder being left; nothing in flight for it
+    // may land here.
+    reads.current.invalidate();
     setCrumbs((c) => [...c, { id: folder.id, name: folder.name }]);
     setFolderId(folder.id);
   };
 
   const upTo = (index: number) => {
+    reads.current.invalidate();
     // -1 is the root: the crumb trail holds everything below it.
     setCrumbs((c) => c.slice(0, index + 1));
     setFolderId(index < 0 ? ROOT_FOLDER_ID : crumbs[index]!.id);
@@ -161,7 +191,9 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const act = async (fn: () => Promise<unknown>) => {
     try {
       await fn();
-      await refresh();
+      // Through the ref: whatever the screen shows NOW, which may not be where this
+      // action started.
+      await refreshRef.current();
     } catch (e: unknown) {
       onError(e instanceof Error ? e.message : String(e));
     }
@@ -221,6 +253,9 @@ export function DriveScreen({ onError }: DriveScreenProps) {
             className="h-8 w-44 pl-8 sm:w-56"
             onChange={(e) => {
               const next = e.currentTarget.value;
+              // FIRST, before the debounce is even scheduled: the request for the
+              // previous term is in flight and still holds the ticket until then.
+              reads.current.invalidate();
               setTerm(next);
               // The previous term's hits are wrong the moment the box changes, so they
               // go now rather than lingering until the next answer lands. With `busy`
@@ -238,13 +273,14 @@ export function DriveScreen({ onError }: DriveScreenProps) {
         <Button
           variant={view === 'trash' ? 'default' : 'outline'}
           size="sm"
-          onClick={() =>
+          onClick={() => {
+            reads.current.invalidate();
             setView((v) => {
               if (v === 'trash') return 'drive';
               setTerm('');
               return 'trash';
-            })
-          }
+            });
+          }}
         >
           <Icon name="trash" className="size-4" />
           Trash

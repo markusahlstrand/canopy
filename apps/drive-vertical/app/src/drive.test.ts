@@ -114,4 +114,21 @@ describe('only the newest read may write to the screen', () => {
     reads.take();
     expect(reads.current(stale)).toBe(false);
   });
+
+  it('invalidates in flight reads the moment the context changes', () => {
+    const reads = latestOnly();
+    const inFlight = reads.take();
+    expect(reads.current(inFlight)).toBe(true);
+
+    // The window taking a ticket per READ left open: the search box is debounced, so
+    // between a keystroke and the request it schedules, the PREVIOUS term's request
+    // still held the current ticket — and answering inside that window wrote hits for a
+    // term the box no longer held, below the minimum length, clearing `busy` on the way.
+    reads.invalidate();
+    expect(reads.current(inFlight)).toBe(false);
+
+    // And it claims nothing: the next read takes its own ticket rather than inheriting.
+    const next = reads.take();
+    expect(reads.current(next)).toBe(true);
+  });
 });
