@@ -238,6 +238,28 @@ and until it lands the vertical's UI has no plugin runtime at all.
 That is a statement about **ownership**, and it was read as though it were a plan. It is
 not one, and S12 is the plan it was mistaken for.
 
+**Amended 2026-09-28 — the old portal is dead, and that decides the method.** S12 first
+said the drive surface "moves screen by screen rather than being reimplemented", which
+implied a shared component layer serving both front ends while the migration ran. There is
+nothing to serve: `apps/portal` on the shared-DB store is not a product being maintained,
+so nothing needs to keep working while the vertical catches up.
+
+So the method is **lift and adapt, then delete**. Code comes out of the portal wherever it
+is worth having — components, the viewer registry, preview — reshaped freely to the
+vertical's data rather than behind an adapter that preserves the old one, and the portal's
+copy is removed in the same change. No compatibility layer, no package existing only to
+have two consumers, no second row shape kept alive.
+
+What this costs, stated rather than discovered later: the portal's drive stops receiving
+fixes from the moment its replacement starts, and anything the vertical has not ported yet
+is simply absent rather than degraded. That is the right trade for a dead product and the
+wrong one for a live one, which is why it is written here beside the decision it amends.
+
+Three things in `apps/portal` are **not** a space's drive and need a home rather than a
+deletion: the model editor (also consumed by the VS Code extension), the welcome/marketing
+surface, and plugin authoring. They are not blocked by this and are not carried by it
+either — each needs its own answer before the portal directory can go.
+
 ---
 
 ## 3. Sequencing, and the honest position
