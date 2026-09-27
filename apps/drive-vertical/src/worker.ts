@@ -381,38 +381,53 @@ app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
  * should not be handed it; `x-site` takes the slug.
  */
 app.get('/api/sites', async (c) => {
-  // Behind the same door as the rest: the list of a tenant's spaces is not public.
-  const principal = await principalFor(c.env, c.req.raw);
-  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
   const base = baseNode(c.req.raw, c.env);
-  const sites = await identityDo(c.env, base).listSites();
+
+  // The SUBJECT, not a principal: who is asking is a fact about the install, and a
+  // principal is a fact about ONE space (K-22 — the same login is a different principal
+  // in each). Going through `principalFor` here asked the wrong question: it resolves
+  // against the SELECTED space, so a member of three spaces who happens to be looking at
+  // a fourth got 401 from the very endpoint that would have let them leave it.
+  const subject = await (await providerFor(c.env, base)).resolve(c.req.raw.headers);
+  if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
+
+  const directory = identityDo(c.env, base);
+  const host = hostFor(c.env);
 
   /**
-   * Dropped: an entry whose scope no longer resolves.
+   * A space is listed when this login is bound in it AND it still resolves.
    *
-   * The registry is written at provision and there is no hook that can remove an entry
-   * when a space is deleted — `onDeleteScope` is handed a scope id and no tenant, and
-   * the registry is per tenant. So a deleted space would sit in the switcher forever.
+   * Both halves are per space, so both are asked per space. The binding is what makes
+   * the entry mean "you can open this"; the stub is what makes it mean "it is still
+   * there" — the registry is written at provision and nothing can remove an entry when
+   * a space is deleted (`onDeleteScope` carries no tenant, and the registry is per
+   * tenant), so without this a deleted space would sit in the switcher forever.
    *
-   * Selecting one was never DANGEROUS: `getScope` validates the (tenant, scope) pair
-   * against the directory and refuses an unknown or inactive scope (K-3), so the data
-   * path already fails closed. What was wrong is the list — offering a space that
-   * cannot be opened. Minting a stub is exactly the question "does this still resolve",
-   * so that is what filters it. A tenant has tens of spaces, not thousands; if that
-   * changes, this wants a real liveness read rather than N stubs.
+   * Selecting a dead space was never dangerous: `getScope` validates the (tenant, scope)
+   * pair against the directory and refuses an unknown or inactive scope (K-3). This is
+   * about the list being honest, not about the data path being safe.
+   *
+   * A signed-in caller bound in NO space gets an empty list rather than 401. They are
+   * authenticated; they simply have nowhere to go, and that is what the switcher should
+   * say.
    */
-  const host = hostFor(c.env);
-  const live = await Promise.all(
-    sites.map(async (site) => {
+  const registered = await directory.listSites();
+  const mine = await Promise.all(
+    registered.map(async (site) => {
+      const principal = await directory.resolvePrincipal(site.scopeId, subject.sub);
+      if (!principal) return null;
       try {
-        await host.getScope(principal, base.tenantId, scopeId.parse(site.scopeId));
+        await host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(site.scopeId));
         return site;
       } catch {
         return null;
       }
     }),
   );
-  return c.json(live.filter((site) => site !== null).map((site) => ({ slug: site.slug, name: site.name })));
+
+  return c.json(
+    mine.filter((site) => site !== null).map((site) => ({ slug: site.slug, name: site.name })),
+  );
 });
 
 /** Who am I — the first call every client makes. */
