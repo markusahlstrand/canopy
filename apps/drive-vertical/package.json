@@ -6,7 +6,7 @@
   "description": "Canopy's drive as a deployable Substrat vertical \u2014 one scope per space.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.app.json --noEmit",
-    "test": "vitest run --root . --dir src",
+    "test": "vitest run --root .",
     "model:emit": "node scripts/emit-model.mjs",
     "lint:model": "node scripts/emit-model.mjs --check",
     "dev": "wrangler dev --var ALLOW_DEV_NODE:true",

@@ -1,5 +1,5 @@
 /**
- * The drive's own front end — one scope, one space, one folder at a time.
+ * The drive's own front end.
  *
  * Scope-shaped on purpose: this app never names a space, because the hostname
  * already did. The platform router resolved it to a scope before the worker saw
@@ -15,21 +15,19 @@
  * landing, so the button that would pretend otherwise is not here.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, Input, Icon, cn } from '@canopy/ui';
+import { Button, Icon } from '@canopy/ui';
 import {
   ApiError,
   LOGIN_URL,
   LOGOUT_URL,
-  ROOT_FOLDER_ID,
   claimOwner,
-  createFolder,
-  ensureFile,
-  fileVersions,
-  listFolder,
+  currentSite,
+  listSites,
+  selectSite,
   whoami,
-  type DriveFile,
-  type FileVersion,
+  type Site,
 } from './api';
+import { DriveScreen } from './drive';
 
 /** Nobody is signed in yet, somebody is, or we have not asked. */
 type Session = { state: 'loading' } | { state: 'out' } | { state: 'in'; principal: string };
@@ -88,7 +86,6 @@ const claimOnce = (token: string): Promise<unknown> => {
 
 export default function App() {
   const [session, setSession] = useState<Session>({ state: 'loading' });
-  const [files, setFiles] = useState<DriveFile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -160,16 +157,6 @@ export default function App() {
       });
   }, []);
 
-  const refresh = useCallback(() => {
-    listFolder(ROOT_FOLDER_ID)
-      .then(setFiles)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-  }, []);
-
-  useEffect(() => {
-    if (session.state === 'in') refresh();
-  }, [session.state, refresh]);
-
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <header className="border-b border-border">
@@ -179,6 +166,7 @@ export default function App() {
           <div className="ml-auto flex items-center gap-2">
             {session.state === 'in' ? (
               <>
+                <SiteSwitcher onError={setError} />
                 <span className="hidden text-sm text-muted-foreground sm:inline">{session.principal}</span>
                 <Button variant="outline" size="sm" asChild>
                   <a href={LOGOUT_URL}>Sign out</a>
@@ -205,7 +193,7 @@ export default function App() {
         ) : session.state === 'out' ? (
           <SignedOut />
         ) : (
-          <Browser files={files} onChanged={refresh} onError={setError} />
+          <DriveScreen onError={setError} />
         )}
       </main>
     </div>
@@ -233,162 +221,50 @@ function SignedOut() {
   );
 }
 
-function Browser({
-  files,
-  onChanged,
-  onError,
-}: {
-  files: DriveFile[] | null;
-  onChanged: () => void;
-  onError: (message: string) => void;
-}) {
-  const [creating, setCreating] = useState<null | 'folder' | 'file'>(null);
-  const [versionsOf, setVersionsOf] = useState<DriveFile | null>(null);
-
-  return (
-    <>
-      <div className="mb-4 flex items-center gap-2">
-        <h2 className="text-sm font-medium text-muted-foreground">Root folder</h2>
-        <div className="ml-auto flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setCreating('folder')}>
-            <Icon name="folder" className="size-4" /> New folder
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setCreating('file')}>
-            <Icon name="plus" className="size-4" /> New file
-          </Button>
-        </div>
-      </div>
-
-      {files === null ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : files.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border p-10 text-center">
-          <p className="text-sm text-muted-foreground">This folder is empty.</p>
-        </div>
-      ) : (
-        <ul className="divide-y divide-border rounded-lg border border-border">
-          {files.map((f) => (
-            <li key={f.id} className="flex items-center gap-3 px-4 py-3">
-              <Icon name="file-text" className="size-4 shrink-0 text-muted-foreground" />
-              <span className={cn('truncate text-sm', f.deleted_at && 'line-through opacity-60')}>{f.name}</span>
-              <time className="ml-auto shrink-0 text-xs text-muted-foreground" dateTime={f.updated_at}>
-                {new Date(f.updated_at).toLocaleDateString()}
-              </time>
-              <Button variant="ghost" size="sm" onClick={() => setVersionsOf(f)}>
-                Versions
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <NameDialog
-        kind={creating}
-        onClose={() => setCreating(null)}
-        onSubmit={async (name) => {
-          try {
-            if (creating === 'folder') await createFolder(ROOT_FOLDER_ID, name);
-            else await ensureFile(ROOT_FOLDER_ID, name);
-            setCreating(null);
-            onChanged();
-          } catch (e) {
-            onError(e instanceof Error ? e.message : String(e));
-          }
-        }}
-      />
-      <VersionsDialog file={versionsOf} onClose={() => setVersionsOf(null)} onError={onError} />
-    </>
-  );
-}
-
 /**
- * One dialog for both creates. The two operations differ only in which endpoint
- * takes the name, and a second near-identical component would be the kind of
- * duplication that drifts.
+ * Which space this tab is looking at.
+ *
+ * Absent for anyone in a single space, because a switcher that can only pick what is
+ * already picked is noise. The selection is a slug the install's own registry knows —
+ * the tenant still comes from the router's assertion, never from here.
  */
-function NameDialog({
-  kind,
-  onClose,
-  onSubmit,
-}: {
-  kind: null | 'folder' | 'file';
-  onClose: () => void;
-  onSubmit: (name: string) => void;
-}) {
-  const [name, setName] = useState('');
-  useEffect(() => {
-    if (kind) setName('');
-  }, [kind]);
-
-  return (
-    <Dialog open={kind !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{kind === 'folder' ? 'New folder' : 'New file'}</DialogTitle>
-        </DialogHeader>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (name.trim()) onSubmit(name.trim());
-          }}
-          className="flex gap-2"
-        >
-          {/* One path segment, never a path — the same rule `segment` enforces
-              server-side, which is what actually refuses a name containing `/`. */}
-          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
-          <Button type="submit" disabled={!name.trim()}>
-            Create
-          </Button>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function VersionsDialog({
-  file,
-  onClose,
-  onError,
-}: {
-  file: DriveFile | null;
-  onClose: () => void;
-  onError: (message: string) => void;
-}) {
-  const [versions, setVersions] = useState<FileVersion[] | null>(null);
+function SiteSwitcher({ onError }: { onError: (message: string | null) => void }) {
+  const [sites, setSites] = useState<Site[] | null>(null);
 
   useEffect(() => {
-    if (!file) return setVersions(null);
-    setVersions(null);
-    fileVersions(file.id)
-      .then(setVersions)
-      .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
-  }, [file, onError]);
+    listSites()
+      .then(setSites)
+      .catch((e: unknown) => {
+        // A failure here is not the screen's failure: the drive still renders against
+        // whatever space the hostname routed to. Say it and carry on.
+        onError(e instanceof Error ? e.message : String(e));
+        setSites([]);
+      });
+  }, [onError]);
 
+  if (!sites || sites.length < 2) return null;
+  const selected = currentSite() ?? '';
   return (
-    <Dialog open={file !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{file?.name}</DialogTitle>
-        </DialogHeader>
-        {versions === null ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : versions.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No versions yet — the file row exists, but nothing has been written to it.
-          </p>
-        ) : (
-          <ul className="divide-y divide-border text-sm">
-            {versions.map((v) => (
-              <li key={v.id} className="flex items-center justify-between py-2">
-                <span className="font-mono text-xs">{v.id}</span>
-                <time className="text-xs text-muted-foreground" dateTime={v.created_at}>
-                  {new Date(v.created_at).toLocaleString()}
-                </time>
-              </li>
-            ))}
-          </ul>
-        )}
-      </DialogContent>
-    </Dialog>
+    <label className="flex items-center gap-1.5 text-sm">
+      <span className="sr-only">Space</span>
+      <select
+        className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+        value={selected}
+        onChange={(e) => {
+          selectSite(e.currentTarget.value || null);
+          // A full reload rather than a re-render: every read on the screen belongs to
+          // the space it was made in, and re-fetching them piecemeal is how a listing
+          // from one space ends up beside a breadcrumb from another.
+          window.location.reload();
+        }}
+      >
+        <option value="">This space</option>
+        {sites.map((site) => (
+          <option key={site.slug} value={site.slug}>
+            {site.name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

@@ -148,6 +148,18 @@ const MAP: Record<string, LucideIcon> = {
   inbox: Inbox,
 };
 
+/**
+ * Does `Icon` know this name?
+ *
+ * Exists because the fallback is deliberately silent: an unknown name renders a puzzle
+ * piece, which is right for a plugin naming something we do not ship and wrong for our
+ * own screens, where it is a typo nobody sees in review. A caller that lists its icon
+ * names can assert them in a test instead.
+ */
+export function hasIcon(name: string): boolean {
+  return name in MAP;
+}
+
 export function Icon({
   name,
   size = 16,

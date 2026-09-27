@@ -158,7 +158,14 @@ function baseNode(req: Request, env: Env): Node {
  * has to serve more than the space its hostname named, or every space needs its own
  * hostname. The platform's answer (`multi-scope-manyfold.md`, epic #360) is this: the
  * app names the space it wants, by scope id (`x-scope`) or by the slug its own registry
- * knows (`x-site`).
+ * knows (`x-site`) — or, where a header cannot ride, a `?site=` query parameter.
+ *
+ * The query parameter exists for exactly one shape: a plain link the browser follows
+ * itself, like a download. `fetch` can set a header and an `<a href>` cannot, and
+ * buffering a file through the app to send one would defeat the point of streaming it.
+ * It is no weaker than the header for the reason below — both name an ADDRESS, and
+ * neither grants anything — and the header wins when both are present, because the
+ * app's own calls should not be steerable by something left in a URL.
  *
  * What makes it safe is what it does NOT do. The tenant always comes from the router's
  * assertion and is never taken from a header, the slug is resolved through the
@@ -174,7 +181,7 @@ async function nodeFor(req: Request, env: Env): Promise<Node> {
   const parsed = byId ? scopeId.safeParse(byId) : null;
   if (parsed?.success) return { tenantId: base.tenantId, scopeId: parsed.data };
 
-  const slug = req.headers.get('x-site');
+  const slug = req.headers.get('x-site') ?? new URL(req.url).searchParams.get('site');
   if (slug) {
     const resolved = await identityDo(env, base).resolveSiteScope(slug);
     const bySlug = resolved ? scopeId.safeParse(resolved) : null;
