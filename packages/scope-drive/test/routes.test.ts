@@ -19,6 +19,7 @@ describe('the derived route table', () => {
     // declaration carries `/folders/{folderId}/files` and the mount decides how that
     // reaches a router. Pinning what it actually mounted is the point.
     expect(mounted.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
+      'DELETE /api/files/:fileId',
       'GET /api/files/:fileId',
       'GET /api/files/:fileId/text',
       'GET /api/files/:fileId/versions',
@@ -26,6 +27,10 @@ describe('the derived route table', () => {
       'GET /api/folders/:folderId/folders',
       'GET /api/folders/by-path',
       'GET /api/search',
+      'GET /api/trash',
+      'PATCH /api/files/:fileId',
+      'PATCH /api/folders/:folderId',
+      'POST /api/files/:fileId/restore',
       'POST /api/files/:fileId/versions',
       'POST /api/folders/:folderId/files',
       'POST /api/folders/:parentId/folders',

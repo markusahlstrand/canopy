@@ -28,7 +28,7 @@ import { assertAllowed, ulid, type ModuleRegistration, type OperationHandler } f
 import { DRIVE_PERM } from './manifest.js';
 import { driveOperations } from '../spec/model.js';
 import { driveManifest } from './manifest.js';
-import { driveMigrations } from './migrations.js';
+import { driveMigrations, ROOT_FOLDER_ID } from './migrations.js';
 
 interface FolderRow {
   id: string;
@@ -46,6 +46,8 @@ interface FileRow {
   current_version_id: string | null;
   created_at: string;
   updated_at: string;
+  /** `'live'` or `'trashed'` — what the reads filter on. */
+  state: string;
   deleted_at: string | null;
 }
 
@@ -89,7 +91,13 @@ const operations = {
     // The kernel composes the walk from `paged.over` — the sort vocabulary, the
     // keyset comparison and the index behind them are one declared thing. What is
     // left to the handler is the filter that says which folder.
-    return ctx.page<FileRow>('file', { ...input, filters: { folder_id: input.folderId } }) as Page<FileRow>;
+    // `state: 'live'` is what keeps trashed files out of the drive's hot listing. It
+    // rides as a declared equality filter rather than a hand-written `IS NULL`,
+    // because that is the only shape a kernel-composed page can express (K-41).
+    return ctx.page<FileRow>('file', {
+      ...input,
+      filters: { folder_id: input.folderId, state: 'live' },
+    }) as Page<FileRow>;
   },
 
   'drive/create-folder': async (ctx, input) => {
@@ -149,6 +157,16 @@ const operations = {
       'SELECT * FROM drive_files WHERE folder_id = ? AND name = ?',
       [input.folderId, input.name],
     )[0];
+    // A trashed row still holds the name — the UNIQUE index does not care about state
+    // — so writing over it would either resurrect it silently or fail on the insert.
+    // Say which it is instead: the name is taken by something in the trash, and the
+    // caller can restore it or pick another name.
+    if (existing?.state === 'trashed') {
+      throw substratError(
+        'conflict',
+        `a trashed file holds the name '${input.name}' — restore it or choose another name`,
+      );
+    }
     if (existing) return existing;
 
     const now = ctx.now();
@@ -159,6 +177,7 @@ const operations = {
       current_version_id: null,
       created_at: now,
       updated_at: now,
+      state: 'live',
       deleted_at: null,
     };
     ctx.sql.exec(
@@ -278,6 +297,174 @@ const operations = {
         ])[0] ?? null)
       : null;
     return { file, version };
+  },
+
+  'drive/rename-file': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
+    if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
+    if (file.name === input.name) return file;
+
+    const taken = ctx.sql.query<{ id: string }>(
+      'SELECT id FROM drive_files WHERE folder_id = ? AND name = ? AND id != ?',
+      [file.folder_id, input.name, file.id],
+    )[0];
+    if (taken) throw substratError('conflict', `this folder already has a '${input.name}'`);
+
+    const now = ctx.now();
+    ctx.sql.exec('UPDATE drive_files SET name = ?, updated_at = ? WHERE id = ?', [
+      input.name,
+      now,
+      file.id,
+    ]);
+    const renamed: FileRow = { ...file, name: input.name, updated_at: now };
+    ctx.emit({
+      type: 'drive.file-renamed',
+      schemaVersion: 1,
+      entity: { entityType: 'file', entityId: renamed.id },
+      piiClass: 'none',
+      payload: { id: renamed.id, folder_id: renamed.folder_id, name: renamed.name },
+    });
+    return renamed;
+  },
+
+  'drive/rename-folder': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(input.folderId)));
+    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [
+      input.folderId,
+    ])[0];
+    if (!folder) throw substratError('not_found', `folder not found: ${input.folderId}`);
+    if (folder.id === ROOT_FOLDER_ID) {
+      throw substratError('validation_failed', 'the root folder has no name to change');
+    }
+    if (folder.name === input.name) return folder;
+
+    const parent = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [
+      folder.parent_id,
+    ])[0];
+    const path = parent && parent.path !== '' ? `${parent.path}/${input.name}` : input.name;
+    if (ctx.sql.query<{ id: string }>('SELECT id FROM drive_folders WHERE path = ? AND id != ?', [
+      path,
+      folder.id,
+    ])[0]) {
+      throw substratError('conflict', `a folder already exists at ${path}`);
+    }
+
+    /**
+     * The descendants' paths, and NOTHING else.
+     *
+     * `path` is derived, so it is the only thing a rename may touch: no `parent_id`
+     * moves, no grant is rewritten, no file row is read. That is the difference the
+     * model change bought — canopy addressed files BY path, so this operation there
+     * had to rewrite every descendant's identity and every grant that named one.
+     *
+     * The prefix guard is `path = old OR path LIKE old || '/%'`, not `LIKE old || '%'`:
+     * the loose form would also catch a sibling called `Documents 2026` and quietly
+     * re-root it.
+     */
+    ctx.sql.exec(
+      `UPDATE drive_folders
+          SET path = ? || substr(path, ?)
+        WHERE path = ? OR path LIKE ? || '/%'`,
+      [path, folder.path.length + 1, folder.path, folder.path],
+    );
+    ctx.sql.exec('UPDATE drive_folders SET name = ? WHERE id = ?', [input.name, folder.id]);
+
+    const renamed: FolderRow = { ...folder, name: input.name, path };
+    ctx.emit({
+      type: 'drive.folder-renamed',
+      schemaVersion: 1,
+      entity: { entityType: 'folder', entityId: renamed.id },
+      piiClass: 'none',
+      payload: { id: renamed.id, path: renamed.path },
+    });
+    return renamed;
+  },
+
+  'drive/trash-file': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
+    if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
+    if (file.state === 'trashed') return file;
+
+    // Both columns, in one statement: `state` is what reads filter on and
+    // `deleted_at` is when it happened, and a row where they disagree is a row no
+    // read expects. Nothing else writes either one.
+    const now = ctx.now();
+    ctx.sql.exec(
+      "UPDATE drive_files SET state = 'trashed', deleted_at = ?, updated_at = ? WHERE id = ?",
+      [now, now, file.id],
+    );
+    const trashed: FileRow = { ...file, state: 'trashed', deleted_at: now, updated_at: now };
+    ctx.emit({
+      type: 'drive.file-trashed',
+      schemaVersion: 1,
+      entity: { entityType: 'file', entityId: trashed.id },
+      piiClass: 'none',
+      payload: { id: trashed.id, folder_id: trashed.folder_id },
+    });
+    return trashed;
+  },
+
+  'drive/restore-file': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
+    if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
+    if (file.state === 'live') return file;
+
+    /**
+     * No uniqueness check here, and that is a consequence rather than an omission: a
+     * trashed file KEEPS its name. `(folder_id, name)` is unique regardless of state,
+     * so both ways in — `ensure-file` and `rename-file` — refuse a name the trash
+     * holds, and nothing can have taken it while this sat there. A restore therefore
+     * cannot conflict, and a check for it would be unreachable code with a test that
+     * cannot be written.
+     *
+     * The alternative — freeing the name on trash, so a new file may reuse it — needs
+     * the uniqueness to become partial (`WHERE state = 'live'`), which contradicts the
+     * `key: ['folder_id', 'name']` the model declares. Worth doing if the product wants
+     * it; it is a model change, not a branch here.
+     */
+    const now = ctx.now();
+    ctx.sql.exec(
+      "UPDATE drive_files SET state = 'live', deleted_at = NULL, updated_at = ? WHERE id = ?",
+      [now, file.id],
+    );
+    const restored: FileRow = { ...file, state: 'live', deleted_at: null, updated_at: now };
+    ctx.emit({
+      type: 'drive.file-restored',
+      schemaVersion: 1,
+      entity: { entityType: 'file', entityId: restored.id },
+      piiClass: 'none',
+      payload: { id: restored.id, folder_id: restored.folder_id },
+    });
+    return restored;
+  },
+
+  'drive/list-trash': async (ctx, input) => {
+    // Scope-wide, so there is no folder to check against up front: what a caller may
+    // see is decided per row by the checker. Over-fetch, because the filter runs after
+    // the walk and a page filtered afterwards returns fewer than it asked for.
+    const limit = input.limit ?? 50;
+    const rows = input.cursor
+      ? ctx.sql.query<FileRow>(
+          "SELECT * FROM drive_files WHERE state = 'trashed' AND id > ? ORDER BY id LIMIT ?",
+          [input.cursor, limit * 4],
+        )
+      : ctx.sql.query<FileRow>(
+          "SELECT * FROM drive_files WHERE state = 'trashed' ORDER BY id LIMIT ?",
+          [limit * 4],
+        );
+
+    const visible: FileRow[] = [];
+    for (const row of rows) {
+      if (visible.length === limit) break;
+      if ((await ctx.check(DRIVE_PERM.read, fileRef(row.id))).allowed) visible.push(row);
+    }
+    const next = rows.length > 0 && visible.length === limit ? visible[visible.length - 1]!.id : null;
+    return { entries: visible, nextCursor: next } as unknown as HandlerOutput<
+      (typeof driveOperations)['drive/list-trash']
+    >;
   },
 
   'drive/file-versions': async (ctx, input) => {
@@ -466,7 +653,7 @@ const operations = {
       // exists in another — an index that leaks existence is still a leak.
       if (!(await ctx.check(DRIVE_PERM.read, fileRef(fileId))).allowed) continue;
       const file = ctx.sql.query<FileRow>(
-        'SELECT * FROM drive_files WHERE id = ? AND deleted_at IS NULL',
+        "SELECT * FROM drive_files WHERE id = ? AND state = 'live'",
         [fileId],
       )[0];
       if (file) hits.push({ ...file, via });

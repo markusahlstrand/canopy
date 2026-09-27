@@ -89,6 +89,13 @@ export const driveEntities = defineEntities({
       current_version_id: z.string().nullable(),
       created_at: z.string(),
       updated_at: z.string(),
+      /**
+       * `'live'` or `'trashed'`. The fact every read filters on, and a column rather
+       * than a derivation because a kernel-composed page filters by equality only —
+       * `deleted_at IS NULL` is not something a caller can ask for. `deleted_at` beside
+       * it says WHEN, and the two are written together or not at all.
+       */
+      state: z.string(),
       deleted_at: z.string().nullable(),
     }),
     key: ['folder_id', 'name'],
@@ -196,7 +203,9 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     // K-41: a read declares the columns a caller may sort and filter by, and the
     // kernel builds the index behind them. `folder_id` is the filter this read is,
     // so it is declared rather than composed in the handler.
-    paged: { over: { entity: 'file', sortable: ['name', 'updated_at'], filterable: ['folder_id'] } },
+    paged: {
+      over: { entity: 'file', sortable: ['name', 'updated_at'], filterable: ['folder_id', 'state'] },
+    },
     http: { method: 'GET', path: '/folders/{folderId}/files' },
   },
 
@@ -306,6 +315,115 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       version: driveEntities.file_version.fields.nullable(),
     }),
     http: { method: 'GET', path: '/files/{fileId}' },
+  },
+
+  /**
+   * Rename a file. A name is one segment and stays unique in its folder, so a rename
+   * onto an occupied name is a conflict rather than a silent overwrite — the schema
+   * says so too, and this is the error the UI gets to show instead of a 500.
+   */
+  'drive/rename-file': {
+    summary: 'Rename a file',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string(), name: segment }),
+    output: driveEntities.file.fields,
+    http: { method: 'PATCH', path: '/files/{fileId}' },
+    emits: {
+      entity: 'file',
+      entityIdFrom: 'id',
+      type: 'drive.file-renamed',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['id', 'folder_id', 'name'],
+    },
+  },
+
+  /**
+   * Rename a folder, which moves the derived `path` of everything beneath it.
+   *
+   * This is where the model change either proves itself or is lost. Canopy addressed a
+   * file BY its path, so a folder rename was a rewrite of every descendant's identity;
+   * here `path` is a derived column and the parent edge is the identity, so a rename
+   * touches paths and **nothing else** — no parent edge moves, and no grant changes
+   * what it reaches. A test asserts exactly that, because it is the claim, not a
+   * detail of the implementation.
+   */
+  'drive/rename-folder': {
+    summary: 'Rename a folder and re-derive the paths beneath it',
+    permission: { key: 'drive:write', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({ folderId: z.string(), name: segment }),
+    output: driveEntities.folder.fields,
+    http: { method: 'PATCH', path: '/folders/{folderId}' },
+    emits: {
+      entity: 'folder',
+      entityIdFrom: 'id',
+      type: 'drive.folder-renamed',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['id', 'path'],
+    },
+  },
+
+  /**
+   * Trash a file: recoverable, and not a delete. The bytes stay in the attachment
+   * store and the version chain is intact — what changes is that every read but the
+   * trash listing stops returning it. Purging (dropping the attachment and the
+   * extracted text) is a retention concern and deliberately not here.
+   */
+  'drive/trash-file': {
+    summary: 'Move a file to the trash',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }),
+    output: driveEntities.file.fields,
+    http: { method: 'DELETE', path: '/files/{fileId}' },
+    emits: {
+      entity: 'file',
+      entityIdFrom: 'id',
+      type: 'drive.file-trashed',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['id', 'folder_id'],
+    },
+  },
+
+  /**
+   * Put a trashed file back. Refused when the name it wants has been taken since —
+   * restoring is a write like any other, and it cannot break the folder's uniqueness
+   * on the way in.
+   */
+  'drive/restore-file': {
+    summary: 'Restore a file from the trash',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }),
+    output: driveEntities.file.fields,
+    http: { method: 'POST', path: '/files/{fileId}/restore' },
+    emits: {
+      entity: 'file',
+      entityIdFrom: 'id',
+      type: 'drive.file-restored',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['id', 'folder_id'],
+    },
+  },
+
+  /**
+   * What is in the trash, scope-wide rather than per folder: a trashed file's folder
+   * is where it will go back to, not where a person looks for it.
+   *
+   * Visibility is a per-row proof walk, so the page may come back short — the same
+   * shape `drive/list-folders` uses, for the same reason: what a caller may see is
+   * decided by the checker, never by a WHERE clause on ownership.
+   */
+  'drive/list-trash': {
+    summary: 'The files in the trash',
+    narrows: {
+      reason: 'Returns only trashed files the caller may read',
+      checks: ['drive:read'],
+    },
+    output: driveEntities.file.fields,
+    paged: { sortKey: 'id' },
+    http: { method: 'GET', path: '/trash' },
   },
 
   'drive/file-versions': {
