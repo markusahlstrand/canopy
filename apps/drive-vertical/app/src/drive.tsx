@@ -12,7 +12,7 @@
  * Folders and files are one list, folders first, because that is what a drive looks
  * like — but they are two reads and two entity types underneath, and the actions differ.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, cn } from '@canopy/ui';
 import {
   DropdownMenu,
@@ -23,6 +23,7 @@ import {
 } from '@canopy/ui';
 import {
   ROOT_FOLDER_ID,
+  SEARCH_MIN,
   contentUrl,
   createFolder,
   listFolder,
@@ -31,10 +32,12 @@ import {
   renameFile,
   renameFolder,
   restoreFile,
+  search,
   trashFile,
   uploadFile,
   type DriveFile,
   type DriveFolder,
+  type SearchHit,
 } from './api';
 
 /**
@@ -53,8 +56,43 @@ export const DRIVE_ICONS = [
   'plus',
   'upload',
   'more',
+  'search',
 ] as const;
 export type IconName = (typeof DRIVE_ICONS)[number];
+
+/**
+ * Only the newest ask may write to the screen.
+ *
+ * Debouncing cancels pending TIMERS; it does nothing about a request already in flight.
+ * Type `lea`, pause, type `se`, and two requests exist — if the first answers second,
+ * the screen shows hits for `lea` under a box reading `lease`. The same race moves a
+ * folder listing: click into a folder, click back, and the deeper listing can land last.
+ *
+ * So every read takes a ticket and only writes if it is still the current one.
+ *
+ * `invalidate` is the other half, and it is not decoration: taking a ticket only when a
+ * read STARTS leaves a window. The search box is debounced by 200ms, so between a
+ * keystroke and the request it triggers, the previous term's request still holds the
+ * current ticket — and if it answers inside that window it writes hits for a term the
+ * box no longer holds, below the minimum length, having cleared `busy` on the way out.
+ * So the context changing invalidates immediately, before anything is scheduled.
+ */
+export function latestOnly() {
+  let issued = 0;
+  return {
+    /** Claim the screen for this read, invalidating every earlier one. */
+    take: () => ++issued,
+    /**
+     * The screen's context changed — a term, a folder, a view. Nothing already in
+     * flight may write, and no ticket is claimed: the next read takes its own.
+     */
+    invalidate: () => {
+      issued += 1;
+    },
+    /** May this read still write? */
+    current: (ticket: number) => ticket === issued,
+  };
+}
 
 /** A breadcrumb: the trail back to the root, built from the folder's own path. */
 interface Crumb {
@@ -72,40 +110,79 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const [folders, setFolders] = useState<DriveFolder[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<'drive' | 'trash'>('drive');
+  const [view, setView] = useState<'drive' | 'trash' | 'search'>('drive');
+  const [term, setTerm] = useState('');
+  const [hits, setHits] = useState<SearchHit[]>([]);
   const [trash, setTrash] = useState<DriveFile[]>([]);
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
+  const reads = useRef(latestOnly());
+  /**
+   * The CURRENT refresh, not the one an action closed over.
+   *
+   * An action started in folder A resolves after the user has opened folder B. Calling
+   * the refresh it captured would read folder A — and, worse, claim the screen's ticket
+   * while doing it, so folder B's own read could no longer correct the result. A ref
+   * keeps "refresh what is on screen" true at the moment it is called.
+   */
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async () => {
+    const ticket = reads.current.take();
     setBusy(true);
     try {
-      if (view === 'trash') {
-        setTrash(await listTrash());
+      if (view === 'search') {
+        // Below the floor there is nothing to ask for, and asking would be a 400.
+        const q = term.trim();
+        const found = q.length >= SEARCH_MIN ? (await search(q)).hits : [];
+        // Checked AFTER the await, every time: an answer that arrives for a term the
+        // box no longer holds is stale, and writing it is how a search shows results
+        // for what you typed a moment ago.
+        if (!reads.current.current(ticket)) return;
+        setHits(found);
+      } else if (view === 'trash') {
+        const bin = await listTrash();
+        if (!reads.current.current(ticket)) return;
+        setTrash(bin);
       } else {
         const [subfolders, contents] = await Promise.all([listFolders(folderId), listFolder(folderId)]);
+        if (!reads.current.current(ticket)) return;
         setFolders(subfolders);
         setFiles(contents);
       }
       onError(null);
     } catch (e: unknown) {
+      // A stale failure is as misleading as a stale answer: the folder it belonged to
+      // is not the one on screen.
+      if (!reads.current.current(ticket)) return;
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, onError]);
+  }, [folderId, view, term, onError]);
 
   useEffect(() => {
-    void refresh();
+    refreshRef.current = refresh;
   }, [refresh]);
 
+  useEffect(() => {
+    // A pause, not a keystroke: the index is per scope and cheap, but a request per
+    // character still races its own answers and the last one to land wins.
+    const t = setTimeout(() => void refresh(), view === 'search' ? 200 : 0);
+    return () => clearTimeout(t);
+  }, [refresh, view]);
+
   const open = (folder: DriveFolder) => {
+    // The listing on screen belongs to the folder being left; nothing in flight for it
+    // may land here.
+    reads.current.invalidate();
     setCrumbs((c) => [...c, { id: folder.id, name: folder.name }]);
     setFolderId(folder.id);
   };
 
   const upTo = (index: number) => {
+    reads.current.invalidate();
     // -1 is the root: the crumb trail holds everything below it.
     setCrumbs((c) => c.slice(0, index + 1));
     setFolderId(index < 0 ? ROOT_FOLDER_ID : crumbs[index]!.id);
@@ -114,7 +191,9 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const act = async (fn: () => Promise<unknown>) => {
     try {
       await fn();
-      await refresh();
+      // Through the ref: whatever the screen shows NOW, which may not be where this
+      // action started.
+      await refreshRef.current();
     } catch (e: unknown) {
       onError(e instanceof Error ? e.message : String(e));
     }
@@ -162,10 +241,46 @@ export function DriveScreen({ onError }: DriveScreenProps) {
           ))}
         </nav>
 
+        <div className="relative">
+          <Icon
+            name="search"
+            className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            value={term}
+            placeholder="Search this space"
+            aria-label="Search this space"
+            className="h-8 w-44 pl-8 sm:w-56"
+            onChange={(e) => {
+              const next = e.currentTarget.value;
+              // FIRST, before the debounce is even scheduled: the request for the
+              // previous term is in flight and still holds the ticket until then.
+              reads.current.invalidate();
+              setTerm(next);
+              // The previous term's hits are wrong the moment the box changes, so they
+              // go now rather than lingering until the next answer lands. With `busy`
+              // set, the list says "Loading…" instead of "No matches" for a search
+              // that has not run yet.
+              setHits([]);
+              setBusy(next.trim().length >= SEARCH_MIN);
+              // Emptying the box returns to where you were, rather than leaving an
+              // empty result list that looks like "nothing here".
+              setView(next.trim() ? 'search' : 'drive');
+            }}
+          />
+        </div>
+
         <Button
           variant={view === 'trash' ? 'default' : 'outline'}
           size="sm"
-          onClick={() => setView((v) => (v === 'trash' ? 'drive' : 'trash'))}
+          onClick={() => {
+            reads.current.invalidate();
+            setView((v) => {
+              if (v === 'trash') return 'drive';
+              setTerm('');
+              return 'trash';
+            });
+          }}
         >
           <Icon name="trash" className="size-4" />
           Trash
@@ -187,7 +302,42 @@ export function DriveScreen({ onError }: DriveScreenProps) {
         ) : null}
       </div>
 
-      {view === 'trash' ? (
+      {view === 'search' ? (
+        <Rows
+          empty={
+            term.trim().length < SEARCH_MIN
+              ? `Type at least ${SEARCH_MIN} characters.`
+              : `No matches for “${term.trim()}”.`
+          }
+          busy={busy}
+          rows={hits.map((hit) => ({
+            key: hit.id,
+            icon: 'file-text' as const,
+            name: hit.name,
+            // The distinction extraction bought: matching a document's text is a
+            // different answer to matching its name, and saying which is the feature.
+            meta: hit.via === 'content' ? 'Matched inside the document' : 'Matched in the name',
+            onOpen: hit.current_version_id
+              ? () => window.open(contentUrl(hit.id), '_blank', 'noopener')
+              : undefined,
+            actions: [
+              ...(hit.current_version_id
+                ? [
+                    {
+                      label: 'Download',
+                      onSelect: () => window.open(contentUrl(hit.id), '_blank', 'noopener'),
+                    },
+                  ]
+                : []),
+              {
+                label: 'Rename',
+                onSelect: () => setRenaming({ kind: 'file', id: hit.id, name: hit.name }),
+              },
+              { label: 'Move to trash', danger: true, onSelect: () => void act(() => trashFile(hit.id)) },
+            ],
+          }))}
+        />
+      ) : view === 'trash' ? (
         <Rows
           empty="The trash is empty."
           busy={busy}
