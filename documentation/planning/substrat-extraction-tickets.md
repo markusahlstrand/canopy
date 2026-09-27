@@ -210,6 +210,34 @@ runs *on* the platform (router, control plane, provisioning, metering) rather th
 converging with its contracts. It also collides head-on with K-15 and canopy's runtime plugin
 model. Decide deliberately — do not drift into it.
 
+### S12 — *(new)* How the portal renders scope-backed data · **decided** · [#64](https://github.com/markusahlstrand/canopy/issues/64)
+
+**The vertical serves the UI.** The drive lives in the vertical as its own SPA, same-origin
+behind `runWorkerFirst: /api/*`; the portal's drive surface moves there screen by screen,
+and `apps/portal` keeps only what is not a space's drive.
+
+Reached through the option beside it: a cross-origin portal client was built first
+(`vertical-drive.ts`, a CORS gate, `PORTAL_ORIGIN`) and then removed — one Worker serving
+its own SPA needs no CORS, no second cookie and no second session, so that cost was
+self-inflicted. The other objection, that the vertical is single-scope-per-hostname, no
+longer holds: one install serves many spaces, with the tenant from the router's assertion
+and the space selected by the app.
+
+Rejected: keeping the portal on `apps/api` while S10 migrates the store beneath it. It
+preserves everything, including the plugin runtime, but it runs **two permission surfaces**
+over the same documents for the length of a migration nobody can date — the leak D-17
+exists to prevent, held open deliberately. A decision to run two enforcement systems needs
+an end date and there was none to offer.
+
+**What it costs, paid rather than deferred:** the sandboxed-iframe plugin runtime cannot
+follow the UI into a sandbox-clean vertical (K-15, D-40, D-46), so the web-components seam
+moves from deferred to scheduled ([#73](https://github.com/markusahlstrand/canopy/issues/73)),
+and until it lands the vertical's UI has no plugin runtime at all.
+
+*Correction this records:* §1C above parks the portal under "stays in canopy — product."
+That is a statement about **ownership**, and it was read as though it were a plan. It is
+not one, and S12 is the plan it was mistaken for.
+
 ---
 
 ## 3. Sequencing, and the honest position
