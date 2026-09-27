@@ -12,7 +12,7 @@
  * Folders and files are one list, folders first, because that is what a drive looks
  * like — but they are two reads and two entity types underneath, and the actions differ.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, cn } from '@canopy/ui';
 import {
   DropdownMenu,
@@ -60,6 +60,27 @@ export const DRIVE_ICONS = [
 ] as const;
 export type IconName = (typeof DRIVE_ICONS)[number];
 
+/**
+ * Only the newest ask may write to the screen.
+ *
+ * Debouncing cancels pending TIMERS; it does nothing about a request already in flight.
+ * Type `lea`, pause, type `se`, and two requests exist — if the first answers second,
+ * the screen shows hits for `lea` under a box reading `lease`. The same race moves a
+ * folder listing: click into a folder, click back, and the deeper listing can land last.
+ *
+ * So every read takes a ticket and only writes if it is still the current one. Kept as a
+ * named thing rather than an inline counter so the rule can be asserted.
+ */
+export function latestOnly() {
+  let issued = 0;
+  return {
+    /** Claim the screen for this read, invalidating every earlier one. */
+    take: () => ++issued,
+    /** May this read still write? */
+    current: (ticket: number) => ticket === issued,
+  };
+}
+
 /** A breadcrumb: the trail back to the root, built from the folder's own path. */
 interface Crumb {
   id: string;
@@ -82,26 +103,40 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const [trash, setTrash] = useState<DriveFile[]>([]);
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
+  const reads = useRef(latestOnly());
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async () => {
+    const ticket = reads.current.take();
     setBusy(true);
     try {
       if (view === 'search') {
         // Below the floor there is nothing to ask for, and asking would be a 400.
-        setHits(term.trim().length >= SEARCH_MIN ? (await search(term.trim())).hits : []);
+        const q = term.trim();
+        const found = q.length >= SEARCH_MIN ? (await search(q)).hits : [];
+        // Checked AFTER the await, every time: an answer that arrives for a term the
+        // box no longer holds is stale, and writing it is how a search shows results
+        // for what you typed a moment ago.
+        if (!reads.current.current(ticket)) return;
+        setHits(found);
       } else if (view === 'trash') {
-        setTrash(await listTrash());
+        const bin = await listTrash();
+        if (!reads.current.current(ticket)) return;
+        setTrash(bin);
       } else {
         const [subfolders, contents] = await Promise.all([listFolders(folderId), listFolder(folderId)]);
+        if (!reads.current.current(ticket)) return;
         setFolders(subfolders);
         setFiles(contents);
       }
       onError(null);
     } catch (e: unknown) {
+      // A stale failure is as misleading as a stale answer: the folder it belonged to
+      // is not the one on screen.
+      if (!reads.current.current(ticket)) return;
       onError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (reads.current.current(ticket)) setBusy(false);
     }
   }, [folderId, view, term, onError]);
 
@@ -187,6 +222,12 @@ export function DriveScreen({ onError }: DriveScreenProps) {
             onChange={(e) => {
               const next = e.currentTarget.value;
               setTerm(next);
+              // The previous term's hits are wrong the moment the box changes, so they
+              // go now rather than lingering until the next answer lands. With `busy`
+              // set, the list says "Loading…" instead of "No matches" for a search
+              // that has not run yet.
+              setHits([]);
+              setBusy(next.trim().length >= SEARCH_MIN);
               // Emptying the box returns to where you were, rather than leaving an
               // empty result list that looks like "nothing here".
               setView(next.trim() ? 'search' : 'drive');

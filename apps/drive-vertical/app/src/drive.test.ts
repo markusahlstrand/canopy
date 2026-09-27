@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hasIcon } from '@canopy/ui';
-import { DRIVE_ICONS } from './drive';
+import { DRIVE_ICONS, latestOnly } from './drive';
 import { ApiError, contentUrl, currentSite, search, selectSite, siteHeaders } from './api';
 
 afterEach(() => {
@@ -90,5 +90,28 @@ describe('search asks the one question the API declares', () => {
     // and the message has to be the platform's rather than a status line.
     await expect(search('a')).rejects.toBeInstanceOf(ApiError);
     await expect(search('a')).rejects.toThrow('term is too short');
+  });
+});
+
+describe('only the newest read may write to the screen', () => {
+  it('invalidates every earlier ticket', () => {
+    const reads = latestOnly();
+    const first = reads.take();
+    expect(reads.current(first)).toBe(true);
+
+    const second = reads.take();
+    // The race this exists for: `first` is a request already in flight when the term
+    // changed. Debouncing cancelled no such request — only the pending timer — so it
+    // will answer, and it must not be allowed to render.
+    expect(reads.current(first)).toBe(false);
+    expect(reads.current(second)).toBe(true);
+  });
+
+  it('stays false for a ticket that lost, however late it answers', () => {
+    const reads = latestOnly();
+    const stale = reads.take();
+    reads.take();
+    reads.take();
+    expect(reads.current(stale)).toBe(false);
   });
 });
