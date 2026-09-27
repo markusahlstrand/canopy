@@ -111,4 +111,23 @@ export const driveMigrations: SqlMigration[] = [
       CREATE INDEX drive_file_text_by_status ON drive_file_text (status, file_id);
     `,
   },
+  {
+    version: '0003',
+    sql: `
+      -- Trash (#74). \`state\` is the FACT a read filters on; \`deleted_at\` is when it
+      -- happened. Two columns for one event, and the split is deliberate: a
+      -- kernel-composed page (K-41) filters by equality only, so "not trashed" has to
+      -- be a value a caller can equal — \`deleted_at IS NULL\` is not expressible there,
+      -- and rewriting the drive's hot listing as hand-composed SQL to get it would cost
+      -- the declared sort vocabulary and the index the kernel builds behind it.
+      --
+      -- The invariant is therefore ours to hold, and only two operations write either
+      -- column: state = 'trashed' if and only if deleted_at IS NOT NULL.
+      ALTER TABLE drive_files ADD COLUMN state TEXT NOT NULL DEFAULT 'live';
+
+      -- Existing rows are live by the default above; this makes any row that was
+      -- already retired agree with it rather than sitting in a state no read expects.
+      UPDATE drive_files SET state = 'trashed' WHERE deleted_at IS NOT NULL;
+    `,
+  },
 ];

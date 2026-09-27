@@ -141,6 +141,11 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
     // `unsupported` rather than `indexed`: the pair measures the permission check,
     // and a status carrying no text is the branch with the least else going on.
     'drive/record-text': { versionId: 'conformance', status: 'unsupported' },
+    // A rename needs a name, and it must not be the one the fixture already used:
+    // the pair measures the permission check, so a conflict refusal on the ALLOWED
+    // half would read as a failure of the check it is not testing.
+    'drive/rename-file': { name: 'renamed-by-conformance' },
+    'drive/rename-folder': { name: 'renamed-by-conformance' },
   },
   /**
    * The kit drives an entity check by putting an id in the input. `drive/folder-by-path`

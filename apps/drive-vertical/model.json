@@ -26,6 +26,9 @@
           "updated_at": {
             "type": "string"
           },
+          "state": {
+            "type": "string"
+          },
           "deleted_at": {
             "type": [
               "string",
@@ -40,6 +43,7 @@
           "current_version_id",
           "created_at",
           "updated_at",
+          "state",
           "deleted_at"
         ],
         "additionalProperties": false
