@@ -152,6 +152,33 @@ describe('a rename moves names and paths, and nothing else', () => {
     expect(after.file.id).toBe(deep.id);
   });
 
+  it('treats % and _ in a path as characters, not wildcards', async () => {
+    const stub = await as(ada);
+    // `segment` permits both, so a `LIKE old || '/%'` guard reads them as wildcards:
+    // renaming `Notes_1` would match `NotesA1/child` and rewrite a stranger's path
+    // while leaving its parent edge pointing somewhere else entirely.
+    const underscore = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Notes_1',
+    });
+    await stub.invoke('drive/create-folder', { parentId: underscore.id, name: 'inside' });
+    const lookalike = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'NotesA1',
+    });
+    await stub.invoke('drive/create-folder', { parentId: lookalike.id, name: 'child' });
+
+    await stub.invoke('drive/rename-folder', { folderId: underscore.id, name: 'Renamed' });
+
+    expect(
+      (await stub.invoke<FolderRow | null>('drive/folder-by-path', { path: 'Renamed/inside' }))?.name,
+    ).toBe('inside');
+    // The lookalike is untouched: same path it was created with.
+    expect(
+      (await stub.invoke<FolderRow | null>('drive/folder-by-path', { path: 'NotesA1/child' }))?.name,
+    ).toBe('child');
+  });
+
   it('will not rename a sibling whose path merely starts the same way', async () => {
     const stub = await as(ada);
     // 'Papers' is gone (renamed above), so this is a fresh pair whose prefixes overlap:
@@ -203,6 +230,28 @@ describe('trash is recoverable, and leaves every other read', () => {
     expect(bin.entries.map((f) => f.id)).toContain(doomed);
   });
 
+  it('a trashed file is gone from every read but the bin', async () => {
+    const stub = await as(ada);
+    // Not a state-specific error: to a caller the file is gone, and an error that said
+    // "trashed" would hand back the existence of something they were not shown.
+    await expect(stub.invoke('drive/get-file', { fileId: doomed })).rejects.toThrow(/not found/);
+    await expect(stub.invoke('drive/file-versions', { fileId: doomed })).rejects.toThrow(/not found/);
+    await expect(stub.invoke('drive/file-text', { fileId: doomed })).rejects.toThrow(/not found/);
+  });
+
+  it('refuses a version written to something in the trash', async () => {
+    const stub = await as(ada);
+    // This used to clear `deleted_at` while leaving `state = 'trashed'` — a row whose
+    // two halves disagreed, which the trash listing would then report as trashed with
+    // no timestamp. Refused instead: restore it first.
+    await expect(
+      stub.invoke('drive/record-version', {
+        fileId: doomed,
+        location: { source: 'external', externalKey: 'resurrect', mime: 'text/plain', size: 1 },
+      }),
+    ).rejects.toThrow(/in the trash/);
+  });
+
   it('a trashed file is not a search hit', async () => {
     const stub = await as(ada);
     const hits = await stub.invoke<{ hits: { id: string }[] }>('drive/search', { term: 'oops' });
@@ -247,5 +296,57 @@ describe('trash is recoverable, and leaves every other read', () => {
 
     const restored = await stub.invoke<FileRow>('drive/restore-file', { fileId: file.id });
     expect(restored.state).toBe('live');
+  });
+});
+
+describe('the trash walk does not end at other people\'s files', () => {
+  it('keeps a cursor whenever the scan filled its batch', async () => {
+    const stub = await as(ada);
+    // Cleo reaches ONE folder. With limit 1 the handler scans four rows per pass, so
+    // her file sitting behind four of Ada's is exactly the case that used to end the
+    // walk: a full batch with nothing visible in it returned no cursor at all.
+    const hidden = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Hidden',
+    });
+    const shared = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Shared',
+    });
+    await host.admin.grant(staff, {
+      principalId: cleo,
+      permission: DRIVE_PERM.read,
+      node: { tenantId: tenant, scopeId: scope },
+      entity: { entityType: 'folder', entityId: shared.id },
+      grantedBy: ada,
+    });
+
+    // Four in the folder she cannot read, then one she can — ULIDs are creation
+    // ordered, so this is also the order the walk sees them in.
+    for (const name of ['a.md', 'b.md', 'c.md', 'd.md']) {
+      const f = await stub.invoke<FileRow>('drive/ensure-file', { folderId: hidden.id, name });
+      await stub.invoke('drive/trash-file', { fileId: f.id });
+    }
+    const hers = await stub.invoke<FileRow>('drive/ensure-file', {
+      folderId: shared.id,
+      name: 'hers.md',
+    });
+    await stub.invoke('drive/trash-file', { fileId: hers.id });
+
+    const cleoStub = await as(cleo);
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    // Bounded: a walk that cannot end is the other failure, and this asserts it ends.
+    for (let page = 0; page < 6; page++) {
+      const res: { entries: FileRow[]; nextCursor?: string | null } = await cleoStub.invoke(
+        'drive/list-trash',
+        cursor ? { limit: 1, cursor } : { limit: 1 },
+      );
+      seen.push(...res.entries.map((f) => f.id));
+      cursor = res.nextCursor ?? null;
+      if (!cursor) break;
+    }
+    expect(seen).toContain(hers.id);
+    expect(cursor).toBeNull();
   });
 });

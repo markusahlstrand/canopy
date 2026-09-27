@@ -367,8 +367,14 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   /**
    * Trash a file: recoverable, and not a delete. The bytes stay in the attachment
    * store and the version chain is intact — what changes is that every read but the
-   * trash listing stops returning it. Purging (dropping the attachment and the
-   * extracted text) is a retention concern and deliberately not here.
+   * trash listing refuses it: `list-folder`, `search`, `get-file`, `file-versions` and
+   * `file-text` all behave as though it were gone, and `record-version` refuses to
+   * write to it. `not_found` rather than a state-specific error, because an error that
+   * distinguished "trashed" from "never existed" would hand back the existence of
+   * something the caller was not shown.
+   *
+   * Purging (dropping the attachment and the extracted text) is a retention concern and
+   * deliberately not here.
    */
   'drive/trash-file': {
     summary: 'Move a file to the trash',
@@ -387,9 +393,13 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
 
   /**
-   * Put a trashed file back. Refused when the name it wants has been taken since —
-   * restoring is a write like any other, and it cannot break the folder's uniqueness
-   * on the way in.
+   * Put a trashed file back.
+   *
+   * This cannot conflict, and that is a consequence of the trash rather than a gap: a
+   * trashed file KEEPS its name, because `(folder_id, name)` is unique regardless of
+   * state — so `ensure-file` and `rename-file` both refuse a name the trash holds, and
+   * nothing can have taken it meanwhile. Freeing the name on trash instead would need
+   * the uniqueness to become partial, which contradicts the declared `key`.
    */
   'drive/restore-file': {
     summary: 'Restore a file from the trash',

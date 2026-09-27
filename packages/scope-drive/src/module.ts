@@ -24,7 +24,13 @@ import {
   type HandlerOutput,
   type Page,
 } from '@substrat-run/contracts';
-import { assertAllowed, ulid, type ModuleRegistration, type OperationHandler } from '@substrat-run/kernel';
+import {
+  assertAllowed,
+  ulid,
+  type ModuleRegistration,
+  type OperationContext,
+  type OperationHandler,
+} from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
 import { driveOperations } from '../spec/model.js';
 import { driveManifest } from './manifest.js';
@@ -73,6 +79,20 @@ interface FileTextRow {
   chars: number;
   extracted_at: string;
   detail: string | null;
+}
+
+/**
+ * The file row, or a refusal — and a TRASHED file is a refusal.
+ *
+ * `not_found` rather than a state-specific error on purpose: to a caller, a file in the
+ * trash is gone, and an error distinguishing "trashed" from "never existed" hands back
+ * the existence of something they were not shown. The trash listing is the one door
+ * that says otherwise, and `restore-file` is the one write that reaches through it.
+ */
+function liveFile(ctx: OperationContext, fileId: string): FileRow {
+  const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [fileId])[0];
+  if (!file || file.state !== 'live') throw substratError('not_found', `file not found: ${fileId}`);
+  return file;
 }
 
 /** The entity refs the checks narrow onto. */
@@ -199,6 +219,13 @@ const operations = {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
     const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
     if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
+    // Writing to something in the trash is refused rather than silently resurrecting
+    // it. This update used to clear `deleted_at` — harmless before trash existed, and
+    // afterwards a way to leave `state = 'trashed'` with no timestamp beside it, which
+    // is a row no read expects.
+    if (file.state !== 'live') {
+      throw substratError('conflict', `this file is in the trash — restore it before writing to it`);
+    }
 
     // One location, guaranteed by the declaration's discriminated union: the columns
     // the other source would use stay null because there is nothing to read them
@@ -272,11 +299,11 @@ const operations = {
     );
     ctx.link(versionRef(version.id), fileRef(file.id));
     ctx.sql.exec(
-      'UPDATE drive_files SET current_version_id = ?, updated_at = ?, deleted_at = NULL WHERE id = ?',
+      'UPDATE drive_files SET current_version_id = ?, updated_at = ? WHERE id = ?',
       [version.id, now, file.id],
     );
 
-    const written: FileRow = { ...file, current_version_id: version.id, updated_at: now, deleted_at: null };
+    const written: FileRow = { ...file, current_version_id: version.id, updated_at: now };
     ctx.emit({
       type: 'drive.file-written',
       schemaVersion: 1,
@@ -289,8 +316,7 @@ const operations = {
 
   'drive/get-file': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
-    const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
-    if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
+    const file = liveFile(ctx, input.fileId);
     const version = file.current_version_id
       ? (ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [
           file.current_version_id,
@@ -358,15 +384,19 @@ const operations = {
      * model change bought — canopy addressed files BY path, so this operation there
      * had to rewrite every descendant's identity and every grant that named one.
      *
-     * The prefix guard is `path = old OR path LIKE old || '/%'`, not `LIKE old || '%'`:
-     * the loose form would also catch a sibling called `Documents 2026` and quietly
-     * re-root it.
+     * The prefix guard compares a literal substring rather than using `LIKE`. Two
+     * traps, one after the other: `LIKE old || '%'` would catch a sibling called
+     * `Documents 2026`, and `LIKE` ALSO reads `%` and `_` inside the old path as
+     * wildcards — a folder named `Notes_1` would match `NotesA1/child` and rewrite a
+     * stranger's path. `segment` permits both characters, so the guard cannot rely on
+     * them being absent.
      */
+    const prefix = `${folder.path}/`;
     ctx.sql.exec(
       `UPDATE drive_folders
           SET path = ? || substr(path, ?)
-        WHERE path = ? OR path LIKE ? || '/%'`,
-      [path, folder.path.length + 1, folder.path, folder.path],
+        WHERE path = ? OR substr(path, 1, ?) = ?`,
+      [path, folder.path.length + 1, folder.path, prefix.length, prefix],
     );
     ctx.sql.exec('UPDATE drive_folders SET name = ? WHERE id = ?', [input.name, folder.id]);
 
@@ -446,22 +476,36 @@ const operations = {
     // see is decided per row by the checker. Over-fetch, because the filter runs after
     // the walk and a page filtered afterwards returns fewer than it asked for.
     const limit = input.limit ?? 50;
+    const scan = limit * 4;
     const rows = input.cursor
       ? ctx.sql.query<FileRow>(
           "SELECT * FROM drive_files WHERE state = 'trashed' AND id > ? ORDER BY id LIMIT ?",
-          [input.cursor, limit * 4],
+          [input.cursor, scan],
         )
       : ctx.sql.query<FileRow>(
           "SELECT * FROM drive_files WHERE state = 'trashed' ORDER BY id LIMIT ?",
-          [limit * 4],
+          [scan],
         );
 
     const visible: FileRow[] = [];
+    let scanned: FileRow | undefined;
     for (const row of rows) {
       if (visible.length === limit) break;
+      scanned = row;
       if ((await ctx.check(DRIVE_PERM.read, fileRef(row.id))).allowed) visible.push(row);
     }
-    const next = rows.length > 0 && visible.length === limit ? visible[visible.length - 1]!.id : null;
+
+    /**
+     * The cursor is where the SCAN stopped, not where the page ended.
+     *
+     * A page can come back short because the rows this caller may see are sparse, and
+     * a short page whose cursor was the last VISIBLE row — or absent — would end the
+     * walk at the first dense patch of other people's files. Someone whose only
+     * readable trashed file sits past the first batch could never reach it. So: the
+     * walk continues whenever the scan filled its batch, and the cursor is the last row
+     * examined, readable or not.
+     */
+    const next = rows.length === scan ? (scanned?.id ?? null) : null;
     return { entries: visible, nextCursor: next } as unknown as HandlerOutput<
       (typeof driveOperations)['drive/list-trash']
     >;
@@ -469,6 +513,7 @@ const operations = {
 
   'drive/file-versions': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
     // Keyset over the ULID id, descending: a version id is creation-ordered, so
     // "newest first" needs no second column and no `created_at` tie-break.
     const limit = input.limit ?? 50;
@@ -602,6 +647,7 @@ const operations = {
 
   'drive/file-text': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
     const row = ctx.sql.query<FileTextRow>(
       'SELECT id, file_id, version_id, status, chars, extracted_at, detail FROM drive_file_text WHERE file_id = ?',
       [input.fileId],
