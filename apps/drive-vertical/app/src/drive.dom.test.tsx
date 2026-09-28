@@ -20,6 +20,8 @@ import { selectSite } from './api';
 interface Pending {
   url: string;
   resolve: (body: unknown) => void;
+  /** For the cases that are about a failure arriving late. */
+  reject: (error: Error) => void;
 }
 
 let pending: Pending[] = [];
@@ -31,15 +33,20 @@ let pending: Pending[] = [];
 function queueFetch() {
   pending = [];
   vi.stubGlobal('fetch', (url: string) =>
-    new Promise((resolveFetch) => {
+    new Promise((resolveFetch, rejectFetch) => {
       pending.push({
         url,
+        reject: (error: Error) => rejectFetch(error),
         resolve: (body: unknown) =>
           resolveFetch({
             ok: true,
             status: 200,
             statusText: 'stubbed',
             json: () => Promise.resolve(body),
+            // The preview reads a text body with `.text()`, not `.json()`. Without this
+            // the call rejected and the panel merely reported an error — which a test
+            // asserting something else would never notice.
+            text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
           } as Response),
       });
     }),
@@ -210,5 +217,103 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     expect(screen.getByText('at-the-root.md')).toBeTruthy();
     expect(screen.queryByText('renamed.pdf')).toBeNull();
     expect(screen.queryByText('lease.pdf')).toBeNull();
+  });
+});
+
+describe('preview shows what the version actually is', () => {
+  it('renders an image inline and a download for its bytes', async () => {
+    await renderDrive([], [file('01A', 'photo.png')]);
+
+    fireEvent.click(screen.getByText('photo.png'));
+    await flush();
+    await answer('/files/01A', {
+      file: file('01A', 'photo.png'),
+      version: { id: '01V', file_id: '01A', source: 'blob', blob_ref: '01B', mime: 'image/png', size: 2048, created_at: '2026-09-01T00:00:00.000Z' },
+    });
+
+    const img = screen.getByAltText('photo.png') as HTMLImageElement;
+    expect(img.src).toContain('/api/files/01A/content');
+    const link = screen.getByText('Download').closest('a') as HTMLAnchorElement;
+    expect(link.getAttribute('download')).toBe('photo.png');
+  });
+
+  it('offers no preview for a type the browser cannot show, and says which type', async () => {
+    await renderDrive([], [file('01A', 'archive.zip')]);
+
+    fireEvent.click(screen.getByText('archive.zip'));
+    await flush();
+    await answer('/files/01A', {
+      file: file('01A', 'archive.zip'),
+      version: { id: '01V', file_id: '01A', source: 'blob', blob_ref: '01B', mime: 'application/zip', size: 10, created_at: '2026-09-01T00:00:00.000Z' },
+    });
+
+    // Naming the type matters: "no preview" alone reads as a failure rather than a fact
+    // about zip files.
+    expect(screen.getByText(/application\/zip/)).toBeTruthy();
+  });
+
+  it('says nobody has looked, rather than showing an empty text tab', async () => {
+    await renderDrive([], [file('01A', 'notes.md')]);
+
+    fireEvent.click(screen.getByText('notes.md'));
+    await flush();
+    await answer('/files/01A', {
+      file: file('01A', 'notes.md'),
+      version: { id: '01V', file_id: '01A', source: 'blob', blob_ref: '01B', mime: 'text/markdown', size: 4, created_at: '2026-09-01T00:00:00.000Z' },
+    });
+    // The text shape fetches its body and shows it.
+    await answer('/files/01A/content', '# notes\nthe body renders inline');
+    expect(screen.getByText(/the body renders inline/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Text'));
+    await flush();
+    await answer('/files/01A/text', null);
+
+    expect(screen.getByText(/Nobody has looked inside/)).toBeTruthy();
+  });
+});
+
+describe('the preview panel’s reads do not compete with each other', () => {
+  it('still shows the file after a tab is opened before the metadata lands', async () => {
+    await renderDrive([], [file('01A', 'photo.png')]);
+
+    fireEvent.click(screen.getByText('photo.png'));
+    await flush();
+
+    // The user reaches for Versions before `getFile` has answered. With one guard for the
+    // whole panel this took the ticket, so the metadata answer was dropped as stale and
+    // the panel sat claiming the file had nothing written to it — the guard suppressing a
+    // CURRENT answer rather than an outdated one.
+    fireEvent.click(screen.getByText('Versions'));
+    await answer('/files/01A/versions', []);
+    await answer('/files/01A', {
+      file: file('01A', 'photo.png'),
+      version: { id: '01V', file_id: '01A', source: 'blob', blob_ref: '01B', mime: 'image/png', size: 2048, created_at: '2026-09-01T00:00:00.000Z' },
+    });
+
+    fireEvent.click(screen.getByText('Preview'));
+    expect(screen.getByAltText('photo.png')).toBeTruthy();
+    expect(screen.queryByText(/Nothing has been written/)).toBeNull();
+  });
+
+  it('says nothing at all once the panel has been closed', async () => {
+    const errors: (string | null)[] = [];
+    render(<DriveScreen onError={(m) => errors.push(m)} />);
+    await flush();
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [file('01A', 'photo.png')]);
+
+    fireEvent.click(screen.getByText('photo.png'));
+    await flush();
+    fireEvent.click(screen.getByLabelText('Close preview'));
+
+    // The read was in flight when the panel closed. Its failure belongs to a file nobody
+    // is looking at, so it must not reach the error surface.
+    const pendingGet = pending.find((p) => p.url.endsWith('/files/01A'));
+    expect(pendingGet).toBeTruthy();
+    await act(async () => {
+      pendingGet!.reject(new Error('gone'));
+    });
+    expect(errors.filter((e) => e === 'gone')).toHaveLength(0);
   });
 });

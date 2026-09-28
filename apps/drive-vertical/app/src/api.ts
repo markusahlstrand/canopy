@@ -79,8 +79,54 @@ export interface Site {
 export interface FileVersion {
   id: string;
   file_id: string;
+  source: string;
+  blob_ref: string | null;
+  mime: string;
   size: number | null;
   created_at: string;
+}
+
+/**
+ * The file's bytes as text, bounded.
+ *
+ * Only for a type the browser would show as text anyway. The bound is not politeness:
+ * this lands in a React state and then in the DOM, and a 40MB log rendered into a `<pre>`
+ * is a hung tab. What is cut says so rather than trailing off silently.
+ */
+export const TEXT_PREVIEW_LIMIT = 200_000;
+
+export async function fileBodyAsText(fileId: string): Promise<{ text: string; truncated: boolean }> {
+  const res = await fetch(contentUrl(fileId), { credentials: 'same-origin' });
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+
+  // Read as a STREAM and stop at the limit. `res.text()` would download and decode the
+  // whole file first and then throw most of it away — so a 2GB log is 2GB through the
+  // tab's memory to show its first 200k characters, which is the opposite of a bound.
+  if (!res.body) {
+    // No stream to read: a runtime or a test double that only implements `text()`.
+    const whole = await res.text();
+    return whole.length > TEXT_PREVIEW_LIMIT
+      ? { text: whole.slice(0, TEXT_PREVIEW_LIMIT), truncated: true }
+      : { text: whole, truncated: false };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let truncated = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+    if (text.length >= TEXT_PREVIEW_LIMIT) {
+      truncated = true;
+      // Cancel rather than break: the rest of the body should never leave the server.
+      await reader.cancel();
+      break;
+    }
+  }
+  if (!truncated) text += decoder.decode();
+  return { text: text.slice(0, TEXT_PREVIEW_LIMIT), truncated };
 }
 
 /**
@@ -164,6 +210,31 @@ export const ensureFile = (folderId: string, name: string) =>
     method: 'POST',
     body: JSON.stringify({ name }),
   });
+
+/** One file and the version it currently points at — what a preview resolves through. */
+export const getFile = (fileId: string) =>
+  call<{ file: DriveFile; version: FileVersion | null }>(`/files/${encodeURIComponent(fileId)}`);
+
+/**
+ * What extraction found, or `null` for "nobody has looked".
+ *
+ * The text itself is not here: the operation omits it, because the row is what a screen
+ * needs and the body is what the FTS index is for. `status` carries the useful
+ * distinction — `empty` is "we looked and there was nothing", which is a different
+ * sentence to `unsupported` and a very different one to `null`.
+ */
+export const fileText = (fileId: string) =>
+  call<FileTextRow | null>(`/files/${encodeURIComponent(fileId)}/text`);
+
+export interface FileTextRow {
+  id: string;
+  file_id: string;
+  version_id: string;
+  status: 'indexed' | 'empty' | 'unsupported' | 'failed';
+  chars: number;
+  extracted_at: string | null;
+  detail: string | null;
+}
 
 /** A file's versions, newest first. Paged, so again a bare array. */
 export const fileVersions = (fileId: string) =>

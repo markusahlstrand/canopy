@@ -14,6 +14,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, cn } from '@canopy/ui';
+import { latestOnly } from './reads';
+import { PreviewPanel } from './preview';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -60,40 +62,6 @@ export const DRIVE_ICONS = [
 ] as const;
 export type IconName = (typeof DRIVE_ICONS)[number];
 
-/**
- * Only the newest ask may write to the screen.
- *
- * Debouncing cancels pending TIMERS; it does nothing about a request already in flight.
- * Type `lea`, pause, type `se`, and two requests exist — if the first answers second,
- * the screen shows hits for `lea` under a box reading `lease`. The same race moves a
- * folder listing: click into a folder, click back, and the deeper listing can land last.
- *
- * So every read takes a ticket and only writes if it is still the current one.
- *
- * `invalidate` is the other half, and it is not decoration: taking a ticket only when a
- * read STARTS leaves a window. The search box is debounced by 200ms, so between a
- * keystroke and the request it triggers, the previous term's request still holds the
- * current ticket — and if it answers inside that window it writes hits for a term the
- * box no longer holds, below the minimum length, having cleared `busy` on the way out.
- * So the context changing invalidates immediately, before anything is scheduled.
- */
-export function latestOnly() {
-  let issued = 0;
-  return {
-    /** Claim the screen for this read, invalidating every earlier one. */
-    take: () => ++issued,
-    /**
-     * The screen's context changed — a term, a folder, a view. Nothing already in
-     * flight may write, and no ticket is claimed: the next read takes its own.
-     */
-    invalidate: () => {
-      issued += 1;
-    },
-    /** May this read still write? */
-    current: (ticket: number) => ticket === issued,
-  };
-}
-
 /** A breadcrumb: the trail back to the root, built from the folder's own path. */
 interface Crumb {
   id: string;
@@ -116,6 +84,7 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const [trash, setTrash] = useState<DriveFile[]>([]);
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
+  const [previewing, setPreviewing] = useState<string | null>(null);
   const reads = useRef(latestOnly());
   /**
    * The CURRENT refresh, not the one an action closed over.
@@ -211,7 +180,8 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   };
 
   return (
-    <div>
+    <div className="flex min-h-0 gap-4">
+      <div className="min-w-0 flex-1">
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <nav aria-label="Breadcrumb" className="mr-auto flex items-center gap-1 text-sm">
           <button
@@ -317,9 +287,7 @@ export function DriveScreen({ onError }: DriveScreenProps) {
             // The distinction extraction bought: matching a document's text is a
             // different answer to matching its name, and saying which is the feature.
             meta: hit.via === 'content' ? 'Matched inside the document' : 'Matched in the name',
-            onOpen: hit.current_version_id
-              ? () => window.open(contentUrl(hit.id), '_blank', 'noopener')
-              : undefined,
+            onOpen: () => setPreviewing(hit.id),
             actions: [
               ...(hit.current_version_id
                 ? [
@@ -372,9 +340,10 @@ export function DriveScreen({ onError }: DriveScreenProps) {
               icon: 'file-text' as const,
               name: file.name,
               meta: file.current_version_id ? `Updated ${when(file.updated_at)}` : 'No content yet',
-              onOpen: file.current_version_id
-                ? () => window.open(contentUrl(file.id), '_blank', 'noopener')
-                : undefined,
+              // A click previews. Before this slice it opened the bytes in a new tab,
+              // which is what a drive does when it has no preview — not what it does
+              // when it has one.
+              onOpen: () => setPreviewing(file.id),
               actions: [
                 ...(file.current_version_id
                   ? [
@@ -409,6 +378,16 @@ export function DriveScreen({ onError }: DriveScreenProps) {
             setCreating(false);
             void act(() => createFolder(folderId, name));
           }}
+        />
+      ) : null}
+
+      </div>
+
+      {previewing ? (
+        <PreviewPanel
+          fileId={previewing}
+          onClose={() => setPreviewing(null)}
+          onError={onError}
         />
       ) : null}
 
