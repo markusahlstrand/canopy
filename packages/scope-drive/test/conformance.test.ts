@@ -148,6 +148,14 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
     'drive/rename-folder': { name: 'renamed-by-conformance' },
   },
   /**
+   * Not listed here, and not in `uncovered` either: `drive/move-file` and
+   * `drive/move-folder` declare `narrows`, so they are outside this partition altogether —
+   * the kit only plans coverage for operations with a leading entity `permission`. Both
+   * check write on TWO folders (destination and source), which one declared entity cannot
+   * express, and `trash.test.ts` drives them by hand — including the refusal that matters:
+   * write on the destination alone is not enough, because access follows a move and that
+   * would be a way to reach content nobody shared.
+   *
    * The kit drives an entity check by putting an id in the input. `drive/folder-by-path`
    * takes a PATH, so there is no id to put — it is declared `resolved` and the kit
    * reports it here rather than letting it pass as covered. `search.test.ts` drives it

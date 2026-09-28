@@ -412,6 +412,110 @@ const operations = {
     return renamed;
   },
 
+  'drive/move-file': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(input.folderId)));
+    const file = liveFile(ctx, input.fileId);
+    // Moving something OUT of a folder is a write to that folder too, and the declaration
+    // can only narrow onto one entity. The destination is the declared one because it is
+    // the permission a caller is most likely to lack.
+    assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(file.folder_id)));
+    if (file.folder_id === input.folderId) return file;
+
+    if (!ctx.sql.query<FolderRow>('SELECT id FROM drive_folders WHERE id = ?', [input.folderId])[0]) {
+      throw substratError('not_found', `folder not found: ${input.folderId}`);
+    }
+    const taken = ctx.sql.query<{ id: string }>(
+      "SELECT id FROM drive_files WHERE folder_id = ? AND name = ? AND state = 'live'",
+      [input.folderId, file.name],
+    )[0];
+    if (taken) throw substratError('conflict', `that folder already has a '${file.name}'`);
+
+    const now = ctx.now();
+    ctx.sql.exec('UPDATE drive_files SET folder_id = ?, updated_at = ? WHERE id = ?', [
+      input.folderId,
+      now,
+      file.id,
+    ]);
+    // The edge, atomically. This is what makes access follow: a grant above the old folder
+    // stops reaching the file here, one above the new folder starts, and the kernel
+    // tombstones the old edge and records `entity.relinked` on the file's timeline.
+    ctx.relink(fileRef(file.id), folderRef(file.folder_id), folderRef(input.folderId));
+
+    const moved: FileRow = { ...file, folder_id: input.folderId, updated_at: now };
+    ctx.emit({
+      type: 'drive.file-moved',
+      schemaVersion: 1,
+      entity: { entityType: 'file', entityId: moved.id },
+      piiClass: 'none',
+      payload: { id: moved.id, folder_id: moved.folder_id },
+    });
+    return moved;
+  },
+
+  'drive/move-folder': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(input.parentId)));
+    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [
+      input.folderId,
+    ])[0];
+    if (!folder) throw substratError('not_found', `folder not found: ${input.folderId}`);
+    if (folder.id === ROOT_FOLDER_ID) {
+      throw substratError('validation_failed', 'the root folder has nowhere to go');
+    }
+    assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(folder.parent_id)));
+    if (folder.parent_id === input.parentId) return folder;
+
+    const parent = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [
+      input.parentId,
+    ])[0];
+    if (!parent) throw substratError('not_found', `folder not found: ${input.parentId}`);
+
+    /**
+     * A folder cannot move inside itself.
+     *
+     * `relink` refuses this too — it knows the edge graph — but the refusal has to come
+     * first, because the path rewrite below would already have built the cycle by the time
+     * the kernel saw the edge. The check is on PATHS rather than a walk, which is the
+     * cheaper question with the same answer: a descendant's path starts with this one's.
+     */
+    const prefix = `${folder.path}/`;
+    if (parent.id === folder.id || parent.path === folder.path || parent.path.startsWith(prefix)) {
+      throw substratError('validation_failed', 'a folder cannot move inside itself');
+    }
+
+    const path = parent.path === '' ? folder.name : `${parent.path}/${folder.name}`;
+    if (
+      ctx.sql.query<{ id: string }>('SELECT id FROM drive_folders WHERE path = ? AND id != ?', [
+        path,
+        folder.id,
+      ])[0]
+    ) {
+      throw substratError('conflict', `a folder already exists at ${path}`);
+    }
+
+    // The subtree's paths, exactly as `rename-folder` re-derives them — literal prefix, so
+    // `%` and `_` in the old path stay characters.
+    ctx.sql.exec(
+      `UPDATE drive_folders
+          SET path = ? || substr(path, ?)
+        WHERE path = ? OR substr(path, 1, ?) = ?`,
+      [path, folder.path.length + 1, folder.path, prefix.length, prefix],
+    );
+    ctx.sql.exec('UPDATE drive_folders SET parent_id = ? WHERE id = ?', [parent.id, folder.id]);
+    // One edge for the whole subtree: everything below reaches its grants through this
+    // folder, so relinking it moves access for all of them at once.
+    ctx.relink(folderRef(folder.id), folderRef(folder.parent_id), folderRef(parent.id));
+
+    const moved: FolderRow = { ...folder, parent_id: parent.id, path };
+    ctx.emit({
+      type: 'drive.folder-moved',
+      schemaVersion: 1,
+      entity: { entityType: 'folder', entityId: moved.id },
+      piiClass: 'none',
+      payload: { id: moved.id, parent_id: moved.parent_id, path: moved.path },
+    });
+    return moved;
+  },
+
   'drive/trash-file': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
     const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];

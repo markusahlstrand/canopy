@@ -267,6 +267,22 @@ export const renameFolder = (folderId: string, name: string) =>
     body: JSON.stringify({ name }),
   });
 
+/**
+ * Move a file or a folder. Access follows: a grant above the destination reaches it
+ * afterwards, and one above where it left does not (#75).
+ */
+export const moveFile = (fileId: string, folderId: string) =>
+  call<DriveFile>(`/files/${encodeURIComponent(fileId)}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ folderId }),
+  });
+
+export const moveFolder = (folderId: string, parentId: string) =>
+  call<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ parentId }),
+  });
+
 /** Recoverable: the bytes stay, and `restoreFile` puts it back under the same name. */
 export const trashFile = (fileId: string) =>
   call<DriveFile>(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
