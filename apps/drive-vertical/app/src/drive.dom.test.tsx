@@ -362,3 +362,26 @@ describe('the moved table brings its own behaviour with it', () => {
     expect(screen.queryByText('Name')).toBeTruthy();
   });
 });
+
+describe('dragging a file onto a folder moves it', () => {
+  it('fires the move the prefix check used to swallow', async () => {
+    await renderDrive(
+      [{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }],
+      [file('01A', 'lease.pdf')],
+    );
+
+    const row = screen.getByText('lease.pdf').closest('tr')!;
+    const target = screen.getByText('Papers').closest('tr')!;
+
+    // The table judged a drop target by `id.startsWith("folder:")`, which was true of the
+    // portal's synthetic folder rows and false of every folder in a scope — so this
+    // gesture did nothing at all, silently, while the UI advertised it.
+    fireEvent.dragStart(row);
+    fireEvent.dragOver(target);
+    fireEvent.drop(target);
+    await flush();
+
+    const moved = pending.find((p) => p.url.includes('/files/01A/move'));
+    expect(moved, `no move request; saw ${pending.map((p) => p.url).join(', ')}`).toBeTruthy();
+  });
+});

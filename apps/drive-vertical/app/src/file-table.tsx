@@ -126,16 +126,33 @@ function FileTableSkeleton({ view }: { view: "list" | "grid" }) {
 /** A real file the user can pick up (folders and synthetic rows aren't draggable). */
 const isDraggableFile = (f: FileItem) => f.kind !== "folder";
 
-/** A plain folder within the current space — a valid move destination.
- *  Excludes space mounts (`space:`) and "Shared with me" (`__shared`), which are cross-space. */
-const isFolderDropTarget = (f: FileItem) => f.kind === "folder" && f.id.startsWith("folder:");
+/**
+ * A folder in this space — a valid move destination.
+ *
+ * The portal tested `id.startsWith("folder:")` because its folder rows were synthetic,
+ * keyed by path, and that also excluded its cross-space rows (space mounts, "shared with
+ * me"). A scope's folders are ordinary entities with ULIDs and there is nothing
+ * cross-space in a listing, so the prefix test rejected every folder and took
+ * drag-to-move with it.
+ */
+const isFolderDropTarget = (f: FileItem) => f.isFolder;
 
 const COLUMNS: { key: SortKey; label: string; className: string }[] = [
   { key: "name", label: "Name", className: "" },
   { key: "modified", label: "Modified", className: "w-[124px]" },
 ];
 
-const STD_ACTIONS = ["Open", "Download", "Share"];
+/**
+ * What the menus offer, per row — and nothing beyond what `onAction` can perform.
+ *
+ * `Share` and `Reprocess` came across with the component and have no operations behind
+ * them; a folder cannot be downloaded or trashed either, so those are file-only. The rule
+ * is the same one the rest of this UI follows: an item that does nothing is worse than an
+ * item that is absent.
+ */
+export function actionsFor(file: FileItem): string[] {
+  return file.isFolder ? ['Open', 'Rename', 'Move'] : ['Open', 'Download', 'Rename', 'Move', 'Delete'];
+}
 
 function RowActions({ file, onAction }: { file: FileItem; onAction: (action: string, f: FileItem) => void }) {
   return (
@@ -149,18 +166,15 @@ function RowActions({ file, onAction }: { file: FileItem; onAction: (action: str
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
-        {STD_ACTIONS.map((a) => (
-          <DropdownMenuItem key={a} onSelect={() => onAction(a, file)}>
+        {actionsFor(file).map((a) => (
+          <DropdownMenuItem
+            key={a}
+            variant={a === "Delete" ? "destructive" : undefined}
+            onSelect={() => onAction(a, file)}
+          >
             {a}
           </DropdownMenuItem>
         ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => onAction("Rename", file)}>Rename</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => onAction("Move", file)}>Move</DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => onAction("Delete", file)}>
-          Delete
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -376,17 +390,22 @@ export function FileTable({
                   </tr>
                 </ContextMenuTrigger>
                 <ContextMenuContent className="w-48">
-                  <ContextMenuItem onSelect={() => onOpen(f)}>Open</ContextMenuItem>
-                  <ContextMenuItem onSelect={() => onAction("Download", f)}>Download</ContextMenuItem>
-                  <ContextMenuItem onSelect={() => onAction("Share", f)}>Share</ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem onSelect={() => onAction("Rename", f)}>Rename</ContextMenuItem>
-                  <ContextMenuItem onSelect={() => onAction("Move", f)}>Move</ContextMenuItem>
-                  {f.kind !== "folder" && (
-                    <ContextMenuItem onSelect={() => onAction("Reprocess", f)}>
-                      <Icon name="sparkles" size={15} />
-                      Reprocess
-                    </ContextMenuItem>
+                  {actionsFor(f).map((a) =>
+                    a === "Open" ? (
+                      // Open is the double-click, so it goes straight there rather than
+                      // through `onAction` — the one item with a shorter path.
+                      <ContextMenuItem key={a} onSelect={() => onOpen(f)}>
+                        Open
+                      </ContextMenuItem>
+                    ) : (
+                      <ContextMenuItem
+                        key={a}
+                        variant={a === "Delete" ? "destructive" : undefined}
+                        onSelect={() => onAction(a, f)}
+                      >
+                        {a}
+                      </ContextMenuItem>
+                    ),
                   )}
                   {pluginItems.length > 0 && <ContextMenuSeparator />}
                   {pluginItems.map((item) => (
@@ -395,10 +414,6 @@ export function FileTable({
                       {item.label}
                     </ContextMenuItem>
                   ))}
-                  <ContextMenuSeparator />
-                  <ContextMenuItem variant="destructive" onSelect={() => onAction("Delete", f)}>
-                    Delete
-                  </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
             );

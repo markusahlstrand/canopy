@@ -240,6 +240,12 @@ export function DriveScreen({ onError }: DriveScreenProps) {
    * component moved rather than wired to nothing here.
    */
   const onAction = (action: string, item: FileItem) => {
+    if (action === 'Open') {
+      const folder = folders.find((f) => f.id === item.id);
+      if (folder) open(folder);
+      else setPreviewing(item.id);
+      return;
+    }
     if (action === 'Rename') {
       setRenaming({ kind: item.isFolder ? 'folder' : 'file', id: item.id, name: item.name });
       return;
