@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown, Star } from "lucide-react";
 import type { FileItem } from "@/lib/mock-data";
 import { FileIcon } from "@/components/file-icon";
-import { AvatarGroup } from "@/components/person-avatar";
+import { PeopleGroup } from "@/components/person-avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -17,8 +17,8 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import { Skeleton } from "@/components/ui/skeleton";
+} from "@canopy/ui";
+import { Skeleton } from "@canopy/ui";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import type { FileKind } from "@/lib/mock-data";
@@ -295,7 +295,7 @@ export function FileTable({
             <div className="truncate text-[13.5px] font-medium">{f.name}</div>
             <div className="flex items-center justify-between">
               <span className="font-mono text-[11.5px] text-muted-foreground">{f.modified}</span>
-              {f.sharedWith && <AvatarGroup people={f.sharedWith} max={2} />}
+              {f.sharedWith && <PeopleGroup people={f.sharedWith} max={2} />}
             </div>
           </div>
         ))}
@@ -388,7 +388,7 @@ export function FileTable({
                     </td>
                     <td className="px-3">
                       {f.sharedWith && f.sharedWith.length > 0 ? (
-                        <AvatarGroup people={f.sharedWith} />
+                        <PeopleGroup people={f.sharedWith} />
                       ) : (
                         <span className="text-[13px] text-muted-foreground">Only you</span>
                       )}

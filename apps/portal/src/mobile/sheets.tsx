@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sheet, SheetContent } from "@canopy/ui";
 import { ShareDialog } from "@/components/share-dialog";
 import { Icon } from "@/lib/icons";
 import { FileIcon } from "@/components/file-icon";

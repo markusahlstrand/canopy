@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Toaster } from "@/components/ui/sonner";
+import { Toaster } from "@canopy/ui";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {

@@ -41,7 +41,14 @@ export function PersonAvatar({
   );
 }
 
-export function AvatarGroup({ people, max = 3 }: { people: string[]; max?: number }) {
+/**
+ * A row of people, overflowing into a count.
+ *
+ * Named `PeopleGroup` rather than `AvatarGroup` because shadcn's own `avatar` primitive
+ * exports an `AvatarGroup` — a layout div — and this is a different thing about people.
+ * The primitive keeps the upstream name so the next copy of it does not collide again.
+ */
+export function PeopleGroup({ people, max = 3 }: { people: string[]; max?: number }) {
   if (people.length === 0) {
     return <span className="text-muted-foreground text-[13px]">Only you</span>;
   }

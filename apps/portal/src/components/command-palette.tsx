@@ -8,7 +8,7 @@ import {
   CommandList,
   CommandSeparator,
   CommandShortcut,
-} from "@/components/ui/command";
+} from "@canopy/ui";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/lib/icons";
 import { FileIcon } from "@/components/file-icon";

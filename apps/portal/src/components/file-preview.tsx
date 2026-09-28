@@ -5,7 +5,7 @@ import { ShareDialog } from "@/components/share-dialog";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "@/components/file-icon";
-import { AvatarGroup, PersonAvatar } from "@/components/person-avatar";
+import { PeopleGroup, PersonAvatar } from "@/components/person-avatar";
 import { PluginViewer } from "@/components/plugin-viewer";
 import { findViewer } from "@/plugins/viewers";
 import { PLUGIN_UI } from "@/plugins";
@@ -622,7 +622,7 @@ export function FilePreview({
         </Detail>
         <Detail label="Owner">{file.owner ?? "Unknown"}</Detail>
         <Detail label="Shared with">
-          {file.sharedWith?.length ? <AvatarGroup people={file.sharedWith} /> : "Only you"}
+          {file.sharedWith?.length ? <PeopleGroup people={file.sharedWith} /> : "Only you"}
         </Detail>
         <Detail label="Location">
           <span className="flex items-center gap-1.5">
