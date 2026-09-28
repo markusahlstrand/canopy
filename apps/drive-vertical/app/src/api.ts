@@ -98,10 +98,35 @@ export const TEXT_PREVIEW_LIMIT = 200_000;
 export async function fileBodyAsText(fileId: string): Promise<{ text: string; truncated: boolean }> {
   const res = await fetch(contentUrl(fileId), { credentials: 'same-origin' });
   if (!res.ok) throw new ApiError(res.status, res.statusText);
-  const whole = await res.text();
-  return whole.length > TEXT_PREVIEW_LIMIT
-    ? { text: whole.slice(0, TEXT_PREVIEW_LIMIT), truncated: true }
-    : { text: whole, truncated: false };
+
+  // Read as a STREAM and stop at the limit. `res.text()` would download and decode the
+  // whole file first and then throw most of it away — so a 2GB log is 2GB through the
+  // tab's memory to show its first 200k characters, which is the opposite of a bound.
+  if (!res.body) {
+    // No stream to read: a runtime or a test double that only implements `text()`.
+    const whole = await res.text();
+    return whole.length > TEXT_PREVIEW_LIMIT
+      ? { text: whole.slice(0, TEXT_PREVIEW_LIMIT), truncated: true }
+      : { text: whole, truncated: false };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let truncated = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+    if (text.length >= TEXT_PREVIEW_LIMIT) {
+      truncated = true;
+      // Cancel rather than break: the rest of the body should never leave the server.
+      await reader.cancel();
+      break;
+    }
+  }
+  if (!truncated) text += decoder.decode();
+  return { text: text.slice(0, TEXT_PREVIEW_LIMIT), truncated };
 }
 
 /**

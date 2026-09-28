@@ -89,13 +89,46 @@ export function PreviewPanel({
   const [versions, setVersions] = useState<FileVersion[] | null>(null);
   const [extracted, setExtracted] = useState<FileTextRow | null | undefined>(undefined);
   const [body, setBody] = useState<{ text: string; truncated: boolean } | null>(null);
-  // One guard for the panel's life, not one per render: a fresh instance every render
-  // would make every in-flight read current again, which is the bug inverted.
-  const reads = useRef(latestOnly()).current;
+
+  /**
+   * FOUR guards, one per independent read — not one for the panel.
+   *
+   * A single guard made the reads compete: opening Versions while `getFile` was still in
+   * flight took the ticket, so the metadata answer was discarded as stale and the panel
+   * sat claiming the file had no content. The guard exists to drop answers a NEWER ask
+   * replaced, and these four do not replace each other — they are four different
+   * questions about the same file, asked whenever the user happens to ask them.
+   *
+   * Each is one instance for the panel's life (a fresh one per render would make every
+   * in-flight read current again, which is the race inverted), and all four are
+   * invalidated together when `fileId` changes or the panel closes.
+   */
+  const meta = useRef(latestOnly()).current;
+  const bodyReads = useRef(latestOnly()).current;
+  const versionReads = useRef(latestOnly()).current;
+  const textReads = useRef(latestOnly()).current;
+
+  /**
+   * Leaving this file — for another, or by closing — retires every pending answer.
+   *
+   * The cleanup runs on both, which is what makes one hook enough: without it a rejection
+   * arriving after the panel closed would call `onError` and put an error on screen about
+   * a file nobody is looking at.
+   */
+  useEffect(
+    () => () => {
+      meta.invalidate();
+      bodyReads.invalidate();
+      versionReads.invalidate();
+      textReads.invalidate();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fileId],
+  );
 
   /** The file and its current version: everything else hangs off the version's mime. */
   useEffect(() => {
-    const ticket = reads.take();
+    const ticket = meta.take();
     setFile(null);
     setVersion(null);
     setBody(null);
@@ -103,15 +136,15 @@ export function PreviewPanel({
     setVersions(null);
     getFile(fileId)
       .then((got) => {
-        if (!reads.current(ticket)) return;
+        if (!meta.current(ticket)) return;
         setFile(got.file);
         setVersion(got.version);
       })
       .catch((e: unknown) => {
-        if (!reads.current(ticket)) return;
+        if (!meta.current(ticket)) return;
         onError(e instanceof Error ? e.message : String(e));
       });
-    // `reads` is stable for this panel; re-running on it would defeat the guard.
+    // The guards are stable for this panel; re-running on them would defeat them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, onError]);
 
@@ -120,13 +153,13 @@ export function PreviewPanel({
   /** Text bodies are fetched, not linked — everything else the browser fetches itself. */
   useEffect(() => {
     if (tab !== 'file' || shape !== 'text' || !version) return;
-    const ticket = reads.take();
+    const ticket = bodyReads.take();
     fileBodyAsText(fileId)
       .then((got) => {
-        if (reads.current(ticket)) setBody(got);
+        if (bodyReads.current(ticket)) setBody(got);
       })
       .catch((e: unknown) => {
-        if (reads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+        if (bodyReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, tab, shape, version?.id, onError]);
@@ -135,23 +168,23 @@ export function PreviewPanel({
     (next: Tab) => {
       setTab(next);
       if (next === 'versions' && versions === null) {
-        const ticket = reads.take();
+        const ticket = versionReads.take();
         fileVersions(fileId)
           .then((got) => {
-            if (reads.current(ticket)) setVersions(got);
+            if (versionReads.current(ticket)) setVersions(got);
           })
           .catch((e: unknown) => {
-            if (reads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+            if (versionReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
           });
       }
       if (next === 'text' && extracted === undefined) {
-        const ticket = reads.take();
+        const ticket = textReads.take();
         fileText(fileId)
           .then((got) => {
-            if (reads.current(ticket)) setExtracted(got);
+            if (textReads.current(ticket)) setExtracted(got);
           })
           .catch((e: unknown) => {
-            if (reads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+            if (textReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
           });
       }
     },

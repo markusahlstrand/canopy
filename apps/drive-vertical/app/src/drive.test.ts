@@ -10,7 +10,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hasIcon } from '@canopy/ui';
 import { DRIVE_ICONS } from './drive';
 import { latestOnly } from './reads';
-import { ApiError, contentUrl, currentSite, search, selectSite, siteHeaders } from './api';
+import {
+  ApiError,
+  TEXT_PREVIEW_LIMIT,
+  contentUrl,
+  currentSite,
+  fileBodyAsText,
+  search,
+  selectSite,
+  siteHeaders,
+} from './api';
 
 afterEach(() => {
   selectSite(null);
@@ -131,5 +140,50 @@ describe('only the newest read may write to the screen', () => {
     // And it claims nothing: the next read takes its own ticket rather than inheriting.
     const next = reads.take();
     expect(reads.current(next)).toBe(true);
+  });
+});
+
+describe('a text preview stops reading at the limit', () => {
+  /** A body delivered in chunks, so the reader can be observed stopping. */
+  function streamOf(chunks: string[]): { body: ReadableStream<Uint8Array>; pulled: () => number; cancelled: () => boolean } {
+    let pulled = 0;
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= chunks.length) return controller.close();
+        controller.enqueue(encoder.encode(chunks[pulled]!));
+        pulled += 1;
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    return { body, pulled: () => pulled, cancelled: () => cancelled };
+  }
+
+  it('cancels the response instead of downloading the rest', async () => {
+    // Ten chunks of 100k: `res.text()` would decode all 1M characters to show 200k. The
+    // point of the bound is that the rest never crosses the wire.
+    const stream = streamOf(Array.from({ length: 10 }, () => 'x'.repeat(100_000)));
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({ ok: true, status: 200, statusText: 'ok', body: stream.body } as Response),
+    );
+
+    const got = await fileBodyAsText('01A');
+
+    expect(got.truncated).toBe(true);
+    expect(got.text).toHaveLength(TEXT_PREVIEW_LIMIT);
+    expect(stream.cancelled()).toBe(true);
+    // Two chunks is 200k — enough to fill the bound. The other eight are never asked for.
+    expect(stream.pulled()).toBeLessThanOrEqual(3);
+  });
+
+  it('keeps a short body whole, and says it was not cut', async () => {
+    const stream = streamOf(['short enough']);
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({ ok: true, status: 200, statusText: 'ok', body: stream.body } as Response),
+    );
+    await expect(fileBodyAsText('01A')).resolves.toEqual({ text: 'short enough', truncated: false });
   });
 });
