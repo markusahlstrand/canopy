@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchContent } from "@/lib/api";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@canopy/ui";
 import { cn } from "@/lib/utils";
 
 /**

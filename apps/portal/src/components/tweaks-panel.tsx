@@ -1,5 +1,5 @@
 import { Settings2 } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@canopy/ui";
 import { cn } from "@/lib/utils";
 import { ACCENT_HSL, type Tweaks } from "@/lib/tweaks";
 

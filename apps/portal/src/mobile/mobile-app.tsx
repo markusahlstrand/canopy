@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Toaster } from "@/components/ui/sonner";
+import { Toaster } from "@canopy/ui";
 import { toast } from "sonner";
 import { Icon } from "@/lib/icons";
 import { cn } from "@/lib/utils";

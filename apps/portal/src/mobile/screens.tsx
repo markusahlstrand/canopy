@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "@/lib/icons";
 import { FileIcon } from "@/components/file-icon";
-import { PersonAvatar, AvatarGroup } from "@/components/person-avatar";
+import { PersonAvatar, PeopleGroup } from "@/components/person-avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,7 +58,7 @@ function MFileRow({ file, onClick }: { file: FileItem; onClick: () => void }) {
           {file.sharedWith && file.sharedWith.length > 0 && (
             <>
               <span className="opacity-50">·</span>
-              <AvatarGroup people={file.sharedWith} max={3} />
+              <PeopleGroup people={file.sharedWith} max={3} />
             </>
           )}
         </div>

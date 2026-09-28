@@ -4,8 +4,8 @@ import { Icon } from "@/lib/icons";
 import { CanopyMark } from "@/components/canopy-mark";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Progress } from "@canopy/ui";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@canopy/ui";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,7 +18,7 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+} from "@canopy/ui";
 import { STORAGE } from "@/lib/mock-data";
 import { creatorsFor, type InstalledCreator } from "@/plugins/viewers";
 import { connectorStatus, testConnector } from "@/lib/api";
