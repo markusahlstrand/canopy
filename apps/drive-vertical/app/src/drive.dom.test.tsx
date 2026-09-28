@@ -12,7 +12,7 @@
  * promise chain would only ever observe the order the runtime happened to pick.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { DriveScreen } from './drive';
 import { selectSite } from './api';
 
@@ -82,7 +82,20 @@ const file = (id: string, name: string) => ({
 
 beforeEach(() => {
   queueFetch();
-  vi.useFakeTimers({ shouldAdvanceTime: true });
+  /**
+   * A FULLY manual clock — no `shouldAdvanceTime`.
+   *
+   * With it, the fake clock advances alongside real time, so the wall-clock milliseconds
+   * spent inside `answer`'s `await act(...)` could carry the timer past 200ms and start
+   * the next search read. That read takes a ticket and invalidates the older request all
+   * by itself, which would make the debounce-window test below pass whether or not the
+   * fix it exists for is present — the exact false positive this file was written to
+   * avoid, reintroduced through the clock instead of the promise order.
+   *
+   * Manual means only `flush()` can leave the debounce window, so the window is a fact
+   * about the test rather than about how long the machine took.
+   */
+  vi.useFakeTimers();
 });
 
 afterEach(() => {
@@ -191,7 +204,10 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     await answer('/folders/root/folders', [{ id: '01G', parent_id: 'root', name: 'Notes', path: 'Notes' }]);
     await answer('/folders/root/files', [file('01C', 'at-the-root.md')]);
 
-    await waitFor(() => expect(screen.getByText('at-the-root.md')).toBeTruthy());
+    // A direct assertion rather than `waitFor`: the clock is manual, so `waitFor` would
+    // poll a timer nothing advances and time out. It also is not needed — `answer` wraps
+    // each resolution in `act`, so every state update it causes has already flushed.
+    expect(screen.getByText('at-the-root.md')).toBeTruthy();
     expect(screen.queryByText('renamed.pdf')).toBeNull();
     expect(screen.queryByText('lease.pdf')).toBeNull();
   });
