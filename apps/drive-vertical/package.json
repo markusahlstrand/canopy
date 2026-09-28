@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Canopy's drive as a deployable Substrat vertical — one scope per space.",
+  "description": "Canopy's drive as a deployable Substrat vertical \u2014 one scope per space.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.app.json --noEmit",
     "test": "vitest run",
@@ -25,6 +25,7 @@
     "@substrat-run/vertical-auth": "^0.15.8",
     "@substrat-run/vertical-host": "^0.126.0",
     "hono": "^4.13.10",
+    "lucide-react": "^1.48.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "zod": "^4.6.5"

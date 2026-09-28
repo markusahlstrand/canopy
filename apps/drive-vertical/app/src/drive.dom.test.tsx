@@ -184,7 +184,7 @@ describe('an action refreshes the folder on screen, not the one it started in', 
       [],
     );
 
-    fireEvent.click(screen.getByText('Papers'));
+    fireEvent.doubleClick(screen.getByText('Papers'));
     await flush();
     await answer('/folders/01F/folders', []);
     await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
@@ -224,7 +224,7 @@ describe('preview shows what the version actually is', () => {
   it('renders an image inline and a download for its bytes', async () => {
     await renderDrive([], [file('01A', 'photo.png')]);
 
-    fireEvent.click(screen.getByText('photo.png'));
+    fireEvent.doubleClick(screen.getByText('photo.png'));
     await flush();
     await answer('/files/01A', {
       file: file('01A', 'photo.png'),
@@ -240,7 +240,7 @@ describe('preview shows what the version actually is', () => {
   it('offers no preview for a type the browser cannot show, and says which type', async () => {
     await renderDrive([], [file('01A', 'archive.zip')]);
 
-    fireEvent.click(screen.getByText('archive.zip'));
+    fireEvent.doubleClick(screen.getByText('archive.zip'));
     await flush();
     await answer('/files/01A', {
       file: file('01A', 'archive.zip'),
@@ -255,7 +255,7 @@ describe('preview shows what the version actually is', () => {
   it('says nobody has looked, rather than showing an empty text tab', async () => {
     await renderDrive([], [file('01A', 'notes.md')]);
 
-    fireEvent.click(screen.getByText('notes.md'));
+    fireEvent.doubleClick(screen.getByText('notes.md'));
     await flush();
     await answer('/files/01A', {
       file: file('01A', 'notes.md'),
@@ -277,7 +277,7 @@ describe('the preview panel’s reads do not compete with each other', () => {
   it('still shows the file after a tab is opened before the metadata lands', async () => {
     await renderDrive([], [file('01A', 'photo.png')]);
 
-    fireEvent.click(screen.getByText('photo.png'));
+    fireEvent.doubleClick(screen.getByText('photo.png'));
     await flush();
 
     // The user reaches for Versions before `getFile` has answered. With one guard for the
@@ -303,7 +303,7 @@ describe('the preview panel’s reads do not compete with each other', () => {
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', [file('01A', 'photo.png')]);
 
-    fireEvent.click(screen.getByText('photo.png'));
+    fireEvent.doubleClick(screen.getByText('photo.png'));
     await flush();
     fireEvent.click(screen.getByLabelText('Close preview'));
 
@@ -315,5 +315,50 @@ describe('the preview panel’s reads do not compete with each other', () => {
       pendingGet!.reject(new Error('gone'));
     });
     expect(errors.filter((e) => e === 'gone')).toHaveLength(0);
+  });
+});
+
+describe('the moved table brings its own behaviour with it', () => {
+  it('sorts by a column header, and toggles direction on a second click', async () => {
+    await renderDrive([], [file('01A', 'beta.md'), file('01B', 'alpha.md')]);
+
+    // The screen sorts the rows and the table renders what it is handed — the component
+    // reports a sort rather than applying one, which only a test makes visible.
+    const names = () => screen.getAllByRole('row').slice(1).map((r) => r.textContent ?? '');
+
+    // The listing arrived beta-then-alpha; the default sort is name ascending, so the
+    // order on screen is not the order the scope returned.
+    expect(names()[0]).toContain('alpha.md');
+
+    // Clicking the column already sorted flips the direction rather than re-sorting.
+    fireEvent.click(screen.getByText('Name'));
+    expect(names()[0]).toContain('beta.md');
+
+    fireEvent.click(screen.getByText('Name'));
+    expect(names()[0]).toContain('alpha.md');
+  });
+
+  it('selects on a single click and opens on a double one', async () => {
+    await renderDrive([], [file('01A', 'photo.png')]);
+
+    // Finder semantics, and the reason the preview tests above had to be rewritten: a
+    // single click selects, so opening is the second click rather than the first.
+    fireEvent.click(screen.getByText('photo.png'));
+    expect(pending.some((p) => p.url.endsWith('/files/01A'))).toBe(false);
+
+    fireEvent.doubleClick(screen.getByText('photo.png'));
+    await flush();
+    expect(pending.some((p) => p.url.endsWith('/files/01A'))).toBe(true);
+  });
+
+  it('switches to the grid and back', async () => {
+    await renderDrive([], [file('01A', 'photo.png')]);
+    // The grid has no column headers; the list does. That is the cheapest observable
+    // difference between the two, and it is the one a user notices first.
+    expect(screen.queryByText('Name')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Switch to grid'));
+    expect(screen.queryByText('Name')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Switch to list'));
+    expect(screen.queryByText('Name')).toBeTruthy();
   });
 });
