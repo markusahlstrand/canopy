@@ -20,13 +20,13 @@
     "@canopy/store": "workspace:*",
     "@cloudflare/containers": "^0.3.7",
     "@hono/node-server": "^2.1.1",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "hono": "^4.13.10",
     "jose": "^6.2.12",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.3",
     "@typespec/compiler": "^1.16.0",
     "@typespec/http": "^1.16.0",
     "@typespec/openapi": "^1.16.0",
@@ -34,6 +34,6 @@
     "ajv": "^8.20.0",
     "tsx": "^4.23.15",
     "typescript": "~7.0.2",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.2"
   }
 }
