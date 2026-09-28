@@ -373,12 +373,25 @@ describe('dragging a file onto a folder moves it', () => {
     const row = screen.getByText('lease.pdf').closest('tr')!;
     const target = screen.getByText('Papers').closest('tr')!;
 
+    /**
+     * A drag event carries a `DataTransfer`; `fireEvent` does not invent one, and the
+     * handlers use `setData`, `effectAllowed` and `dropEffect`. Without this the handler
+     * throws on the first line — which vitest reports as an unhandled error beside a
+     * passing test, so the test looked green while the gesture never ran.
+     */
+    const dataTransfer = {
+      setData: () => {},
+      getData: () => '',
+      effectAllowed: 'none',
+      dropEffect: 'none',
+    };
+
     // The table judged a drop target by `id.startsWith("folder:")`, which was true of the
     // portal's synthetic folder rows and false of every folder in a scope — so this
     // gesture did nothing at all, silently, while the UI advertised it.
-    fireEvent.dragStart(row);
-    fireEvent.dragOver(target);
-    fireEvent.drop(target);
+    fireEvent.dragStart(row, { dataTransfer });
+    fireEvent.dragOver(target, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
     await flush();
 
     const moved = pending.find((p) => p.url.includes('/files/01A/move'));
