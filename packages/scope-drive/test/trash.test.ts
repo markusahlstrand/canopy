@@ -512,6 +512,40 @@ describe('a move takes access with it', () => {
     expect(where.file.folder_id).toBe(locked.id);
   });
 
+  it('refuses a move onto a name the destination’s trash still holds', async () => {
+    const stub = await as(ada);
+    const here = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Here',
+    });
+    const there = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'There',
+    });
+
+    // A trashed file keeps its name (#74), and `(folder_id, name)` is unique regardless of
+    // state — so a check that looked only at live rows would pass and then hit the
+    // constraint, turning a conflict into a database error.
+    const doomedThere = await stub.invoke<FileRow>('drive/ensure-file', {
+      folderId: there.id,
+      name: 'report.pdf',
+    });
+    await stub.invoke('drive/trash-file', { fileId: doomedThere.id });
+
+    const mine = await stub.invoke<FileRow>('drive/ensure-file', {
+      folderId: here.id,
+      name: 'report.pdf',
+    });
+    await expect(
+      stub.invoke('drive/move-file', { fileId: mine.id, folderId: there.id }),
+    ).rejects.toThrow(/trashed file in that folder holds the name/);
+
+    // And it is still where it was.
+    expect(
+      (await stub.invoke<{ file: FileRow }>('drive/get-file', { fileId: mine.id })).file.folder_id,
+    ).toBe(here.id);
+  });
+
   it('refuses a folder moving inside itself, and a name already taken', async () => {
     const stub = await as(ada);
     const outer = await stub.invoke<FolderRow>('drive/create-folder', {

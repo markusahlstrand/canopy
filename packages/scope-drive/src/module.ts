@@ -424,11 +424,23 @@ const operations = {
     if (!ctx.sql.query<FolderRow>('SELECT id FROM drive_folders WHERE id = ?', [input.folderId])[0]) {
       throw substratError('not_found', `folder not found: ${input.folderId}`);
     }
-    const taken = ctx.sql.query<{ id: string }>(
-      "SELECT id FROM drive_files WHERE folder_id = ? AND name = ? AND state = 'live'",
+    // Every state, not just live: `(folder_id, name)` is unique regardless, so a trashed
+    // file in the destination still holds the name. Filtering to live rows passed this
+    // check and then hit the UNIQUE constraint — a raw database error where the caller
+    // should get a `conflict` saying which of the two cases it is. Same rule and same two
+    // messages as `ensure-file`.
+    const taken = ctx.sql.query<{ id: string; state: string }>(
+      'SELECT id, state FROM drive_files WHERE folder_id = ? AND name = ?',
       [input.folderId, file.name],
     )[0];
-    if (taken) throw substratError('conflict', `that folder already has a '${file.name}'`);
+    if (taken) {
+      throw substratError(
+        'conflict',
+        taken.state === 'trashed'
+          ? `a trashed file in that folder holds the name '${file.name}' — restore it or rename this one`
+          : `that folder already has a '${file.name}'`,
+      );
+    }
 
     const now = ctx.now();
     ctx.sql.exec('UPDATE drive_files SET folder_id = ?, updated_at = ? WHERE id = ?', [
