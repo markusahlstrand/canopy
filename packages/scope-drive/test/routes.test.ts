@@ -30,9 +30,11 @@ describe('the derived route table', () => {
       'GET /api/trash',
       'PATCH /api/files/:fileId',
       'PATCH /api/folders/:folderId',
+      'POST /api/files/:fileId/move',
       'POST /api/files/:fileId/restore',
       'POST /api/files/:fileId/versions',
       'POST /api/folders/:folderId/files',
+      'POST /api/folders/:folderId/move',
       'POST /api/folders/:parentId/folders',
     ]);
   });

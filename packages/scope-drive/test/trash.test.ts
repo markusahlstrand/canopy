@@ -31,6 +31,8 @@ const scope = scopeId.parse(ulid());
 const ada = principalId.parse(ulid());
 /** NOT a member. One grant, deep in the tree, and nothing at the node. */
 const cleo = principalId.parse(ulid());
+/** A member: reads the space, and holds write only where he is given it. */
+const bjorn = principalId.parse(ulid());
 
 interface FileRow {
   id: string;
@@ -58,11 +60,13 @@ beforeAll(async () => {
   await host.provisionBlobStore(staff, { tenantId: tenant, vertical: 'drive', binding: 'BLOBS' });
   await host.admin.activateScope(staff, tenant, scope);
   for (const role of ROLES) await host.admin.defineRole(staff, tenant, role);
-  await host.admin.assignRole(staff, {
-    principalId: ada,
-    roleKey: 'member',
-    node: { tenantId: tenant, scopeId: scope },
-  });
+  for (const p of [ada, bjorn]) {
+    await host.admin.assignRole(staff, {
+      principalId: p,
+      roleKey: 'member',
+      node: { tenantId: tenant, scopeId: scope },
+    });
+  }
   for (const permission of [DRIVE_PERM.write, DRIVE_PERM.manage]) {
     await host.admin.grant(staff, {
       principalId: ada,
@@ -391,5 +395,183 @@ describe('the trash walk does not end at other people\'s files', () => {
     }
     for (const id of ids) expect(seen).toContain(id);
     expect(cursor).toBeNull();
+  });
+});
+
+describe('a move takes access with it', () => {
+  it('hands a folder and its subtree to whoever can reach the new parent', async () => {
+    const stub = await as(ada);
+    const personal = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Personal',
+    });
+    const shared = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Family',
+    });
+    const year = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: personal.id,
+      name: '2026',
+    });
+    const deep = await stub.invoke<FileRow>('drive/ensure-file', {
+      folderId: year.id,
+      name: 'lease.pdf',
+    });
+
+    // Cleo is not a member. Her whole reach is one grant on Family — so before the move she
+    // cannot see a file that lives under Personal.
+    await host.admin.grant(staff, {
+      principalId: cleo,
+      permission: DRIVE_PERM.read,
+      node: { tenantId: tenant, scopeId: scope },
+      entity: { entityType: 'folder', entityId: shared.id },
+      grantedBy: ada,
+    });
+    await expect(
+      (await as(cleo)).invoke('drive/get-file', { fileId: deep.id }),
+    ).rejects.toThrow();
+
+    // Dragging 2026 into Family is the sharing decision (#75), and the kernel's relink is
+    // what carries it: one atomic replace of the edge, so the grant above Family now
+    // reaches everything under 2026 — including a file two levels down.
+    const moved = await stub.invoke<FolderRow>('drive/move-folder', {
+      folderId: year.id,
+      parentId: shared.id,
+    });
+    expect(moved.path).toBe('Family/2026');
+
+    const seen = await (await as(cleo)).invoke<{ file: FileRow }>('drive/get-file', {
+      fileId: deep.id,
+    });
+    expect(seen.file.id).toBe(deep.id);
+  });
+
+  it('takes access AWAY from the folder it left', async () => {
+    const stub = await as(ada);
+    const from = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Lent',
+    });
+    const to = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Private',
+    });
+    const file = await stub.invoke<FileRow>('drive/ensure-file', { folderId: from.id, name: 'note.md' });
+
+    await host.admin.grant(staff, {
+      principalId: cleo,
+      permission: DRIVE_PERM.read,
+      node: { tenantId: tenant, scopeId: scope },
+      entity: { entityType: 'folder', entityId: from.id },
+      grantedBy: ada,
+    });
+    expect((await (await as(cleo)).invoke<{ file: FileRow }>('drive/get-file', { fileId: file.id })).file.id).toBe(file.id);
+
+    await stub.invoke('drive/move-file', { fileId: file.id, folderId: to.id });
+
+    // The half that makes "grants follow" a rule rather than a widening: the old edge is
+    // tombstoned, so Cleo's grant on Lent no longer reaches a file that is not in Lent.
+    await expect(
+      (await as(cleo)).invoke('drive/get-file', { fileId: file.id }),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a move by someone who can write only where it is going', async () => {
+    const stub = await as(ada);
+    const locked = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Locked',
+    });
+    const open = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Open',
+    });
+    const secret = await stub.invoke<FileRow>('drive/ensure-file', {
+      folderId: locked.id,
+      name: 'secret.md',
+    });
+
+    // Björn can write in Open and has nothing on Locked. If a move checked only the
+    // destination he could pull the file into Open — and because access FOLLOWS a move, he
+    // would then be entitled to read it. That is granting yourself access to content
+    // nobody shared, which is why both ends are checked.
+    await host.admin.grant(staff, {
+      principalId: bjorn,
+      permission: DRIVE_PERM.write,
+      node: { tenantId: tenant, scopeId: scope },
+      entity: { entityType: 'folder', entityId: open.id },
+      grantedBy: ada,
+    });
+
+    await expect(
+      (await as(bjorn)).invoke('drive/move-file', { fileId: secret.id, folderId: open.id }),
+    ).rejects.toThrow();
+
+    // Still where it was, and still Ada's.
+    const where = await stub.invoke<{ file: FileRow }>('drive/get-file', { fileId: secret.id });
+    expect(where.file.folder_id).toBe(locked.id);
+  });
+
+  it('refuses a move onto a name the destination’s trash still holds', async () => {
+    const stub = await as(ada);
+    const here = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Here',
+    });
+    const there = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'There',
+    });
+
+    // A trashed file keeps its name (#74), and `(folder_id, name)` is unique regardless of
+    // state — so a check that looked only at live rows would pass and then hit the
+    // constraint, turning a conflict into a database error.
+    const doomedThere = await stub.invoke<FileRow>('drive/ensure-file', {
+      folderId: there.id,
+      name: 'report.pdf',
+    });
+    await stub.invoke('drive/trash-file', { fileId: doomedThere.id });
+
+    const mine = await stub.invoke<FileRow>('drive/ensure-file', {
+      folderId: here.id,
+      name: 'report.pdf',
+    });
+    await expect(
+      stub.invoke('drive/move-file', { fileId: mine.id, folderId: there.id }),
+    ).rejects.toThrow(/trashed file in that folder holds the name/);
+
+    // And it is still where it was.
+    expect(
+      (await stub.invoke<{ file: FileRow }>('drive/get-file', { fileId: mine.id })).file.folder_id,
+    ).toBe(here.id);
+  });
+
+  it('refuses a folder moving inside itself, and a name already taken', async () => {
+    const stub = await as(ada);
+    const outer = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Outer',
+    });
+    const inner = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: outer.id,
+      name: 'Inner',
+    });
+
+    await expect(
+      stub.invoke('drive/move-folder', { folderId: outer.id, parentId: inner.id }),
+    ).rejects.toThrow(/inside itself/);
+    await expect(
+      stub.invoke('drive/move-folder', { folderId: outer.id, parentId: outer.id }),
+    ).rejects.toThrow(/inside itself/);
+
+    // And a collision at the destination is a conflict, not an overwrite.
+    const other = await stub.invoke<FolderRow>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID,
+      name: 'Collide',
+    });
+    await stub.invoke('drive/create-folder', { parentId: other.id, name: 'Inner' });
+    await expect(
+      stub.invoke('drive/move-folder', { folderId: inner.id, parentId: other.id }),
+    ).rejects.toThrow(/already exists/);
   });
 });

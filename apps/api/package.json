@@ -21,7 +21,7 @@
     "@cloudflare/containers": "^0.3.7",
     "@hono/node-server": "^2.1.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "hono": "^4.13.8",
+    "hono": "^4.13.10",
     "jose": "^6.2.12",
     "zod": "^4.6.5"
   },

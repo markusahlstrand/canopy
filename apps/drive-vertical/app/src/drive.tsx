@@ -31,6 +31,8 @@ import {
   listFolder,
   listFolders,
   listTrash,
+  moveFile,
+  moveFolder,
   renameFile,
   renameFolder,
   restoreFile,
@@ -333,6 +335,19 @@ export function DriveScreen({ onError }: DriveScreenProps) {
                   label: 'Rename',
                   onSelect: () => setRenaming({ kind: 'folder', id: folder.id, name: folder.name }),
                 },
+                ...(crumbs.length > 0
+                  ? [
+                      {
+                        // Up one level only, for now: a full destination picker is its own
+                        // screen, and "out of here" is the move people actually make.
+                        label: 'Move up one level',
+                        onSelect: () =>
+                          void act(() =>
+                            moveFolder(folder.id, crumbs[crumbs.length - 2]?.id ?? ROOT_FOLDER_ID),
+                          ),
+                      },
+                    ]
+                  : []),
               ],
             })),
             ...files.map((file) => ({
@@ -357,6 +372,21 @@ export function DriveScreen({ onError }: DriveScreenProps) {
                   label: 'Rename',
                   onSelect: () => setRenaming({ kind: 'file', id: file.id, name: file.name }),
                 },
+                ...folders.map((into) => ({
+                  label: `Move to ${into.name}`,
+                  onSelect: () => void act(() => moveFile(file.id, into.id)),
+                })),
+                ...(crumbs.length > 0
+                  ? [
+                      {
+                        label: 'Move up one level',
+                        onSelect: () =>
+                          void act(() =>
+                            moveFile(file.id, crumbs[crumbs.length - 2]?.id ?? ROOT_FOLDER_ID),
+                          ),
+                      },
+                    ]
+                  : []),
                 {
                   label: 'Move to trash',
                   danger: true,

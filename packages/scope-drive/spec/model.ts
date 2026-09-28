@@ -376,6 +376,80 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * Purging (dropping the attachment and the extracted text) is a retention concern and
    * deliberately not here.
    */
+  /**
+   * Move a file to another folder.
+   *
+   * **Access follows the move**, which is the decision recorded on #75: dragging a file
+   * into a folder the family can read means the family can read it, because that is what
+   * the gesture means to the person making it. The kernel's `relink` is what makes that
+   * true — one atomic replace, so a grant above the old parent stops reaching the file and
+   * one above the new parent starts, with no instant in between where it has no parent at
+   * all. It tombstones the old edge rather than deleting it and emits `entity.relinked`, so
+   * "who could reach this on which date" stays answerable.
+   *
+   * **Two entity checks, which is why this declares `narrows` rather than a single
+   * `permission`.** A move needs write where the file is GOING and write where it is
+   * LEAVING, and the declaration format carries one entity. Declaring only the
+   * destination would be a partial truth in the artifact the permission registry is
+   * derived from — and the conformance kit is right to refuse it: it grants the declared
+   * key on the declared entity and expects the operation to proceed.
+   *
+   * Only the destination would also be a hole rather than a simplification. Access
+   * follows a move, so a caller with write on a folder they can read could pull a file
+   * out of one they cannot, and reading it afterwards would be legitimate — a way to
+   * grant yourself access to content nobody shared. Both checks, and the reason written
+   * where the next reader meets it.
+   */
+  'drive/move-file': {
+    summary: 'Move a file into another folder',
+    narrows: {
+      reason: 'Checks drive:write on BOTH folders — where the file is going and where it is leaving',
+      checks: ['drive:write'],
+    },
+    input: z.object({ fileId: z.string(), folderId: z.string() }),
+    output: driveEntities.file.fields,
+    http: { method: 'POST', path: '/files/{fileId}/move' },
+    emits: {
+      entity: 'file',
+      entityIdFrom: 'id',
+      type: 'drive.file-moved',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['id', 'folder_id'],
+    },
+  },
+
+  /**
+   * Move a folder, and everything under it, to another parent.
+   *
+   * Two things happen and both matter: the parent edge is relinked, so access follows for
+   * the whole subtree at once, and the descendants' derived paths are re-written the way
+   * `rename-folder` already does. A move into the folder's own descendant is refused — by
+   * the kernel, which knows the edge graph, and again here, because the path rewrite would
+   * otherwise build a cycle before the kernel ever saw it.
+   *
+   * `narrows` for the same reason as `move-file`: write is checked on the destination
+   * parent AND on the parent being left, and one declared entity cannot say that.
+   */
+  'drive/move-folder': {
+    summary: 'Move a folder into another folder',
+    narrows: {
+      reason: 'Checks drive:write on BOTH parents — the destination and the one being left',
+      checks: ['drive:write'],
+    },
+    input: z.object({ folderId: z.string(), parentId: z.string() }),
+    output: driveEntities.folder.fields,
+    http: { method: 'POST', path: '/folders/{folderId}/move' },
+    emits: {
+      entity: 'folder',
+      entityIdFrom: 'id',
+      type: 'drive.folder-moved',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['id', 'parent_id', 'path'],
+    },
+  },
+
   'drive/trash-file': {
     summary: 'Move a file to the trash',
     permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
