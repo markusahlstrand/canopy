@@ -1,0 +1,275 @@
+/**
+ * File preview (S12a slice 3, #78) — lifted from the portal's `file-preview.tsx` and
+ * cut down to what this vertical can actually answer.
+ *
+ * The portal's version is 769 lines because it also carries comments, tags, descriptions,
+ * version pinning, restore-a-version and a processing log. The drive module has no
+ * operations for any of those, so they are not here: a panel offering a button that
+ * cannot work is worse than a panel that does less. Each is a small ticket the day
+ * somebody wants it.
+ *
+ * Plugin viewers are absent for a different reason. The portal mounts them in a sandboxed
+ * iframe, which is a runtime microfrontend and exactly what K-15 rejects for a hosted
+ * vertical — so built-in types render here and the plugin seam waits for #73.
+ */
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Button, Icon, cn } from '@canopy/ui';
+import {
+  contentUrl,
+  fileBodyAsText,
+  fileText,
+  fileVersions,
+  getFile,
+  type DriveFile,
+  type FileTextRow,
+  type FileVersion,
+} from './api';
+import { latestOnly } from './reads';
+
+type Tab = 'file' | 'versions' | 'text';
+
+/** How a file's current version wants to be shown. */
+type Shape = 'image' | 'pdf' | 'text' | 'none';
+
+/**
+ * What the browser can render without help, decided from the version's recorded mime —
+ * which came from the stored bytes rather than from whatever the uploader claimed.
+ */
+export function shapeOf(mime: string | undefined): Shape {
+  if (!mime) return 'none';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') {
+    return 'text';
+  }
+  return 'none';
+}
+
+/** Bytes, as a person reads them. */
+export function humanSize(bytes: number | null | undefined): string {
+  if (bytes == null) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['kB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/** What the extraction row means, in the words a person would use. */
+export function textStatusLabel(row: FileTextRow | null): string {
+  if (!row) return 'Nobody has looked inside this file yet.';
+  switch (row.status) {
+    case 'indexed':
+      return `${row.chars.toLocaleString()} characters, searchable.`;
+    case 'empty':
+      return 'Looked, and found no text — a scan or an image, most likely.';
+    case 'unsupported':
+      return 'Nothing here can read this kind of file yet.';
+    case 'failed':
+      return row.detail ? `Extraction failed: ${row.detail}` : 'Extraction failed.';
+  }
+}
+
+export function PreviewPanel({
+  fileId,
+  onClose,
+  onError,
+}: {
+  fileId: string;
+  onClose: () => void;
+  onError: (message: string | null) => void;
+}) {
+  const [tab, setTab] = useState<Tab>('file');
+  const [file, setFile] = useState<DriveFile | null>(null);
+  const [version, setVersion] = useState<FileVersion | null>(null);
+  const [versions, setVersions] = useState<FileVersion[] | null>(null);
+  const [extracted, setExtracted] = useState<FileTextRow | null | undefined>(undefined);
+  const [body, setBody] = useState<{ text: string; truncated: boolean } | null>(null);
+  // One guard for the panel's life, not one per render: a fresh instance every render
+  // would make every in-flight read current again, which is the bug inverted.
+  const reads = useRef(latestOnly()).current;
+
+  /** The file and its current version: everything else hangs off the version's mime. */
+  useEffect(() => {
+    const ticket = reads.take();
+    setFile(null);
+    setVersion(null);
+    setBody(null);
+    setExtracted(undefined);
+    setVersions(null);
+    getFile(fileId)
+      .then((got) => {
+        if (!reads.current(ticket)) return;
+        setFile(got.file);
+        setVersion(got.version);
+      })
+      .catch((e: unknown) => {
+        if (!reads.current(ticket)) return;
+        onError(e instanceof Error ? e.message : String(e));
+      });
+    // `reads` is stable for this panel; re-running on it would defeat the guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId, onError]);
+
+  const shape = shapeOf(version?.mime);
+
+  /** Text bodies are fetched, not linked — everything else the browser fetches itself. */
+  useEffect(() => {
+    if (tab !== 'file' || shape !== 'text' || !version) return;
+    const ticket = reads.take();
+    fileBodyAsText(fileId)
+      .then((got) => {
+        if (reads.current(ticket)) setBody(got);
+      })
+      .catch((e: unknown) => {
+        if (reads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId, tab, shape, version?.id, onError]);
+
+  const loadTab = useCallback(
+    (next: Tab) => {
+      setTab(next);
+      if (next === 'versions' && versions === null) {
+        const ticket = reads.take();
+        fileVersions(fileId)
+          .then((got) => {
+            if (reads.current(ticket)) setVersions(got);
+          })
+          .catch((e: unknown) => {
+            if (reads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+          });
+      }
+      if (next === 'text' && extracted === undefined) {
+        const ticket = reads.take();
+        fileText(fileId)
+          .then((got) => {
+            if (reads.current(ticket)) setExtracted(got);
+          })
+          .catch((e: unknown) => {
+            if (reads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+          });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fileId, versions, extracted, onError],
+  );
+
+  return (
+    <aside
+      aria-label="Preview"
+      className="flex h-full w-full flex-col border-l border-border bg-background md:w-[28rem]"
+    >
+      <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <Icon name="file-text" className="size-4 text-muted-foreground" />
+        <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{file?.name ?? 'Loading…'}</h2>
+        {version ? (
+          <Button variant="outline" size="sm" asChild>
+            <a href={contentUrl(fileId)} download={file?.name}>
+              <Icon name="download" className="size-4" />
+              Download
+            </a>
+          </Button>
+        ) : null}
+        <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close preview">
+          <Icon name="x" className="size-4" />
+        </Button>
+      </header>
+
+      <nav className="flex gap-1 border-b border-border px-2 py-1.5" aria-label="Preview sections">
+        {(['file', 'versions', 'text'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => loadTab(t)}
+            className={cn(
+              'rounded px-2 py-1 text-xs capitalize',
+              tab === t ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60',
+            )}
+          >
+            {t === 'file' ? 'Preview' : t === 'versions' ? 'Versions' : 'Text'}
+          </button>
+        ))}
+      </nav>
+
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        {tab === 'file' ? (
+          !version ? (
+            <Empty>Nothing has been written to this file yet.</Empty>
+          ) : shape === 'image' ? (
+            <img
+              src={contentUrl(fileId)}
+              alt={file?.name ?? ''}
+              className="mx-auto max-h-full rounded-md"
+            />
+          ) : shape === 'pdf' ? (
+            // `object` rather than `iframe`: it falls back to its children when the
+            // browser has no PDF viewer, instead of rendering an empty frame.
+            <object data={contentUrl(fileId)} type="application/pdf" className="h-full w-full">
+              <Empty>
+                This browser will not show the PDF inline. Download it instead.
+              </Empty>
+            </object>
+          ) : shape === 'text' ? (
+            body ? (
+              <>
+                <pre className="whitespace-pre-wrap break-words text-xs">{body.text}</pre>
+                {body.truncated ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Cut off here — download the file to read the rest.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <Empty>Loading…</Empty>
+            )
+          ) : (
+            <Empty>
+              No preview for {version.mime || 'this kind of file'}. Download it to open it.
+            </Empty>
+          )
+        ) : tab === 'versions' ? (
+          versions === null ? (
+            <Empty>Loading…</Empty>
+          ) : (
+            <ul className="space-y-1.5 text-sm">
+              {versions.map((v) => (
+                <li key={v.id} className="flex items-baseline gap-2">
+                  <span className="text-muted-foreground">{new Date(v.created_at).toLocaleString()}</span>
+                  <span>{humanSize(v.size)}</span>
+                  {v.id === version?.id ? (
+                    <span className="rounded bg-muted px-1.5 text-xs">current</span>
+                  ) : null}
+                  {v.source === 'external' ? (
+                    <span className="text-xs text-muted-foreground">in a connected source</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )
+        ) : extracted === undefined ? (
+          <Empty>Loading…</Empty>
+        ) : (
+          <div className="space-y-2 text-sm">
+            <p>{textStatusLabel(extracted)}</p>
+            {extracted && extracted.version_id !== version?.id ? (
+              // The text describes a version the file has moved off. Saying so beats
+              // showing a character count for content nobody can open any more.
+              <p className="text-xs text-muted-foreground">
+                This describes an older version — the file has been written to since.
+              </p>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return <p className="px-2 py-8 text-center text-sm text-muted-foreground">{children}</p>;
+}

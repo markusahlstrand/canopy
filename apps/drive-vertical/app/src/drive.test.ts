@@ -8,7 +8,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hasIcon } from '@canopy/ui';
-import { DRIVE_ICONS, latestOnly } from './drive';
+import { DRIVE_ICONS } from './drive';
+import { latestOnly } from './reads';
 import { ApiError, contentUrl, currentSite, search, selectSite, siteHeaders } from './api';
 
 afterEach(() => {
