@@ -1,6 +1,6 @@
 # Canopy
 
-An extensible, Google-Workspace-style portal built as a **slim core with everything else as
+An extensible, Google-Workspace-style workspace built as a **slim core with everything else as
 plugins**. The first app is a **drive** over bring-your-own storage (local filesystem or
 Cloudflare R2) — and the same shell hosts first-party apps (calendar, tasks, documentation)
 and sandboxed file viewers right alongside it.
@@ -29,7 +29,7 @@ packages/
   runtimes/             (planned) sandbox adapters for dynamic plugin code
 apps/
   api/                  @canopy/api              portable Hono API — Node entry (node.ts) + Worker entry (worker.ts)
-  portal/               @canopy/portal           Vite + React SPA (the Drive UI; desktop + mobile)
+  drive-vertical/       @canopy/drive-vertical   the drive as a Substrat vertical — worker + its own SPA
 examples/
   plugins/              sample plugins — a hook plugin, sandboxed image/PDF viewers, a markdown editor
 demo/                   sample files for the anonymous demo drive (tracked; runtime data lives in storage/, which is gitignored)
@@ -94,7 +94,8 @@ Requires Node 22 (`.nvmrc`) and pnpm.
 ```bash
 nvm use
 pnpm install
-pnpm dev        # api on :8787, portal on :5768 (Vite proxies /api → the api)
+pnpm dev        # the drive vertical: wrangler dev, serving its API and its SPA
+pnpm dev:api    # the legacy API on :8787 (MCP, connectors, docworker)
 ```
 
 Open <http://localhost:5768>. The browser only talks to 5768; the API is proxied, so it's
@@ -118,7 +119,7 @@ and stores the session in an encrypted, HttpOnly cookie. Register
 Serve the built UI **and** the API from one Node process on one port:
 
 ```bash
-pnpm start      # builds the portal, then serves UI + /api on :8787
+pnpm start      # the legacy API on :8787 (no UI — the drive's UI ships with the vertical)
 ```
 
 Point the local connector at any folder with `CANOPY_LOCAL_ROOT=/path pnpm start`.
@@ -140,7 +141,7 @@ account. The **R2 bucket, D1 database, and Workers AI** binding are provisioned 
 is created on first request — so a fresh deploy comes up as a **working anonymous demo with no
 secrets**. When prompted by Workers Builds, use:
 
-- **Build command:** `pnpm install && pnpm --filter @canopy/portal build` (produces the SPA in `apps/portal/dist`)
+- **Build command:** `pnpm install` (the worker carries no assets; the drive's UI is deployed with the vertical)
 - **Deploy command:** `npx wrangler deploy`
 
 To turn on login afterwards, add the OIDC vars and secrets — see [`.dev.vars.example`](.dev.vars.example).
@@ -159,7 +160,8 @@ wrangler secret put SESSION_SECRET         # 32+ random bytes; encrypts the sess
 # then add vars.OIDC_ISSUER / OIDC_CLIENT_ID to wrangler.jsonc and register
 # <your-url>/api/auth/callback as a callback on your OIDC client
 
-pnpm deploy        # from the repo root: builds the portal, then `wrangler deploy`
+pnpm deploy        # from the repo root: the API worker
+pnpm push          # the drive vertical, to the Substrat platform
 ```
 
 `wrangler deploy --dry-run` validates the bundle and bindings without deploying. Wrangler writes

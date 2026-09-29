@@ -2,7 +2,8 @@
 //
 // Deploy it three ways, all from the repo root:
 //   • One click: the "Deploy to Cloudflare" button in README.md
-//   • From your machine: `pnpm deploy` (builds the portal, then `wrangler deploy`)
+//   • From your machine: `pnpm deploy` (the API worker; the drive's UI ships with the
+//     vertical and is deployed by `pnpm push`)
 //   • Local edge dev: `pnpm cf:dev`
 //
 // Resource IDs are intentionally OMITTED: Cloudflare auto-provisions the R2
@@ -27,17 +28,6 @@
 	"main": "apps/api/src/worker-cf.ts",
 	"compatibility_date": "2026-05-01",
 	// Serve the built SPA from Static Assets; run the Worker first only for the API.
-	"assets": {
-		"directory": "apps/portal/dist",
-		"not_found_handling": "single-page-application",
-		"run_worker_first": [
-			"/api/*",
-			"/dav/*",
-			"/mcp",
-			"/mcp/*",
-			"/.well-known/oauth-protected-resource"
-		]
-	},
 	// Content-addressed blobs. Provisioned as "canopy-canopy-drive" on first deploy.
 	"r2_buckets": [
 		{
