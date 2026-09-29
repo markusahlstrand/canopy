@@ -84,7 +84,17 @@ export function CommandPalette({
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="top-[18%] translate-y-0">
-      <CommandInput placeholder="Search files and more…" value={query} onValueChange={setQuery} />
+      <CommandInput
+        placeholder="Search files and more…"
+        value={query}
+        onValueChange={(next) => {
+          setQuery(next);
+          // The previous query's hits are wrong the moment the query changes — and worse
+          // than wrong, because cmdk's `value` embeds the new query, so they stay
+          // selectable and open an unrelated file.
+          setResults([]);
+        }}
+      />
       <CommandList className="max-h-[60vh]">
         <CommandEmpty>No results found.</CommandEmpty>
 

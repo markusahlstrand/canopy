@@ -173,6 +173,7 @@ export default function App() {
         ) : (
           <DriveScreen
             onError={setError}
+            spaceSwitcher={<SiteSwitcher onError={setError} />}
             auth={{ user: { name: session.principal }, principal: session.principal }}
             onSignIn={() => (window.location.href = LOGIN_URL)}
             onSignOut={() => (window.location.href = LOGOUT_URL)}

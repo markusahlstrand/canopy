@@ -12,7 +12,7 @@
  * promise chain would only ever observe the order the runtime happened to pick.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { DriveScreen } from './drive';
 import { selectSite } from './api';
 
@@ -435,5 +435,48 @@ describe('the shell the portal had, on the vertical', () => {
     // one takes the principal it was handed and nothing else.
     expect(screen.getByText('My Drive')).toBeTruthy();
     expect(screen.queryByText(/Log in/)).toBeNull();
+  });
+});
+
+describe('the palette does not hand back the wrong thing', () => {
+  it('drops the previous query’s hits the moment the query changes', async () => {
+    await renderDrive([], []);
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    const input = screen.getByPlaceholderText(/Search files/);
+
+    fireEvent.change(input, { target: { value: 'lease' } });
+    await flush();
+    await answer('term=lease', { hits: [{ ...file('01A', 'lease.pdf'), via: 'name' }] });
+    expect(screen.getByText('lease.pdf')).toBeTruthy();
+
+    // cmdk's item `value` embeds the CURRENT query, so a hit left over from the previous
+    // one stays selectable and opens a file nobody searched for.
+    fireEvent.change(input, { target: { value: 'invoice' } });
+    expect(screen.queryByText('lease.pdf')).toBeNull();
+  });
+
+  it('enters a folder chosen in the palette instead of previewing it', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
+
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    // Two "Papers" now exist — one in the table behind the dialog, one in the palette's
+    // zero-query list. Scope to the dialog, which is the thing under test.
+    const palette = screen.getByRole('dialog');
+    fireEvent.click(within(palette).getByText('Papers'));
+    await flush();
+
+    // Navigation reads the folder; a preview would have asked `get-file` for a folder id.
+    expect(pending.some((p) => p.url.includes('/folders/01F/files'))).toBe(true);
+    expect(pending.some((p) => p.url.endsWith('/files/01F'))).toBe(false);
+  });
+
+  it('keeps the space switcher reachable from the shell', async () => {
+    // The switcher was in the header this slice deleted; a person in several spaces had no
+    // other way to change space.
+    render(<DriveScreen {...shell} onError={() => {}} spaceSwitcher={<span>Family</span>} />);
+    await flush();
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.getByText('Family')).toBeTruthy();
   });
 });

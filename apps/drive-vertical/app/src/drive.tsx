@@ -130,13 +130,21 @@ interface Crumb {
 
 export interface DriveScreenProps {
   onError: (message: string | null) => void;
+  /** Rendered in the topbar beside the trail — the switcher the old header carried. */
+  spaceSwitcher?: React.ReactNode;
   /** The shell's account menu lives in the topbar, which this screen renders. */
   auth: Me;
   onSignIn: () => void;
   onSignOut: () => void;
 }
 
-export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
+export function DriveScreen({
+  onError,
+  spaceSwitcher,
+  auth,
+  onSignIn,
+  onSignOut,
+}: DriveScreenProps) {
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
   const [folders, setFolders] = useState<DriveFolder[]>([]);
@@ -306,6 +314,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         breadcrumb={['My Drive', ...crumbs.map((c) => c.name)]}
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
         onCrumbClick={(index) => upTo(index - 1)}
+        spaceSwitcher={spaceSwitcher}
         onOpenCmd={() => setCmdOpen(true)}
         onUpload={() => uploadRef.current?.click()}
         onRefresh={() => void refresh()}
@@ -328,7 +337,13 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onOpenChange={setCmdOpen}
         files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
         onNavigate={(id) => setView(id === 'trash' ? 'trash' : 'drive')}
-        onOpenFile={(item) => setPreviewing(item.id)}
+        onOpenFile={(item) => {
+          // The palette lists folders too, and a folder is entered rather than previewed —
+          // the panel would open on an id `get-file` cannot resolve.
+          const folder = folders.find((f) => f.id === item.id);
+          if (folder) open(folder);
+          else setPreviewing(item.id);
+        }}
         onUpload={() => uploadRef.current?.click()}
       />
 

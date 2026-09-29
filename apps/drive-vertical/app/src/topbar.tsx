@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Icon } from "@canopy/ui";
 import { cn } from "@canopy/ui";
 import { Button } from "@canopy/ui";
@@ -60,6 +61,13 @@ interface TopbarProps {
   onSignOut: () => void;
   /** Backend unreachable — the app is view-only, so disable uploads. */
   offline?: boolean;
+  /**
+   * Which space this install is showing, rendered beside the trail.
+   *
+   * A slot rather than a prop pair: the switcher reads `/api/sites` and owns its own
+   * failure, and the topbar has no business knowing what a site is.
+   */
+  spaceSwitcher?: ReactNode;
   /** Force a re-fetch of the current view (re-syncs the offline mirror + reloads). */
   onRefresh?: () => void;
   /** True while a background sync is in flight — spins the refresh icon. */
@@ -69,6 +77,7 @@ interface TopbarProps {
 export function Topbar({
   breadcrumb,
   onCrumbClick,
+  spaceSwitcher,
   onOpenCmd,
   onUpload,
   auth,
@@ -147,6 +156,8 @@ export function Topbar({
       </div>
 
 
+      {spaceSwitcher}
+
       <div className="flex-1" />
 
       {/* Search trigger */}
@@ -158,12 +169,6 @@ export function Topbar({
         <span className="flex-1 text-left">Search or jump to…</span>
         <kbd className="rounded bg-muted px-1.5 font-mono text-[10.5px]">⌘</kbd>
         <kbd className="rounded bg-muted px-1.5 font-mono text-[10.5px]">K</kbd>
-      </button>
-
-      {/* Bell */}
-      <button className="relative grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-accent">
-        <Icon name="bell" size={18} />
-        <span className="absolute right-2 top-2 size-[7px] rounded-full bg-primary ring-2 ring-background" />
       </button>
 
       {/* Refresh — force a re-sync + reload of the current view */}
