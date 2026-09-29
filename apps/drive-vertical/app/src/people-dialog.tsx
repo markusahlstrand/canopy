@@ -14,7 +14,7 @@
  * its link: the owner copies it and passes it on however they already talk to the person.
  * The email field is a note on the row so an owner can tell two invitations apart.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, cn } from '@canopy/ui';
 import {
   Dialog,
@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@canopy/ui';
+import { latestOnly } from './reads';
 import { createInvite, listInvites, revokeInvite, type Invite } from './api';
 
 interface PeopleDialogProps {
@@ -59,15 +60,29 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
    * depending on which read answered last.
    */
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The same ticket the drive screen uses, for the same reason.
+   *
+   * This component stays mounted while `open` changes, and every mutation triggers
+   * another read — so a read from before the dialog closed can repopulate the list it
+   * cleared, and two reads started by two withdrawals can land out of order and leave the
+   * older answer on screen. Closing invalidates; only the newest read may write.
+   */
+  const reads = useRef(latestOnly());
 
   const load = useCallback(() => {
+    const ticket = reads.current.take();
     setError(null);
     listInvites()
       .then((answer) => {
+        if (!reads.current.current(ticket)) return;
         setInvites(answer.invites);
         setRoles(answer.roles);
       })
       .catch((e: unknown) => {
+        // A stale FAILURE is as misleading as a stale answer — it belongs to a dialog
+        // that is no longer open, or to a read something newer has already corrected.
+        if (!reads.current.current(ticket)) return;
         setInvites([]);
         setError(e instanceof Error ? e.message : String(e));
       });
@@ -76,7 +91,9 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
   useEffect(() => {
     if (!open) {
       // Nothing from the last visit survives: a copied link left on screen is a live
-      // credential, and the list is cheap to read again.
+      // credential, and the list is cheap to read again. Anything still in flight belongs
+      // to the visit being ended and may not write to the next one.
+      reads.current.invalidate();
       setMinted(null);
       setEmail('');
       setError(null);

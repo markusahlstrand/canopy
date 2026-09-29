@@ -771,6 +771,28 @@ describe('the People surface is offered only to whoever may use it', () => {
     expect(screen.queryByText('People…')).toBeNull();
   });
 
+  it('does not repopulate the list with a read from before it was closed', async () => {
+    await renderDrive();
+    await answer('/people/access', { canManage: true });
+
+    accountMenu();
+    fireEvent.click(screen.getByText('People…'));
+    // The read is in flight and unanswered. The dialog is closed on top of it — this
+    // component stays mounted, so nothing cancels it.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await answer('/api/invites', {
+      roles: ['member'],
+      invites: [{ principal: '01P', roleKey: 'member', email: 'ghost@example.com' }],
+    });
+
+    // Reopened, its own read still pending: what shows now is whatever state the closed
+    // dialog was left in. A stale answer applied while closed would be sitting here.
+    accountMenu();
+    fireEvent.click(screen.getByText('People…'));
+    expect(screen.queryByText('ghost@example.com')).toBeNull();
+    expect(screen.getByText('Loading…')).toBeTruthy();
+  });
+
   it('offers it to an owner, and the dialog lists what is still waiting', async () => {
     await renderDrive();
     await answer('/people/access', { canManage: true });
