@@ -226,14 +226,12 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
 
         <div>
           <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            In this space
+            Signed in here
           </h3>
           {people === null ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : people.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nobody has signed in here yet but you.
-            </p>
+            <p className="text-sm text-muted-foreground">Nobody has been seen here yet.</p>
           ) : (
             <ul className="mb-4 flex flex-col gap-1">
               {people.map((person) => (
@@ -262,11 +260,14 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
               ))}
             </ul>
           )}
-          {/* Said plainly, because the list above cannot be trusted as a roster: it is
-              built from sign-ins, so a member who has not been here is missing from it. */}
+          {/* Said plainly, because this list is not a statement about access, and my first
+              version of this copy said it was. It is a record of sign-ins, wrong in BOTH
+              directions: a member who has never opened the drive is missing, and a row is
+              not removed when somebody's access ends — nothing today removes access, and
+              whatever ships for that has to delete the row as well. */}
           <p className="mb-4 text-[11.5px] text-muted-foreground">
-            Everyone here reads the whole space. Who has signed in is what this knows —
-            a member who has never opened this drive is not listed.
+            Who has opened this drive — not who has access. Someone who has never opened it
+            is missing here, and a row stays after access is taken away.
           </p>
           <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Open invitations

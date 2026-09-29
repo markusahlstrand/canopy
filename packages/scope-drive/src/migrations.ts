@@ -147,6 +147,12 @@ export const driveMigrations: SqlMigration[] = [
       -- nothing, and a person missing from it is still a member — they are just
       -- someone this install has not seen sign in yet.
       --
+      -- It is wrong in the other direction too, and deliberately so for now: nothing
+      -- deletes a row when somebody's access ends. Nothing today ENDS a member's access
+      -- either, so there is no hook to hang the delete on — but whatever ships for that
+      -- has to remove the row, or this list keeps naming people who cannot open the
+      -- space. Until then the UI describes itself as a record of sign-ins.
+      --
       -- Written only by \`drive/record-person\`, which declares no HTTP route: the
       -- verified subject exists only in the worker, so the worker is the only caller
       -- that can assert who somebody is. Over a public route, a member could write

@@ -55,11 +55,14 @@ describe('the derived route table', () => {
     const mounted = mountApi(new Hono(), async () => {
       throw new Error('not reached: this test never resolves a stub');
     });
-    const paths = mounted.map((r) => r.path);
-    expect(paths).not.toContain('/api/people/record');
-    // Nothing anywhere in the table may reach them, however it is spelled.
-    for (const forbidden of ['record-person', 'record-text', 'record_person']) {
-      expect(paths.filter((path) => path.includes(forbidden))).toEqual([]);
-    }
+    /**
+     * The OPERATION, not the path. My first version of this matched path substrings, which
+     * pins a spelling rather than the property: an `http` block mounting
+     * `drive/record-person` at `/api/me/identity` would have passed it. Each mounted route
+     * carries the operation it serves, so that is what gets asserted.
+     */
+    const operations = mounted.map((r) => r.operation);
+    expect(operations).not.toContain('drive/record-person');
+    expect(operations).not.toContain('drive/record-text');
   });
 });

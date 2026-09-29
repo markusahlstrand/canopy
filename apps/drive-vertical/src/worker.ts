@@ -543,14 +543,33 @@ app.get('/api/me', async (c) => {
    * should wait for it. A failure is dropped for the same reason — `/api/me` answering
    * "who you are" must not fail because a display name could not be filed.
    */
-  if (principal && (subject?.email || subject?.name)) {
-    const scope = await hostFor(c.env).getScope(principalId.parse(principal), node.tenantId, node.scopeId);
+  if (principal) {
+    const who = principalId.parse(principal);
+    // EVERY bound principal, and every part of it deferred.
+    //
+    // Three things this got wrong when written. Gating on a claim being present meant a
+    // principal whose issuer releases neither name nor email was never recorded at all —
+    // so the roster's "a principal and nothing else" row, which the UI renders and a test
+    // covers, could not actually occur. It also meant a claim the issuer STOPPED releasing
+    // was never cleared, leaving a name nothing upstream still asserts. And `getScope` was
+    // awaited out here, ahead of the defer and outside the catch, so its latency was on the
+    // critical path of `/api/me` and its failure was the route's failure — for bookkeeping.
+    //
+    // Now the whole chain is inside the swallowed promise: nulls are written as nulls, and
+    // "who you are" cannot fail because a display name could not be filed.
     await defer(
       c,
-      scope
-        .invoke('drive/record-person', { email: subject.email, name: subject.name })
-        .then(() => undefined)
-        .catch(() => undefined),
+      (async () => {
+        try {
+          const scope = await hostFor(c.env).getScope(who, node.tenantId, node.scopeId);
+          await scope.invoke('drive/record-person', {
+            email: subject?.email ?? null,
+            name: subject?.name ?? null,
+          });
+        } catch {
+          // Bookkeeping. The answer above has already gone out.
+        }
+      })(),
     );
   }
 

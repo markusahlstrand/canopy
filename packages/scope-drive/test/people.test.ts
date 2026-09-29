@@ -171,20 +171,40 @@ describe('the roster remembers what to call people', () => {
     // whatever the issuer released, and a display name is self-asserted in every product
     // that has one. WHOSE ROW it lands on is not.
     //
-    // Two things hold that, which is why this test is worth having even though the attack
-    // is awkward to express: the input schema has no `principal` field, so an extra one is
-    // stripped before the handler runs, and the handler writes `ctx.principal`. Remove
-    // either and this fails; I checked by adding the field back to the schema and having
-    // the handler prefer it.
+    // Two things hold that: the input schema has no `principal` field, so an extra one is
+    // stripped before the handler runs, and the handler writes `ctx.principal`.
+    //
+    // The forged field is IN the payload below, which it has to be — without it, a schema
+    // that gained the field and a handler that then read `input.principal ?? ctx.principal`
+    // would leave this test green, because there would be nothing to prefer. With it, either
+    // half regressing fails here.
     await (await as(cleo)).invoke('drive/record-person', {
       email: 'ada@example.com',
       name: 'Ada',
+      principal: ada,
     });
 
     const { people } = await (await as(ada)).invoke<{ people: Person[] }>('drive/list-people', {});
     // Ada has never recorded herself, and nobody else can do it for her.
     expect(people.some((p) => p.principal === ada)).toBe(false);
     expect(people.find((p) => p.principal === cleo)?.email).toBe('ada@example.com');
+  });
+
+  it('records a person an issuer says nothing about', async () => {
+    // Both claims null. The worker used to skip the call entirely in this case, which made
+    // the roster's principal-only row — the one the dialog renders as an id — unreachable
+    // in practice while still being rendered and tested. It writes nulls now, so this is
+    // the shape that actually arrives.
+    await (await as(bjorn)).invoke('drive/record-person', { email: null, name: null });
+
+    const { people } = await (await as(ada)).invoke<{ people: Person[] }>('drive/list-people', {});
+    const row = people.find((p) => p.principal === bjorn);
+    expect(row).toBeTruthy();
+    expect(row!.email).toBeNull();
+    expect(row!.name).toBeNull();
+    // And a nameless row sorts last, because a row that can only show a ULID is the least
+    // useful thing in a picker.
+    expect(people[people.length - 1]!.principal).toBe(bjorn);
   });
 
   it('is not the roster of record: a member who never signed in is absent', async () => {
