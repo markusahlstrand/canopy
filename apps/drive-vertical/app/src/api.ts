@@ -247,6 +247,29 @@ export interface Invite {
   createdAt?: string;
 }
 
+/**
+ * A person this install has seen in this space.
+ *
+ * `principal` is what a grant names; the rest is what a human recognises. Both nullable,
+ * because an issuer need not release either claim — a row with neither is a principal and
+ * nothing more, which the UI has to render as such rather than as a blank.
+ */
+export interface Person {
+  principal: string;
+  email: string | null;
+  name: string | null;
+  seen_at: string;
+}
+
+/**
+ * The people seen in this space — a projection of sign-ins, NOT the roster of record.
+ *
+ * Membership is a role the kernel holds; this is only what to call someone. A member who
+ * has never signed in here is absent while still being a member, so nothing may present
+ * this as everyone.
+ */
+export const listPeople = () => call<{ people: Person[] }>('/people');
+
 /** Whether this login administers the people in this space — `drive/people-access`. */
 export const peopleAccess = () => call<{ canManage: boolean }>('/people/access');
 

@@ -26,6 +26,7 @@ describe('the derived route table', () => {
       'GET /api/folders/:folderId/files',
       'GET /api/folders/:folderId/folders',
       'GET /api/folders/by-path',
+      'GET /api/people',
       'GET /api/people/access',
       'GET /api/search',
       'GET /api/trash',
@@ -38,5 +39,30 @@ describe('the derived route table', () => {
       'POST /api/folders/:folderId/move',
       'POST /api/folders/:parentId/folders',
     ]);
+  });
+
+  /**
+   * The operations that must NOT be reachable over HTTP, named rather than merely absent
+   * from the list above.
+   *
+   * Both are writes whose authority comes from something the caller cannot be trusted to
+   * assert about itself: `record-person` writes a display identity that only the worker's
+   * verified session knows, and `record-text` writes extraction output about a version.
+   * Adding an `http` block to either would pass the assertion above by simply appearing in
+   * it, so the property is stated on its own.
+   */
+  it('mounts no route for the operations only the worker may invoke', () => {
+    const mounted = mountApi(new Hono(), async () => {
+      throw new Error('not reached: this test never resolves a stub');
+    });
+    /**
+     * The OPERATION, not the path. My first version of this matched path substrings, which
+     * pins a spelling rather than the property: an `http` block mounting
+     * `drive/record-person` at `/api/me/identity` would have passed it. Each mounted route
+     * carries the operation it serves, so that is what gets asserted.
+     */
+    const operations = mounted.map((r) => r.operation);
+    expect(operations).not.toContain('drive/record-person');
+    expect(operations).not.toContain('drive/record-text');
   });
 });

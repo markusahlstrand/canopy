@@ -97,6 +97,14 @@ function liveFile(ctx: OperationContext, fileId: string): FileRow {
 
 /** The entity refs the checks narrow onto. */
 const folderRef = (id: string) => ({ entityType: 'folder', entityId: id }) as const;
+/** A `drive_people` row, as the two operations above read and write it. */
+interface PersonRow {
+  principal: string;
+  email: string | null;
+  name: string | null;
+  seen_at: string;
+}
+
 const fileRef = (id: string) => ({ entityType: 'file', entityId: id }) as const;
 const versionRef = (id: string) => ({ entityType: 'file_version', entityId: id }) as const;
 const fileTextRef = (id: string) => ({ entityType: 'file_text', entityId: id }) as const;
@@ -778,6 +786,37 @@ const operations = {
     )[0];
     // Null is the answer, not the absence of one: it says nobody has looked yet.
     return row ?? null;
+  },
+
+  'drive/record-person': async (ctx, input) => {
+    // A member may record themselves; that is all this writes.
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    const email = input.email ?? null;
+    const name = input.name ?? null;
+    const seen = ctx.now();
+    // `ctx.principal`, never an input: the fields say what to call the caller and the
+    // context says who the caller is. There is no shape of this operation that lets one
+    // person write another's row.
+    ctx.sql.exec(
+      `INSERT INTO drive_people (principal, email, name, seen_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(principal) DO UPDATE SET email = excluded.email, name = excluded.name,
+         seen_at = excluded.seen_at`,
+      [ctx.principal, email, name, seen],
+    );
+    return { principal: ctx.principal, email, name, seen_at: seen };
+  },
+
+  'drive/list-people': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    // Someone with a name or an address first — a row that can only show a ULID is the
+    // least useful thing in a picker, and the bound means it is what gets cut.
+    const people = ctx.sql.query<PersonRow>(
+      `SELECT principal, email, name, seen_at FROM drive_people
+       ORDER BY (name IS NULL AND email IS NULL), name, email
+       LIMIT ?`,
+      [input.limit ?? 100],
+    );
+    return { people };
   },
 
   'drive/people-access': async (ctx) => {

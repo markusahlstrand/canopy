@@ -24,7 +24,20 @@ import {
   DialogTitle,
 } from '@canopy/ui';
 import { latestOnly } from './reads';
-import { createInvite, listInvites, revokeInvite, type Invite } from './api';
+import {
+  createInvite,
+  listInvites,
+  listPeople,
+  revokeInvite,
+  type Invite,
+  type Person,
+} from './api';
+
+/** The same rule the topbar's avatar uses, so one person reads the same in both. */
+function initialsOf(s: string): string {
+  const parts = s.split(/[\s@.]+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || 'U';
+}
 
 interface PeopleDialogProps {
   open: boolean;
@@ -40,6 +53,9 @@ interface Minted {
 
 export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
   const [invites, setInvites] = useState<Invite[] | null>(null);
+  const [people, setPeople] = useState<Person[] | null>(null);
+  /** The roster read failed. Its own state, because it must not disable inviting. */
+  const [peopleFailed, setPeopleFailed] = useState(false);
   /**
    * The roles the SERVER says a teammate may be invited at.
    *
@@ -73,11 +89,24 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
   const load = useCallback(() => {
     const ticket = reads.current.take();
     setError(null);
+    setPeopleFailed(false);
+
+    /**
+     * Two reads, ONE ticket, and no `Promise.all`.
+     *
+     * The ticket is shared because they are one view and a stale answer must not land half
+     * of it. But awaiting them together made the lesser read able to break the greater one:
+     * if the roster failed, a perfectly good invitation list was discarded with it and
+     * `roles` stayed empty — which disables the Invite button, so a failure to read who has
+     * signed in took away the one thing this dialog exists to do.
+     *
+     * So each lands on its own, and each reports its own failure where it happened.
+     */
     listInvites()
-      .then((answer) => {
+      .then((open) => {
         if (!reads.current.current(ticket)) return;
-        setInvites(answer.invites);
-        setRoles(answer.roles);
+        setInvites(open.invites);
+        setRoles(open.roles);
       })
       .catch((e: unknown) => {
         // A stale FAILURE is as misleading as a stale answer — it belongs to a dialog
@@ -85,6 +114,19 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
         if (!reads.current.current(ticket)) return;
         setInvites([]);
         setError(e instanceof Error ? e.message : String(e));
+      });
+
+    listPeople()
+      .then((seen) => {
+        if (!reads.current.current(ticket)) return;
+        setPeople(seen.people);
+      })
+      .catch(() => {
+        // Not the banner: this failure is about one list, and the banner is where the
+        // failure of an ACTION goes. Said in the section it belongs to, with a retry.
+        if (!reads.current.current(ticket)) return;
+        setPeople([]);
+        setPeopleFailed(true);
       });
   }, []);
 
@@ -98,6 +140,8 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
       setEmail('');
       setError(null);
       setInvites(null);
+      setPeople(null);
+      setPeopleFailed(false);
       setRoles([]);
       return;
     }
@@ -206,6 +250,57 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
         ) : null}
 
         <div>
+          <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Signed in here
+          </h3>
+          {peopleFailed ? (
+            <p className="text-sm text-muted-foreground">
+              Couldn’t read who has signed in.{' '}
+              <button onClick={load} className="underline hover:text-foreground">
+                Try again
+              </button>
+            </p>
+          ) : people === null ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : people.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nobody has been seen here yet.</p>
+          ) : (
+            <ul className="mb-4 flex flex-col gap-1">
+              {people.map((person) => (
+                <li
+                  key={person.principal}
+                  className="flex items-center gap-2.5 rounded-md border border-border px-2.5 py-2 text-[13.5px]"
+                >
+                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+                    {initialsOf(person.name ?? person.email ?? '?')}
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate">
+                      {/* A principal and nothing else is what an issuer releasing neither
+                          claim looks like. Showing the id is more honest than a blank. */}
+                      {person.name ?? person.email ?? (
+                        <span className="font-mono text-[11.5px] text-muted-foreground">
+                          {person.principal}
+                        </span>
+                      )}
+                    </span>
+                    {person.name && person.email && (
+                      <span className="truncate text-[11.5px] text-muted-foreground">{person.email}</span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* Said plainly, because this list is not a statement about access, and my first
+              version of this copy said it was. It is a record of sign-ins, wrong in BOTH
+              directions: a member who has never opened the drive is missing, and a row is
+              not removed when somebody's access ends — nothing today removes access, and
+              whatever ships for that has to delete the row as well. */}
+          <p className="mb-4 text-[11.5px] text-muted-foreground">
+            Who has opened this drive — not who has access. Someone who has never opened it
+            is missing here, and a row stays after access is taken away.
+          </p>
           <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Open invitations
           </h3>
