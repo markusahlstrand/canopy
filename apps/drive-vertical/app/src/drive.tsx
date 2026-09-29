@@ -316,6 +316,23 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     }
   };
 
+  /**
+   * Creating and uploading are things you do IN the drive, so they take you there first.
+   *
+   * Both write into `folderId`, and the trash and search views keep whatever folder you
+   * were last in. Pressing New folder while looking at the trash therefore wrote into a
+   * folder that was not on screen, and the refresh afterwards reloaded the trash — so the
+   * write succeeded, invisibly, somewhere else. Going to My Drive first makes the
+   * destination the thing you are looking at, which is the only version of this a person
+   * can predict. `navigate` also resets the folder to the root, and the handlers below
+   * read `folderId` when they run rather than when they were wired, so the write lands
+   * where the screen now is.
+   */
+  const startWrite = (begin: () => void) => {
+    if (view !== 'drive') navigate('drive');
+    begin();
+  };
+
   const onUpload = (input: HTMLInputElement) => {
     const chosen = Array.from(input.files ?? []);
     input.value = '';
@@ -334,9 +351,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         // while you type.
         active={view === 'trash' ? 'trash' : 'drive'}
         onNavigate={navigate}
-        onNewFolder={() => setCreating(true)}
-        onUpload={() => uploadRef.current?.click()}
-        onError={onError}
+        onNewFolder={() => startWrite(() => setCreating(true))}
+        onUpload={() => startWrite(() => uploadRef.current?.click())}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -345,7 +361,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
         onCrumbClick={(index) => upTo(index - 1)}
         onOpenCmd={() => setCmdOpen(true)}
-        onUpload={() => uploadRef.current?.click()}
+        onUpload={() => startWrite(() => uploadRef.current?.click())}
         onRefresh={() => void refresh()}
         syncing={busy}
         auth={auth}
@@ -373,7 +389,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           if (folder) open(folder);
           else setPreviewing(item.id);
         }}
-        onUpload={() => uploadRef.current?.click()}
+        onUpload={() => startWrite(() => uploadRef.current?.click())}
       />
 
       {/* The one scrolling region: the rail and the topbar stay put. */}

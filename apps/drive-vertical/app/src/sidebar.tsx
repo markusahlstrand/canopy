@@ -1,5 +1,5 @@
 /**
- * The shell's left rail, moved from the portal (S12a slice 6, #78).
+ * The shell's left rail, moved from the portal — the rail half of #78's slice 4.
  *
  * It lists the SPACES this login is bound in, which is the decision this file records:
  * the topbar's `<select>` switcher and a space list in the sidebar are two ways to change
@@ -22,7 +22,7 @@
  *
  * `New` stays, because both of its items are real operations.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Button,
   CanopyMark,
@@ -85,8 +85,6 @@ interface SidebarProps {
   onNavigate: (id: NavId) => void;
   onNewFolder: () => void;
   onUpload: () => void;
-  /** Listing the spaces can fail without the drive failing; the shell says so. */
-  onError: (message: string | null) => void;
 }
 
 function NavRow({
@@ -138,9 +136,19 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, onError }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [sites, setSites] = useState<Site[] | null>(null);
+  /**
+   * The rail's own error, NOT the shell's banner.
+   *
+   * Sharing the shell's `onError` made this message's survival depend on response order:
+   * the drive's refresh calls `onError(null)` when it succeeds, and it runs concurrently
+   * with this read, so a good folder listing erased "could not list spaces" whenever it
+   * landed second. A failure about the rail belongs in the rail, where nothing else
+   * clears it.
+   */
+  const [failed, setFailed] = useState(false);
 
   const toggle = () =>
     setCollapsed((was) => {
@@ -148,22 +156,28 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, onError }: 
       return !was;
     });
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setFailed(false);
     listSites()
-      .then(setSites)
-      .catch((e: unknown) => {
-        // Not the screen's failure: the drive still renders against whatever space the
-        // hostname routed to. Say it and carry on with no list.
-        onError(e instanceof Error ? e.message : String(e));
+      .then((found) => {
+        setSites(found);
+      })
+      .catch(() => {
+        // Not the drive's failure: it still renders against whatever space the hostname
+        // routed to. The rail says so about itself and offers another go, because the
+        // alternative to a retry here is reloading the page.
         setSites([]);
+        setFailed(true);
       });
-  }, [onError]);
+  }, []);
+
+  useEffect(load, [load]);
 
   return (
     <TooltipProvider>
       <aside className={cn('flex h-full shrink-0 flex-col border-r bg-card', collapsed ? 'w-16' : 'w-60')}>
         {/* Logo row */}
-        <div className={cn('flex h-14 items-center gap-2 px-3', collapsed && 'justify-center px-0')}>
+        <div className={cn('flex h-14 shrink-0 items-center gap-2 px-3', collapsed && 'justify-center px-0')}>
           <div className="grid size-[26px] shrink-0 place-items-center rounded-md bg-primary text-primary-foreground">
             <CanopyMark size={16} />
           </div>
@@ -182,7 +196,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, onError }: 
         </div>
 
         {/* New — a folder, or bytes. Both are operations the scope actually has. */}
-        <div className={cn('px-3 pb-2', collapsed && 'px-2')}>
+        <div className={cn('shrink-0 px-3 pb-2', collapsed && 'px-2')}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button className="w-full justify-center gap-1.5" size={collapsed ? 'icon' : 'default'}>
@@ -207,7 +221,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, onError }: 
         </div>
 
         {/* Main nav */}
-        <nav className={cn('flex flex-col gap-0.5 px-3', collapsed && 'px-2')} aria-label="Views">
+        <nav className={cn('flex shrink-0 flex-col gap-0.5 px-3', collapsed && 'px-2')} aria-label="Views">
           {NAV.map((n) => (
             <NavRow
               key={n.id}
@@ -220,7 +234,24 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, onError }: 
           ))}
         </nav>
 
-        {/* Spaces. One row per scope this login is bound in — the switcher, unfolded. */}
+        {/*
+          Spaces. One row per scope this login is bound in — the switcher, unfolded.
+
+          This is the part that grows, so this is the part that scrolls: with enough
+          spaces the rail used to run past the bottom of the shell, taking the expand
+          button with it.
+        */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+        {failed && !collapsed && (
+          <div className="mt-4 px-3">
+            <p className="px-2.5 text-[12px] text-muted-foreground">
+              Couldn’t list your spaces.{' '}
+              <button onClick={load} className="underline hover:text-foreground">
+                Try again
+              </button>
+            </p>
+          </div>
+        )}
         {!collapsed && sites && sites.length > 0 && (
           <div className="mt-4 px-3">
             <div className="mb-1 flex items-center justify-between px-2.5">
@@ -235,11 +266,20 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, onError }: 
                   aria-current={s.current ? 'true' : undefined}
                   onClick={() => {
                     if (s.current) return;
-                    selectSite(s.slug);
                     // A full reload rather than a re-render: every read on the screen
                     // belongs to the space it was made in, and re-fetching them piecemeal
                     // is how a listing from one space ends up beside a breadcrumb from
                     // another.
+                    //
+                    // Which is also why a selection storage refused to keep has to ride
+                    // in the URL instead: it lives in module memory, and the reload is
+                    // what throws that away. Without this, clicking another space in a
+                    // private window reloads straight back into the old one.
+                    if (!selectSite(s.slug)) {
+                      const url = new URL(window.location.href);
+                      url.searchParams.set('site', s.slug);
+                      window.history.replaceState(null, '', url);
+                    }
                     window.location.reload();
                   }}
                   className={cn(
@@ -258,14 +298,12 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, onError }: 
             </nav>
           </div>
         )}
-
-        {/* Spacer keeps the expand button on the floor. */}
-        <div className="min-h-4 flex-1" />
+        </div>
 
         {collapsed && (
           <button
             onClick={toggle}
-            className="mb-2 grid h-8 place-items-center text-muted-foreground hover:bg-accent"
+            className="mb-2 grid h-8 shrink-0 place-items-center text-muted-foreground hover:bg-accent"
             aria-label="Expand sidebar"
           >
             <Icon name="panel-left" size={16} />

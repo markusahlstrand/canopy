@@ -13,13 +13,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import App from './App';
 import { DriveScreen } from './drive';
 import { currentSite, selectSite } from './api';
 
 /** One pending answer, and the handle a test resolves it with. */
 interface Pending {
   url: string;
-  resolve: (body: unknown) => void;
+  resolve: (body: unknown, status?: number) => void;
   /** For the cases that are about a failure arriving late. */
   reject: (error: Error) => void;
 }
@@ -37,10 +38,10 @@ function queueFetch() {
       pending.push({
         url,
         reject: (error: Error) => rejectFetch(error),
-        resolve: (body: unknown) =>
+        resolve: (body: unknown, status = 200) =>
           resolveFetch({
-            ok: true,
-            status: 200,
+            ok: status < 400,
+            status,
             statusText: 'stubbed',
             json: () => Promise.resolve(body),
             // The preview reads a text body with `.text()`, not `.json()`. Without this
@@ -68,11 +69,16 @@ async function flush(ms = 250): Promise<void> {
 
 /** Answer the first queued request whose URL matches, leaving the others pending. */
 async function answer(match: string, body: unknown): Promise<void> {
+  await answerWith(match, 200, body);
+}
+
+/** The same, with a status — for the paths that are about being refused. */
+async function answerWith(match: string, status: number, body: unknown): Promise<void> {
   const i = pending.findIndex((p) => p.url.includes(match));
   expect(i, `no pending request matching ${match}; saw ${pending.map((p) => p.url).join(', ')}`).toBeGreaterThan(-1);
   const [target] = pending.splice(i, 1);
   await act(async () => {
-    target!.resolve(body);
+    target!.resolve(body, status);
   });
 }
 
@@ -526,5 +532,116 @@ describe('the rail is how you change space', () => {
     // reloads. Clicking it used to mean a pointless round trip through a whole page load.
     fireEvent.click(screen.getByText('Home'));
     expect(currentSite()).toBe('family');
+  });
+});
+
+describe('a selection that has gone stale does not lock the install', () => {
+  it('drops the selected space when it is the reason nobody is signed in', async () => {
+    // Membership in the selected space was revoked. `/api/me` resolves the principal in
+    // the SELECTED space, so it answers 401 — and the signed-out shell has no rail, so
+    // there is no control on screen that can clear the selection that caused it.
+    selectSite('family');
+    window.history.replaceState(null, '', '/?site=family');
+
+    render(<App />);
+    await flush();
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+
+    // Retried without the selection, which is what recovers the session.
+    await answer('/api/me', { principal: '01ADA' });
+    await flush();
+    expect(currentSite()).toBeNull();
+    // …and the URL cannot put it back on the next reload.
+    expect(window.location.search).not.toContain('site=');
+
+    // The drive renders, which is the whole point: the rail is on screen and lists the
+    // spaces this login really is in.
+    await answer('/api/sites', [{ slug: 'home', name: 'Home', current: true }]);
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.getByRole('complementary')).toBeTruthy();
+  });
+
+  it('keeps the selection when the 401 was simply nobody being signed in', async () => {
+    selectSite('family');
+
+    render(<App />);
+    await flush();
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+
+    // Both answers were 401, so the space was never the problem. Forgetting the choice
+    // here would land them in the routed space after signing in.
+    expect(currentSite()).toBe('family');
+    expect(screen.getByText(/Sign in to this space/)).toBeTruthy();
+  });
+});
+
+describe('a write goes where the person is looking', () => {
+  it('creates in My Drive rather than invisibly behind the trash', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
+
+    // Into a folder, then off to the trash. The folder id stays behind the trash view,
+    // which is what made this a bug: the write used it, and the refresh afterwards
+    // reloaded the trash — so it succeeded somewhere nobody could see.
+    fireEvent.doubleClick(screen.getByText('Papers'));
+    await flush();
+    await answer('/folders/01F/folders', []);
+    await answer('/folders/01F/files', []);
+
+    fireEvent.click(rail().getByText('Trash'));
+    await flush();
+    await answer('/trash', []);
+
+    newMenu();
+    fireEvent.click(screen.getByText('New folder'));
+    fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
+    fireEvent.click(screen.getByText('Create'));
+
+    // The root, because that is where the screen went — not 01F, the folder the trash
+    // was hiding.
+    const create = pending.find((p) => p.url.includes('/folders') && !p.url.includes('/trash'));
+    expect(create?.url).toContain('/folders/root/folders');
+  });
+});
+
+describe('the rail reports its own failures', () => {
+  it('keeps saying the space list failed after a folder read succeeds', async () => {
+    render(<DriveScreen {...shell} onError={() => {}} />);
+    await flush();
+    const sites = pending.findIndex((p) => p.url.includes('/api/sites'));
+    await act(async () => {
+      pending.splice(sites, 1)[0]!.reject(new Error('nope'));
+    });
+
+    // The drive's own refresh succeeds AFTER it, and it clears the shell's banner on
+    // success — which used to erase this message whenever the order came out this way.
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+
+    expect(screen.getByText(/Couldn’t list your spaces/)).toBeTruthy();
+  });
+});
+
+describe('a space change survives storage that refuses to hold it', () => {
+  it('carries the slug in the URL when it cannot be stored', async () => {
+    // Private mode, blocked site data. The selection lives in module memory, and the
+    // reload that applies it is exactly what throws that away — so without the URL,
+    // clicking another space reloads back into the one you were in.
+    // On `Storage.prototype`, not on `window.localStorage`: jsdom's storage is a Proxy,
+    // so a spy installed as an own property of it is never consulted and the test would
+    // pass against blocked storage it never blocked.
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    window.history.replaceState(null, '', '/');
+
+    await renderDrive([], [], [
+      { slug: 'home', name: 'Home', current: true },
+      { slug: 'family', name: 'Family', current: false },
+    ]);
+
+    fireEvent.click(screen.getByText('Family'));
+    expect(window.location.search).toContain('site=family');
   });
 });

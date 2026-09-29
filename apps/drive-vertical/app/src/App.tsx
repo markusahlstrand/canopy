@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Icon } from '@canopy/ui';
-import { ApiError, LOGIN_URL, LOGOUT_URL, claimOwner, whoami } from './api';
+import { ApiError, LOGIN_URL, LOGOUT_URL, claimOwner, currentSite, selectSite, whoami } from './api';
 import { DriveScreen } from './drive';
 
 /** Nobody is signed in yet, somebody is, or we have not asked. */
@@ -70,6 +70,43 @@ const claimOnce = (token: string): Promise<unknown> => {
   return inFlight.result;
 };
 
+/**
+ * Who am I — and if a selected space is the reason nobody is, stop selecting it.
+ *
+ * `/api/me` resolves the principal in the SELECTED space, so a selection pointing at a
+ * space this login is no longer bound in answers 401. That renders the signed-out shell,
+ * which mounts no rail — and the rail is the only thing that can change space. The
+ * selection outlives reloads, so the install became unreachable until someone cleared
+ * their site data: signed in, told they are not, with no control on screen that helps.
+ *
+ * So a 401 WITH a selection in force is retried without it. The `?site=` parameter goes
+ * too, or a reload would restore the state we just escaped. If the second answer is also
+ * 401 then nobody is signed in and the selection was never the problem — put it back, so
+ * signing in returns to the space they chose.
+ */
+const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
+  try {
+    return await whoami();
+  } catch (e: unknown) {
+    const selected = currentSite();
+    if (!selected || !(e instanceof ApiError) || e.status !== 401) throw e;
+
+    selectSite(null);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('site')) {
+      url.searchParams.delete('site');
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+
+    try {
+      return await whoami();
+    } catch (retry: unknown) {
+      selectSite(selected);
+      throw retry;
+    }
+  }
+};
+
 export default function App() {
   const [session, setSession] = useState<Session>({ state: 'loading' });
   const [error, setError] = useState<string | null>(null);
@@ -98,7 +135,7 @@ export default function App() {
       }
 
       const token = fromUrl ?? readStash();
-      if (!token) return whoami();
+      if (!token) return whoamiWithoutStaleSpace();
 
       try {
         await claimOnce(token);
@@ -128,7 +165,7 @@ export default function App() {
           setError(e instanceof ApiError ? e.message : String(e));
         }
       }
-      return whoami();
+      return whoamiWithoutStaleSpace();
     };
 
     boot()
