@@ -186,6 +186,19 @@ export const driveEntities = defineEntities({
  */
 export const DRIVE_PERMISSIONS = ['drive:read', 'drive:write', 'drive:manage'] as const;
 
+/**
+ * A person as this drive displays them: a principal, and what to call it.
+ *
+ * Not an entity. Nothing is granted on a person and nothing pages over them — this is a
+ * row shape shared by the operation that writes it and the one that reads it back.
+ */
+const drivePerson = z.object({
+  principal: z.string(),
+  email: z.string().nullable(),
+  name: z.string().nullable(),
+  seen_at: z.string(),
+});
+
 export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS)({
   /**
    * The hot read, and the one S10 converts first.
@@ -633,6 +646,62 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * kernel's index answers ids and says to hydrate through your own read path —
    * this is that read path, and the check is what makes it one.
    */
+  /**
+   * Remember what to call the caller — and no route, deliberately.
+   *
+   * The kernel deals in principals, and a principal is a ULID. Sharing a folder means
+   * picking a PERSON, so something has to hold the difference between `01JBQ…` and
+   * "bjorn@example.com". Nothing in the platform does: the identity directory maps a
+   * subject to a principal and keeps no display identity, and the invite row that carried
+   * an email stops existing the moment it is accepted.
+   *
+   * **No `http` block, which is the security property.** The verified subject exists only
+   * in the worker — it comes off the session, from the issuer's claims — so the worker is
+   * the only caller that can say who somebody is. Exposed as a route, this would let any
+   * member write any name and address onto their own row and appear in a share dialog as
+   * somebody else. `drive/record-text` omits its route for a related reason.
+   *
+   * The identity written is `ctx.principal`, never an input: the fields say what to call
+   * the caller, and the context says who the caller is.
+   */
+  'drive/record-person': {
+    summary: 'Remember what to call the caller (worker-only: no HTTP route)',
+    permission: 'drive:read',
+    input: z.object({
+      /** Both nullable: an issuer need not release either claim. */
+      email: z.string().nullable().optional(),
+      name: z.string().nullable().optional(),
+    }),
+    output: drivePerson,
+  },
+
+  /**
+   * The people this install has seen in this space — the share dialog's picker.
+   *
+   * A projection of sign-ins, not the roster of record. Membership is a role at this node
+   * and the kernel owns it; this answers "what do we call them", so a member who has never
+   * signed in here is absent while still being a member. The UI has to say that rather than
+   * present this as everyone.
+   *
+   * Not kernel-paged. A space's people are tens, not thousands — `limit` bounds it so the
+   * answer cannot grow without one, and when a space needs a keyset walk over its members
+   * it needs a picker with a search box, which is a different operation from this.
+   */
+  'drive/list-people': {
+    summary: 'The people this install has seen in this space',
+    permission: 'drive:read',
+    /**
+     * An object, even when empty. `.default({})` would let a bare `invoke` with no
+     * argument through, but it widens the inferred input of every OTHER handler in the
+     * registry to `| undefined` — one operation's convenience paid for by unrelated
+     * handlers guarding a value they always receive. The derived GET builds `{}` from an
+     * empty query string, so this only ever bites a hand-written caller.
+     */
+    input: z.object({ limit: z.number().int().positive().max(200).optional() }),
+    output: z.object({ people: z.array(drivePerson) }),
+    http: { method: 'GET', path: '/people' },
+  },
+
   /**
    * May the caller manage the people in this space?
    *

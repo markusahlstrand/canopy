@@ -526,6 +526,34 @@ app.get('/api/me', async (c) => {
     await defer(c, observePlace(reporterFor(instance.identity), node.scopeId, subject.sub, principal));
   }
 
+  /**
+   * And tell the DRIVE what to call them (#79), for the same reason and in the same place.
+   *
+   * A grant names a principal, and a principal is a ULID — so a share dialog that has to
+   * let someone pick a PERSON needs an email beside it. Nothing in the platform keeps one:
+   * the identity directory maps a subject to a principal and stores no display identity,
+   * and the invite row that carried an email stops existing when it is accepted.
+   *
+   * Here is where it can be known truthfully. `subject.email` and `subject.name` come off
+   * a verified session, which is exactly why `drive/record-person` has no HTTP route — over
+   * one, a member could write another member's address onto their own row. This call is the
+   * only way in, and it can only ever record the caller.
+   *
+   * After the response, like the report above: this is bookkeeping, and nobody's screen
+   * should wait for it. A failure is dropped for the same reason — `/api/me` answering
+   * "who you are" must not fail because a display name could not be filed.
+   */
+  if (principal && (subject?.email || subject?.name)) {
+    const scope = await hostFor(c.env).getScope(principalId.parse(principal), node.tenantId, node.scopeId);
+    await defer(
+      c,
+      scope
+        .invoke('drive/record-person', { email: subject.email, name: subject.name })
+        .then(() => undefined)
+        .catch(() => undefined),
+    );
+  }
+
   return principal ? c.json({ principal: principalId.parse(principal) }) : c.json({ error: 'unauthorized' }, 401);
 });
 

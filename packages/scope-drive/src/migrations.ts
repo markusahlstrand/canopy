@@ -130,4 +130,68 @@ export const driveMigrations: SqlMigration[] = [
       UPDATE drive_files SET state = 'trashed' WHERE deleted_at IS NOT NULL;
     `,
   },
+  {
+    version: '0004',
+    sql: `
+      -- Who is in this space (#79), as a name a person can recognise.
+      --
+      -- The kernel knows principals; a principal is a ULID. Sharing a folder means
+      -- picking a PERSON, so something has to hold the difference between
+      -- \`01JBQ…\` and "bjorn@example.com" — and nothing in the platform does: the
+      -- identity directory maps a subject to a principal and stores no display
+      -- identity, and the invite row that carried an email stops existing the moment
+      -- it is accepted. So this is where an email goes to survive acceptance.
+      --
+      -- A PROJECTION, not a source of truth. Membership is the kernel's (a role at
+      -- this node); this table only remembers what to call someone. A row here grants
+      -- nothing, and a person missing from it is still a member — they are just
+      -- someone this install has not seen sign in yet.
+      --
+      -- Written only by \`drive/record-person\`, which declares no HTTP route: the
+      -- verified subject exists only in the worker, so the worker is the only caller
+      -- that can assert who somebody is. Over a public route, a member could write
+      -- another member's name and email onto their own row.
+      CREATE TABLE drive_people (
+        -- The principal this display identity belongs to. One row per person.
+        principal TEXT PRIMARY KEY,
+        -- Both nullable: an issuer need not release either claim, and a person with
+        -- no name is shown by their email, or failing that not at all.
+        email TEXT,
+        name TEXT,
+        -- When this install last saw them. Not a session record — a single timestamp
+        -- that answers "is this a live member or someone from the first week".
+        seen_at TEXT NOT NULL
+      );
+
+      -- The picker's order: people with a name or an address first, then by name.
+      CREATE INDEX drive_people_by_name ON drive_people (name, email);
+
+      -- Who a folder is shared with (#79), because the kernel cannot be asked.
+      --
+      -- \`ctx.grant\` enforces a share and there is NO read that enumerates grants —
+      -- the platform's own console says so ("no enumeration; this view would be the
+      -- only witness to grants it cannot read"). A share dialog has to show who has
+      -- access, so the drive records the shares it made.
+      --
+      -- Enforcement is still the kernel's, and that ordering matters when the two
+      -- disagree: a row here that the kernel does not back grants nothing, which is
+      -- the safe direction. Both are written in one operation, so they part company
+      -- only if a grant is made or withdrawn by some other path — a platform actor at
+      -- the admin seam, say — and then this table is stale rather than dangerous.
+      CREATE TABLE drive_folder_shares (
+        folder_id TEXT NOT NULL,
+        principal TEXT NOT NULL,
+        -- The permission key granted, so withdrawing removes exactly what was given.
+        permission TEXT NOT NULL,
+        granted_at TEXT NOT NULL,
+        -- Who did the sharing. Kept because "who let them in" is the first question
+        -- asked when somebody is somewhere they should not be.
+        granted_by TEXT NOT NULL,
+        PRIMARY KEY (folder_id, principal, permission)
+      );
+
+      -- The two reads: everyone on one folder, and every folder one person holds.
+      CREATE INDEX drive_folder_shares_by_principal ON drive_folder_shares (principal, folder_id);
+    `,
+  },
 ];

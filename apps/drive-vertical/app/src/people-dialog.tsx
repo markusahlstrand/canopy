@@ -24,7 +24,20 @@ import {
   DialogTitle,
 } from '@canopy/ui';
 import { latestOnly } from './reads';
-import { createInvite, listInvites, revokeInvite, type Invite } from './api';
+import {
+  createInvite,
+  listInvites,
+  listPeople,
+  revokeInvite,
+  type Invite,
+  type Person,
+} from './api';
+
+/** The same rule the topbar's avatar uses, so one person reads the same in both. */
+function initialsOf(s: string): string {
+  const parts = s.split(/[\s@.]+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || 'U';
+}
 
 interface PeopleDialogProps {
   open: boolean;
@@ -40,6 +53,7 @@ interface Minted {
 
 export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
   const [invites, setInvites] = useState<Invite[] | null>(null);
+  const [people, setPeople] = useState<Person[] | null>(null);
   /**
    * The roles the SERVER says a teammate may be invited at.
    *
@@ -73,17 +87,21 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
   const load = useCallback(() => {
     const ticket = reads.current.take();
     setError(null);
-    listInvites()
-      .then((answer) => {
+    // One ticket for both: they are one view, and half of it arriving under the other
+    // half's failure is a screen nobody can read.
+    Promise.all([listInvites(), listPeople()])
+      .then(([open, seen]) => {
         if (!reads.current.current(ticket)) return;
-        setInvites(answer.invites);
-        setRoles(answer.roles);
+        setInvites(open.invites);
+        setRoles(open.roles);
+        setPeople(seen.people);
       })
       .catch((e: unknown) => {
         // A stale FAILURE is as misleading as a stale answer — it belongs to a dialog
         // that is no longer open, or to a read something newer has already corrected.
         if (!reads.current.current(ticket)) return;
         setInvites([]);
+        setPeople([]);
         setError(e instanceof Error ? e.message : String(e));
       });
   }, []);
@@ -98,6 +116,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
       setEmail('');
       setError(null);
       setInvites(null);
+      setPeople(null);
       setRoles([]);
       return;
     }
@@ -206,6 +225,49 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
         ) : null}
 
         <div>
+          <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            In this space
+          </h3>
+          {people === null ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : people.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nobody has signed in here yet but you.
+            </p>
+          ) : (
+            <ul className="mb-4 flex flex-col gap-1">
+              {people.map((person) => (
+                <li
+                  key={person.principal}
+                  className="flex items-center gap-2.5 rounded-md border border-border px-2.5 py-2 text-[13.5px]"
+                >
+                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+                    {initialsOf(person.name ?? person.email ?? '?')}
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate">
+                      {/* A principal and nothing else is what an issuer releasing neither
+                          claim looks like. Showing the id is more honest than a blank. */}
+                      {person.name ?? person.email ?? (
+                        <span className="font-mono text-[11.5px] text-muted-foreground">
+                          {person.principal}
+                        </span>
+                      )}
+                    </span>
+                    {person.name && person.email && (
+                      <span className="truncate text-[11.5px] text-muted-foreground">{person.email}</span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* Said plainly, because the list above cannot be trusted as a roster: it is
+              built from sign-ins, so a member who has not been here is missing from it. */}
+          <p className="mb-4 text-[11.5px] text-muted-foreground">
+            Everyone here reads the whole space. Who has signed in is what this knows —
+            a member who has never opened this drive is not listed.
+          </p>
           <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Open invitations
           </h3>

@@ -44,6 +44,12 @@ const stranger = principalId.parse(ulid());
 interface Access {
   canManage: boolean;
 }
+interface Person {
+  principal: string;
+  email: string | null;
+  name: string | null;
+  seen_at: string;
+}
 interface FolderRow {
   id: string;
 }
@@ -139,5 +145,59 @@ describe('who may manage the people in a space', () => {
     // "You may not manage people here" and "you are not in this space" are different
     // answers and the second one is not this operation's to soften.
     await expect(access(stranger)).rejects.toThrow();
+  });
+});
+
+describe('the roster remembers what to call people', () => {
+  it('records the caller and reads back, the newest name winning', async () => {
+    await (await as(bjorn)).invoke('drive/record-person', {
+      email: 'bjorn@example.com',
+      name: 'Bjorn',
+    });
+    // A second sign-in with a changed name: the row is replaced, not duplicated.
+    await (await as(bjorn)).invoke('drive/record-person', {
+      email: 'bjorn@example.com',
+      name: 'Bjorn Egerland',
+    });
+
+    const { people } = await (await as(ada)).invoke<{ people: Person[] }>('drive/list-people', {});
+    const mine = people.filter((p) => p.principal === bjorn);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.name).toBe('Bjorn Egerland');
+  });
+
+  it('lands a claim on the CLAIMANT, never on the person claimed', async () => {
+    // Cleo records herself as Ada. The name and address are self-asserted — they are
+    // whatever the issuer released, and a display name is self-asserted in every product
+    // that has one. WHOSE ROW it lands on is not.
+    //
+    // Two things hold that, which is why this test is worth having even though the attack
+    // is awkward to express: the input schema has no `principal` field, so an extra one is
+    // stripped before the handler runs, and the handler writes `ctx.principal`. Remove
+    // either and this fails; I checked by adding the field back to the schema and having
+    // the handler prefer it.
+    await (await as(cleo)).invoke('drive/record-person', {
+      email: 'ada@example.com',
+      name: 'Ada',
+    });
+
+    const { people } = await (await as(ada)).invoke<{ people: Person[] }>('drive/list-people', {});
+    // Ada has never recorded herself, and nobody else can do it for her.
+    expect(people.some((p) => p.principal === ada)).toBe(false);
+    expect(people.find((p) => p.principal === cleo)?.email).toBe('ada@example.com');
+  });
+
+  it('is not the roster of record: a member who never signed in is absent', async () => {
+    const { people } = await (await as(ada)).invoke<{ people: Person[] }>('drive/list-people', {});
+    // Ada is the owner. She is a member because the kernel says so, not because a row here
+    // says so — which is why the UI may not present this list as everyone in the space.
+    expect(people.some((p) => p.principal === ada)).toBe(false);
+  });
+
+  it('refuses a stranger, who is not in the space to be seen in it', async () => {
+    await expect(
+      (await as(stranger)).invoke('drive/record-person', { email: 'x@example.com', name: 'X' }),
+    ).rejects.toThrow();
+    await expect((await as(stranger)).invoke('drive/list-people', {})).rejects.toThrow();
   });
 });

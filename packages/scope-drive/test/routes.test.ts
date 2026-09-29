@@ -26,6 +26,7 @@ describe('the derived route table', () => {
       'GET /api/folders/:folderId/files',
       'GET /api/folders/:folderId/folders',
       'GET /api/folders/by-path',
+      'GET /api/people',
       'GET /api/people/access',
       'GET /api/search',
       'GET /api/trash',
@@ -38,5 +39,27 @@ describe('the derived route table', () => {
       'POST /api/folders/:folderId/move',
       'POST /api/folders/:parentId/folders',
     ]);
+  });
+
+  /**
+   * The operations that must NOT be reachable over HTTP, named rather than merely absent
+   * from the list above.
+   *
+   * Both are writes whose authority comes from something the caller cannot be trusted to
+   * assert about itself: `record-person` writes a display identity that only the worker's
+   * verified session knows, and `record-text` writes extraction output about a version.
+   * Adding an `http` block to either would pass the assertion above by simply appearing in
+   * it, so the property is stated on its own.
+   */
+  it('mounts no route for the operations only the worker may invoke', () => {
+    const mounted = mountApi(new Hono(), async () => {
+      throw new Error('not reached: this test never resolves a stub');
+    });
+    const paths = mounted.map((r) => r.path);
+    expect(paths).not.toContain('/api/people/record');
+    // Nothing anywhere in the table may reach them, however it is spelled.
+    for (const forbidden of ['record-person', 'record-text', 'record_person']) {
+      expect(paths.filter((path) => path.includes(forbidden))).toEqual([]);
+    }
   });
 });

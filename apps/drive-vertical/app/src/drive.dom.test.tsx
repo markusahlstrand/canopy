@@ -784,13 +784,16 @@ describe('the People surface is offered only to whoever may use it', () => {
       roles: ['member'],
       invites: [{ principal: '01P', roleKey: 'member', email: 'ghost@example.com' }],
     });
+    await answer('/api/people', { people: [] });
 
     // Reopened, its own read still pending: what shows now is whatever state the closed
     // dialog was left in. A stale answer applied while closed would be sitting here.
     accountMenu();
     fireEvent.click(screen.getByText('People…'));
     expect(screen.queryByText('ghost@example.com')).toBeNull();
-    expect(screen.getByText('Loading…')).toBeTruthy();
+    // BOTH lists are back to loading — the dialog's two reads share one ticket, so a
+    // stale answer cannot land half of this view under the other half's state.
+    expect(screen.getAllByText('Loading…')).toHaveLength(2);
   });
 
   it('offers it to an owner, and the dialog lists what is still waiting', async () => {
@@ -803,7 +806,18 @@ describe('the People surface is offered only to whoever may use it', () => {
       roles: ['member'],
       invites: [{ principal: '01P', roleKey: 'member', email: 'bjorn@example.com' }],
     });
+    await answer('/api/people', {
+      people: [
+        { principal: '01ADA', email: 'ada@example.com', name: 'Ada', seen_at: '2026-09-29T00:00:00.000Z' },
+        // Neither claim released: a principal and nothing else, which has to render as
+        // itself rather than as an empty row.
+        { principal: '01NAMELESS', email: null, name: null, seen_at: '2026-09-29T00:00:00.000Z' },
+      ],
+    });
 
+    // Who is here, and what is still waiting — two different lists, and the dialog says so.
+    expect(screen.getByText('Ada')).toBeTruthy();
+    expect(screen.getByText('01NAMELESS')).toBeTruthy();
     expect(screen.getByText('bjorn@example.com')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Withdraw' })).toBeTruthy();
   });
