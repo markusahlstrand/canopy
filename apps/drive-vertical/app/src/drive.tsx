@@ -16,6 +16,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, cn } from '@canopy/ui';
 import { latestOnly } from './reads';
 import { PreviewPanel } from './preview';
+import { FileTable, type SortKey, type SortState } from './file-table';
+import { kindOf, type FileItem } from './items';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,8 +63,61 @@ export const DRIVE_ICONS = [
   'upload',
   'more',
   'search',
+  'grid',
+  'list',
 ] as const;
 export type IconName = (typeof DRIVE_ICONS)[number];
+
+/**
+ * The order the table displays, applied to the rows before they become items.
+ *
+ * The table reports a sort and renders what it is given — it does not sort itself, which
+ * is a fact about the component that only a test surfaces. Folders always lead, because a
+ * drive that interleaves them is a drive nobody can scan.
+ */
+function sorted<T extends { name: string; updated_at?: string }>(rows: T[], sort: SortState): T[] {
+  const dir = sort.dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) =>
+    sort.key === 'modified'
+      ? dir * (a.updated_at ?? '').localeCompare(b.updated_at ?? '')
+      : dir * a.name.localeCompare(b.name),
+  );
+}
+
+/** Bytes, as the table's `size` column wants them: already formatted, or an em dash. */
+function sizeLabel(bytes: number | null | undefined): string {
+  if (bytes == null) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['kB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+const folderItem = (folder: DriveFolder): FileItem => ({
+  id: folder.id,
+  name: folder.name,
+  kind: 'folder',
+  modified: '—',
+  size: '—',
+  isFolder: true,
+  path: folder.path,
+});
+
+const fileItem = (file: DriveFile, mime?: string | null): FileItem => ({
+  id: file.id,
+  name: file.name,
+  // The kind is a presentation fact derived from the version's mime; a listing does not
+  // carry versions, so an unwritten file reads as a plain document until it is opened.
+  kind: file.current_version_id ? kindOf(mime) : 'doc',
+  modified: file.current_version_id ? when(file.updated_at) : 'No content yet',
+  size: '—',
+  isFolder: false,
+});
 
 /** A breadcrumb: the trail back to the root, built from the folder's own path. */
 interface Crumb {
@@ -87,6 +142,9 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const [previewing, setPreviewing] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [layout, setLayout] = useState<'list' | 'grid'>('list');
+  const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' });
   const reads = useRef(latestOnly());
   /**
    * The CURRENT refresh, not the one an action closed over.
@@ -170,6 +228,45 @@ export function DriveScreen({ onError }: DriveScreenProps) {
     }
   };
 
+  /** Clicking a column header: same key toggles direction, a new key starts ascending. */
+  const onSort = (key: SortKey) =>
+    setSort((s) => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
+
+  /**
+   * The table emits action names; this is where they become operations.
+   *
+   * Only the ones that exist: the table's own menu offers Rename, Move, Delete and Download,
+   * and anything it would offer without an operation behind it was removed when the
+   * component moved rather than wired to nothing here.
+   */
+  const onAction = (action: string, item: FileItem) => {
+    if (action === 'Open') {
+      const folder = folders.find((f) => f.id === item.id);
+      if (folder) open(folder);
+      else setPreviewing(item.id);
+      return;
+    }
+    if (action === 'Rename') {
+      setRenaming({ kind: item.isFolder ? 'folder' : 'file', id: item.id, name: item.name });
+      return;
+    }
+    if (action === 'Delete') {
+      if (!item.isFolder) void act(() => trashFile(item.id));
+      return;
+    }
+    if (action === 'Download' && !item.isFolder) {
+      window.open(contentUrl(item.id), '_blank', 'noopener');
+      return;
+    }
+    if (action === 'Move') {
+      // Up one level, as before — a destination picker is its own screen.
+      const up = crumbs[crumbs.length - 2]?.id ?? ROOT_FOLDER_ID;
+      if (crumbs.length > 0) {
+        void act(() => (item.isFolder ? moveFolder(item.id, up) : moveFile(item.id, up)));
+      }
+    }
+  };
+
   const onUpload = (input: HTMLInputElement) => {
     const chosen = Array.from(input.files ?? []);
     input.value = '';
@@ -243,6 +340,15 @@ export function DriveScreen({ onError }: DriveScreenProps) {
         </div>
 
         <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setLayout((l) => (l === 'list' ? 'grid' : 'list'))}
+          aria-label={layout === 'list' ? 'Switch to grid' : 'Switch to list'}
+        >
+          <Icon name={layout === 'list' ? 'grid' : 'list'} className="size-4" />
+        </Button>
+
+        <Button
           variant={view === 'trash' ? 'default' : 'outline'}
           size="sm"
           onClick={() => {
@@ -275,128 +381,61 @@ export function DriveScreen({ onError }: DriveScreenProps) {
       </div>
 
       {view === 'search' ? (
-        <Rows
-          empty={
-            term.trim().length < SEARCH_MIN
-              ? `Type at least ${SEARCH_MIN} characters.`
-              : `No matches for “${term.trim()}”.`
-          }
-          busy={busy}
-          rows={hits.map((hit) => ({
-            key: hit.id,
-            icon: 'file-text' as const,
-            name: hit.name,
-            // The distinction extraction bought: matching a document's text is a
-            // different answer to matching its name, and saying which is the feature.
-            meta: hit.via === 'content' ? 'Matched inside the document' : 'Matched in the name',
-            onOpen: () => setPreviewing(hit.id),
-            actions: [
-              ...(hit.current_version_id
-                ? [
-                    {
-                      label: 'Download',
-                      onSelect: () => window.open(contentUrl(hit.id), '_blank', 'noopener'),
-                    },
-                  ]
-                : []),
-              {
-                label: 'Rename',
-                onSelect: () => setRenaming({ kind: 'file', id: hit.id, name: hit.name }),
-              },
-              { label: 'Move to trash', danger: true, onSelect: () => void act(() => trashFile(hit.id)) },
-            ],
-          }))}
+        <FileTable
+          files={sorted(hits, sort).map((hit) => fileItem(hit))}
+          selection={selection}
+          onSelectionChange={setSelection}
+          onOpen={(item) => setPreviewing(item.id)}
+          sort={sort}
+          onSort={onSort}
+          view={layout}
+          onAction={onAction}
+          pluginMenuItems={() => []}
+          loading={busy}
         />
       ) : view === 'trash' ? (
-        <Rows
-          empty="The trash is empty."
-          busy={busy}
-          rows={trash.map((file) => ({
-            key: file.id,
-            icon: 'file-text',
-            name: file.name,
-            meta: file.deleted_at ? `Trashed ${when(file.deleted_at)}` : 'Trashed',
-            actions: [{ label: 'Restore', onSelect: () => void act(() => restoreFile(file.id)) }],
-          }))}
+        <FileTable
+          files={sorted(trash, sort).map((file) => fileItem(file))}
+          selection={selection}
+          onSelectionChange={setSelection}
+          onOpen={(item) => void act(() => restoreFile(item.id))}
+          sort={sort}
+          onSort={onSort}
+          view={layout}
+          onAction={onAction}
+          pluginMenuItems={() => []}
+          loading={busy}
         />
       ) : (
-        <Rows
-          empty="Nothing here yet. Upload a file, or make a folder."
-          busy={busy}
-          rows={[
-            ...folders.map((folder) => ({
-              key: folder.id,
-              icon: 'folder' as const,
-              name: folder.name,
-              meta: 'Folder',
-              onOpen: () => open(folder),
-              actions: [
-                {
-                  label: 'Rename',
-                  onSelect: () => setRenaming({ kind: 'folder', id: folder.id, name: folder.name }),
-                },
-                ...(crumbs.length > 0
-                  ? [
-                      {
-                        // Up one level only, for now: a full destination picker is its own
-                        // screen, and "out of here" is the move people actually make.
-                        label: 'Move up one level',
-                        onSelect: () =>
-                          void act(() =>
-                            moveFolder(folder.id, crumbs[crumbs.length - 2]?.id ?? ROOT_FOLDER_ID),
-                          ),
-                      },
-                    ]
-                  : []),
-              ],
-            })),
-            ...files.map((file) => ({
-              key: file.id,
-              icon: 'file-text' as const,
-              name: file.name,
-              meta: file.current_version_id ? `Updated ${when(file.updated_at)}` : 'No content yet',
-              // A click previews. Before this slice it opened the bytes in a new tab,
-              // which is what a drive does when it has no preview — not what it does
-              // when it has one.
-              onOpen: () => setPreviewing(file.id),
-              actions: [
-                ...(file.current_version_id
-                  ? [
-                      {
-                        label: 'Download',
-                        onSelect: () => window.open(contentUrl(file.id), '_blank', 'noopener'),
-                      },
-                    ]
-                  : []),
-                {
-                  label: 'Rename',
-                  onSelect: () => setRenaming({ kind: 'file', id: file.id, name: file.name }),
-                },
-                ...folders.map((into) => ({
-                  label: `Move to ${into.name}`,
-                  onSelect: () => void act(() => moveFile(file.id, into.id)),
-                })),
-                ...(crumbs.length > 0
-                  ? [
-                      {
-                        label: 'Move up one level',
-                        onSelect: () =>
-                          void act(() =>
-                            moveFile(file.id, crumbs[crumbs.length - 2]?.id ?? ROOT_FOLDER_ID),
-                          ),
-                      },
-                    ]
-                  : []),
-                {
-                  label: 'Move to trash',
-                  danger: true,
-                  onSelect: () => void act(() => trashFile(file.id)),
-                },
-              ],
-            })),
-          ]}
+        <FileTable
+          files={[...sorted(folders, sort).map(folderItem), ...sorted(files, sort).map((file) => fileItem(file))]}
+          selection={selection}
+          onSelectionChange={setSelection}
+          onOpen={(item) => {
+            const folder = folders.find((f) => f.id === item.id);
+            if (folder) open(folder);
+            else setPreviewing(item.id);
+          }}
+          sort={sort}
+          onSort={onSort}
+          view={layout}
+          onAction={onAction}
+          // Drag a file onto a folder: the move the platform's relink makes safe (#75).
+          onMove={(item, folder) => void act(() => moveFile(item.id, folder.id))}
+          pluginMenuItems={() => []}
+          previewOpen={previewing !== null}
+          loading={busy}
         />
       )}
+      </div>
+
+      {previewing ? (
+        <PreviewPanel
+          fileId={previewing}
+          onClose={() => setPreviewing(null)}
+          onError={onError}
+        />
+      ) : null}
 
       {creating ? (
         <NameDialog
@@ -408,16 +447,6 @@ export function DriveScreen({ onError }: DriveScreenProps) {
             setCreating(false);
             void act(() => createFolder(folderId, name));
           }}
-        />
-      ) : null}
-
-      </div>
-
-      {previewing ? (
-        <PreviewPanel
-          fileId={previewing}
-          onClose={() => setPreviewing(null)}
-          onError={onError}
         />
       ) : null}
 
@@ -437,64 +466,6 @@ export function DriveScreen({ onError }: DriveScreenProps) {
         />
       ) : null}
     </div>
-  );
-}
-
-interface Row {
-  key: string;
-  icon: IconName;
-  name: string;
-  meta: string;
-  onOpen?: () => void;
-  actions: { label: string; onSelect: () => void; danger?: boolean }[];
-}
-
-/** The list itself: one shape for the drive and the trash, because they differ only in rows. */
-function Rows({ rows, empty, busy }: { rows: Row[]; empty: string; busy: boolean }) {
-  if (rows.length === 0) {
-    return (
-      <p className="rounded-lg border border-border px-4 py-10 text-center text-sm text-muted-foreground">
-        {busy ? 'Loading…' : empty}
-      </p>
-    );
-  }
-  return (
-    <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
-      {rows.map((row) => (
-        <li key={row.key} className="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/50">
-          <Icon name={row.icon} className="size-5 text-muted-foreground" />
-          <button
-            type="button"
-            onClick={row.onOpen}
-            disabled={!row.onOpen}
-            className="min-w-0 flex-1 text-left disabled:cursor-default"
-          >
-            <span className="block truncate text-sm">{row.name}</span>
-            <span className="block truncate text-xs text-muted-foreground">{row.meta}</span>
-          </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" aria-label={`Actions for ${row.name}`}>
-                <Icon name="more" className="size-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              {row.actions.map((action, i) => (
-                <span key={action.label}>
-                  {action.danger && i > 0 ? <DropdownMenuSeparator /> : null}
-                  <DropdownMenuItem
-                    onSelect={action.onSelect}
-                    className={action.danger ? 'text-destructive' : undefined}
-                  >
-                    {action.label}
-                  </DropdownMenuItem>
-                </span>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </li>
-      ))}
-    </ul>
   );
 }
 

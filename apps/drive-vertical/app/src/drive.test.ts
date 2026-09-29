@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hasIcon } from '@canopy/ui';
 import { DRIVE_ICONS } from './drive';
+import { actionsFor } from './file-table';
 import { latestOnly } from './reads';
 import {
   ApiError,
@@ -185,5 +186,36 @@ describe('a text preview stops reading at the limit', () => {
       Promise.resolve({ ok: true, status: 200, statusText: 'ok', body: stream.body } as Response),
     );
     await expect(fileBodyAsText('01A')).resolves.toEqual({ text: 'short enough', truncated: false });
+  });
+});
+
+describe('the table offers only what the screen can perform', () => {
+  it('gives a folder no download and no delete', () => {
+    // Both were in the moved component's menus for every row. A folder cannot be
+    // downloaded — there is no archive endpoint — and `trash-file` takes a file.
+    expect(actionsFor({ id: '01F', name: 'Papers', kind: 'folder', modified: '—', size: '—', isFolder: true })).toEqual([
+      'Open',
+      'Rename',
+      'Move',
+    ]);
+  });
+
+  it('gives a file the five that have operations behind them', () => {
+    expect(actionsFor({ id: '01A', name: 'a.md', kind: 'note', modified: 'today', size: '1 kB', isFolder: false })).toEqual([
+      'Open',
+      'Download',
+      'Rename',
+      'Move',
+      'Delete',
+    ]);
+  });
+
+  it('offers neither Share nor Reprocess, which came across with no operations', () => {
+    const every = [
+      ...actionsFor({ id: '01F', name: 'f', kind: 'folder', modified: '—', size: '—', isFolder: true }),
+      ...actionsFor({ id: '01A', name: 'a', kind: 'doc', modified: '—', size: '—', isFolder: false }),
+    ];
+    expect(every).not.toContain('Share');
+    expect(every).not.toContain('Reprocess');
   });
 });
