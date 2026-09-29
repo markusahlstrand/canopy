@@ -28,6 +28,8 @@ export default defineConfig({
           name: 'app',
           include: ['app/src/**/*.test.{ts,tsx}'],
           environment: 'jsdom',
+          // jsdom lacks ResizeObserver, which cmdk needs to render at all.
+          setupFiles: ['app/src/test-setup.ts'],
         },
       },
     ],

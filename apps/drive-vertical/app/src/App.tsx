@@ -159,28 +159,6 @@ export default function App() {
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
-      <header className="border-b border-border">
-        <div className="mx-auto flex max-w-4xl items-center gap-3 px-4 py-3">
-          <Icon name="my-drive" className="size-5 text-primary" />
-          <h1 className="text-base font-semibold">Canopy Drive</h1>
-          <div className="ml-auto flex items-center gap-2">
-            {session.state === 'in' ? (
-              <>
-                <SiteSwitcher onError={setError} />
-                <span className="hidden text-sm text-muted-foreground sm:inline">{session.principal}</span>
-                <Button variant="outline" size="sm" asChild>
-                  <a href={LOGOUT_URL}>Sign out</a>
-                </Button>
-              </>
-            ) : session.state === 'out' ? (
-              <Button size="sm" asChild>
-                <a href={LOGIN_URL}>Sign in</a>
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </header>
-
       <main className="mx-auto max-w-4xl px-4 py-8">
         {error ? (
           <p className="mb-6 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
@@ -193,7 +171,12 @@ export default function App() {
         ) : session.state === 'out' ? (
           <SignedOut />
         ) : (
-          <DriveScreen onError={setError} />
+          <DriveScreen
+            onError={setError}
+            auth={{ user: { name: session.principal }, principal: session.principal }}
+            onSignIn={() => (window.location.href = LOGIN_URL)}
+            onSignOut={() => (window.location.href = LOGOUT_URL)}
+          />
         )}
       </main>
     </div>
