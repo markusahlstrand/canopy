@@ -14,7 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { DriveScreen } from './drive';
-import { selectSite } from './api';
+import { currentSite, selectSite } from './api';
 
 /** One pending answer, and the handle a test resolves it with. */
 interface Pending {
@@ -119,13 +119,30 @@ afterEach(() => {
   selectSite(null);
 });
 
-/** The screen starts by reading the root folder; answer that and get out of the way. */
-async function renderDrive(folders: unknown[] = [], files: unknown[] = []): Promise<void> {
+/**
+ * The screen starts by reading the root folder and the space list; answer both and get
+ * out of the way. The rail's list is answered even when a test does not care, because an
+ * unanswered read is a component stuck on its loading state for the whole test.
+ */
+async function renderDrive(
+  folders: unknown[] = [],
+  files: unknown[] = [],
+  sites: unknown[] = [],
+): Promise<void> {
   render(<DriveScreen {...shell} onError={() => {}} />);
   await flush();
+  await answer('/api/sites', sites);
   await answer('/folders/root/folders', folders);
   await answer('/folders/root/files', files);
 }
+
+/** Open the rail's New menu, which is a Radix trigger: it answers the keyboard, not `click`. */
+function newMenu(): void {
+  fireEvent.keyDown(screen.getByText('New'), { key: 'Enter' });
+}
+
+/** The rail, to address it apart from the topbar — both say "My Drive". */
+const rail = () => within(screen.getByRole('complementary'));
 
 describe('a stale search answer never reaches the screen', () => {
   it('drops the first term’s hits when the term has moved on', async () => {
@@ -197,15 +214,16 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
     expect(screen.getByText('lease.pdf')).toBeTruthy();
 
-    // A write starts in Papers. "New folder" rather than the row menu because the menu
-    // is a Radix trigger that wants real pointer events, and the race under test is about
-    // WHICH refresh an action runs — not about which control started it.
+    // A write starts in Papers. "New folder" rather than the row menu because the row's
+    // menu wants real pointer events, and the race under test is about WHICH refresh an
+    // action runs — not about which control started it.
+    newMenu();
     fireEvent.click(screen.getByText('New folder'));
     fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
     fireEvent.click(screen.getByText('Create'));
 
     // …and the user leaves for the root before it answers.
-    fireEvent.click(screen.getByText('My Drive'));
+    fireEvent.click(rail().getByText('My Drive'));
     await flush();
     await answer('/folders/root/folders', [{ id: '01G', parent_id: 'root', name: 'Notes', path: 'Notes' }]);
     await answer('/folders/root/files', [file('01C', 'at-the-root.md')]);
@@ -432,8 +450,9 @@ describe('the shell the portal had, on the vertical', () => {
   it('shows the signed-in account and offers sign-out', async () => {
     await renderDrive([], []);
     // The portal's topbar rendered a fabricated persona when nobody was signed in; this
-    // one takes the principal it was handed and nothing else.
-    expect(screen.getByText('My Drive')).toBeTruthy();
+    // one takes the principal it was handed and nothing else. Scoped to the header,
+    // because the rail says "My Drive" too.
+    expect(within(screen.getByRole('banner')).getByText('My Drive')).toBeTruthy();
     expect(screen.queryByText(/Log in/)).toBeNull();
   });
 });
@@ -470,13 +489,42 @@ describe('the palette does not hand back the wrong thing', () => {
     expect(pending.some((p) => p.url.endsWith('/files/01F'))).toBe(false);
   });
 
-  it('keeps the space switcher reachable from the shell', async () => {
-    // The switcher was in the header this slice deleted; a person in several spaces had no
-    // other way to change space.
-    render(<DriveScreen {...shell} onError={() => {}} spaceSwitcher={<span>Family</span>} />);
-    await flush();
-    await answer('/folders/root/folders', []);
-    await answer('/folders/root/files', []);
-    expect(screen.getByText('Family')).toBeTruthy();
+});
+
+describe('the rail is how you change space', () => {
+  it('lists every space and marks the one in view', async () => {
+    // The guarantee the topbar's `<select>` used to carry: a person in several spaces can
+    // always reach the others. It moved here, so the test moved with it.
+    await renderDrive([], [], [
+      { slug: 'home', name: 'Home', current: true },
+      { slug: 'family', name: 'Family', current: false },
+    ]);
+
+    const spaces = within(screen.getByRole('navigation', { name: 'Spaces' }));
+    expect(spaces.getByText('Home')).toBeTruthy();
+    expect(spaces.getByText('Family')).toBeTruthy();
+    // `current` comes from the server because only the worker knows which slug the
+    // hostname resolved to; the rail renders it and does not guess.
+    expect(spaces.getByText('Home').closest('button')?.getAttribute('aria-current')).toBe('true');
+    expect(spaces.getByText('Family').closest('button')?.getAttribute('aria-current')).toBeNull();
+  });
+
+  it('persists the space it was told to select', async () => {
+    await renderDrive([], [], [
+      { slug: 'home', name: 'Home', current: true },
+      { slug: 'family', name: 'Family', current: false },
+    ]);
+
+    // Selecting is persist-then-reload, and the persist is the half that has to be true
+    // by the time the new page reads it. The reload itself shows up as jsdom's
+    // "Not implemented: navigation" line — there is no way to stub `location.reload`,
+    // and the selection is what a wrong answer would get wrong.
+    fireEvent.click(screen.getByText('Family'));
+    expect(currentSite()).toBe('family');
+
+    // The space you are already in is not a navigation: nothing is written, and nothing
+    // reloads. Clicking it used to mean a pointless round trip through a whole page load.
+    fireEvent.click(screen.getByText('Home'));
+    expect(currentSite()).toBe('family');
   });
 });

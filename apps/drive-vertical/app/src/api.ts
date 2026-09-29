@@ -74,6 +74,14 @@ export interface DriveFolder {
 export interface Site {
   slug: string;
   name: string;
+  /**
+   * This is the space the request was answered in.
+   *
+   * The server decides it, because the client cannot: with no selection the space comes
+   * from the hostname the router resolved, and only the worker can say which slug that
+   * was. A selection makes it follow the selection.
+   */
+  current: boolean;
 }
 
 export interface FileVersion {
@@ -252,7 +260,7 @@ export interface FileTextRow {
 export const fileVersions = (fileId: string) =>
   call<FileVersion[]>(`/files/${encodeURIComponent(fileId)}/versions`);
 
-/** The spaces this login is bound in — empty when the install has only the routed one. */
+/** The spaces this login is bound in, one of them flagged as the one in view. */
 export const listSites = () => call<Site[]>('/sites');
 
 /** The folders directly inside a folder. Paged, so a bare array like the file listing. */

@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hasIcon } from '@canopy/ui';
 import { DRIVE_ICONS } from './drive';
+import { SIDEBAR_ICONS } from './sidebar';
 import { actionsFor } from './file-table';
 import { latestOnly } from './reads';
 import {
@@ -73,7 +74,7 @@ describe('every icon the screen asks for exists', () => {
     // `Icon` answers an unknown name with a puzzle piece rather than throwing. That is
     // right for a plugin naming something we do not ship, and wrong here: a typo would
     // ship as a puzzle piece in a toolbar. Three of these were wrong when written.
-    for (const name of DRIVE_ICONS) expect(hasIcon(name), name).toBe(true);
+    for (const name of [...DRIVE_ICONS, ...SIDEBAR_ICONS]) expect(hasIcon(name), name).toBe(true);
   });
 });
 

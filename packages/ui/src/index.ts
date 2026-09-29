@@ -22,3 +22,4 @@ export * from "./person-avatar";
 export { cn } from "./utils";
 export { Icon, hasIcon } from "./icon";
 export { toast } from "sonner";
+export { CanopyMark } from "./canopy-mark";

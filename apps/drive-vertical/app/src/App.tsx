@@ -1,32 +1,18 @@
 /**
  * The drive's own front end.
  *
- * Scope-shaped on purpose: this app never names a space, because the hostname
- * already did. The platform router resolved it to a scope before the worker saw
- * the request, so there is no space picker here and no space id in any URL. That
- * is the difference between this and the portal, which is the multi-space host.
+ * Scope-shaped on purpose: the hostname already resolved to a scope before the worker
+ * saw the request, so the space is never in a URL here and the tenant is never in a
+ * header. The sidebar does list the other spaces this login is bound in and can select
+ * one (`x-site`, see `api.ts`) — but that names an ADDRESS the platform re-checks, which
+ * is a different thing from the portal deciding for itself which space you are in.
  *
  * It renders with `@canopy/ui` — the same shadcn/radix primitives and the same
- * Canopy tokens the portal and the trusted plugins use — so the vertical looks
- * like Canopy without depending on the portal.
- *
- * What it deliberately does NOT do: upload bytes. A write is three hops
- * (ensure-file → put the bytes → record-version) and the middle one is still
- * landing, so the button that would pretend otherwise is not here.
+ * Canopy tokens the trusted plugins use.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Icon } from '@canopy/ui';
-import {
-  ApiError,
-  LOGIN_URL,
-  LOGOUT_URL,
-  claimOwner,
-  currentSite,
-  listSites,
-  selectSite,
-  whoami,
-  type Site,
-} from './api';
+import { ApiError, LOGIN_URL, LOGOUT_URL, claimOwner, whoami } from './api';
 import { DriveScreen } from './drive';
 
 /** Nobody is signed in yet, somebody is, or we have not asked. */
@@ -157,29 +143,39 @@ export default function App() {
       });
   }, []);
 
+  /**
+   * A full-height shell, not a centred column.
+   *
+   * The sidebar is a column of the shell and has to reach the floor, so this is
+   * `h-dvh` with `min-h-0` children and exactly one scrolling region inside the
+   * screen — the portal's layout, which is what makes a rail a rail rather than a
+   * block that stops where the file list happens to end.
+   *
+   * The error banner sits ABOVE the shell, spanning it: a failure to list spaces
+   * belongs to the install, not to the pane it was noticed in.
+   */
   return (
-    <div className="min-h-dvh bg-background text-foreground">
-      <main className="mx-auto max-w-4xl px-4 py-8">
-        {error ? (
-          <p className="mb-6 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error}
-          </p>
-        ) : null}
+    <div className="flex h-dvh flex-col bg-background text-foreground">
+      {error ? (
+        <p className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
 
-        {session.state === 'loading' ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : session.state === 'out' ? (
+      {session.state === 'loading' ? (
+        <p className="p-8 text-sm text-muted-foreground">Loading…</p>
+      ) : session.state === 'out' ? (
+        <main className="mx-auto w-full max-w-4xl px-4 py-8">
           <SignedOut />
-        ) : (
-          <DriveScreen
-            onError={setError}
-            spaceSwitcher={<SiteSwitcher onError={setError} />}
-            auth={{ user: { name: session.principal }, principal: session.principal }}
-            onSignIn={() => (window.location.href = LOGIN_URL)}
-            onSignOut={() => (window.location.href = LOGOUT_URL)}
-          />
-        )}
-      </main>
+        </main>
+      ) : (
+        <DriveScreen
+          onError={setError}
+          auth={{ user: { name: session.principal }, principal: session.principal }}
+          onSignIn={() => (window.location.href = LOGIN_URL)}
+          onSignOut={() => (window.location.href = LOGOUT_URL)}
+        />
+      )}
     </div>
   );
 }
@@ -202,53 +198,5 @@ function SignedOut() {
         <a href={LOGIN_URL}>Sign in</a>
       </Button>
     </div>
-  );
-}
-
-/**
- * Which space this tab is looking at.
- *
- * Absent for anyone in a single space, because a switcher that can only pick what is
- * already picked is noise. The selection is a slug the install's own registry knows —
- * the tenant still comes from the router's assertion, never from here.
- */
-function SiteSwitcher({ onError }: { onError: (message: string | null) => void }) {
-  const [sites, setSites] = useState<Site[] | null>(null);
-
-  useEffect(() => {
-    listSites()
-      .then(setSites)
-      .catch((e: unknown) => {
-        // A failure here is not the screen's failure: the drive still renders against
-        // whatever space the hostname routed to. Say it and carry on.
-        onError(e instanceof Error ? e.message : String(e));
-        setSites([]);
-      });
-  }, [onError]);
-
-  if (!sites || sites.length < 2) return null;
-  const selected = currentSite() ?? '';
-  return (
-    <label className="flex items-center gap-1.5 text-sm">
-      <span className="sr-only">Space</span>
-      <select
-        className="rounded-md border border-border bg-background px-2 py-1 text-sm"
-        value={selected}
-        onChange={(e) => {
-          selectSite(e.currentTarget.value || null);
-          // A full reload rather than a re-render: every read on the screen belongs to
-          // the space it was made in, and re-fetching them piecemeal is how a listing
-          // from one space ends up beside a breadcrumb from another.
-          window.location.reload();
-        }}
-      >
-        <option value="">This space</option>
-        {sites.map((site) => (
-          <option key={site.slug} value={site.slug}>
-            {site.name}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
