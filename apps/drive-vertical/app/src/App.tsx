@@ -101,7 +101,14 @@ const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
     try {
       return await whoami();
     } catch (retry: unknown) {
-      selectSite(selected);
+      // Put the selection back — and if storage refuses to hold it, put it back where it
+      // came from. In a private window the URL is the ONLY carrier (the rail's own rule),
+      // and this path has just deleted it, so restoring memory alone restores nothing: the
+      // sign-in that follows is a full navigation, and module memory does not survive it.
+      if (!selectSite(selected)) {
+        url.searchParams.set('site', selected);
+        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      }
       throw retry;
     }
   }

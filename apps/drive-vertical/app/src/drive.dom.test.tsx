@@ -562,6 +562,28 @@ describe('a selection that has gone stale does not lock the install', () => {
     expect(screen.getByRole('complementary')).toBeTruthy();
   });
 
+  it('puts a URL-carried selection back when the retry fails too', async () => {
+    // Storage is blocked, so `?site=` is the only place the selection lives — and the
+    // recovery above deletes it before retrying. Restoring module memory alone restores
+    // nothing here: signing in is a full navigation, and memory does not survive it, so
+    // they would come back to the routed space instead of the one they chose.
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    selectSite('family');
+    window.history.replaceState(null, '', '/?site=family&keep=1#frag');
+
+    render(<App />);
+    await flush();
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+
+    expect(window.location.search).toContain('site=family');
+    // The rest of the URL is not ours to rewrite.
+    expect(window.location.search).toContain('keep=1');
+    expect(window.location.hash).toBe('#frag');
+  });
+
   it('keeps the selection when the 401 was simply nobody being signed in', async () => {
     selectSite('family');
 
