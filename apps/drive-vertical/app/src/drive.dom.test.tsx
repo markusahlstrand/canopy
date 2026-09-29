@@ -771,6 +771,31 @@ describe('the People surface is offered only to whoever may use it', () => {
     expect(screen.queryByText('People…')).toBeNull();
   });
 
+  it('can still invite when the roster read fails', async () => {
+    await renderDrive();
+    await answer('/people/access', { canManage: true });
+
+    accountMenu();
+    fireEvent.click(screen.getByText('People…'));
+    await answer('/api/invites', {
+      roles: ['member'],
+      invites: [{ principal: '01P', roleKey: 'member', email: 'bjorn@example.com' }],
+    });
+    // The lesser read fails. Awaiting the two together used to discard the invitation list
+    // with it and leave `roles` empty — which disables Invite, so failing to read who has
+    // signed in took away the one thing this dialog is for.
+    const roster = pending.findIndex((p) => p.url.includes('/api/people'));
+    await act(async () => {
+      pending.splice(roster, 1)[0]!.reject(new Error('nope'));
+    });
+
+    expect(screen.getByText('bjorn@example.com')).toBeTruthy();
+    // The DOM property, not `toBeDisabled` — this suite has no jest-dom matchers.
+    expect((screen.getByRole('button', { name: /Invite/ }) as HTMLButtonElement).disabled).toBe(false);
+    // And the failure is reported where it happened, with a way to try again.
+    expect(screen.getByText(/Couldn’t read who has signed in/)).toBeTruthy();
+  });
+
   it('does not repopulate the list with a read from before it was closed', async () => {
     await renderDrive();
     await answer('/people/access', { canManage: true });

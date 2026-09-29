@@ -54,6 +54,8 @@ interface Minted {
 export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
   const [invites, setInvites] = useState<Invite[] | null>(null);
   const [people, setPeople] = useState<Person[] | null>(null);
+  /** The roster read failed. Its own state, because it must not disable inviting. */
+  const [peopleFailed, setPeopleFailed] = useState(false);
   /**
    * The roles the SERVER says a teammate may be invited at.
    *
@@ -87,22 +89,44 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
   const load = useCallback(() => {
     const ticket = reads.current.take();
     setError(null);
-    // One ticket for both: they are one view, and half of it arriving under the other
-    // half's failure is a screen nobody can read.
-    Promise.all([listInvites(), listPeople()])
-      .then(([open, seen]) => {
+    setPeopleFailed(false);
+
+    /**
+     * Two reads, ONE ticket, and no `Promise.all`.
+     *
+     * The ticket is shared because they are one view and a stale answer must not land half
+     * of it. But awaiting them together made the lesser read able to break the greater one:
+     * if the roster failed, a perfectly good invitation list was discarded with it and
+     * `roles` stayed empty — which disables the Invite button, so a failure to read who has
+     * signed in took away the one thing this dialog exists to do.
+     *
+     * So each lands on its own, and each reports its own failure where it happened.
+     */
+    listInvites()
+      .then((open) => {
         if (!reads.current.current(ticket)) return;
         setInvites(open.invites);
         setRoles(open.roles);
-        setPeople(seen.people);
       })
       .catch((e: unknown) => {
         // A stale FAILURE is as misleading as a stale answer — it belongs to a dialog
         // that is no longer open, or to a read something newer has already corrected.
         if (!reads.current.current(ticket)) return;
         setInvites([]);
-        setPeople([]);
         setError(e instanceof Error ? e.message : String(e));
+      });
+
+    listPeople()
+      .then((seen) => {
+        if (!reads.current.current(ticket)) return;
+        setPeople(seen.people);
+      })
+      .catch(() => {
+        // Not the banner: this failure is about one list, and the banner is where the
+        // failure of an ACTION goes. Said in the section it belongs to, with a retry.
+        if (!reads.current.current(ticket)) return;
+        setPeople([]);
+        setPeopleFailed(true);
       });
   }, []);
 
@@ -117,6 +141,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
       setError(null);
       setInvites(null);
       setPeople(null);
+      setPeopleFailed(false);
       setRoles([]);
       return;
     }
@@ -228,7 +253,14 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
           <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Signed in here
           </h3>
-          {people === null ? (
+          {peopleFailed ? (
+            <p className="text-sm text-muted-foreground">
+              Couldn’t read who has signed in.{' '}
+              <button onClick={load} className="underline hover:text-foreground">
+                Try again
+              </button>
+            </p>
+          ) : people === null ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : people.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nobody has been seen here yet.</p>
