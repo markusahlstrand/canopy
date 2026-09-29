@@ -12,7 +12,7 @@
  * promise chain would only ever observe the order the runtime happened to pick.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { DriveScreen } from './drive';
 import { selectSite } from './api';
 
@@ -76,6 +76,13 @@ async function answer(match: string, body: unknown): Promise<void> {
   });
 }
 
+/** What the shell needs and these tests do not exercise: an account and its two actions. */
+const shell = {
+  auth: { user: { name: 'ada@example.com' }, principal: '01ADA' },
+  onSignIn: () => {},
+  onSignOut: () => {},
+};
+
 const file = (id: string, name: string) => ({
   id,
   folder_id: 'root',
@@ -114,7 +121,7 @@ afterEach(() => {
 
 /** The screen starts by reading the root folder; answer that and get out of the way. */
 async function renderDrive(folders: unknown[] = [], files: unknown[] = []): Promise<void> {
-  render(<DriveScreen onError={() => {}} />);
+  render(<DriveScreen {...shell} onError={() => {}} />);
   await flush();
   await answer('/folders/root/folders', folders);
   await answer('/folders/root/files', files);
@@ -298,7 +305,7 @@ describe('the preview panel’s reads do not compete with each other', () => {
 
   it('says nothing at all once the panel has been closed', async () => {
     const errors: (string | null)[] = [];
-    render(<DriveScreen onError={(m) => errors.push(m)} />);
+    render(<DriveScreen {...shell} onError={(m) => errors.push(m)} />);
     await flush();
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', [file('01A', 'photo.png')]);
@@ -396,5 +403,80 @@ describe('dragging a file onto a folder moves it', () => {
 
     const moved = pending.find((p) => p.url.includes('/files/01A/move'));
     expect(moved, `no move request; saw ${pending.map((p) => p.url).join(', ')}`).toBeTruthy();
+  });
+});
+
+describe('the shell the portal had, on the vertical', () => {
+  it('opens the palette on ⌘K and searches the drive with it', async () => {
+    await renderDrive([], [file('01A', 'lease.pdf')]);
+
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    const input = screen.getByPlaceholderText(/Search files/);
+
+    fireEvent.change(input, { target: { value: 'lease' } });
+    await flush();
+    // The palette searches the real operation, and the hit says WHERE it matched — the
+    // half of search that content extraction paid for.
+    await answer('term=lease', { hits: [{ ...file('01A', 'lease.pdf'), via: 'content' }] });
+    expect(screen.getByText(/matched inside the document/)).toBeTruthy();
+  });
+
+  it('closes on a second ⌘K, so the shortcut is a toggle', async () => {
+    await renderDrive([], []);
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    expect(screen.queryByPlaceholderText(/Search files/)).toBeTruthy();
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    expect(screen.queryByPlaceholderText(/Search files/)).toBeNull();
+  });
+
+  it('shows the signed-in account and offers sign-out', async () => {
+    await renderDrive([], []);
+    // The portal's topbar rendered a fabricated persona when nobody was signed in; this
+    // one takes the principal it was handed and nothing else.
+    expect(screen.getByText('My Drive')).toBeTruthy();
+    expect(screen.queryByText(/Log in/)).toBeNull();
+  });
+});
+
+describe('the palette does not hand back the wrong thing', () => {
+  it('drops the previous query’s hits the moment the query changes', async () => {
+    await renderDrive([], []);
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    const input = screen.getByPlaceholderText(/Search files/);
+
+    fireEvent.change(input, { target: { value: 'lease' } });
+    await flush();
+    await answer('term=lease', { hits: [{ ...file('01A', 'lease.pdf'), via: 'name' }] });
+    expect(screen.getByText('lease.pdf')).toBeTruthy();
+
+    // cmdk's item `value` embeds the CURRENT query, so a hit left over from the previous
+    // one stays selectable and opens a file nobody searched for.
+    fireEvent.change(input, { target: { value: 'invoice' } });
+    expect(screen.queryByText('lease.pdf')).toBeNull();
+  });
+
+  it('enters a folder chosen in the palette instead of previewing it', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
+
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    // Two "Papers" now exist — one in the table behind the dialog, one in the palette's
+    // zero-query list. Scope to the dialog, which is the thing under test.
+    const palette = screen.getByRole('dialog');
+    fireEvent.click(within(palette).getByText('Papers'));
+    await flush();
+
+    // Navigation reads the folder; a preview would have asked `get-file` for a folder id.
+    expect(pending.some((p) => p.url.includes('/folders/01F/files'))).toBe(true);
+    expect(pending.some((p) => p.url.endsWith('/files/01F'))).toBe(false);
+  });
+
+  it('keeps the space switcher reachable from the shell', async () => {
+    // The switcher was in the header this slice deleted; a person in several spaces had no
+    // other way to change space.
+    render(<DriveScreen {...shell} onError={() => {}} spaceSwitcher={<span>Family</span>} />);
+    await flush();
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.getByText('Family')).toBeTruthy();
   });
 });

@@ -171,6 +171,18 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
 
+/**
+ * Who am I, in the shape the shell reads.
+ *
+ * `user` is null when nobody is signed in, which is a state rather than an error: the
+ * worker answers 401 for an unauthenticated caller and the shell renders its signed-out
+ * form. The portal's `Me` carried plan and quota fields this install has no source for.
+ */
+export interface Me {
+  user: { name?: string; email?: string } | null;
+  principal?: string;
+}
+
 /** Who am I — the first call the app makes, and the one that decides which shell renders. */
 export const whoami = () => call<{ principal: string }>('/me');
 

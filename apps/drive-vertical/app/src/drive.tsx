@@ -17,6 +17,9 @@ import { Button, Icon, Input, cn } from '@canopy/ui';
 import { latestOnly } from './reads';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
+import { Topbar } from './topbar';
+import { CommandPalette } from './command-palette';
+import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
 import {
   DropdownMenu,
@@ -127,9 +130,21 @@ interface Crumb {
 
 export interface DriveScreenProps {
   onError: (message: string | null) => void;
+  /** Rendered in the topbar beside the trail — the switcher the old header carried. */
+  spaceSwitcher?: React.ReactNode;
+  /** The shell's account menu lives in the topbar, which this screen renders. */
+  auth: Me;
+  onSignIn: () => void;
+  onSignOut: () => void;
 }
 
-export function DriveScreen({ onError }: DriveScreenProps) {
+export function DriveScreen({
+  onError,
+  spaceSwitcher,
+  auth,
+  onSignIn,
+  onSignOut,
+}: DriveScreenProps) {
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
   const [folders, setFolders] = useState<DriveFolder[]>([]);
@@ -142,6 +157,9 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const [previewing, setPreviewing] = useState<string | null>(null);
+  const [cmdOpen, setCmdOpen] = useState(false);
+  /** The topbar's Upload button and the palette's action both reach the one file input. */
+  const uploadRef = useRef<HTMLInputElement>(null);
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [layout, setLayout] = useState<'list' | 'grid'>('list');
   const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' });
@@ -194,6 +212,18 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
+
+  /** ⌘K / Ctrl-K opens the palette — the shortcut the portal had, and the reason it exists. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setCmdOpen((was) => !was);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     // A pause, not a keystroke: the index is per scope and cheap, but a request per
@@ -279,37 +309,47 @@ export function DriveScreen({ onError }: DriveScreenProps) {
   };
 
   return (
+    <>
+      <Topbar
+        breadcrumb={['My Drive', ...crumbs.map((c) => c.name)]}
+        // The topbar counts the root as crumb 0; `upTo` counts it as -1.
+        onCrumbClick={(index) => upTo(index - 1)}
+        spaceSwitcher={spaceSwitcher}
+        onOpenCmd={() => setCmdOpen(true)}
+        onUpload={() => uploadRef.current?.click()}
+        onRefresh={() => void refresh()}
+        syncing={busy}
+        auth={auth}
+        onSignIn={onSignIn}
+        onSignOut={onSignOut}
+      />
+
+      <input
+        ref={uploadRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => onUpload(e.currentTarget)}
+      />
+
+      <CommandPalette
+        open={cmdOpen}
+        onOpenChange={setCmdOpen}
+        files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
+        onNavigate={(id) => setView(id === 'trash' ? 'trash' : 'drive')}
+        onOpenFile={(item) => {
+          // The palette lists folders too, and a folder is entered rather than previewed —
+          // the panel would open on an id `get-file` cannot resolve.
+          const folder = folders.find((f) => f.id === item.id);
+          if (folder) open(folder);
+          else setPreviewing(item.id);
+        }}
+        onUpload={() => uploadRef.current?.click()}
+      />
+
     <div className="flex min-h-0 gap-4">
       <div className="min-w-0 flex-1">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <nav aria-label="Breadcrumb" className="mr-auto flex items-center gap-1 text-sm">
-          <button
-            type="button"
-            onClick={() => upTo(-1)}
-            className={cn(
-              'rounded px-1.5 py-0.5 hover:bg-muted',
-              folderId === ROOT_FOLDER_ID && view === 'drive' ? 'font-medium' : 'text-muted-foreground',
-            )}
-          >
-            My Drive
-          </button>
-          {crumbs.map((crumb, i) => (
-            <span key={crumb.id} className="flex items-center gap-1">
-              <Icon name="chevron-right" className="size-3.5 text-muted-foreground" />
-              <button
-                type="button"
-                onClick={() => upTo(i)}
-                className={cn(
-                  'rounded px-1.5 py-0.5 hover:bg-muted',
-                  i === crumbs.length - 1 ? 'font-medium' : 'text-muted-foreground',
-                )}
-              >
-                {crumb.name}
-              </button>
-            </span>
-          ))}
-        </nav>
-
         <div className="relative">
           <Icon
             name="search"
@@ -466,6 +506,7 @@ export function DriveScreen({ onError }: DriveScreenProps) {
         />
       ) : null}
     </div>
+    </>
   );
 }
 
