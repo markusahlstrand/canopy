@@ -271,15 +271,21 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload }: SidebarPr
                     // is how a listing from one space ends up beside a breadcrumb from
                     // another.
                     //
-                    // Which is also why a selection storage refused to keep has to ride
-                    // in the URL instead: it lives in module memory, and the reload is
-                    // what throws that away. Without this, clicking another space in a
-                    // private window reloads straight back into the old one.
-                    if (!selectSite(s.slug)) {
-                      const url = new URL(window.location.href);
-                      url.searchParams.set('site', s.slug);
-                      window.history.replaceState(null, '', url);
-                    }
+                    // The URL has to agree with the choice, in BOTH directions, because
+                    // `api.ts` reads `?site=` ahead of storage on the next load:
+                    //
+                    //  - storage refused it → the URL is the only carrier. The slug lives
+                    //    in module memory, and the reload is what throws that away, so
+                    //    without this a private window reloads into the space you left.
+                    //  - storage took it → a `?site=` still in the URL outranks it and the
+                    //    reload lands back where the parameter says. Arriving through a
+                    //    `?site=` link would pin you to that space: every selection would
+                    //    persist correctly and none of them would take effect.
+                    const url = new URL(window.location.href);
+                    const before = url.search;
+                    if (selectSite(s.slug)) url.searchParams.delete('site');
+                    else url.searchParams.set('site', s.slug);
+                    if (url.search !== before) window.history.replaceState(null, '', url);
                     window.location.reload();
                   }}
                   className={cn(

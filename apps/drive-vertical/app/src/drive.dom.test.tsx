@@ -122,7 +122,17 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  /**
+   * Spies too, not just stubbed globals.
+   *
+   * Two tests here make `Storage.prototype.setItem` throw to stand in for blocked storage.
+   * Vitest does not undo a spy between tests on its own, so without this the next test
+   * runs in a private window it never asked for — which is not a failure, it is a
+   * different test quietly passing for the wrong reason.
+   */
+  vi.restoreAllMocks();
   selectSite(null);
+  window.history.replaceState(null, '', '/');
 });
 
 /**
@@ -646,6 +656,24 @@ describe('the rail reports its own failures', () => {
 });
 
 describe('a space change survives storage that refuses to hold it', () => {
+  it('clears a `?site=` link once the choice is stored, so it can be left', async () => {
+    // Arrived through a link that names a space, with storage working. `api.ts` reads the
+    // URL ahead of storage, so a parameter left behind outranks the new selection: every
+    // click would persist correctly and none would take effect, pinning the person to the
+    // linked space until they edited the address bar.
+    selectSite('family');
+    window.history.replaceState(null, '', '/?site=family');
+
+    await renderDrive([], [], [
+      { slug: 'home', name: 'Home', current: false },
+      { slug: 'family', name: 'Family', current: true },
+    ]);
+
+    fireEvent.click(screen.getByText('Home'));
+    expect(currentSite()).toBe('home');
+    expect(window.location.search).not.toContain('site=');
+  });
+
   it('carries the slug in the URL when it cannot be stored', async () => {
     // Private mode, blocked site data. The selection lives in module memory, and the
     // reload that applies it is exactly what throws that away — so without the URL,
