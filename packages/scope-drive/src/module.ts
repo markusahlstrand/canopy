@@ -780,6 +780,14 @@ const operations = {
     return row ?? null;
   },
 
+  'drive/people-access': async (ctx) => {
+    // Asking is a read: any member may know who administers the space they are in.
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    // The answer. A member's honest answer is `false` — see the declaration for why this
+    // is a boolean and not a refusal.
+    return { canManage: (await ctx.check(DRIVE_PERM.manage)).allowed };
+  },
+
   'drive/search': async (ctx, input) => {
     // The gate on ASKING. What comes back is gated per hit, below.
     assertAllowed(await ctx.check(DRIVE_PERM.read));

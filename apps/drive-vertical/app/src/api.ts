@@ -234,6 +234,56 @@ export const claimOwner = (token: string) =>
   });
 
 /**
+ * An open invitation, as the directory records it.
+ *
+ * `principal` is pre-minted and already holds its role, so it is the id a revoke names —
+ * the person it is for may not exist yet, and `email` is a note on the invitation rather
+ * than an address the platform has verified.
+ */
+export interface Invite {
+  principal: string;
+  roleKey: string;
+  email: string | null;
+  createdAt?: string;
+}
+
+/** Whether this login administers the people in this space — `drive/people-access`. */
+export const peopleAccess = () => call<{ canManage: boolean }>('/people/access');
+
+/** The open invitations, and the roles a teammate may be invited at. Owner only. */
+export const listInvites = () => call<{ roles: string[]; invites: Invite[] }>('/invites');
+
+/**
+ * Invite someone, at a role. Owner only.
+ *
+ * The answer carries `acceptUrl`, which is the whole product of this call: the invitation
+ * IS that link. Nothing is emailed — the platform verifies no address here, so the link
+ * is handed to whoever is inviting and they pass it on.
+ */
+export const createInvite = (roleKey: string, email?: string) =>
+  call<{ principal: string; roleKey: string; email: string | null; acceptUrl: string }>('/invites', {
+    method: 'POST',
+    body: JSON.stringify(email ? { roleKey, email } : { roleKey }),
+  });
+
+/** Withdraw an invitation. The pre-minted principal loses its role with the row. */
+export const revokeInvite = (principal: string) =>
+  call<void>(`/invites/${encodeURIComponent(principal)}/revoke`, { method: 'POST' });
+
+/**
+ * Accept an invitation — the same shape as `claimOwner` and for the same reasons.
+ *
+ * The token arrives as `?invite=` and leaves in a POST body: a live credential in a query
+ * string lands in history, logs and the `Referer` of everything the page loads next.
+ * Requires a session, because accepting binds whoever is signed in to the invited seat.
+ */
+export const acceptInvite = (token: string) =>
+  call<{ ok: true; principal: string }>('/accept-invite', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
+
+/**
  * The files directly inside a folder.
  *
  * A paged read's BODY is a bare array — the walk rides in a `Link` header, which

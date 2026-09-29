@@ -19,6 +19,7 @@ import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
 import { Sidebar, type NavId } from './sidebar';
+import { PeopleDialog } from './people-dialog';
 import { CommandPalette } from './command-palette';
 import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
@@ -33,6 +34,7 @@ import {
   ROOT_FOLDER_ID,
   SEARCH_MIN,
   contentUrl,
+  peopleAccess,
   createFolder,
   listFolder,
   listFolders,
@@ -154,6 +156,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [creating, setCreating] = useState(false);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [peopleOpen, setPeopleOpen] = useState(false);
+  /**
+   * Whether this login administers the people here — asked once, on mount.
+   *
+   * A boolean from the server rather than a role name read off the session: the answer is
+   * a permission decision, and the operation that makes it is the same one the invite
+   * routes gate on, so the menu cannot offer what the routes would refuse.
+   */
+  const [canManagePeople, setCanManagePeople] = useState(false);
   /** The topbar's Upload button and the palette's action both reach the one file input. */
   const uploadRef = useRef<HTMLInputElement>(null);
   const [selection, setSelection] = useState<Set<string>>(new Set());
@@ -208,6 +219,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
+
+  useEffect(() => {
+    // A failure is an answer here: no menu item. It is not worth the shell's banner —
+    // nothing the person was trying to do has failed.
+    peopleAccess()
+      .then(({ canManage }) => setCanManagePeople(canManage))
+      .catch(() => setCanManagePeople(false));
+  }, []);
 
   /** ⌘K / Ctrl-K opens the palette — the shortcut the portal had, and the reason it exists. */
   useEffect(() => {
@@ -364,6 +383,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onUpload={() => startWrite(() => uploadRef.current?.click())}
         onRefresh={() => void refresh()}
         syncing={busy}
+        onOpenPeople={canManagePeople ? () => setPeopleOpen(true) : undefined}
         auth={auth}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
@@ -493,6 +513,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       ) : null}
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
+
+      <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 
       {creating ? (
         <NameDialog
