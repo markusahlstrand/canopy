@@ -59,9 +59,15 @@ import {
   type IdentityStub,
   type InstanceAuth,
 } from '@substrat-run/vertical-auth';
+/**
+ * The subpath, not the barrel. `mountInviteRoutes` is the one module in `vertical-auth`
+ * that imports `hono` at runtime, and the package keeps it off its index so a consumer
+ * wanting only an `AuthProvider` does not resolve a peer it never uses.
+ */
+import { mountInviteRoutes } from '@substrat-run/vertical-auth/invite-routes';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
-import { MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
+import { MEMBER_ROLE_KEY, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
  * The scope-DO class = the app binary: kernel + the drive module, bundled. One
@@ -376,6 +382,52 @@ mountPlatformSurface<Env>(app, {
 app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
   (await providerFor(c.env, baseNode(c.req.raw, c.env))).handle(c.req.raw),
 );
+
+/**
+ * Who is in this space, and how someone else gets in (#79).
+ *
+ * Four routes, mounted rather than written: list the open invites, create one, revoke
+ * one, accept one. Canopy had its own invite flow against the shared database; this is
+ * the same feature as a platform contract, and the contract does the part that is easy
+ * to get wrong — the token is stored only as a hash, the role is granted BEFORE the row
+ * is written, and a row that then fails to write takes the grant back rather than
+ * leaving a principal nobody can bind to holding a role.
+ *
+ * What the vertical owns is the gate, because only the vertical knows what "may manage
+ * the people here" means. Ours is `drive/people-access`, which is an OPERATION for a
+ * reason: an app-side `ScopeStub` can only `invoke`, so a route has no way to ask the
+ * kernel a permission question except by invoking something that does. The alternative
+ * would be re-deciding authorization out here from a role name — the hand-rolled check
+ * beside the enforced one, which is the failure this platform exists to remove.
+ *
+ * One invitable role. See `MEMBER_ROLE_KEY` for why that is a safety property and not a
+ * simplification.
+ */
+mountInviteRoutes<Env, Node>(app, {
+  nodeFor,
+  requireAdmin: async (c) => {
+    const principal = await principalFor(c.env, c.req.raw);
+    // 401 and 403 are different answers and the invite routes let us say which: nobody is
+    // signed in, versus signed in and not the person who administers this space.
+    if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+    const node = await nodeFor(c.req.raw, c.env);
+    const stub = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+    const { canManage } = await stub.invoke<{ canManage: boolean }>('drive/people-access');
+    if (!canManage) {
+      throw new HTTPException(403, { message: 'only an owner can manage the people in this space' });
+    }
+  },
+  roles: [MEMBER_ROLE_KEY],
+  directory: (env, node) => identityDo(env, node),
+  // Scope-local, no control plane: the role lands in the same store the checker reads.
+  assignScopeRole: (env, scopeId, principal, roleKey) =>
+    hostFor(env).assignScopeRole(scopeId, principal, roleKey),
+  revokeScopeRole: (env, scopeId, principal, roleKey) =>
+    hostFor(env).revokeScopeRole(scopeId, principal, roleKey),
+  // The INSTALL's provider, never the selected space's: identity is the install's and
+  // membership is the space's, the same split `/api/me` documents.
+  authProvider: (env, req) => providerFor(env, baseNode(req, env)),
+});
 
 /**
  * The spaces this tenant has in this install — the switcher's list.

@@ -52,6 +52,11 @@ interface TopbarProps {
   onSignOut: () => void;
   /** Backend unreachable — the app is view-only, so disable uploads. */
   offline?: boolean;
+  /**
+   * Open the People dialog. Absent for anyone who may not manage the people here —
+   * a menu item that answers 403 is worse than no menu item.
+   */
+  onOpenPeople?: () => void;
   /** Force a re-fetch of the current view (re-syncs the offline mirror + reloads). */
   onRefresh?: () => void;
   /** True while a background sync is in flight — spins the refresh icon. */
@@ -67,6 +72,7 @@ export function Topbar({
   onSignIn,
   onSignOut,
   offline,
+  onOpenPeople,
   onRefresh,
   syncing,
 }: TopbarProps) {
@@ -201,6 +207,11 @@ export function Topbar({
             )}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
+          {onOpenPeople && (
+            <DropdownMenuItem onClick={onOpenPeople}>
+              <Icon name="users" size={15} /> People…
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={onSignOut}>
             <Icon name="log-out" size={15} /> Sign out
           </DropdownMenuItem>

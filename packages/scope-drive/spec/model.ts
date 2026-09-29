@@ -633,6 +633,35 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * kernel's index answers ids and says to hydrate through your own read path —
    * this is that read path, and the check is what makes it one.
    */
+  /**
+   * May the caller manage the people in this space?
+   *
+   * An app-side `ScopeStub` can only `invoke` — there is no route-level permission check
+   * to be had — so a decision a ROUTE needs has to be an operation. This is that
+   * operation, and the platform's own invite routes are what needs it: they take an
+   * admin gate from the vertical (`requireAdmin`) and the vertical has nowhere else to
+   * ask.
+   *
+   * Two checks with different jobs, which is why the answer is a boolean rather than a
+   * refusal. `drive:read` node-level is the gate on ASKING — any member of the space may
+   * know whether they are the one who administers it, and the People surface needs that
+   * to decide what to render. `drive:manage` is the answer, and a member's honest answer
+   * is `false`, not a 403: a screen that has to provoke an error to find out what it may
+   * show has to treat every error as that answer, including the ones that are not.
+   *
+   * Node-level on purpose (a bare key, no entity). `drive:manage` narrowed to a folder is
+   * sharing THAT folder, which is a different authority from adding a person to the
+   * space — and the kernel's own narrowing rule says so: a narrowed grant does not
+   * satisfy an unnarrowed check, or sharing one folder would launder into administering
+   * everyone.
+   */
+  'drive/people-access': {
+    summary: 'Whether the caller may manage the people in this space',
+    permission: 'drive:read',
+    output: z.object({ canManage: z.boolean() }),
+    http: { method: 'GET', path: '/people/access' },
+  },
+
   'drive/search': {
     summary: 'Find files by name or by content',
     permission: 'drive:read',

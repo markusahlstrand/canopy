@@ -55,6 +55,22 @@ export const ROLES: RoleDefinition[] = [
 export const OWNER_ROLE_KEY = 'owner';
 
 /**
+ * The role a teammate is invited at, and the only one.
+ *
+ * Inviting at `owner` would need the kernel's assignment bound checked against the
+ * REQUESTED role (`ctx.canAssign`: a principal may confer a role only if they already
+ * hold every permission it carries). The platform's invite mount calls the vertical's
+ * admin gate before it parses the body, so the gate never sees which role was asked for
+ * and the bound cannot be applied per role — only this static list can. One role it is
+ * until the mount can apply the bound: substrat-run/substrat#1931.
+ *
+ * Safe as it stands rather than by luck: every caller the gate admits holds
+ * `drive:manage` across the space, and so holds the `drive:read` that `member` carries.
+ * The bound is satisfied by construction for this one key.
+ */
+export const MEMBER_ROLE_KEY = 'member';
+
+/**
  * The entity-narrowed grant SHAPES — which keys are reachable outside the role table.
  * This is sharing: `drive:write` on ONE folder for ONE person, reaching everything
  * beneath it through the declared parent edge. The grants themselves are per-principal

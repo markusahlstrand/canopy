@@ -12,63 +12,122 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Icon } from '@canopy/ui';
-import { ApiError, LOGIN_URL, LOGOUT_URL, claimOwner, currentSite, selectSite, whoami } from './api';
+import {
+  ApiError,
+  LOGIN_URL,
+  LOGOUT_URL,
+  acceptInvite,
+  claimOwner,
+  currentSite,
+  selectSite,
+  whoami,
+} from './api';
 import { DriveScreen } from './drive';
 
 /** Nobody is signed in yet, somebody is, or we have not asked. */
 type Session = { state: 'loading' } | { state: 'out' } | { state: 'in'; principal: string };
 
 /**
- * Where an owner-claim token waits out a login round-trip.
+ * The two credentials that arrive as a LINK, and what to do with each.
+ *
+ * `?claim=` opens an install's owner seat; `?invite=` binds a teammate to the member seat
+ * an owner pre-minted for them. They are the same object in every way that matters here —
+ * single-use, live until consumed, useless without a session — so they take one path
+ * rather than two that have to be kept in step.
+ *
+ * What a failure SAYS still comes from the server, not from here: "already used" and "the
+ * network is down" are different facts, and a friendly sentence of our own would caption
+ * the second as the first.
+ */
+const LINKS = {
+  claim: {
+    param: 'claim',
+    stash: 'canopy.drive.pending-claim',
+    redeem: (token: string) => claimOwner(token),
+  },
+  invite: {
+    param: 'invite',
+    stash: 'canopy.drive.pending-invite',
+    redeem: (token: string) => acceptInvite(token),
+  },
+} as const;
+
+type LinkKind = keyof typeof LINKS;
+/** Claim first: an unclaimable install is worse than an unaccepted invitation. */
+const KINDS = ['claim', 'invite'] as const satisfies readonly LinkKind[];
+
+/**
+ * Where a link's token waits out a login round-trip.
  *
  * NOT `returnTo`. The token is a live credential until it is consumed, and a login URL
  * carrying it is one more address bar, history entry and request log to leak it from —
- * on top of the `/?claim=` link the platform already mints. `sessionStorage` is
- * same-origin and per-tab, reaches no server, and dies with the tab.
+ * on top of the link the platform already minted. `sessionStorage` is same-origin and
+ * per-tab, reaches no server, and dies with the tab.
  */
-const CLAIM_STASH = 'canopy.drive.pending-claim';
-
-const readStash = (): string | null => {
+const readStash = (kind: LinkKind): string | null => {
   try {
-    return window.sessionStorage.getItem(CLAIM_STASH);
+    return window.sessionStorage.getItem(LINKS[kind].stash);
   } catch {
     return null;
   }
 };
 
 /** False when storage refused us — private mode, blocked site data. The caller has a plan. */
-const stash = (token: string): boolean => {
+const stash = (kind: LinkKind, token: string): boolean => {
   try {
-    window.sessionStorage.setItem(CLAIM_STASH, token);
+    window.sessionStorage.setItem(LINKS[kind].stash, token);
     return true;
   } catch {
     return false;
   }
 };
 
-const clearStash = () => {
+const clearStash = (kind: LinkKind) => {
   try {
-    window.sessionStorage.removeItem(CLAIM_STASH);
+    window.sessionStorage.removeItem(LINKS[kind].stash);
   } catch {
     // Nothing to clear if we could never write.
   }
 };
 
 /**
- * One claim per token, however many times the effect runs.
+ * One redemption per token, however many times the effect runs.
  *
  * `StrictMode` mounts every effect twice, and both passes read the same token before
- * either request finishes. A claim is single-use: one would consume it and the other
- * would take the 403, leaving a signed-in page wearing a "this link is not valid" error
- * about a claim that in fact succeeded. Sharing the in-flight promise makes the second
- * pass await the first's answer instead of racing it.
+ * either request finishes. These are single-use: one pass would consume the token and the
+ * other would take the 403, leaving a signed-in page wearing a "this link is not valid"
+ * error about a redemption that in fact succeeded. Sharing the in-flight promise makes the
+ * second pass await the first's answer instead of racing it.
  */
-let inFlight: { token: string; result: Promise<unknown> } | null = null;
+let inFlight: { key: string; result: Promise<unknown> } | null = null;
 
-const claimOnce = (token: string): Promise<unknown> => {
-  if (inFlight?.token !== token) inFlight = { token, result: claimOwner(token) };
+const redeemOnce = (kind: LinkKind, token: string): Promise<unknown> => {
+  // Keyed by kind as well as token, so the two links cannot alias each other.
+  const key = `${kind}:${token}`;
+  if (inFlight?.key !== key) inFlight = { key, result: LINKS[kind].redeem(token) };
   return inFlight.result;
 };
+
+/** A link's token, taken OUT of the URL on sight, or whatever is waiting in the stash. */
+function pendingLink(): { kind: LinkKind; token: string; fromUrl: boolean } | null {
+  const url = new URL(window.location.href);
+  for (const kind of KINDS) {
+    const { param } = LINKS[kind];
+    const fromUrl = url.searchParams.get(param);
+    if (fromUrl) {
+      // Before anything can await: a token in the address bar is one screenshot or pasted
+      // link from being someone else's.
+      url.searchParams.delete(param);
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      return { kind, token: fromUrl, fromUrl: true };
+    }
+  }
+  for (const kind of KINDS) {
+    const waiting = readStash(kind);
+    if (waiting) return { kind, token: waiting, fromUrl: false };
+  }
+  return null;
+}
 
 /**
  * Who am I — and if a selected space is the reason nobody is, stop selecting it.
@@ -119,56 +178,53 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   /**
-   * Boot: redeem an owner-claim link if this page was opened as one, then ask who we are.
+   * Boot: redeem the link this page was opened as, if it was one, then ask who we are.
    *
-   * Order matters. Until the seat is bound, `whoami` is exactly the 401 the claim exists
-   * to fix, so asking first renders the signed-out shell and its Sign in button — which
-   * is the loop this closes: sign in, resolve to nobody, get offered the button again.
+   * Order matters. Until the seat is bound, `whoami` is exactly the 401 the link exists to
+   * fix, so asking first renders the signed-out shell and its Sign in button — which is
+   * the loop this closes: sign in, resolve to nobody, get offered the button again. True
+   * of an owner claim and of an invitation alike: an invitee's subject maps to no
+   * principal in this space until they accept.
    *
-   * A claim needs a session (it binds whoever is signed in), so a 401 from it means "not
-   * signed in yet" rather than "bad token" — park the token, send them through login, and
-   * they land back on this effect with a session and the claim still pending. The token
-   * itself never waits in a URL; see `CLAIM_STASH`.
+   * Redeeming needs a session (both bind whoever is signed in), so a 401 from it means
+   * "not signed in yet" rather than "bad token" — park the token, send them through login,
+   * and they land back on this effect with a session and the redemption still pending. The
+   * token itself never waits in a URL; see `readStash`.
    */
   useEffect(() => {
     const boot = async () => {
-      // Out of the URL on sight, before anything can await: a token in the address bar
-      // is one screenshot or pasted link from being someone else's.
-      const url = new URL(window.location.href);
-      const fromUrl = url.searchParams.get('claim');
-      if (fromUrl) {
-        url.searchParams.delete('claim');
-        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
-      }
-
-      const token = fromUrl ?? readStash();
-      if (!token) return whoamiWithoutStaleSpace();
+      const pending = pendingLink();
+      if (!pending) return whoamiWithoutStaleSpace();
+      const { kind, token, fromUrl } = pending;
 
       try {
-        await claimOnce(token);
-        clearStash();
+        await redeemOnce(kind, token);
+        clearStash(kind);
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) {
           // Not signed in yet, so go get a session — but only on the way IN from a link.
           // A STASHED token that still 401s means the round-trip already happened without
           // producing one (the person backed out at the issuer), and bouncing them again
           // is a loop. The stash outlives that, so signing in by hand still completes the
-          // claim on the next load.
+          // redemption on the next load.
           if (fromUrl) {
             window.location.assign(
               // `returnTo` is where the token would otherwise have to ride. It only does
               // so when storage refused to hold it, which is one more URL than we want
-              // and still better than an install nobody can claim.
-              stash(token) ? LOGIN_URL : `${LOGIN_URL}?returnTo=${encodeURIComponent(`/?claim=${token}`)}`,
+              // and still better than a link nobody can redeem.
+              stash(kind, token)
+                ? LOGIN_URL
+                : `${LOGIN_URL}?returnTo=${encodeURIComponent(`/?${LINKS[kind].param}=${token}`)}`,
             );
             return null;
           }
         } else {
-          // A dead link is worth SAYING — the person followed one the dashboard told them
-          // to open. Drop it so a reload stops retrying a token that cannot work, and
-          // fall through to `whoami`: the seat may have been claimed in another tab, and
+          // A dead link is worth SAYING — somebody followed one they were given, and
+          // silence would leave them looking at a drive that is not the one they were
+          // invited to. Drop it so a reload stops retrying a token that cannot work, and
+          // fall through to `whoami`: the seat may have been taken in another tab, and
           // that is the call which knows.
-          clearStash();
+          clearStash(kind);
           setError(e instanceof ApiError ? e.message : String(e));
         }
       }

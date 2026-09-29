@@ -160,6 +160,16 @@ function newMenu(): void {
 /** The rail, to address it apart from the topbar — both say "My Drive". */
 const rail = () => within(screen.getByRole('complementary'));
 
+/**
+ * Open the account menu in the topbar. Radix again: it answers the keyboard, not `click`.
+ * Every assertion about what is IN this menu has to prove the menu opened first, or a
+ * missing item and a closed menu read identically.
+ */
+function accountMenu(): void {
+  fireEvent.keyDown(within(screen.getByRole('banner')).getByText('AE'), { key: 'Enter' });
+  expect(screen.getByText('Sign out')).toBeTruthy();
+}
+
 describe('a stale search answer never reaches the screen', () => {
   it('drops the first term’s hits when the term has moved on', async () => {
     await renderDrive();
@@ -693,5 +703,108 @@ describe('a space change survives storage that refuses to hold it', () => {
 
     fireEvent.click(screen.getByText('Family'));
     expect(window.location.search).toContain('site=family');
+  });
+});
+
+describe('an invitation is redeemed by opening its link', () => {
+  it('accepts the token, then resolves the session it just created', async () => {
+    window.history.replaceState(null, '', '/?invite=tok-123');
+
+    render(<App />);
+    await flush();
+
+    // The token leaves the URL before anything awaits: in the address bar it is one
+    // screenshot or pasted link from being someone else's.
+    expect(window.location.search).not.toContain('invite=');
+
+    await answer('/api/accept-invite', { ok: true, principal: '01BJORN' });
+    // Only NOW is there a principal to resolve — which is the ordering this boot exists
+    // for. Asking first would have rendered the signed-out shell to someone holding a
+    // valid invitation.
+    await answer('/api/me', { principal: '01BJORN' });
+    await flush();
+
+    await answer('/api/sites', []);
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.getByRole('banner')).toBeTruthy();
+  });
+
+  it('sends an unauthenticated invitee to log in, with the token parked out of the URL', async () => {
+    window.history.replaceState(null, '', '/?invite=tok-456');
+
+    render(<App />);
+    await flush();
+    // Accepting binds whoever is signed in, so a 401 here means "no session yet" rather
+    // than "bad token".
+    await answerWith('/api/accept-invite', 401, { error: 'unauthorized' });
+
+    // Parked in sessionStorage rather than carried through the login URL, so it appears in
+    // no history entry or request log on the way to the issuer and back.
+    expect(window.sessionStorage.getItem('canopy.drive.pending-invite')).toBe('tok-456');
+    expect(window.location.search).not.toContain('invite=');
+  });
+
+  it('says what the server said when the invitation is spent', async () => {
+    window.history.replaceState(null, '', '/?invite=tok-789');
+
+    render(<App />);
+    await flush();
+    await answerWith('/api/accept-invite', 400, { detail: 'this invite is invalid or already used' });
+    // The server's words, not ours: "already used" and "the network is down" are different
+    // facts, and one sentence of our own would caption the second as the first.
+    await answer('/api/me', { principal: '01ADA' });
+    await flush();
+
+    expect(screen.getByText(/already used/)).toBeTruthy();
+    // And it does not retry on the next load.
+    expect(window.sessionStorage.getItem('canopy.drive.pending-invite')).toBeNull();
+  });
+});
+
+describe('the People surface is offered only to whoever may use it', () => {
+  it('shows nothing in the menu for a member', async () => {
+    await renderDrive();
+    await answer('/people/access', { canManage: false });
+
+    accountMenu();
+    expect(screen.queryByText('People…')).toBeNull();
+  });
+
+  it('does not repopulate the list with a read from before it was closed', async () => {
+    await renderDrive();
+    await answer('/people/access', { canManage: true });
+
+    accountMenu();
+    fireEvent.click(screen.getByText('People…'));
+    // The read is in flight and unanswered. The dialog is closed on top of it — this
+    // component stays mounted, so nothing cancels it.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await answer('/api/invites', {
+      roles: ['member'],
+      invites: [{ principal: '01P', roleKey: 'member', email: 'ghost@example.com' }],
+    });
+
+    // Reopened, its own read still pending: what shows now is whatever state the closed
+    // dialog was left in. A stale answer applied while closed would be sitting here.
+    accountMenu();
+    fireEvent.click(screen.getByText('People…'));
+    expect(screen.queryByText('ghost@example.com')).toBeNull();
+    expect(screen.getByText('Loading…')).toBeTruthy();
+  });
+
+  it('offers it to an owner, and the dialog lists what is still waiting', async () => {
+    await renderDrive();
+    await answer('/people/access', { canManage: true });
+
+    accountMenu();
+    fireEvent.click(screen.getByText('People…'));
+    await answer('/api/invites', {
+      roles: ['member'],
+      invites: [{ principal: '01P', roleKey: 'member', email: 'bjorn@example.com' }],
+    });
+
+    expect(screen.getByText('bjorn@example.com')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Withdraw' })).toBeTruthy();
   });
 });
