@@ -13,13 +13,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import App from './App';
 import { DriveScreen } from './drive';
-import { selectSite } from './api';
+import { currentSite, selectSite } from './api';
 
 /** One pending answer, and the handle a test resolves it with. */
 interface Pending {
   url: string;
-  resolve: (body: unknown) => void;
+  resolve: (body: unknown, status?: number) => void;
   /** For the cases that are about a failure arriving late. */
   reject: (error: Error) => void;
 }
@@ -37,10 +38,10 @@ function queueFetch() {
       pending.push({
         url,
         reject: (error: Error) => rejectFetch(error),
-        resolve: (body: unknown) =>
+        resolve: (body: unknown, status = 200) =>
           resolveFetch({
-            ok: true,
-            status: 200,
+            ok: status < 400,
+            status,
             statusText: 'stubbed',
             json: () => Promise.resolve(body),
             // The preview reads a text body with `.text()`, not `.json()`. Without this
@@ -68,11 +69,16 @@ async function flush(ms = 250): Promise<void> {
 
 /** Answer the first queued request whose URL matches, leaving the others pending. */
 async function answer(match: string, body: unknown): Promise<void> {
+  await answerWith(match, 200, body);
+}
+
+/** The same, with a status — for the paths that are about being refused. */
+async function answerWith(match: string, status: number, body: unknown): Promise<void> {
   const i = pending.findIndex((p) => p.url.includes(match));
   expect(i, `no pending request matching ${match}; saw ${pending.map((p) => p.url).join(', ')}`).toBeGreaterThan(-1);
   const [target] = pending.splice(i, 1);
   await act(async () => {
-    target!.resolve(body);
+    target!.resolve(body, status);
   });
 }
 
@@ -116,16 +122,43 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  /**
+   * Spies too, not just stubbed globals.
+   *
+   * Two tests here make `Storage.prototype.setItem` throw to stand in for blocked storage.
+   * Vitest does not undo a spy between tests on its own, so without this the next test
+   * runs in a private window it never asked for — which is not a failure, it is a
+   * different test quietly passing for the wrong reason.
+   */
+  vi.restoreAllMocks();
   selectSite(null);
+  window.history.replaceState(null, '', '/');
 });
 
-/** The screen starts by reading the root folder; answer that and get out of the way. */
-async function renderDrive(folders: unknown[] = [], files: unknown[] = []): Promise<void> {
+/**
+ * The screen starts by reading the root folder and the space list; answer both and get
+ * out of the way. The rail's list is answered even when a test does not care, because an
+ * unanswered read is a component stuck on its loading state for the whole test.
+ */
+async function renderDrive(
+  folders: unknown[] = [],
+  files: unknown[] = [],
+  sites: unknown[] = [],
+): Promise<void> {
   render(<DriveScreen {...shell} onError={() => {}} />);
   await flush();
+  await answer('/api/sites', sites);
   await answer('/folders/root/folders', folders);
   await answer('/folders/root/files', files);
 }
+
+/** Open the rail's New menu, which is a Radix trigger: it answers the keyboard, not `click`. */
+function newMenu(): void {
+  fireEvent.keyDown(screen.getByText('New'), { key: 'Enter' });
+}
+
+/** The rail, to address it apart from the topbar — both say "My Drive". */
+const rail = () => within(screen.getByRole('complementary'));
 
 describe('a stale search answer never reaches the screen', () => {
   it('drops the first term’s hits when the term has moved on', async () => {
@@ -197,15 +230,16 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
     expect(screen.getByText('lease.pdf')).toBeTruthy();
 
-    // A write starts in Papers. "New folder" rather than the row menu because the menu
-    // is a Radix trigger that wants real pointer events, and the race under test is about
-    // WHICH refresh an action runs — not about which control started it.
+    // A write starts in Papers. "New folder" rather than the row menu because the row's
+    // menu wants real pointer events, and the race under test is about WHICH refresh an
+    // action runs — not about which control started it.
+    newMenu();
     fireEvent.click(screen.getByText('New folder'));
     fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
     fireEvent.click(screen.getByText('Create'));
 
     // …and the user leaves for the root before it answers.
-    fireEvent.click(screen.getByText('My Drive'));
+    fireEvent.click(rail().getByText('My Drive'));
     await flush();
     await answer('/folders/root/folders', [{ id: '01G', parent_id: 'root', name: 'Notes', path: 'Notes' }]);
     await answer('/folders/root/files', [file('01C', 'at-the-root.md')]);
@@ -432,8 +466,9 @@ describe('the shell the portal had, on the vertical', () => {
   it('shows the signed-in account and offers sign-out', async () => {
     await renderDrive([], []);
     // The portal's topbar rendered a fabricated persona when nobody was signed in; this
-    // one takes the principal it was handed and nothing else.
-    expect(screen.getByText('My Drive')).toBeTruthy();
+    // one takes the principal it was handed and nothing else. Scoped to the header,
+    // because the rail says "My Drive" too.
+    expect(within(screen.getByRole('banner')).getByText('My Drive')).toBeTruthy();
     expect(screen.queryByText(/Log in/)).toBeNull();
   });
 });
@@ -470,13 +505,193 @@ describe('the palette does not hand back the wrong thing', () => {
     expect(pending.some((p) => p.url.endsWith('/files/01F'))).toBe(false);
   });
 
-  it('keeps the space switcher reachable from the shell', async () => {
-    // The switcher was in the header this slice deleted; a person in several spaces had no
-    // other way to change space.
-    render(<DriveScreen {...shell} onError={() => {}} spaceSwitcher={<span>Family</span>} />);
+});
+
+describe('the rail is how you change space', () => {
+  it('lists every space and marks the one in view', async () => {
+    // The guarantee the topbar's `<select>` used to carry: a person in several spaces can
+    // always reach the others. It moved here, so the test moved with it.
+    await renderDrive([], [], [
+      { slug: 'home', name: 'Home', current: true },
+      { slug: 'family', name: 'Family', current: false },
+    ]);
+
+    const spaces = within(screen.getByRole('navigation', { name: 'Spaces' }));
+    expect(spaces.getByText('Home')).toBeTruthy();
+    expect(spaces.getByText('Family')).toBeTruthy();
+    // `current` comes from the server because only the worker knows which slug the
+    // hostname resolved to; the rail renders it and does not guess.
+    expect(spaces.getByText('Home').closest('button')?.getAttribute('aria-current')).toBe('true');
+    expect(spaces.getByText('Family').closest('button')?.getAttribute('aria-current')).toBeNull();
+  });
+
+  it('persists the space it was told to select', async () => {
+    await renderDrive([], [], [
+      { slug: 'home', name: 'Home', current: true },
+      { slug: 'family', name: 'Family', current: false },
+    ]);
+
+    // Selecting is persist-then-reload, and the persist is the half that has to be true
+    // by the time the new page reads it. The reload itself shows up as jsdom's
+    // "Not implemented: navigation" line — there is no way to stub `location.reload`,
+    // and the selection is what a wrong answer would get wrong.
+    fireEvent.click(screen.getByText('Family'));
+    expect(currentSite()).toBe('family');
+
+    // The space you are already in is not a navigation: nothing is written, and nothing
+    // reloads. Clicking it used to mean a pointless round trip through a whole page load.
+    fireEvent.click(screen.getByText('Home'));
+    expect(currentSite()).toBe('family');
+  });
+});
+
+describe('a selection that has gone stale does not lock the install', () => {
+  it('drops the selected space when it is the reason nobody is signed in', async () => {
+    // Membership in the selected space was revoked. `/api/me` resolves the principal in
+    // the SELECTED space, so it answers 401 — and the signed-out shell has no rail, so
+    // there is no control on screen that can clear the selection that caused it.
+    selectSite('family');
+    window.history.replaceState(null, '', '/?site=family');
+
+    render(<App />);
     await flush();
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+
+    // Retried without the selection, which is what recovers the session.
+    await answer('/api/me', { principal: '01ADA' });
+    await flush();
+    expect(currentSite()).toBeNull();
+    // …and the URL cannot put it back on the next reload.
+    expect(window.location.search).not.toContain('site=');
+
+    // The drive renders, which is the whole point: the rail is on screen and lists the
+    // spaces this login really is in.
+    await answer('/api/sites', [{ slug: 'home', name: 'Home', current: true }]);
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', []);
-    expect(screen.getByText('Family')).toBeTruthy();
+    expect(screen.getByRole('complementary')).toBeTruthy();
+  });
+
+  it('puts a URL-carried selection back when the retry fails too', async () => {
+    // Storage is blocked, so `?site=` is the only place the selection lives — and the
+    // recovery above deletes it before retrying. Restoring module memory alone restores
+    // nothing here: signing in is a full navigation, and memory does not survive it, so
+    // they would come back to the routed space instead of the one they chose.
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    selectSite('family');
+    window.history.replaceState(null, '', '/?site=family&keep=1#frag');
+
+    render(<App />);
+    await flush();
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+
+    expect(window.location.search).toContain('site=family');
+    // The rest of the URL is not ours to rewrite.
+    expect(window.location.search).toContain('keep=1');
+    expect(window.location.hash).toBe('#frag');
+  });
+
+  it('keeps the selection when the 401 was simply nobody being signed in', async () => {
+    selectSite('family');
+
+    render(<App />);
+    await flush();
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+    await answerWith('/api/me', 401, { error: 'unauthorized' });
+
+    // Both answers were 401, so the space was never the problem. Forgetting the choice
+    // here would land them in the routed space after signing in.
+    expect(currentSite()).toBe('family');
+    expect(screen.getByText(/Sign in to this space/)).toBeTruthy();
+  });
+});
+
+describe('a write goes where the person is looking', () => {
+  it('creates in My Drive rather than invisibly behind the trash', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
+
+    // Into a folder, then off to the trash. The folder id stays behind the trash view,
+    // which is what made this a bug: the write used it, and the refresh afterwards
+    // reloaded the trash — so it succeeded somewhere nobody could see.
+    fireEvent.doubleClick(screen.getByText('Papers'));
+    await flush();
+    await answer('/folders/01F/folders', []);
+    await answer('/folders/01F/files', []);
+
+    fireEvent.click(rail().getByText('Trash'));
+    await flush();
+    await answer('/trash', []);
+
+    newMenu();
+    fireEvent.click(screen.getByText('New folder'));
+    fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
+    fireEvent.click(screen.getByText('Create'));
+
+    // The root, because that is where the screen went — not 01F, the folder the trash
+    // was hiding.
+    const create = pending.find((p) => p.url.includes('/folders') && !p.url.includes('/trash'));
+    expect(create?.url).toContain('/folders/root/folders');
+  });
+});
+
+describe('the rail reports its own failures', () => {
+  it('keeps saying the space list failed after a folder read succeeds', async () => {
+    render(<DriveScreen {...shell} onError={() => {}} />);
+    await flush();
+    const sites = pending.findIndex((p) => p.url.includes('/api/sites'));
+    await act(async () => {
+      pending.splice(sites, 1)[0]!.reject(new Error('nope'));
+    });
+
+    // The drive's own refresh succeeds AFTER it, and it clears the shell's banner on
+    // success — which used to erase this message whenever the order came out this way.
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+
+    expect(screen.getByText(/Couldn’t list your spaces/)).toBeTruthy();
+  });
+});
+
+describe('a space change survives storage that refuses to hold it', () => {
+  it('clears a `?site=` link once the choice is stored, so it can be left', async () => {
+    // Arrived through a link that names a space, with storage working. `api.ts` reads the
+    // URL ahead of storage, so a parameter left behind outranks the new selection: every
+    // click would persist correctly and none would take effect, pinning the person to the
+    // linked space until they edited the address bar.
+    selectSite('family');
+    window.history.replaceState(null, '', '/?site=family');
+
+    await renderDrive([], [], [
+      { slug: 'home', name: 'Home', current: false },
+      { slug: 'family', name: 'Family', current: true },
+    ]);
+
+    fireEvent.click(screen.getByText('Home'));
+    expect(currentSite()).toBe('home');
+    expect(window.location.search).not.toContain('site=');
+  });
+
+  it('carries the slug in the URL when it cannot be stored', async () => {
+    // Private mode, blocked site data. The selection lives in module memory, and the
+    // reload that applies it is exactly what throws that away — so without the URL,
+    // clicking another space reloads back into the one you were in.
+    // On `Storage.prototype`, not on `window.localStorage`: jsdom's storage is a Proxy,
+    // so a spy installed as an own property of it is never consulted and the test would
+    // pass against blocked storage it never blocked.
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    window.history.replaceState(null, '', '/');
+
+    await renderDrive([], [], [
+      { slug: 'home', name: 'Home', current: true },
+      { slug: 'family', name: 'Family', current: false },
+    ]);
+
+    fireEvent.click(screen.getByText('Family'));
+    expect(window.location.search).toContain('site=family');
   });
 });

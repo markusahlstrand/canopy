@@ -432,8 +432,22 @@ app.get('/api/sites', async (c) => {
     }),
   );
 
+  /**
+   * WHICH of them this request is looking at — the one fact the client cannot work out.
+   *
+   * A selection rides as `x-site` and so is already known in the browser, but the
+   * DEFAULT is the scope the router asserted from the hostname, and its slug is only
+   * knowable here. Without this a space list can say what you have and not where you
+   * are, which is the one thing a list of places is for.
+   *
+   * Still slug and name: `current` is a boolean about this request, not the scope id.
+   */
+  const here = (await nodeFor(c.req.raw, c.env)).scopeId;
+
   return c.json(
-    mine.filter((site) => site !== null).map((site) => ({ slug: site.slug, name: site.name })),
+    mine
+      .filter((site) => site !== null)
+      .map((site) => ({ slug: site.slug, name: site.name, current: site.scopeId === here })),
   );
 });
 

@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { Icon } from "@canopy/ui";
 import { cn } from "@canopy/ui";
 import { Button } from "@canopy/ui";
@@ -8,7 +7,6 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@canopy/ui";
 import type { Me } from './api';
@@ -48,26 +46,12 @@ interface TopbarProps {
   breadcrumb: string[];
   onCrumbClick?: (index: number) => void;
   onOpenCmd: () => void;
-  /** Open the Settings page (avatar menu → Settings, and the ⌘, shortcut). */
   onUpload: () => void;
-  /** Hide the Upload button in a read-only (connected) space. */
-  /** When the current view is a connected space, its connector plugin id — enables the
-   *  branch picker (it self-hides for connectors without a branch concept, e.g. a NAS). */
-  /** The active branch of the connected space, mirrored in the host's URL ("" until probed). */
-  /** The user picked a branch — host persists + re-indexes + updates the URL. */
-  /** The picker probed the connector's current branch — host reconciles it with the URL. */
   auth: Me;
   onSignIn: () => void;
   onSignOut: () => void;
   /** Backend unreachable — the app is view-only, so disable uploads. */
   offline?: boolean;
-  /**
-   * Which space this install is showing, rendered beside the trail.
-   *
-   * A slot rather than a prop pair: the switcher reads `/api/sites` and owns its own
-   * failure, and the topbar has no business knowing what a site is.
-   */
-  spaceSwitcher?: ReactNode;
   /** Force a re-fetch of the current view (re-syncs the offline mirror + reloads). */
   onRefresh?: () => void;
   /** True while a background sync is in flight — spins the refresh icon. */
@@ -77,7 +61,6 @@ interface TopbarProps {
 export function Topbar({
   breadcrumb,
   onCrumbClick,
-  spaceSwitcher,
   onOpenCmd,
   onUpload,
   auth,
@@ -155,9 +138,6 @@ export function Topbar({
         })}
       </div>
 
-
-      {spaceSwitcher}
-
       <div className="flex-1" />
 
       {/* Search trigger */}
@@ -184,21 +164,17 @@ export function Topbar({
         </button>
       )}
 
-      {/* Theme toggle */}
-
       {/* Upload. The portal hid this in a read-only connected space; every space here is
           writable by whoever holds drive:write, and the operation refuses the rest. */}
-      {true && (
-        <Button
-          onClick={onUpload}
-          disabled={offline}
-          title={offline ? "Unavailable while offline" : undefined}
-          className="gap-1.5"
-        >
-          <Icon name="upload" size={16} />
-          Upload
-        </Button>
-      )}
+      <Button
+        onClick={onUpload}
+        disabled={offline}
+        title={offline ? "Unavailable while offline" : undefined}
+        className="gap-1.5"
+      >
+        <Icon name="upload" size={16} />
+        Upload
+      </Button>
 
       {/* Account: square login button when logged out, avatar menu otherwise */}
       {loggedOut ? (
@@ -224,7 +200,6 @@ export function Topbar({
               <div className="text-[12px] font-normal text-muted-foreground">{display.email}</div>
             )}
           </DropdownMenuLabel>
-          <DropdownMenuSeparator />
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onSignOut}>
             <Icon name="log-out" size={15} /> Sign out

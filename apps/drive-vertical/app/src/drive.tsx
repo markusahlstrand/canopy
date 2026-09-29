@@ -18,6 +18,7 @@ import { latestOnly } from './reads';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
+import { Sidebar, type NavId } from './sidebar';
 import { CommandPalette } from './command-palette';
 import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
@@ -68,6 +69,9 @@ export const DRIVE_ICONS = [
   'search',
   'grid',
   'list',
+  // The topbar's, which this screen renders and so is answerable for.
+  'refresh',
+  'log-out',
 ] as const;
 export type IconName = (typeof DRIVE_ICONS)[number];
 
@@ -130,21 +134,13 @@ interface Crumb {
 
 export interface DriveScreenProps {
   onError: (message: string | null) => void;
-  /** Rendered in the topbar beside the trail — the switcher the old header carried. */
-  spaceSwitcher?: React.ReactNode;
   /** The shell's account menu lives in the topbar, which this screen renders. */
   auth: Me;
   onSignIn: () => void;
   onSignOut: () => void;
 }
 
-export function DriveScreen({
-  onError,
-  spaceSwitcher,
-  auth,
-  onSignIn,
-  onSignOut,
-}: DriveScreenProps) {
+export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
   const [folders, setFolders] = useState<DriveFolder[]>([]);
@@ -232,6 +228,29 @@ export function DriveScreen({
     return () => clearTimeout(t);
   }, [refresh, view]);
 
+  /**
+   * Switching view, from the rail or from the palette.
+   *
+   * One function for both, because "go to My Drive" has to mean the same thing however
+   * it was asked: back to the ROOT of the drive, not to whichever folder the trail
+   * happened to be in when you left for the trash. The palette used to only set the
+   * view, so its My Drive left you looking at a subfolder labelled as the root.
+   */
+  const navigate = useCallback((id: NavId) => {
+    // Whatever is in flight belongs to the view being left.
+    reads.current.invalidate();
+    setTerm('');
+    setHits([]);
+    setSelection(new Set());
+    if (id === 'trash') {
+      setView('trash');
+      return;
+    }
+    setCrumbs([]);
+    setFolderId(ROOT_FOLDER_ID);
+    setView('drive');
+  }, []);
+
   const open = (folder: DriveFolder) => {
     // The listing on screen belongs to the folder being left; nothing in flight for it
     // may land here.
@@ -297,6 +316,23 @@ export function DriveScreen({
     }
   };
 
+  /**
+   * Creating and uploading are things you do IN the drive, so they take you there first.
+   *
+   * Both write into `folderId`, and the trash and search views keep whatever folder you
+   * were last in. Pressing New folder while looking at the trash therefore wrote into a
+   * folder that was not on screen, and the refresh afterwards reloaded the trash — so the
+   * write succeeded, invisibly, somewhere else. Going to My Drive first makes the
+   * destination the thing you are looking at, which is the only version of this a person
+   * can predict. `navigate` also resets the folder to the root, and the handlers below
+   * read `folderId` when they run rather than when they were wired, so the write lands
+   * where the screen now is.
+   */
+  const startWrite = (begin: () => void) => {
+    if (view !== 'drive') navigate('drive');
+    begin();
+  };
+
   const onUpload = (input: HTMLInputElement) => {
     const chosen = Array.from(input.files ?? []);
     input.value = '';
@@ -309,14 +345,23 @@ export function DriveScreen({
   };
 
   return (
-    <>
+    <div className="flex min-h-0 flex-1">
+      <Sidebar
+        // Searching is still the drive, not a third place — the rail should not go blank
+        // while you type.
+        active={view === 'trash' ? 'trash' : 'drive'}
+        onNavigate={navigate}
+        onNewFolder={() => startWrite(() => setCreating(true))}
+        onUpload={() => startWrite(() => uploadRef.current?.click())}
+      />
+
+      <div className="flex min-w-0 flex-1 flex-col">
       <Topbar
         breadcrumb={['My Drive', ...crumbs.map((c) => c.name)]}
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
         onCrumbClick={(index) => upTo(index - 1)}
-        spaceSwitcher={spaceSwitcher}
         onOpenCmd={() => setCmdOpen(true)}
-        onUpload={() => uploadRef.current?.click()}
+        onUpload={() => startWrite(() => uploadRef.current?.click())}
         onRefresh={() => void refresh()}
         syncing={busy}
         auth={auth}
@@ -336,7 +381,7 @@ export function DriveScreen({
         open={cmdOpen}
         onOpenChange={setCmdOpen}
         files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
-        onNavigate={(id) => setView(id === 'trash' ? 'trash' : 'drive')}
+        onNavigate={(id) => navigate(id === 'trash' ? 'trash' : 'drive')}
         onOpenFile={(item) => {
           // The palette lists folders too, and a folder is entered rather than previewed —
           // the panel would open on an id `get-file` cannot resolve.
@@ -344,10 +389,11 @@ export function DriveScreen({
           if (folder) open(folder);
           else setPreviewing(item.id);
         }}
-        onUpload={() => uploadRef.current?.click()}
+        onUpload={() => startWrite(() => uploadRef.current?.click())}
       />
 
-    <div className="flex min-h-0 gap-4">
+      {/* The one scrolling region: the rail and the topbar stay put. */}
+      <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-4">
       <div className="min-w-0 flex-1">
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative">
@@ -387,37 +433,6 @@ export function DriveScreen({
         >
           <Icon name={layout === 'list' ? 'grid' : 'list'} className="size-4" />
         </Button>
-
-        <Button
-          variant={view === 'trash' ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => {
-            reads.current.invalidate();
-            setView((v) => {
-              if (v === 'trash') return 'drive';
-              setTerm('');
-              return 'trash';
-            });
-          }}
-        >
-          <Icon name="trash" className="size-4" />
-          Trash
-        </Button>
-        {view === 'drive' ? (
-          <>
-            <Button variant="outline" size="sm" onClick={() => setCreating(true)}>
-              <Icon name="plus" className="size-4" />
-              New folder
-            </Button>
-            <Button size="sm" asChild>
-              <label>
-                <Icon name="upload" className="size-4" />
-                Upload
-                <input type="file" multiple className="hidden" onChange={(e) => onUpload(e.currentTarget)} />
-              </label>
-            </Button>
-          </>
-        ) : null}
       </div>
 
       {view === 'search' ? (
@@ -476,6 +491,8 @@ export function DriveScreen({
           onError={onError}
         />
       ) : null}
+      </div>{/* scrolling region */}
+      </div>{/* the column beside the rail */}
 
       {creating ? (
         <NameDialog
@@ -506,7 +523,6 @@ export function DriveScreen({
         />
       ) : null}
     </div>
-    </>
   );
 }
 

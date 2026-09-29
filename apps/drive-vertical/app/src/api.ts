@@ -29,21 +29,46 @@ const API = '/api';
  */
 let site: string | null = null;
 const SITE_KEY = 'canopy.site';
+
+/**
+ * The URL wins over the stored selection.
+ *
+ * `?site=` is how a selection survives a reload when storage refused to hold it (see
+ * `selectSite`), so it has to outrank the stale value storage may still have. It is also
+ * the more explicit of the two: a link someone followed, against a preference from
+ * whenever.
+ */
 try {
-  site = localStorage.getItem(SITE_KEY);
+  site = new URL(window.location.href).searchParams.get('site');
 } catch {
-  // Private mode, blocked site data: the hostname's own space is the fallback.
+  // No URL to read: a non-browser runtime loading this module.
+}
+if (!site) {
+  try {
+    site = localStorage.getItem(SITE_KEY);
+  } catch {
+    // Private mode, blocked site data: the hostname's own space is the fallback.
+  }
 }
 
 export const currentSite = (): string | null => site;
 
-export function selectSite(slug: string | null): void {
+/**
+ * Select a space, and say whether the choice will survive a reload.
+ *
+ * `false` means storage refused us. The caller has to carry the slug some other way,
+ * because a selection that only exists in this module's memory is gone the moment the
+ * page reloads — and reloading is how a space change takes effect.
+ */
+export function selectSite(slug: string | null): boolean {
   site = slug;
   try {
     if (slug) localStorage.setItem(SITE_KEY, slug);
     else localStorage.removeItem(SITE_KEY);
+    return true;
   } catch {
     // Selection still applies to this tab; it just will not survive a reload.
+    return false;
   }
 }
 
@@ -74,6 +99,14 @@ export interface DriveFolder {
 export interface Site {
   slug: string;
   name: string;
+  /**
+   * This is the space the request was answered in.
+   *
+   * The server decides it, because the client cannot: with no selection the space comes
+   * from the hostname the router resolved, and only the worker can say which slug that
+   * was. A selection makes it follow the selection.
+   */
+  current: boolean;
 }
 
 export interface FileVersion {
@@ -252,7 +285,7 @@ export interface FileTextRow {
 export const fileVersions = (fileId: string) =>
   call<FileVersion[]>(`/files/${encodeURIComponent(fileId)}/versions`);
 
-/** The spaces this login is bound in — empty when the install has only the routed one. */
+/** The spaces this login is bound in, one of them flagged as the one in view. */
 export const listSites = () => call<Site[]>('/sites');
 
 /** The folders directly inside a folder. Paged, so a bare array like the file listing. */
