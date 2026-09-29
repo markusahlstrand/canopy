@@ -10,20 +10,21 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "concurrently -n api,web -c blue,green \"pnpm --filter @canopy/api dev\" \"pnpm --filter @canopy/portal dev\"",
-    "dev:web": "pnpm --filter @canopy/portal dev",
+    "dev": "pnpm --filter @canopy/drive-vertical dev",
+    "dev:web": "pnpm --filter @canopy/drive-vertical dev:web",
     "dev:api": "pnpm --filter @canopy/api dev",
     "build": "pnpm -r build",
-    "start": "pnpm --filter @canopy/portal build && pnpm --filter @canopy/api start",
+    "start": "pnpm --filter @canopy/api start",
     "cf:dev": "wrangler dev",
-    "deploy": "pnpm --filter @canopy/portal build && wrangler deploy",
+    "deploy": "wrangler deploy",
     "deploy:cf": "pnpm run deploy",
-    "deploy:cf:worker-only": "pnpm --filter @canopy/portal build && wrangler deploy --containers-rollout=none",
+    "deploy:cf:worker-only": "wrangler deploy --containers-rollout=none",
     "docworker:dev": "pnpm --filter @canopy/docworker-service dev",
     "docworker:build": "docker build --platform linux/amd64 -f apps/docworker/Dockerfile -t canopy-docworker .",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "push": "pnpm --filter @canopy/drive-vertical push"
   },
   "devDependencies": {
     "concurrently": "^10.0.5",
