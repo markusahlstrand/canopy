@@ -333,6 +333,55 @@ export const listFolderShares = (folderId: string) =>
   call<{ shares: Share[] }>(`/folders/${encodeURIComponent(folderId)}/shares`);
 
 /**
+ * Share a folder with somebody who is not in the space yet: invite, then grant.
+ *
+ * The portal could share with an address it had never seen — its grants took an `email`
+ * subject, resolved server-side later. A grant here names a PRINCIPAL, so the equivalent is
+ * two steps: an invitation pre-mints a principal (holding the member role, bindable when they
+ * accept), and the share goes to that principal. They get one link; opening it makes them a
+ * member, and the folder is already theirs to edit.
+ *
+ * Returns the accept link, because that link IS the invitation — nothing is emailed.
+ *
+ * A share that fails after the invitation was made is UNDONE, not left for a retry to pile on.
+ * By then the seat holds the member role and maybe the first of the level's two keys; a
+ * failure reported over a live invitation would leave both standing, and trying again would
+ * mint a second seat beside it. So the invitation is revoked first — that alone makes the seat
+ * unreachable, since nobody can bind to a principal whose invitation is gone — and then the
+ * seat is removed like any person, which takes the role and whatever grants landed. Both are
+ * idempotent. If the undo fails too, the error says what is still open and where to close it.
+ */
+export async function shareFolderWithEmail(folderId: string, email: string, level: ShareLevel) {
+  const invited = await createInvite(MEMBER_ROLE_FALLBACK, email);
+  try {
+    await shareFolder(folderId, invited.principal, level);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    try {
+      await revokeInvite(invited.principal);
+    } catch {
+      throw new Error(
+        `${reason} — and the invitation for ${email} could not be withdrawn. Revoke it from People.`,
+      );
+    }
+    // Tidying only: with the invitation gone, what is left of the seat is held by nobody.
+    await removePerson(invited.principal).catch(() => undefined);
+    throw new Error(`${reason} — nothing was shared and ${email} was not invited.`);
+  }
+  return { acceptUrl: invited.acceptUrl, principal: invited.principal, email };
+}
+
+/**
+ * The role an invitation made from the share dialog carries.
+ *
+ * The People dialog reads the roles the server allows and uses what comes back; this path has
+ * no list in hand and one role is all the worker offers (see `MEMBER_ROLE_KEY` there for why
+ * that is a safety property). A wrong key is a 400 from the route rather than a silent
+ * mis-grant, which is the right failure for a constant that drifts.
+ */
+const MEMBER_ROLE_FALLBACK = 'member';
+
+/**
  * Share a folder at a level, which is one call per key the level carries.
  *
  * Sequential, and not `Promise.all`: two grants on one folder, and a failure halfway leaves

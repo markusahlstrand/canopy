@@ -15,7 +15,7 @@
  * The email field is a note on the row so an owner can tell two invitations apart.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Icon, Input, cn } from '@canopy/ui';
+import { Button, Icon, Input, PersonAvatar, cn } from '@canopy/ui';
 import {
   Dialog,
   DialogContent,
@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from '@canopy/ui';
 import { latestOnly } from './reads';
+import { PeoplePicker } from './people-picker';
 import {
   createInvite,
   listInvites,
@@ -33,12 +34,6 @@ import {
   type Invite,
   type Person,
 } from './api';
-
-/** The same rule the topbar's avatar uses, so one person reads the same in both. */
-function initialsOf(s: string): string {
-  const parts = s.split(/[\s@.]+/).filter(Boolean);
-  return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || 'U';
-}
 
 interface PeopleDialogProps {
   open: boolean;
@@ -95,6 +90,36 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
    * older answer on screen. Closing invalidates; only the newest read may write.
    */
   const reads = useRef(latestOnly());
+
+  /**
+   * One list of people, which is the portal's shape and the better one: an unaccepted
+   * invitation is a PERSON who has not arrived yet, not a separate table of paperwork.
+   *
+   * The two reads stay separate (they fail separately, see `load`) and are merged here.
+   * Invitations whose principal already appears in the roster are dropped: that is somebody
+   * who accepted and signed in, and the invite row can outlive the acceptance by a moment.
+   */
+  const roster =
+    people === null && invites === null
+      ? null
+      : [
+          ...(people ?? []).map((p) => ({
+            principal: p.principal,
+            name: p.name,
+            email: p.email,
+            label: p.name ?? p.email ?? p.principal,
+            pending: false,
+          })),
+          ...(invites ?? [])
+            .filter((i) => !(people ?? []).some((p) => p.principal === i.principal))
+            .map((i) => ({
+              principal: i.principal,
+              name: null,
+              email: i.email,
+              label: i.email ?? i.principal,
+              pending: true,
+            })),
+        ];
 
   const load = useCallback(() => {
     const ticket = reads.current.take();
@@ -224,20 +249,32 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
           </p>
         ) : null}
 
+        {/*
+          The portal's picker, moved — and here it earns its place differently than in the
+          share dialog: picking somebody already in the space is NOT an action (they are already
+          a member), so a match is a warning rather than a shortcut. What it prevents is
+          inviting an address that is already here, which the portal's `exclude` did too.
+        */}
         <form
-          className="flex gap-2"
+          className="flex items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             if (!busy) void invite();
           }}
         >
-          <Input
+          <PeoplePicker
             value={email}
-            onChange={(e) => setEmail(e.currentTarget.value)}
-            placeholder="their email (optional — a note for you)"
-            aria-label="Email"
-            type="email"
-            className="h-9"
+            onChange={setEmail}
+            people={people ?? []}
+            disabled={busy}
+            label="Email"
+            placeholder="their email — they get a link"
+            // A match means "already here", so choosing one says so instead of inviting them
+            // again into a space they are in.
+            onPick={(person) => {
+              setEmail('');
+              setError(`${person.name ?? person.email ?? person.principal} is already in this space.`);
+            }}
           />
           <Button type="submit" disabled={busy || roles.length === 0} className="shrink-0 gap-1.5">
             <Icon name="plus" size={16} />
@@ -276,44 +313,68 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
 
         <div>
           <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Signed in here
+            People
           </h3>
+          {/*
+            The failure sits BESIDE the list, not instead of it.
+            
+            Replacing the list with this message would hide invitations that loaded perfectly
+            well — which is the same mistake as bundling the two reads, made again in the
+            rendering instead of the fetching.
+          */}
           {peopleFailed ? (
-            <p className="text-sm text-muted-foreground">
-              Couldn’t read who has signed in.{' '}
+            <p className="mb-2 text-[12.5px] text-muted-foreground">
+              Couldn’t read who is in this space — only invitations are listed.{' '}
               <button onClick={load} className="underline hover:text-foreground">
                 Try again
               </button>
             </p>
-          ) : people === null ? (
+          ) : null}
+          {roster === null ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : people.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nobody has been seen here yet.</p>
+          ) : roster.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nobody here but you.</p>
           ) : (
-            <ul className="mb-4 flex flex-col gap-1">
-              {people.map((person) => (
+            <ul className="flex flex-col gap-1">
+              {roster.map((row) => (
                 <li
-                  key={person.principal}
-                  className="flex items-center gap-2.5 rounded-md border border-border px-2.5 py-2 text-[13.5px]"
+                  key={row.principal}
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-md border border-border px-2.5 py-2 text-[13.5px]',
+                  )}
                 >
-                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
-                    {initialsOf(person.name ?? person.email ?? '?')}
-                  </span>
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate">
-                      {/* A principal and nothing else is what an issuer releasing neither
-                          claim looks like. Showing the id is more honest than a blank. */}
-                      {person.name ?? person.email ?? (
-                        <span className="font-mono text-[11.5px] text-muted-foreground">
-                          {person.principal}
-                        </span>
-                      )}
-                    </span>
-                    {person.name && person.email && (
-                      <span className="truncate text-[11.5px] text-muted-foreground">{person.email}</span>
+                  <PersonAvatar name={row.label} size="md" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {row.name ?? row.email ?? (
+                      // A principal and nothing else is what an issuer releasing neither claim
+                      // looks like. Showing the id is more honest than a blank.
+                      <span className="font-mono text-[11.5px] text-muted-foreground">
+                        {row.principal}
+                      </span>
+                    )}
+                    {row.pending && (
+                      <span className="ml-1.5 text-[11px] text-muted-foreground">· invited</span>
                     )}
                   </span>
-                  {confirming === person.principal ? (
+                  {row.name && row.email && (
+                    <span className="hidden truncate text-[11.5px] text-muted-foreground sm:block">
+                      {row.email}
+                    </span>
+                  )}
+
+                  {/* An invitation is withdrawn on one click: nobody has used it, and
+                      re-inviting costs a click. A PERSON is removed on two — their access and
+                      everything shared with them goes, and re-inviting does not bring it back. */}
+                  {row.pending ? (
+                    <button
+                      className="shrink-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
+                      disabled={busy}
+                      aria-label={`Withdraw the invitation for ${row.label}`}
+                      onClick={() => void withdraw(row.principal)}
+                    >
+                      <Icon name="x" size={15} />
+                    </button>
+                  ) : confirming === row.principal ? (
                     <>
                       <span className="shrink-0 text-[11.5px] text-muted-foreground">
                         Removes their access
@@ -322,7 +383,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
                         variant="outline"
                         size="sm"
                         disabled={busy}
-                        onClick={() => void remove(person.principal)}
+                        onClick={() => void remove(row.principal)}
                       >
                         Confirm
                       </Button>
@@ -331,67 +392,29 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
                       </Button>
                     </>
                   ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
+                    <button
+                      className="shrink-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
                       disabled={busy}
-                      onClick={() => setConfirming(person.principal)}
+                      aria-label={`Remove ${row.label}`}
+                      onClick={() => setConfirming(row.principal)}
                     >
-                      Remove
-                    </Button>
+                      <Icon name="x" size={15} />
+                    </button>
                   )}
                 </li>
               ))}
             </ul>
           )}
-          {/* Still not a roster: it is built from sign-ins, so a member who has never opened
-              the drive is missing from it. The other half of that caveat is gone as of #79 —
-              removing somebody now deletes their row, along with their grants and their role,
-              so a name here is no longer evidence of access that ended. */}
-          <p className="mb-4 text-[11.5px] text-muted-foreground">
-            Who has opened this drive. A member who has never opened it is not listed.
-            Removing somebody takes away their access to this space and everything shared with
-            them in it.
+
+          {/* Two things this list still cannot say, both worth saying instead of implying:
+              somebody who has never opened the drive is missing from it (it is built from
+              sign-ins), and a member's ROLE is not here — the kernel holds roles, and the
+              roster does not read them, so an owner and a member look alike. */}
+          <p className="mt-3 text-[11.5px] text-muted-foreground">
+            Invited people appear here until they open their link. Somebody who has never opened
+            this drive is not listed at all. Removing somebody takes away their access to this
+            space and everything shared with them in it.
           </p>
-          <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Open invitations
-          </h3>
-          {invites === null ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : invites.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              None open. Accepted invitations are not listed here — this is what is still
-              waiting.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-1">
-              {invites.map((row) => (
-                <li
-                  key={row.principal}
-                  className={cn(
-                    'flex items-center gap-2.5 rounded-md border border-border px-2.5 py-2 text-[13.5px]',
-                  )}
-                >
-                  <Icon name="users" size={16} className="shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">
-                    {row.email ?? <span className="text-muted-foreground">no email noted</span>}
-                  </span>
-                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                    {row.roleKey}
-                  </span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void withdraw(row.principal)}
-                  >
-                    Withdraw
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       </DialogContent>
     </Dialog>

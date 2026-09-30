@@ -230,6 +230,8 @@ describe('removing a person takes their access with them', () => {
   it('revokes every folder grant they held, measured by what they can still do', async () => {
     // Cleo ends the tests above holding write and manage on Papers, and can write there.
     expect(await canWriteIn(cleo, papers, 'before-removal')).toBe(true);
+    // And she is on the roster, so the removal has a row there to take away too.
+    await (await as(cleo)).invoke('drive/record-person', { email: 'cleo@example.com', name: 'Cleo' });
 
     const gone = await (await as(ada)).invoke<{ revoked: number; forgotten: boolean }>(
       'drive/forget-person',
@@ -237,6 +239,7 @@ describe('removing a person takes their access with them', () => {
     );
     // Both keys, taken back.
     expect(gone.revoked).toBeGreaterThanOrEqual(2);
+    expect(gone.forgotten).toBe(true);
 
     // The claim that matters: not that rows were deleted, but that the access is gone.
     expect(await canWriteIn(cleo, papers, 'after-removal')).toBe(false);
@@ -245,6 +248,12 @@ describe('removing a person takes their access with them', () => {
       folderId: papers,
     });
     expect(shares.some((s) => s.principal === cleo)).toBe(false);
+    // Nor does the roster, which is what every picker is built from.
+    const { people } = await (await as(ada)).invoke<{ people: { principal: string }[] }>(
+      'drive/list-people',
+      {},
+    );
+    expect(people.some((p) => p.principal === cleo)).toBe(false);
   });
 
   it('is idempotent, because a removal that failed halfway has to be retryable', async () => {

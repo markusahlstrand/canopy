@@ -15,13 +15,15 @@
  * sharing more than they think.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Icon, cn } from '@canopy/ui';
+import { Button, Icon, Input, PersonAvatar, cn } from '@canopy/ui';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@canopy/ui';
 import { latestOnly } from './reads';
+import { PeoplePicker } from './people-picker';
 import {
   listFolderShares,
   listPeople,
   shareFolder,
+  shareFolderWithEmail,
   sharesByPerson,
   unshareFolder,
   type PersonShare,
@@ -33,12 +35,6 @@ const LEVELS: { value: ShareLevel; label: string; hint: string }[] = [
   { value: 'edit', label: 'Can edit', hint: 'Add, change and remove what is in it' },
   { value: 'manage', label: 'Can edit and share', hint: 'And give other people access' },
 ];
-
-/** The same rule the topbar's avatar uses, so one person reads the same everywhere. */
-function initialsOf(s: string): string {
-  const parts = s.split(/[\s@.]+/).filter(Boolean);
-  return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || 'U';
-}
 
 /** What to call somebody: their name, their address, or — honestly — their id. */
 function label(person: { name: string | null; email: string | null; principal: string }) {
@@ -66,7 +62,18 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
   const [peopleFailed, setPeopleFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [picked, setPicked] = useState('');
+  /** What is in the picker's field — a name being matched, or an address being typed. */
+  const [typed, setTyped] = useState('');
+  /** A just-made invitation, held so its link can be copied. Shown once. */
+  const [invited, setInvited] = useState<{ email: string; acceptUrl: string } | null>(null);
+  /**
+   * An address waiting to be confirmed before it becomes an invitation.
+   *
+   * Asked, not assumed, because an invitation is more than this folder: it makes the person a
+   * MEMBER, and a member reads everything in the space. Sharing one folder with a stranger
+   * must not quietly hand them the rest.
+   */
+  const [confirming, setConfirming] = useState<string | null>(null);
   const [level, setLevel] = useState<ShareLevel>('edit');
   const reads = useRef(latestOnly());
   /** The folder on screen NOW, for actions that resolve after it changed. */
@@ -116,7 +123,9 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
       setPeople(null);
       setPeopleFailed(false);
       setError(null);
-      setPicked('');
+      setTyped('');
+      setInvited(null);
+      setConfirming(null);
       setLevel('edit');
       return;
     }
@@ -176,27 +185,65 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
           </p>
         ) : null}
 
-        {/* Add somebody. A picker over the roster rather than a free-text field: a share
-            names a principal, and an address nobody has signed in with names nothing. */}
-        <div className="flex gap-2">
-          <select
-            aria-label="Person"
-            value={picked}
-            onChange={(e) => setPicked(e.currentTarget.value)}
-            className="h-9 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm"
-          >
-            <option value="">Choose a person…</option>
-            {shareable.map((person) => (
-              <option key={person.principal} value={person.principal}>
-                {label(person)}
-              </option>
-            ))}
-          </select>
+        {/*
+          The portal's shape, moved: type a name to pick somebody, or type an address nobody
+          has seen and share with them anyway.
+
+          The second half is what a bare `<select>` could not do, and what the portal did
+          through an `email` subject its server resolved later. A grant here names a principal,
+          so an address becomes an invitation first — `shareFolderWithEmail` mints the seat and
+          grants the folder to it, and the person gets one link that makes them a member with
+          the folder already theirs.
+        */}
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const address = typed.trim();
+            if (!address || !folderId) return;
+            // An address somebody in the space already signed in with is that person, not a
+            // stranger: inviting it would mint a second seat for them.
+            const known = (people ?? []).find(
+              (person) => person.email?.toLowerCase() === address.toLowerCase(),
+            );
+            if (known) {
+              // Checked before the general case, whose message would be false here: the
+              // caller may hold no share on this folder at all — they hold the space.
+              if (me !== undefined && known.principal === me) {
+                setError('That is you — you already have this whole space.');
+                return;
+              }
+              if (!shareable.includes(known)) {
+                setError(`${label(known)} already has access to this folder.`);
+                return;
+              }
+              setTyped('');
+              void act(() => shareFolder(folderId, known.principal, level));
+              return;
+            }
+            setConfirming(address);
+          }}
+        >
+          <PeoplePicker
+            value={typed}
+            onChange={(v) => {
+              setTyped(v);
+              // Editing the address withdraws the question about the old one.
+              setConfirming(null);
+            }}
+            people={shareable}
+            disabled={busy}
+            placeholder="Add by name or email…"
+            onPick={(person) => {
+              setTyped('');
+              void act(() => shareFolder(folderId!, person.principal, level));
+            }}
+          />
           <select
             aria-label="Access"
             value={level}
             onChange={(e) => setLevel(e.currentTarget.value as ShareLevel)}
-            className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+            className="h-9 shrink-0 rounded-md border border-border bg-background px-2 text-sm"
           >
             {LEVELS.map((l) => (
               <option key={l.value} value={l.value}>
@@ -204,18 +251,76 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
               </option>
             ))}
           </select>
-          <Button
-            disabled={busy || !picked || !folderId}
-            className="shrink-0"
-            onClick={() => {
-              const principal = picked;
-              setPicked('');
-              void act(() => shareFolder(folderId!, principal, level));
-            }}
-          >
+          <Button type="submit" className="shrink-0" disabled={busy || !typed.trim()}>
             Share
           </Button>
-        </div>
+        </form>
+
+        {confirming ? (
+          <div className="rounded-md border border-border bg-muted/40 p-3" role="alertdialog" aria-label="Invite to this space">
+            <p className="text-[13px]">
+              <span className="font-medium">{confirming}</span> is not in this space yet. Sharing
+              invites them as a member of the whole space: they will be able to{' '}
+              <span className="font-medium">read everything in it</span>, and{' '}
+              {level === 'manage' ? 'edit and share' : 'edit'} “{folder?.name}”.
+            </p>
+            <div className="mt-2.5 flex justify-end gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setConfirming(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy || !folderId}
+                onClick={() => {
+                  const address = confirming;
+                  const startedOn = folderId!;
+                  setConfirming(null);
+                  setTyped('');
+                  void act(async () => {
+                    const made = await shareFolderWithEmail(startedOn, address, level);
+                    // The same guard `act` applies after `fn`, needed here because this write
+                    // happens INSIDE it: closed or moved on while the invite was in flight, and
+                    // this link would reappear on whatever folder is open next.
+                    if (openFolder.current === startedOn) setInvited(made);
+                  });
+                }}
+              >
+                Invite and share
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* The invitation's link, shown once — see the People dialog for why nothing is
+            emailed and why an existing invitation's link cannot be shown again. */}
+        {invited ? (
+          <div className="rounded-md border border-border bg-muted/40 p-3">
+            <p className="mb-2 text-[13px] font-medium">
+              Invited {invited.email} — send them this link
+            </p>
+            <div className="flex gap-2">
+              <Input
+                readOnly
+                value={invited.acceptUrl}
+                aria-label="Invitation link"
+                className="h-8 font-mono text-[11.5px]"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => void navigator.clipboard?.writeText(invited.acceptUrl).catch(() => undefined)}
+              >
+                Copy
+              </Button>
+            </div>
+            <p className="mt-2 text-[11.5px] text-muted-foreground">
+              They get this folder as soon as they open it. It is shown once.
+            </p>
+          </div>
+        ) : null}
 
         {peopleFailed ? (
           <p className="text-[11.5px] text-muted-foreground">
@@ -249,9 +354,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
                     'flex items-center gap-2.5 rounded-md border border-border px-2.5 py-2 text-[13.5px]',
                   )}
                 >
-                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
-                    {initialsOf(label(share))}
-                  </span>
+                  <PersonAvatar name={label(share)} size="md" />
                   <span className="min-w-0 flex-1 truncate">{label(share)}</span>
                   {/* Changing the level is a share at the new level: the lower one revokes
                       what the higher added, and the operation is idempotent either way. */}
@@ -278,14 +381,17 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
                       </option>
                     ))}
                   </select>
-                  <Button
-                    variant="outline"
-                    size="sm"
+                  {/* An X, as the portal had it: the row is already crowded with a level, and
+                      taking a share back is not destructive the way removing a person is —
+                      re-sharing restores exactly what was there. */}
+                  <button
+                    className="shrink-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
                     disabled={busy}
+                    aria-label={`Remove access for ${label(share)}`}
                     onClick={() => void act(() => unshareFolder(folderId!, share.principal))}
                   >
-                    Remove
-                  </Button>
+                    <Icon name="x" size={15} />
+                  </button>
                 </li>
               ))}
             </ul>
