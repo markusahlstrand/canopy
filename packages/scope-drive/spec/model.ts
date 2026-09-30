@@ -804,10 +804,17 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * behind every folder grant the person held. A removal that leaves grants standing is the
    * worst kind: the roster stops naming them and the access remains.
    *
-   * What it does, all in one transaction: revoke every folder grant recorded for them,
-   * delete those rows, and forget what we called them. What it does NOT do is the
-   * membership itself — the scope role and the subject binding are the platform's, and the
-   * worker takes those either side of this call.
+   * What it does, all in one transaction: revoke every folder grant RECORDED for them,
+   * delete those rows, and forget what we called them. What it does NOT do is the membership
+   * itself — the scope role and the subject binding are the platform's, and the worker takes
+   * those either side of this call.
+   *
+   * **Recorded is the load-bearing word.** Nothing enumerates kernel grants — that absence is
+   * why this projection exists at all — so a grant made through the platform's admin seam has
+   * no row here and this cannot revoke it. That is why the worker unbinds the subject FIRST:
+   * an unbound subject resolves to nobody on every request, so authority this operation could
+   * not see becomes unreachable rather than merely unrevoked. Read alone, this operation is not
+   * a removal and must not be presented as one, which is also why it has no route.
    *
    * `drive:manage` node-level, like `people-access`: administering who is in a space is not
    * something a grant on one folder can confer, and the kernel's narrowing rule is what

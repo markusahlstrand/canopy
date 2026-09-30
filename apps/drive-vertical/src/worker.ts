@@ -68,6 +68,7 @@ import {
 import { mountInviteRoutes } from '@substrat-run/vertical-auth/invite-routes';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
+import { removeMember } from './remove-member.js';
 import { MEMBER_ROLE_KEY, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
@@ -460,17 +461,31 @@ const UNBIND_SCAN_LIMIT = 500;
  * designing against: until now nothing removed anybody at all, and the People dialog had to
  * say so.
  *
- * The ORDER is the safety property, because any step can fail:
+ * The ORDER is the safety property, because any step can fail — and this order is the SECOND
+ * one, because the first was wrong:
  *
- *  1. **Folder grants first** (`drive/forget-person`). A grant is enough on its own — somebody
- *     with no role but a grant on a folder can still write in it — so these are what a failure
- *     must never leave behind.
- *  2. **Then the roles**, which removes space-wide read.
- *  3. **Then the binding**, so the next sign-in resolves to nobody rather than to a principal
- *     that holds nothing, which would render a drive where every read is refused.
+ *  1. **The binding first.** Unbinding the subject is the only step that cuts access to
+ *     EVERYTHING at once, including a grant the drive never recorded: principal resolution goes
+ *     through the directory on every request, so an unbound subject resolves to nobody even
+ *     holding a live session cookie. A failure after this leaves somebody who cannot act at
+ *     all; a failure OF this leaves them exactly as they were, with the caller told so.
+ *  2. **Then the folder grants** (`drive/forget-person`), which is what the drive recorded.
+ *  3. **Then the roles**, which is space-wide read gone, and every role this vertical defines
+ *     rather than the one invites use — a co-owner must be removable too.
+ *
+ * Grants before the binding was the wrong way round, and review caught the hole: this table is
+ * a projection, and a grant made through the platform's admin seam has no row here (the
+ * migration says so). `forget-person` skips what it cannot see, so with the old order a failure
+ * between steps left a still-bound person holding real access that the route had just reported
+ * as revoked. Unbinding first means the worst case is an orphaned grant held by a principal
+ * nobody can be, which the retry clears.
  *
  * Stop anywhere and the person has strictly less than before, and a retry finishes the job:
  * every step is idempotent.
+ *
+ * What this cannot claim: that every grant is gone. Nothing enumerates kernel grants, which is
+ * the whole reason the projection exists — so removal revokes what the drive recorded, and the
+ * unbind is what makes the rest unreachable rather than absent.
  */
 app.delete('/api/people/:principal', async (c) => {
   const asking = await requirePeopleAdmin(c);
@@ -487,33 +502,42 @@ app.delete('/api/people/:principal', async (c) => {
 
   const node = await nodeFor(c.req.raw, c.env);
   const host = hostFor(c.env);
-
-  // 1. The drive's own, in one transaction: grants revoked, rows gone.
-  const stub = await host.getScope(asking, node.tenantId, node.scopeId);
-  const forgotten = await stub.invoke<{ revoked: number; forgotten: boolean }>(
-    'drive/forget-person',
-    { principal: target },
-  );
-
-  // 2. Every role this vertical defines, not just the one invites use: a co-owner must be
-  // removable, and a role left behind is space-wide read left behind.
   const removed = principalId.parse(target);
-  for (const role of ROLES) {
-    await host.revokeScopeRole(node.scopeId, removed, role.key);
-  }
-
-  // 3. The binding, which is what makes them signed out rather than empty-handed.
   const directory = identityDo(c.env, node);
-  const instance = await instanceFor(c.env, baseNode(c.req.raw, c.env));
-  const subjects = await directory.subjectsOf(node.scopeId, UNBIND_SCAN_LIMIT);
-  let unbound = 0;
-  for (const sub of subjects) {
-    if ((await directory.resolvePrincipal(node.scopeId, sub)) !== target) continue;
-    const result = await unbindMember(directory, reporterFor(instance.identity), node.scopeId, sub);
-    if (result.unbound) unbound += 1;
-  }
+  const stub = await host.getScope(asking, node.tenantId, node.scopeId);
 
-  return c.json({ principal: target, ...forgotten, roles: ROLES.length, unbound });
+  // The order lives in `remove-member.ts`, where it is tested — including what each failure
+  // leaves behind, which is the half that cannot be checked by reading. This route's job is to
+  // supply the three steps against the real bindings.
+  const outcome = await removeMember({
+    unbind: async () => {
+      // Resolved before anything is unbound, because this lookup is how we find whose binding
+      // to remove — the directory maps subject → principal and offers no reverse.
+      const instance = await instanceFor(c.env, baseNode(c.req.raw, c.env));
+      const subjects = await directory.subjectsOf(node.scopeId, UNBIND_SCAN_LIMIT);
+      let unbound = 0;
+      for (const sub of subjects) {
+        if ((await directory.resolvePrincipal(node.scopeId, sub)) !== target) continue;
+        const gone = await unbindMember(directory, reporterFor(instance.identity), node.scopeId, sub);
+        if (gone.unbound) unbound += 1;
+      }
+      return unbound;
+    },
+    forgetGrants: () =>
+      stub.invoke<{ revoked: number; forgotten: boolean }>('drive/forget-person', {
+        principal: target,
+      }),
+    revokeRoles: async () => {
+      // Every role this vertical defines, not just the one invites use: a co-owner must be
+      // removable, and a role left behind is space-wide read left behind.
+      for (const role of ROLES) {
+        await host.revokeScopeRole(node.scopeId, removed, role.key);
+      }
+      return ROLES.length;
+    },
+  });
+
+  return c.json({ principal: target, ...outcome });
 });
 
 /**
