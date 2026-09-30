@@ -24,6 +24,10 @@ pnpm push
 
 <code>check</code> validates the bundle and the Substrat permission surface without deploying. <code>pnpm push</code> deploys the vertical to the platform. The push reads <code>apps/drive-vertical/package.json</code>: its entry, assets, Durable Object classes, and blob-store need. The hosted path does not read the vertical's <code>wrangler.jsonc</code>; that file is for local Wrangler development.
 
+## Hostnames
+
+An installed drive is served at its own Substrat hostname. The platform binds a default hostname when the app instance is created; a custom domain can be added in the app's Domains settings. <code>pnpm push</code> updates the vertical's code but does not create an app instance or bind its hostname.
+
 A fresh install has no working login until its OIDC issuer is configured. The install's Identity settings deliver that configuration; the worker uses it to establish its same-origin session. The platform's owner claim and Canopy's invitation flow bind signed-in subjects to principals in a space. See [the vertical README](../apps/drive-vertical/README.md) for the current auth and byte boundaries.
 
 ## Legacy deployment

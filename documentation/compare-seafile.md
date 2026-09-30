@@ -17,7 +17,7 @@ feature set rather than a broad app platform.
 ## Where Canopy differs
 
 - Canopy is a hosted web drive with spaces and sharing, not a sync-first client.
-- Edge-serverless deployment and bring-your-own object storage; no sync client.
+- Edge-serverless deployment with platform-managed per-tenant blob storage; no sync client.
 - A replacement for the retired portal's plugin model is still being decided.
 
 ## Pick Seafile if

@@ -36,7 +36,7 @@ substrat login
 pnpm push
 ~~~
 
-<code>pnpm push</code> deploys the vertical through Substrat. Its runtime needs are declared in <code>apps/drive-vertical/package.json</code>; the vertical's <code>wrangler.jsonc</code> is for local development. An install needs an OIDC issuer configured before anyone can sign in.
+<code>pnpm push</code> deploys the vertical's code through Substrat. Each installed drive has its own hostname: Substrat binds a default hostname when the app is created, and custom domains are managed in that app's Domains settings. See [hostnames](documentation/06-deploying.md#hostnames). Runtime needs are declared in <code>apps/drive-vertical/package.json</code>; the vertical's <code>wrangler.jsonc</code> is for local development. An install needs an OIDC issuer configured before anyone can sign in.
 
 The root <code>pnpm deploy</code> deploys the legacy API Worker. It is separate from <code>pnpm push</code> and does not serve the vertical UI.
 
