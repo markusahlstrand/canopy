@@ -789,7 +789,7 @@ describe('the People surface is offered only to whoever may use it', () => {
 
     // One click asks. Nothing is sent — removal takes the grants with it and re-inviting does
     // not bring them back, so it is not a thing to do on a mis-click.
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Remove Bjorn/ }));
     expect(pending.filter((p) => p.url.includes('/api/people/01B'))).toHaveLength(0);
     expect(screen.getByText(/Removes their access/)).toBeTruthy();
 
@@ -815,9 +815,9 @@ describe('the People surface is offered only to whoever may use it', () => {
       people: [{ principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Remove Bjorn/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Remove Bjorn/ })).toBeTruthy();
     expect(pending.filter((p) => p.url.includes('/api/people/01B'))).toHaveLength(0);
   });
 
@@ -839,11 +839,14 @@ describe('the People surface is offered only to whoever may use it', () => {
       pending.splice(roster, 1)[0]!.reject(new Error('nope'));
     });
 
+    // The invitation still renders — in the one list, marked as not yet arrived.
     expect(screen.getByText('bjorn@example.com')).toBeTruthy();
+    expect(screen.getByText(/· invited/)).toBeTruthy();
     // The DOM property, not `toBeDisabled` — this suite has no jest-dom matchers.
     expect((screen.getByRole('button', { name: /Invite/ }) as HTMLButtonElement).disabled).toBe(false);
-    // And the failure is reported where it happened, with a way to try again.
-    expect(screen.getByText(/Couldn’t read who has signed in/)).toBeTruthy();
+    // And the failure is reported BESIDE the list rather than in place of it, which is the
+    // same mistake as bundling the reads, made in the rendering instead.
+    expect(screen.getByText(/Couldn’t read who is in this space/)).toBeTruthy();
   });
 
   it('does not repopulate the list with a read from before it was closed', async () => {
@@ -866,9 +869,9 @@ describe('the People surface is offered only to whoever may use it', () => {
     accountMenu();
     fireEvent.click(screen.getByText('People…'));
     expect(screen.queryByText('ghost@example.com')).toBeNull();
-    // BOTH lists are back to loading — the dialog's two reads share one ticket, so a
-    // stale answer cannot land half of this view under the other half's state.
-    expect(screen.getAllByText('Loading…')).toHaveLength(2);
+    // Back to loading — the two reads share one ticket, so a stale answer cannot land half of
+    // the list they are merged into.
+    expect(screen.getByText('Loading…')).toBeTruthy();
   });
 
   it('offers it to an owner, and the dialog lists what is still waiting', async () => {
@@ -890,11 +893,16 @@ describe('the People surface is offered only to whoever may use it', () => {
       ],
     });
 
-    // Who is here, and what is still waiting — two different lists, and the dialog says so.
+    // One list: who is here, and who has been invited and not yet arrived.
     expect(screen.getByText('Ada')).toBeTruthy();
     expect(screen.getByText('01NAMELESS')).toBeTruthy();
     expect(screen.getByText('bjorn@example.com')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Withdraw' })).toBeTruthy();
+    expect(screen.getByText(/· invited/)).toBeTruthy();
+    // An invitation is withdrawn on ONE click — nobody has used it — where removing a person
+    // takes two.
+    expect(
+      screen.getByRole('button', { name: /Withdraw the invitation for bjorn@example.com/ }),
+    ).toBeTruthy();
   });
 });
 
@@ -942,9 +950,11 @@ describe('sharing a folder', () => {
       people: [{ principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' }],
     });
 
-    fireEvent.change(screen.getByLabelText('Person'), { target: { value: '01B' } });
+    // The level first, then type a name and pick the suggestion — choosing somebody IS the
+    // share, as it was in the portal's dialog.
     fireEvent.change(screen.getByLabelText('Access'), { target: { value: 'manage' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.change(screen.getByLabelText('Person'), { target: { value: 'bjor' } });
+    fireEvent.click(screen.getByText('Bjorn'));
 
     // `write` FIRST: the keys are applied weakest-first, so a failure halfway leaves the
     // lesser access rather than the greater.
@@ -996,7 +1006,7 @@ describe('sharing a folder', () => {
     });
     await answer('/api/people', { people: [] });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: /Remove access for/ }));
     // The dialog is closed while the withdrawal is still in flight.
     fireEvent.keyDown(document, { key: 'Escape' });
 
@@ -1022,9 +1032,42 @@ describe('sharing a folder', () => {
       ],
     });
 
-    const picker = screen.getByLabelText('Person') as HTMLSelectElement;
-    const offered = [...picker.options].map((o) => o.textContent);
-    expect(offered).toContain('Bjorn');
-    expect(offered).not.toContain('Ada');
+    // Both names contain an "a", so both would match a picker that offered everybody.
+    fireEvent.change(screen.getByLabelText('Person'), { target: { value: 'a' } });
+    expect(screen.getByText('Bjorn')).toBeTruthy();
+    expect(screen.queryByText('Ada')).toBeNull();
+  });
+
+  it('suggests only matches, and leaves an unknown address to be invited', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', { shares: [] });
+    await answer('/api/people', {
+      people: [{ principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' }],
+    });
+
+    // A name that matches nobody suggests nothing — and the field still submits, which is the
+    // path to somebody who is not in the space yet. The portal reached them with an `email`
+    // grant subject; here it is an invitation plus a grant on the pre-minted principal.
+    fireEvent.change(screen.getByLabelText('Person'), { target: { value: 'nobody@example.com' } });
+    expect(screen.queryByText('Bjorn')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    const invite = pending.find((p) => p.url.includes('/api/invites'));
+    expect(invite?.method).toBe('POST');
+    expect(invite?.body).toContain('nobody@example.com');
+
+    // Then the grant, to the principal the invitation minted.
+    await answer('/api/invites', {
+      principal: '01NEW',
+      roleKey: 'member',
+      email: 'nobody@example.com',
+      acceptUrl: 'https://drive.example/?invite=tok',
+    });
+    const grant = pending.find((p) => p.url.includes('/folders/01F/shares') && p.method === 'POST');
+    expect(grant?.body).toContain('01NEW');
+
+    // And the link is shown once, because that link IS the invitation.
+    await answer('/folders/01F/shares', { folder_id: '01F', principal: '01NEW', permission: 'drive:write' });
+    expect(screen.getByDisplayValue('https://drive.example/?invite=tok')).toBeTruthy();
   });
 });

@@ -333,6 +333,33 @@ export const listFolderShares = (folderId: string) =>
   call<{ shares: Share[] }>(`/folders/${encodeURIComponent(folderId)}/shares`);
 
 /**
+ * Share a folder with somebody who is not in the space yet: invite, then grant.
+ *
+ * The portal could share with an address it had never seen — its grants took an `email`
+ * subject, resolved server-side later. A grant here names a PRINCIPAL, so the equivalent is
+ * two steps: an invitation pre-mints a principal (holding the member role, bindable when they
+ * accept), and the share goes to that principal. They get one link; opening it makes them a
+ * member, and the folder is already theirs to edit.
+ *
+ * Returns the accept link, because that link IS the invitation — nothing is emailed.
+ */
+export async function shareFolderWithEmail(folderId: string, email: string, level: ShareLevel) {
+  const invited = await createInvite(MEMBER_ROLE_FALLBACK, email);
+  await shareFolder(folderId, invited.principal, level);
+  return { acceptUrl: invited.acceptUrl, principal: invited.principal, email };
+}
+
+/**
+ * The role an invitation made from the share dialog carries.
+ *
+ * The People dialog reads the roles the server allows and uses what comes back; this path has
+ * no list in hand and one role is all the worker offers (see `MEMBER_ROLE_KEY` there for why
+ * that is a safety property). A wrong key is a 400 from the route rather than a silent
+ * mis-grant, which is the right failure for a constant that drifts.
+ */
+const MEMBER_ROLE_FALLBACK = 'member';
+
+/**
  * Share a folder at a level, which is one call per key the level carries.
  *
  * Sequential, and not `Promise.all`: two grants on one folder, and a failure halfway leaves
