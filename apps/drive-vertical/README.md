@@ -121,9 +121,10 @@ with `POST /api/maintenance/text-backfill` (response: `runId`, `status`).
 
 The first-party image viewer is a build-time web component. Its input is the
 current file's name, MIME type and permission-checked content URL. The component
-shares this app's origin; it is trusted code, unlike the portal's sandboxed iframe
-plugins. The [viewer decision](../../documentation/planning/web-component-viewers.md)
-records what can move into this deployment and what stays in the portal.
+shares this app's origin; it is trusted code, unlike the retired portal's sandboxed
+iframe plugins. The [viewer decision](../../documentation/planning/web-component-viewers.md)
+records what can move into this deployment and which legacy plugin workflows are
+currently unavailable.
 
 ## Not yet wired
 
