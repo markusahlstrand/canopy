@@ -77,6 +77,7 @@ export function textStatusLabel(row: FileTextRow | null): string {
   }
 }
 
+/** Load the current file's metadata and render only the preview surfaces the API supports. */
 export function PreviewPanel({
   fileId,
   onClose,
@@ -302,6 +303,7 @@ export function PreviewPanel({
   );
 }
 
+/** Mount the trusted web component and retire its file when this preview closes. */
 function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mime: string }) {
   const host = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
@@ -323,6 +325,7 @@ function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mi
   return failed ? <Empty>Could not render {name}.</Empty> : <div ref={host} className="h-full w-full" />;
 }
 
+/** Keep an empty or failed preview legible in the space used by the file body. */
 function Empty({ children }: { children: React.ReactNode }) {
   return <p className="px-2 py-8 text-center text-sm text-muted-foreground">{children}</p>;
 }

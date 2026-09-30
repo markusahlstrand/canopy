@@ -11,6 +11,7 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
   #file: ViewerFile | null = null;
   #image: HTMLImageElement;
 
+  /** Build the isolated rendering tree and relay the image's load state to the host. */
   constructor() {
     super();
     const shadow = this.attachShadow({ mode: 'open' });
@@ -35,8 +36,10 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
     shadow.append(style, this.#image);
   }
 
+  /** The file currently shown by this element, or null after preview cleanup. */
   get file(): ViewerFile | null { return this.#file; }
 
+  /** Replace the image source and reset sizing inherited from the previous file. */
   set file(file: ViewerFile | null) {
     this.#file = file;
     this.#image.style.removeProperty('max-width');
@@ -47,6 +50,7 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
   }
 }
 
+/** Register the built-in image renderer once during the vertical's bundle startup. */
 export function registerImageViewer(): void {
   defineFileViewer(IMAGE_VIEWER_TAG, ImageViewer);
 }
