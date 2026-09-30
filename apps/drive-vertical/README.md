@@ -104,8 +104,21 @@ file's history cannot record a write that never happened.
 A version whose source is a connected system refuses with a 501 that says so, rather than
 serving an empty body that reads as an empty file.
 
+## Text extraction and backfill
+
+PDF uploads extract at most 200,000 characters for content search. The scope stores the
+extractor result as `indexed`, `empty`, `unsupported`, or `failed`, alongside the file
+version and extractor revision. Search ignores text from a superseded version.
+
+The `text-backfill` job scans current blob versions in batches of 20. It picks up
+missing or stale text, retries failed rows on a later run, and revisits unsupported
+rows when the extractor revision changes. The scope sweeper advances durable job
+passes and starts a new pass every 12 hours. Uploads queue a run immediately; the
+job driver coalesces concurrent starts. A space administrator can start one manually
+with `POST /api/maintenance/text-backfill` (response: `runId`, `status`).
+
 ## Not yet wired
 
-Durable text backfill, the changes feed, WebDAV, connector-backed reads, and any
-migration of existing canopy spaces. PDF extraction on upload and search are already wired. See
+The changes feed, WebDAV, connector-backed reads, and any
+migration of existing canopy spaces. See
 [`documentation/planning/scope-model-mapping.md`](../../documentation/planning/scope-model-mapping.md) §3.

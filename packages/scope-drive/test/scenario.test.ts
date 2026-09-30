@@ -192,6 +192,38 @@ describe('a space is a scope', () => {
     expect(new TextDecoder().decode(previous!.body)).toBe('first draft');
   });
 
+  it('pages current blob versions that need extraction and revisits changed extractors', async () => {
+    const stub = await host.getScope(ada, tenant, scope);
+    const file = await write(ada, ROOT_FOLDER_ID, 'backfill.pdf', 'first version');
+    const candidates = async (revision: string) => stub.invoke<{
+      files: { id: string; versionId: string; blobRef: string }[];
+      next: string | null;
+    }>('drive/list-extraction-candidates', { limit: 50, extractorRevision: revision });
+    const first = await candidates('pdf-v1');
+    expect(first.files.some((entry) => entry.id === file.id)).toBe(true);
+    const paged: string[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const page = await stub.invoke<{ files: { id: string }[]; next: string | null }>(
+        'drive/list-extraction-candidates', { limit: 1, after, extractorRevision: 'pdf-v1' },
+      );
+      paged.push(...page.files.map((entry) => entry.id));
+      if (!page.next) break;
+      after = page.next;
+    }
+    expect(paged).toContain(file.id);
+    expect(new Set(paged).size).toBe(paged.length);
+    await stub.invoke('drive/record-text', {
+      fileId: file.id, versionId: file.current_version_id,
+      status: 'unsupported', extractorRevision: 'pdf-v1',
+    });
+    expect((await candidates('pdf-v1')).files.some((entry) => entry.id === file.id)).toBe(false);
+    expect((await candidates('pdf-v2')).files.some((entry) => entry.id === file.id)).toBe(true);
+    const updated = await write(ada, ROOT_FOLDER_ID, 'backfill.pdf', 'second version');
+    expect((await candidates('pdf-v1')).files.find((entry) => entry.id === file.id)?.versionId)
+      .toBe(updated.current_version_id);
+  });
+
   it('a version cannot name another file\'s bytes, or bytes that do not exist', async () => {
     const stub = await host.getScope(ada, tenant, scope);
     scratch = (

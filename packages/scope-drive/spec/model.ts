@@ -163,6 +163,7 @@ export const driveEntities = defineEntities({
       text: z.string(),
       chars: z.number(),
       extracted_at: z.string(),
+      extractor_revision: z.string(),
       /** Why, for `failed` and `unsupported`. Null otherwise. */
       detail: z.string().nullable(),
     }),
@@ -609,6 +610,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       fileId: z.string(),
       /** The version the text was read from — a stale row is detectable, not just old. */
       versionId: z.string(),
+      extractorRevision: z.string().default('pdf-v1'),
       status: z.enum(['indexed', 'empty', 'unsupported', 'failed']),
       /** Present for `indexed`; ignored otherwise, because nothing else has text. */
       text: z.string().optional(),
@@ -643,6 +645,17 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     input: z.object({ fileId: z.string() }),
     output: driveEntities.file_text.fields.omit({ text: true }).nullable(),
     http: { method: 'GET', path: '/files/{fileId}/text' },
+  },
+
+  /** Bounded, keyset-paged work for the system extraction job. */
+  'drive/list-extraction-candidates': {
+    summary: 'List current blob versions needing text extraction',
+    permission: 'drive:read',
+    input: z.object({ after: z.string().optional(), limit: z.number().int().min(1).max(50), extractorRevision: z.string() }),
+    output: z.object({
+      files: z.array(z.object({ id: z.string(), versionId: z.string(), name: z.string(), mime: z.string(), blobRef: z.string() })),
+      next: z.string().nullable(),
+    }),
   },
 
   /**

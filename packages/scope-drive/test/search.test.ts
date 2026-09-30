@@ -223,6 +223,8 @@ describe('a file is findable by what is inside it', () => {
       location: { source: 'external', externalKey: 'q2', mime: 'application/pdf', size: 1 },
     });
     const v2 = written.current_version_id;
+    const whilePending = await stub.invoke<Hits>('drive/search', { term: 'Nordic region' });
+    expect(whilePending.hits.map((h) => h.id)).not.toContain(quarterly);
     await stub.invoke('drive/record-text', {
       fileId: quarterly,
       versionId: v2,

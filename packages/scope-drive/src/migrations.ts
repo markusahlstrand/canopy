@@ -199,4 +199,8 @@ export const driveMigrations: SqlMigration[] = [
       CREATE INDEX drive_folder_shares_by_principal ON drive_folder_shares (principal, folder_id);
     `,
   },
+  {
+    version: '0005',
+    sql: `ALTER TABLE drive_file_text ADD COLUMN extractor_revision TEXT NOT NULL DEFAULT 'pdf-v1';`,
+  },
 ];
