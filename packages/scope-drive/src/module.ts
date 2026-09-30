@@ -902,6 +902,9 @@ const operations = {
     // Node-level: removing somebody from the space is not a folder's authority.
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
 
+    // What the drive RECORDED, which is all it can know: there is no read that enumerates
+    // grants, so a grant made at the admin seam is invisible here. The worker's unbind is what
+    // covers that gap — see the declaration.
     const held = ctx.sql.query<{ folder_id: string; permission: string }>(
       'SELECT folder_id, permission FROM drive_folder_shares WHERE principal = ?',
       [input.principal],
