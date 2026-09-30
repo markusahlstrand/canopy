@@ -67,5 +67,6 @@ describe('the derived route table', () => {
     const operations = mounted.map((r) => r.operation);
     expect(operations).not.toContain('drive/record-person');
     expect(operations).not.toContain('drive/record-text');
+    expect(operations).not.toContain('drive/forget-person');
   });
 });

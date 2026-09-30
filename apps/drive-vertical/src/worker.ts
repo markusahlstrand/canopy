@@ -52,6 +52,7 @@ import {
   instanceAuthFor,
   mintOwnerClaimLink,
   observePlace,
+  unbindMember,
   placesReporter,
   reportScopeMembers,
   sha256Hex,
@@ -67,6 +68,7 @@ import {
 import { mountInviteRoutes } from '@substrat-run/vertical-auth/invite-routes';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
+import { ScanSaturated, removeMember, unbindEveryBinding } from './remove-member.js';
 import { MEMBER_ROLE_KEY, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
@@ -403,20 +405,31 @@ app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
  * One invitable role. See `MEMBER_ROLE_KEY` for why that is a safety property and not a
  * simplification.
  */
+/**
+ * The gate on every people route, and it answers WHO is asking.
+ *
+ * The decision itself is `drive/people-access` — an operation, because an app-side stub can
+ * only invoke and the alternative is re-deciding authorization out here from a role name. The
+ * principal comes back because the removal route needs it: to act as somebody, and to refuse
+ * removing them.
+ */
+async function requirePeopleAdmin(c: Context<{ Bindings: Env }>): Promise<PrincipalId> {
+  const principal = await principalFor(c.env, c.req.raw);
+  // 401 and 403 are different answers and these routes let us say which: nobody is signed in,
+  // versus signed in and not the person who administers this space.
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, c.env);
+  const stub = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+  const { canManage } = await stub.invoke<{ canManage: boolean }>('drive/people-access');
+  if (!canManage) {
+    throw new HTTPException(403, { message: 'only an owner can manage the people in this space' });
+  }
+  return principal;
+}
+
 mountInviteRoutes<Env, Node>(app, {
   nodeFor,
-  requireAdmin: async (c) => {
-    const principal = await principalFor(c.env, c.req.raw);
-    // 401 and 403 are different answers and the invite routes let us say which: nobody is
-    // signed in, versus signed in and not the person who administers this space.
-    if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
-    const node = await nodeFor(c.req.raw, c.env);
-    const stub = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
-    const { canManage } = await stub.invoke<{ canManage: boolean }>('drive/people-access');
-    if (!canManage) {
-      throw new HTTPException(403, { message: 'only an owner can manage the people in this space' });
-    }
-  },
+  requireAdmin: requirePeopleAdmin,
   roles: [MEMBER_ROLE_KEY],
   directory: (env, node) => identityDo(env, node),
   // Scope-local, no control plane: the role lands in the same store the checker reads.
@@ -427,6 +440,123 @@ mountInviteRoutes<Env, Node>(app, {
   // The INSTALL's provider, never the selected space's: identity is the install's and
   // membership is the space's, the same split `/api/me` documents.
   authProvider: (env, req) => providerFor(env, baseNode(req, env)),
+});
+
+/**
+ * `removeMember`, with its one expected refusal turned into an answer a client can act on.
+ *
+ * A saturated subject scan is not a bug and not the caller's mistake: this space has more bound
+ * logins than the directory can be scanned for one principal, and nothing was changed. 503
+ * rather than 500 because it is a limit of this route, and the message says what to do about it
+ * — which is to give the directory a reverse lookup (substrat-run/substrat#1939), not to raise
+ * the limit.
+ */
+async function removeMemberOrExplain(steps: Parameters<typeof removeMember>[0]) {
+  try {
+    return await removeMember(steps);
+  } catch (e) {
+    if (e instanceof ScanSaturated) throw new HTTPException(503, { message: e.message });
+    throw e;
+  }
+}
+
+/**
+ * How many bindings this route will walk looking for a principal's subject.
+ *
+ * The directory maps subject → principal and offers no reverse lookup, so finding whose
+ * binding to remove means resolving the scope's subjects until one matches. Bounded rather
+ * than unbounded: a family space has a handful, and a scope with more than this needs the
+ * reverse lookup rather than a bigger loop here.
+ */
+const UNBIND_SCAN_LIMIT = 500;
+
+/**
+ * Remove somebody from this space (#79) — all three parts of it, in the order that fails safe.
+ *
+ * Membership is not one fact. A person reaches this drive through a subject bound to a
+ * principal, a role held at the scope, and whatever folder grants they were given — and the
+ * drive owns only the last of those. Doing one and not the others is the failure mode worth
+ * designing against: until now nothing removed anybody at all, and the People dialog had to
+ * say so.
+ *
+ * The ORDER is the safety property, because any step can fail — and this order is the SECOND
+ * one, because the first was wrong:
+ *
+ *  1. **The binding first.** Unbinding the subject is the only step that cuts access to
+ *     EVERYTHING at once, including a grant the drive never recorded: principal resolution goes
+ *     through the directory on every request, so an unbound subject resolves to nobody even
+ *     holding a live session cookie. A failure after this leaves somebody who cannot act at
+ *     all; a failure OF this leaves them exactly as they were, with the caller told so.
+ *  2. **Then the folder grants** (`drive/forget-person`), which is what the drive recorded.
+ *  3. **Then the roles**, which is space-wide read gone, and every role this vertical defines
+ *     rather than the one invites use — a co-owner must be removable too.
+ *
+ * Grants before the binding was the wrong way round, and review caught the hole: this table is
+ * a projection, and a grant made through the platform's admin seam has no row here (the
+ * migration says so). `forget-person` skips what it cannot see, so with the old order a failure
+ * between steps left a still-bound person holding real access that the route had just reported
+ * as revoked. Unbinding first means the worst case is an orphaned grant held by a principal
+ * nobody can be, which the retry clears.
+ *
+ * Stop anywhere and the person has strictly less than before, and a retry finishes the job:
+ * every step is idempotent.
+ *
+ * What this cannot claim: that every grant is gone. Nothing enumerates kernel grants, which is
+ * the whole reason the projection exists — so removal revokes what the drive recorded, and the
+ * unbind is what makes the rest unreachable rather than absent.
+ */
+app.delete('/api/people/:principal', async (c) => {
+  const asking = await requirePeopleAdmin(c);
+  const target = c.req.param('principal');
+
+  // Not yourself. Nothing else guarantees an administrator remains — every other owner could
+  // be removed by one who then removes themselves, leaving a space nobody can administer, and
+  // the platform's claim link is a poor answer to "I locked myself out of my own drive".
+  if (target === asking) {
+    throw new HTTPException(400, {
+      message: 'you cannot remove yourself from a space you administer',
+    });
+  }
+
+  const node = await nodeFor(c.req.raw, c.env);
+  const host = hostFor(c.env);
+  const removed = principalId.parse(target);
+  const directory = identityDo(c.env, node);
+  const stub = await host.getScope(asking, node.tenantId, node.scopeId);
+
+  // The order lives in `remove-member.ts`, where it is tested — including what each failure
+  // leaves behind, which is the half that cannot be checked by reading. This route's job is to
+  // supply the three steps against the real bindings.
+  const outcome = await removeMemberOrExplain({
+    unbind: async () => {
+      const instance = await instanceFor(c.env, baseNode(c.req.raw, c.env));
+      // The scan and its refusal live in `remove-member.ts`: a full scan cannot prove it found
+      // every binding, and unbinding what it happened to see would report a removal with another
+      // login still live. This is wiring.
+      return unbindEveryBinding({
+        list: (limit) => directory.subjectsOf(node.scopeId, limit),
+        principalOf: (sub) => directory.resolvePrincipal(node.scopeId, sub),
+        unbind: async (sub) =>
+          (await unbindMember(directory, reporterFor(instance.identity), node.scopeId, sub)).unbound,
+        target,
+        limit: UNBIND_SCAN_LIMIT,
+      });
+    },
+    forgetGrants: () =>
+      stub.invoke<{ revoked: number; forgotten: boolean }>('drive/forget-person', {
+        principal: target,
+      }),
+    revokeRoles: async () => {
+      // Every role this vertical defines, not just the one invites use: a co-owner must be
+      // removable, and a role left behind is space-wide read left behind.
+      for (const role of ROLES) {
+        await host.revokeScopeRole(node.scopeId, removed, role.key);
+      }
+      return ROLES.length;
+    },
+  });
+
+  return c.json({ principal: target, ...outcome });
 });
 
 /**

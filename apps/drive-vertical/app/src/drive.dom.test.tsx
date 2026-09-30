@@ -777,6 +777,50 @@ describe('the People surface is offered only to whoever may use it', () => {
     expect(screen.queryByText('People…')).toBeNull();
   });
 
+  it('asks before removing somebody, and then removes them', async () => {
+    await renderDrive();
+    await answer('/people/access', { canManage: true });
+    accountMenu();
+    fireEvent.click(screen.getByText('People…'));
+    await answer('/api/invites', { roles: ['member'], invites: [] });
+    await answer('/api/people', {
+      people: [{ principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' }],
+    });
+
+    // One click asks. Nothing is sent — removal takes the grants with it and re-inviting does
+    // not bring them back, so it is not a thing to do on a mis-click.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(pending.filter((p) => p.url.includes('/api/people/01B'))).toHaveLength(0);
+    expect(screen.getByText(/Removes their access/)).toBeTruthy();
+
+    // The second click sends it, as a DELETE of the worker's own route — the one that does all
+    // three parts. The module's `forget-person` has no route precisely so this cannot be half
+    // done from a client.
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    const sent = pending.find((p) => p.url.includes('/api/people/01B'));
+    expect(sent?.method).toBe('DELETE');
+
+    await answer('/api/people/01B', { principal: '01B', revoked: 2, unbound: 1 });
+    // And the list is re-read, so the row goes without a second look.
+    expect(pending.some((p) => p.url.endsWith('/api/people'))).toBe(true);
+  });
+
+  it('can be talked out of it', async () => {
+    await renderDrive();
+    await answer('/people/access', { canManage: true });
+    accountMenu();
+    fireEvent.click(screen.getByText('People…'));
+    await answer('/api/invites', { roles: ['member'], invites: [] });
+    await answer('/api/people', {
+      people: [{ principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+    expect(pending.filter((p) => p.url.includes('/api/people/01B'))).toHaveLength(0);
+  });
+
   it('can still invite when the roster read fails', async () => {
     await renderDrive();
     await answer('/people/access', { canManage: true });

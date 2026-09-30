@@ -225,3 +225,43 @@ describe('who may share, and how much', () => {
     expect(await canWriteIn(cleo, papers, 'now-with-write')).toBe(true);
   });
 });
+
+describe('removing a person takes their access with them', () => {
+  it('revokes every folder grant they held, measured by what they can still do', async () => {
+    // Cleo ends the tests above holding write and manage on Papers, and can write there.
+    expect(await canWriteIn(cleo, papers, 'before-removal')).toBe(true);
+
+    const gone = await (await as(ada)).invoke<{ revoked: number; forgotten: boolean }>(
+      'drive/forget-person',
+      { principal: cleo },
+    );
+    // Both keys, taken back.
+    expect(gone.revoked).toBeGreaterThanOrEqual(2);
+
+    // The claim that matters: not that rows were deleted, but that the access is gone.
+    expect(await canWriteIn(cleo, papers, 'after-removal')).toBe(false);
+    // And her shares are off the folder's list, so nothing still names her.
+    const { shares } = await (await as(ada)).invoke<{ shares: Share[] }>('drive/list-folder-shares', {
+      folderId: papers,
+    });
+    expect(shares.some((s) => s.principal === cleo)).toBe(false);
+  });
+
+  it('is idempotent, because a removal that failed halfway has to be retryable', async () => {
+    const again = await (await as(ada)).invoke<{ revoked: number; forgotten: boolean }>(
+      'drive/forget-person',
+      { principal: cleo },
+    );
+    expect(again.revoked).toBe(0);
+    expect(again.forgotten).toBe(false);
+  });
+
+  it('is not something a member can do, nor somebody a folder was shared with', async () => {
+    // Bjorn holds `drive:manage` on Papers from the tests above. Administering who is in the
+    // space is node-level, and a grant on one folder does not reach it — otherwise sharing a
+    // folder would be a way to remove people from everything.
+    await expect(
+      (await as(bjorn)).invoke('drive/forget-person', { principal: ada }),
+    ).rejects.toThrow();
+  });
+});

@@ -28,6 +28,7 @@ import {
   createInvite,
   listInvites,
   listPeople,
+  removePerson,
   revokeInvite,
   type Invite,
   type Person,
@@ -68,6 +69,15 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
   const [email, setEmail] = useState('');
   const [minted, setMinted] = useState<Minted | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * Who has been asked about, not yet confirmed.
+   *
+   * Removal is not undoable — the grants are gone and re-inviting does not bring them back —
+   * so it takes two clicks. In the row rather than in a second dialog: `confirm()` is blocked
+   * in some embedded webviews and untestable in all of them, and a dialog on top of a dialog
+   * is worse than a button that changes its mind.
+   */
+  const [confirming, setConfirming] = useState<string | null>(null);
   /**
    * This dialog's own error, not the shell's.
    *
@@ -142,6 +152,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
       setInvites(null);
       setPeople(null);
       setPeopleFailed(false);
+      setConfirming(null);
       setRoles([]);
       return;
     }
@@ -159,6 +170,20 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
       const made = await createInvite(roleKey, email.trim() || undefined);
       setMinted({ principal: made.principal, email: made.email, acceptUrl: made.acceptUrl });
       setEmail('');
+      load();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (principal: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await removePerson(principal);
+      setConfirming(null);
       load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -288,18 +313,45 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
                       <span className="truncate text-[11.5px] text-muted-foreground">{person.email}</span>
                     )}
                   </span>
+                  {confirming === person.principal ? (
+                    <>
+                      <span className="shrink-0 text-[11.5px] text-muted-foreground">
+                        Removes their access
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void remove(person.principal)}
+                      >
+                        Confirm
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setConfirming(null)}>
+                        Cancel
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => setConfirming(person.principal)}
+                    >
+                      Remove
+                    </Button>
+                  )}
                 </li>
               ))}
             </ul>
           )}
-          {/* Said plainly, because this list is not a statement about access, and my first
-              version of this copy said it was. It is a record of sign-ins, wrong in BOTH
-              directions: a member who has never opened the drive is missing, and a row is
-              not removed when somebody's access ends — nothing today removes access, and
-              whatever ships for that has to delete the row as well. */}
+          {/* Still not a roster: it is built from sign-ins, so a member who has never opened
+              the drive is missing from it. The other half of that caveat is gone as of #79 —
+              removing somebody now deletes their row, along with their grants and their role,
+              so a name here is no longer evidence of access that ended. */}
           <p className="mb-4 text-[11.5px] text-muted-foreground">
-            Who has opened this drive — not who has access. Someone who has never opened it
-            is missing here, and a row stays after access is taken away.
+            Who has opened this drive. A member who has never opened it is not listed.
+            Removing somebody takes away their access to this space and everything shared with
+            them in it.
           </p>
           <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Open invitations
