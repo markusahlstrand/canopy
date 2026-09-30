@@ -15,17 +15,13 @@ specialised for paperwork, not a general drive.
 
 ## Where Canopy differs
 
-- Canopy is a **general** drive / portal. Its **Document AI** auto-labels and describes uploads — a
-  lighter, more general take than Paperless's OCR + tagging — and full-text search works today
-  (a core search index + FTS adapter, reindexed on change and queried from a ⌘K command palette;
-  semantic search and a plugin-facing query grant are still to come).
-- Edge-native, plugin-extensible, with sharing and spaces; not a dedicated DMS.
-- The directions rhyme: Canopy's content-types + AI labeling head toward some of what Paperless
-  does well today.
+- Canopy is a **general** drive. The current vertical extracts text from PDFs after upload and searches it alongside file names. It does not have OCR, durable text backfill, or automatic labeling yet.
+- Hosted as a Substrat vertical, with sharing and spaces; not a dedicated DMS.
+- The products overlap on finding documents; Paperless has the more complete document workflow.
 
 ## Pick Paperless-ngx if
 
 Your core need is digitising and searching documents (receipts, invoices, letters) with OCR and
 tagging.
 
-[← Back to the comparison overview](how-it-compares)
+[← Back to the comparison overview](10-how-it-compares.md)

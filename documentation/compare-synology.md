@@ -16,13 +16,11 @@ desktop and mobile clients. Tied to Synology boxes.
 
 ## Where Canopy differs
 
-- Canopy isn't a NAS and won't manage storage hardware — in fact it runs **well as an app on top of
-  one** (point it at the NAS filesystem or its S3-compatible endpoint).
+- Canopy is a web drive, not a NAS. Connection to Synology storage in the current vertical is future work.
 - Edge-deployable, vendor-neutral, open source; bring-your-own identity.
 
 ## Pick Synology if
 
-You want a turnkey storage appliance with backups, RAID, and a broad app suite. Use Canopy as the
-drive / portal layer over it if you like.
+You want a turnkey storage appliance with backups, RAID, and a broad app suite.
 
-[← Back to the comparison overview](how-it-compares)
+[← Back to the comparison overview](10-how-it-compares.md)

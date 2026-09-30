@@ -1,5 +1,12 @@
 # Substrat convergence rail (canopy side)
 
+> **Status note, 2026-09-30:** This is a dated planning record. Since it was
+> revised, the drive vertical has gained uploads, search, PDF extraction on upload,
+> file actions, preview, people, and folder sharing; `apps/portal` has been retired.
+> The issue links and current [README](../../README.md) describe the live state.
+> In particular, the “canopy is static” snapshot below and S12's original
+> screen-by-screen wording are historical context.
+
 *Revised 2026-09-20 against substrat @ `ecac7249`. The previous revision (2026-07-14) is
 superseded in most of its particulars — not in its direction.*
 

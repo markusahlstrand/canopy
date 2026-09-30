@@ -106,6 +106,6 @@ serving an empty body that reads as an empty file.
 
 ## Not yet wired
 
-Content extraction and search, the changes feed, WebDAV, connector-backed reads, and any
-migration of existing canopy spaces. See
+Durable text backfill, the changes feed, WebDAV, connector-backed reads, and any
+migration of existing canopy spaces. PDF extraction on upload and search are already wired. See
 [`documentation/planning/scope-model-mapping.md`](../../documentation/planning/scope-model-mapping.md) §3.

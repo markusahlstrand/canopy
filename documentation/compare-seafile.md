@@ -16,13 +16,12 @@ feature set rather than a broad app platform.
 
 ## Where Canopy differs
 
-- Canopy is a drive **and** a plugin portal (Calendar, Tasks, Document AI, sandboxed viewers), not
-  sync-first.
+- Canopy is a hosted web drive with spaces and sharing, not a sync-first client.
 - Edge-serverless deployment and bring-your-own object storage; no sync client.
-- Open, plugin-based extensibility vs Seafile's deliberately narrower scope.
+- A replacement for the retired portal's plugin model is still being decided.
 
 ## Pick Seafile if
 
 You want a lean, fast, self-hosted Dropbox alternative with great sync.
 
-[← Back to the comparison overview](how-it-compares)
+[← Back to the comparison overview](10-how-it-compares.md)

@@ -1,5 +1,10 @@
 # Canopy onto the scope model
 
+> **Status note, 2026-09-30:** This mapping records the first working scope module.
+> The vertical now implements more of the read and write paths, and the old portal
+> is retired. See the current [README](../../README.md) and open migration issues
+> for what remains; §6 below records the next step at the time of writing.
+
 *S1 of the convergence rail ([#42](https://github.com/markusahlstrand/canopy/issues/42)),
 written against `@substrat-run/*` 0.114.0 and proved by `packages/scope-drive`.
 This is the canopy half of that ticket; the platform half — the open questions — is filed

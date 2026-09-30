@@ -10,9 +10,8 @@ data-model and API files in a visual editor instead of plain text:
 | `.arazzo`, `.arazzo.yaml/.yml/.json` | Arazzo workflow builder |
 | `.asyncapi`, `.asyncapi.yaml/.yml/.json` | AsyncAPI channels (events) |
 
-The UI is the exact same React component tree (`@canopy/model-editor`) used by the
-Canopy portal. The only thing that differs per host is the `HostBridge`: in the
-portal it talks to the Canopy API; here it talks to the VS Code extension host
+The UI is the React component tree in `@canopy/model-editor`, formerly used by the
+retired Canopy portal. Here its `HostBridge` talks to the VS Code extension host
 over `postMessage`.
 
 ## Install

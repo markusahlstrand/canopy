@@ -15,12 +15,11 @@ web UI for configuration.
 
 ## Where Canopy differs
 
-- A different model. Canopy is a centralised drive / portal (a shared web UI, a sharing graph,
-  plugins), not peer sync, and it has no desktop sync client.
-- You could even point Canopy at a folder that Syncthing keeps in sync.
+- A different model. Canopy is a hosted web drive with spaces and folder sharing, not peer sync, and it has no desktop sync client.
+- Connected-folder indexing is planned; it is not available in the current vertical.
 
 ## Pick Syncthing if
 
 You want to mirror folders directly between your own devices, with no server in the middle.
 
-[← Back to the comparison overview](how-it-compares)
+[← Back to the comparison overview](10-how-it-compares.md)
