@@ -69,8 +69,11 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
   const [picked, setPicked] = useState('');
   const [level, setLevel] = useState<ShareLevel>('edit');
   const reads = useRef(latestOnly());
+  /** The folder on screen NOW, for actions that resolve after it changed. */
+  const openFolder = useRef<string | null>(null);
 
   const folderId = folder?.id ?? null;
+  openFolder.current = folderId;
 
   const load = useCallback(() => {
     if (!folderId) return;
@@ -120,16 +123,34 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
     load();
   }, [folderId, load]);
 
+  /**
+   * A mutation, and nothing it says applies to a folder it did not start in.
+   *
+   * `act` closes over the `load` of the render it was called from, which closes over THAT
+   * folder's id. A share removed on folder A, resolving after the dialog has been reopened on
+   * folder B, would call A's `load` — which takes a fresh ticket and so passes the staleness
+   * check, and writes A's access list under B's title. The ticket cannot catch this one: from
+   * its point of view the read is the newest there is.
+   *
+   * So the folder is checked instead, through a ref that always holds the one on screen. Same
+   * reasoning as `refreshRef` in the drive screen, where an action's captured refresh had to
+   * give way to the current one.
+   */
   const act = async (fn: () => Promise<unknown>) => {
+    const startedOn = folderId;
     setBusy(true);
     setError(null);
     try {
       await fn();
+      if (openFolder.current !== startedOn) return;
       load();
     } catch (e: unknown) {
+      // The error too: a failure to change folder A is not something to report to somebody
+      // now looking at folder B.
+      if (openFolder.current !== startedOn) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (openFolder.current === startedOn) setBusy(false);
     }
   };
 
@@ -241,10 +262,11 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
                     onChange={(e) =>
                       void act(() =>
                         e.currentTarget.value === 'edit'
-                          ? // Down to edit: take the manage key back, leave write.
-                            unshareFolder(folderId!, share.principal).then(() =>
-                              shareFolder(folderId!, share.principal, 'edit'),
-                            )
+                          ? // Down to edit: take the manage key back, and ONLY that.
+                            // Removing everything and re-granting write is two operations
+                            // whose second can fail, and then a downgrade has become a
+                            // removal. This one cannot, because nothing is put back.
+                            unshareFolder(folderId!, share.principal, ['drive:manage'])
                           : shareFolder(folderId!, share.principal, 'manage'),
                       )
                     }

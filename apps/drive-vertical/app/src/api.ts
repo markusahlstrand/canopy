@@ -349,14 +349,24 @@ export async function shareFolder(folderId: string, principal: string, level: Sh
 }
 
 /**
- * Remove a person's access entirely — both keys, whichever they hold.
+ * Withdraw access — by default all of it, or exactly the keys named.
  *
  * Withdrawing a key nobody holds is not an error (the operation answers rather than
- * refusing), so this does not need to know which ones they had. "Remove" in a dialog means
- * all of it; lowering a level is a share at the lower level, which revokes the rest.
+ * refusing), so "Remove" does not need to know which keys somebody had.
+ *
+ * The named form exists for LOWERING a level, and the reason is worth stating: taking
+ * everything away and granting the lower level back is two operations where the second can
+ * fail — a network error, or a sharer who holds `drive:manage` but not `drive:write`, whom
+ * `ctx.grant` would refuse. Either way the person ends with nothing when the intent was to
+ * leave them editing. Removing only the surplus key cannot fail that way, because there is
+ * nothing to put back.
  */
-export async function unshareFolder(folderId: string, principal: string) {
-  for (const permission of ['drive:manage', 'drive:write']) {
+export async function unshareFolder(
+  folderId: string,
+  principal: string,
+  permissions: readonly string[] = ['drive:manage', 'drive:write'],
+) {
+  for (const permission of permissions) {
     await call<unknown>(`/folders/${encodeURIComponent(folderId)}/shares`, {
       method: 'DELETE',
       body: JSON.stringify({ principal, permission }),
