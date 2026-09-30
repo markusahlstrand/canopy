@@ -930,6 +930,38 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     }),
     http: { method: 'GET', path: '/search' },
   },
+
+  /**
+   * The first offline-mirror projection over the scope's event spine. Event ids are
+   * monotonic in this scope; the cursor is the LAST SCANNED id, even when the caller
+   * was not allowed to see that file. A short page can therefore still advance.
+   * The file is hydrated from current state so an old write never resurrects a
+   * file that has since been trashed. This is a metadata feed, not a byte feed.
+   *
+   * The outbox is a kernel table, so K-41 cannot compose this read from an entity.
+   * Rule 3 permits a read-only spine projection while Substrat #1582 develops a
+   * supported scope-wide helper. Every returned file is checked separately.
+   */
+  'drive/changes': {
+    summary: 'File metadata changes after an event cursor',
+    permission: 'drive:read',
+    input: z.object({
+      after: z.string().length(26).optional(),
+      limit: z.number().int().positive().max(100).optional(),
+    }),
+    output: z.object({
+      changes: z.array(z.object({
+        id: z.string(),
+        type: z.string(),
+        fileId: z.string(),
+        /** Null means remove this row from the metadata mirror. */
+        file: driveEntities.file.fields.nullable(),
+      })),
+      cursor: z.string().nullable(),
+      hasMore: z.boolean(),
+    }),
+    http: { method: 'GET', path: '/changes' },
+  },
 });
 
 /**

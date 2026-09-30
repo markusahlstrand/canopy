@@ -126,8 +126,17 @@ iframe plugins. The [viewer decision](../../documentation/planning/web-component
 records what can move into this deployment and which legacy plugin workflows are
 currently unavailable.
 
+## Event feed
+
+`GET /api/changes` pages file metadata invalidations from the scope's Substrat
+outbox, using event ids as exclusive cursors. Each returned file is checked with
+`drive:read`; a trashed file is returned as a tombstone (`file: null`). The response
+contains current metadata so replaying an old event cannot resurrect an obsolete
+name or version. It contains no bytes. The browser's offline mirror consumer and
+folder-event projection are the next part of #47.
+
 ## Not yet wired
 
-The changes feed, WebDAV, connector-backed reads, and any
-migration of existing canopy spaces. See
+Offline mirror consumption, WebDAV, connector-backed reads, and any migration of
+existing canopy spaces. See
 [`documentation/planning/scope-model-mapping.md`](../../documentation/planning/scope-model-mapping.md) §3.
