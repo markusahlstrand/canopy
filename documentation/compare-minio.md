@@ -15,12 +15,11 @@ bytes in.
 
 ## Where Canopy differs
 
-- A different layer. Canopy is the **drive / portal** that can sit **on top of** MinIO — point a
-  connector at its S3 endpoint — adding files, versions, sharing, plugins, and a UI.
+- A different layer. Canopy is a **web drive** with files, versions, sharing, and a UI. A MinIO connector for the current vertical is future work.
 - They're complementary, not either/or.
 
 ## Pick MinIO if
 
-You need self-hosted, S3-compatible storage. Run Canopy in front of it for a drive experience.
+You need self-hosted, S3-compatible storage. A Canopy connection to it depends on the storage connector migration.
 
-[← Back to the comparison overview](how-it-compares)
+[← Back to the comparison overview](10-how-it-compares.md)
