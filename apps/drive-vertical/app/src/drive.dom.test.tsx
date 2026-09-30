@@ -288,8 +288,11 @@ describe('preview shows what the version actually is', () => {
       version: { id: '01V', file_id: '01A', source: 'blob', blob_ref: '01B', mime: 'image/png', size: 2048, created_at: '2026-09-01T00:00:00.000Z' },
     });
 
-    const img = screen.getByAltText('photo.png') as HTMLImageElement;
-    expect(img.src).toContain('/api/files/01A/content');
+    const viewer = document.querySelector('canopy-image-viewer');
+    const img = viewer?.shadowRoot?.querySelector('img');
+    expect(img?.alt).toBe('photo.png');
+    expect(img).toBeTruthy();
+    expect(img!.src).toContain('/api/files/01A/content');
     const link = screen.getByText('Download').closest('a') as HTMLAnchorElement;
     expect(link.getAttribute('download')).toBe('photo.png');
   });
@@ -349,7 +352,7 @@ describe('the preview panel’s reads do not compete with each other', () => {
     });
 
     fireEvent.click(screen.getByText('Preview'));
-    expect(screen.getByAltText('photo.png')).toBeTruthy();
+    expect(document.querySelector('canopy-image-viewer')?.shadowRoot?.querySelector('img')?.alt).toBe('photo.png');
     expect(screen.queryByText(/Nothing has been written/)).toBeNull();
   });
 

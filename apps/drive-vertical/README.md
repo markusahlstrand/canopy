@@ -117,6 +117,14 @@ passes and starts a new pass every 12 hours. Uploads queue a run immediately; th
 job driver coalesces concurrent starts. A space administrator can start one manually
 with `POST /api/maintenance/text-backfill` (response: `runId`, `status`).
 
+## Viewers
+
+The first-party image viewer is a build-time web component. Its input is the
+current file's name, MIME type and permission-checked content URL. The component
+shares this app's origin; it is trusted code, unlike the portal's sandboxed iframe
+plugins. The [viewer decision](../../documentation/planning/web-component-viewers.md)
+records what can move into this deployment and what stays in the portal.
+
 ## Not yet wired
 
 The changes feed, WebDAV, connector-backed reads, and any

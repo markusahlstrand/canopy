@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@canopy/docworker": "workspace:*",
+    "@canopy/plugin-sdk": "workspace:*",
     "@canopy/scope-drive": "workspace:*",
     "@canopy/ui": "workspace:*",
     "@substrat-run/adapter-cloudflare": "^0.131.0",

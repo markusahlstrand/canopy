@@ -127,6 +127,9 @@ importers:
       '@canopy/docworker':
         specifier: workspace:*
         version: link:../../packages/docworker
+      '@canopy/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
       '@canopy/scope-drive':
         specifier: workspace:*
         version: link:../../packages/scope-drive
