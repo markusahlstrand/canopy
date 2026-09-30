@@ -151,7 +151,11 @@ const COLUMNS: { key: SortKey; label: string; className: string }[] = [
  * item that is absent.
  */
 export function actionsFor(file: FileItem): string[] {
-  return file.isFolder ? ['Open', 'Rename', 'Move'] : ['Open', 'Download', 'Rename', 'Move', 'Delete'];
+  // Share is a FOLDER action and only a folder action: a grant narrows onto a folder and
+  // reaches what is under it, so there is no such thing as sharing one file here.
+  return file.isFolder
+    ? ['Open', 'Share', 'Rename', 'Move']
+    : ['Open', 'Download', 'Rename', 'Move', 'Delete'];
 }
 
 function RowActions({ file, onAction }: { file: FileItem; onAction: (action: string, f: FileItem) => void }) {

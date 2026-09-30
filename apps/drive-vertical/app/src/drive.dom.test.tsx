@@ -847,3 +847,81 @@ describe('the People surface is offered only to whoever may use it', () => {
     expect(screen.getByRole('button', { name: 'Withdraw' })).toBeTruthy();
   });
 });
+
+describe('sharing a folder', () => {
+  /** Open the share dialog on the one folder in the listing, via the row menu. */
+  async function openShare(): Promise<void> {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
+    await answer('/people/access', { canManage: true });
+    // The row's own Radix menu, which answers the keyboard rather than `click`.
+    const row = screen.getByText('Papers').closest('tr') ?? screen.getByText('Papers');
+    fireEvent.keyDown(within(row as HTMLElement).getByRole('button'), { key: 'Enter' });
+    fireEvent.click(screen.getByText('Share'));
+  }
+
+  it('lists who has access, with the level their keys add up to', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', {
+      shares: [
+        // Two rows, one person: the keys are independent, and the dialog has to add them up
+        // rather than render the same person twice at two levels.
+        //
+        // MANAGE FIRST, which is the order the server actually returns — its `ORDER BY`
+        // sorts by permission, and 'drive:manage' sorts before 'drive:write'. With the rows
+        // this way round, an aggregation that simply takes the last row seen downgrades
+        // Bjorn to "can edit"; my first version of this test listed write first and would
+        // have passed against exactly that bug.
+        { folder_id: '01F', principal: '01B', permission: 'drive:manage', granted_at: 'x', granted_by: '01ADA', email: 'bjorn@example.com', name: 'Bjorn' },
+        { folder_id: '01F', principal: '01B', permission: 'drive:write', granted_at: 'x', granted_by: '01ADA', email: 'bjorn@example.com', name: 'Bjorn' },
+        { folder_id: '01F', principal: '01C', permission: 'drive:write', granted_at: 'x', granted_by: '01ADA', email: null, name: null },
+      ],
+    });
+    await answer('/api/people', { people: [] });
+
+    expect(screen.getAllByText('Bjorn')).toHaveLength(1);
+    // The higher level wins for somebody holding both keys.
+    expect((screen.getByLabelText('Access for Bjorn') as HTMLSelectElement).value).toBe('manage');
+    // And an unseen person reads as their id rather than as a blank row.
+    expect((screen.getByLabelText('Access for 01C') as HTMLSelectElement).value).toBe('edit');
+  });
+
+  it('shares at a level, which is one call per key it carries', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', { shares: [] });
+    await answer('/api/people', {
+      people: [{ principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' }],
+    });
+
+    fireEvent.change(screen.getByLabelText('Person'), { target: { value: '01B' } });
+    fireEvent.change(screen.getByLabelText('Access'), { target: { value: 'manage' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+
+    // `write` FIRST: the keys are applied weakest-first, so a failure halfway leaves the
+    // lesser access rather than the greater.
+    const first = pending.find((p) => p.url.includes('/folders/01F/shares'));
+    expect(first).toBeTruthy();
+    await answer('/folders/01F/shares', { folder_id: '01F', principal: '01B', permission: 'drive:write' });
+    await answer('/folders/01F/shares', { folder_id: '01F', principal: '01B', permission: 'drive:manage' });
+
+    // Then it re-reads, which is how the row appears without a second click.
+    expect(pending.some((p) => p.url.includes('/folders/01F/shares'))).toBe(true);
+  });
+
+  it('does not offer to share a folder with the person doing the sharing', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', { shares: [] });
+    await answer('/api/people', {
+      people: [
+        // `shell.auth.principal` is 01ADA — the caller. They hold the space already, so
+        // offering it would be an action that does nothing.
+        { principal: '01ADA', email: 'ada@example.com', name: 'Ada', seen_at: 'x' },
+        { principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' },
+      ],
+    });
+
+    const picker = screen.getByLabelText('Person') as HTMLSelectElement;
+    const offered = [...picker.options].map((o) => o.textContent);
+    expect(offered).toContain('Bjorn');
+    expect(offered).not.toContain('Ada');
+  });
+});

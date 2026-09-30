@@ -191,11 +191,16 @@ describe('a text preview stops reading at the limit', () => {
 });
 
 describe('the table offers only what the screen can perform', () => {
-  it('gives a folder no download and no delete', () => {
-    // Both were in the moved component's menus for every row. A folder cannot be
-    // downloaded — there is no archive endpoint — and `trash-file` takes a file.
+  it('gives a folder no download and no delete, and Share only now that it exists', () => {
+    // Download and Delete were in the moved component's menus for every row. A folder cannot
+    // be downloaded — there is no archive endpoint — and `trash-file` takes a file.
+    //
+    // Share is here as of #79, and only for a folder: a grant narrows onto a folder and
+    // reaches what is under it through the declared parent edge, so there is no operation
+    // that shares one file.
     expect(actionsFor({ id: '01F', name: 'Papers', kind: 'folder', modified: '—', size: '—', isFolder: true })).toEqual([
       'Open',
+      'Share',
       'Rename',
       'Move',
     ]);
@@ -211,12 +216,13 @@ describe('the table offers only what the screen can perform', () => {
     ]);
   });
 
-  it('offers neither Share nor Reprocess, which came across with no operations', () => {
-    const every = [
-      ...actionsFor({ id: '01F', name: 'f', kind: 'folder', modified: '—', size: '—', isFolder: true }),
-      ...actionsFor({ id: '01A', name: 'a', kind: 'doc', modified: '—', size: '—', isFolder: false }),
-    ];
-    expect(every).not.toContain('Share');
-    expect(every).not.toContain('Reprocess');
+  it('still offers no Reprocess, and no Share on a FILE', () => {
+    // Reprocess came across with the component and has no operation behind it to this day.
+    // Share earned its place; it stays off files, because sharing one is not a thing the
+    // drive can do — the grant narrows onto a folder.
+    const file = actionsFor({ id: '01A', name: 'a', kind: 'doc', modified: '—', size: '—', isFolder: false });
+    const folder = actionsFor({ id: '01F', name: 'f', kind: 'folder', modified: '—', size: '—', isFolder: true });
+    expect(file).not.toContain('Share');
+    expect([...file, ...folder]).not.toContain('Reprocess');
   });
 });

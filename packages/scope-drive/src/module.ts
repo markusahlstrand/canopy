@@ -19,6 +19,8 @@
  */
 import {
   operationInputsOf,
+  permissionKey,
+  principalId,
   substratError,
   type HandlerInput,
   type HandlerOutput,
@@ -97,6 +99,17 @@ function liveFile(ctx: OperationContext, fileId: string): FileRow {
 
 /** The entity refs the checks narrow onto. */
 const folderRef = (id: string) => ({ entityType: 'folder', entityId: id }) as const;
+/** A `drive_folder_shares` row joined to the roster, as the dialog reads it. */
+interface ShareRow {
+  folder_id: string;
+  principal: string;
+  permission: string;
+  granted_at: string;
+  granted_by: string;
+  email: string | null;
+  name: string | null;
+}
+
 /** A `drive_people` row, as the two operations above read and write it. */
 interface PersonRow {
   principal: string;
@@ -786,6 +799,85 @@ const operations = {
     )[0];
     // Null is the answer, not the absence of one: it says nobody has looked yet.
     return row ?? null;
+  },
+
+  'drive/share-folder': async (ctx, input) => {
+    // Sharing is an owner's act on this folder. Being able to write in it is not enough.
+    assertAllowed(await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId)));
+    // The folder has to exist, and a trashed one is not somewhere to hand out access to.
+    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [
+      input.folderId,
+    ])[0];
+    if (!folder) throw substratError('not_found', `folder not found: ${input.folderId}`);
+
+    const permission = permissionKey.parse(input.permission);
+    const granted_at = ctx.now();
+
+    /**
+     * The grant FIRST, because it is the one that means anything.
+     *
+     * `ctx.grant` re-checks that this caller holds `permission` on this entity, so the
+     * operation cannot hand out more than it has — and it throws when it cannot, which takes
+     * the row below with it. The row exists only so the share can be SHOWN: nothing can ask
+     * the kernel who holds a grant.
+     */
+    await ctx.grant(principalId.parse(input.principal), permission, folderRef(input.folderId));
+
+    ctx.sql.exec(
+      `INSERT INTO drive_folder_shares (folder_id, principal, permission, granted_at, granted_by)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(folder_id, principal, permission) DO UPDATE SET
+         granted_at = excluded.granted_at, granted_by = excluded.granted_by`,
+      [input.folderId, input.principal, input.permission, granted_at, ctx.principal],
+    );
+
+    return {
+      folder_id: input.folderId,
+      principal: input.principal,
+      permission: input.permission,
+      granted_at,
+      granted_by: ctx.principal,
+    };
+  },
+
+  'drive/unshare-folder': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId)));
+
+    // `ctx.revoke` carries the grant's guardrail in reverse: you may withdraw only what you
+    // could have given. Nothing is read first — withdrawing a share that is not there is the
+    // state the caller asked for, so it answers instead of refusing.
+    await ctx.revoke(
+      principalId.parse(input.principal),
+      permissionKey.parse(input.permission),
+      folderRef(input.folderId),
+    );
+
+    ctx.sql.exec(
+      'DELETE FROM drive_folder_shares WHERE folder_id = ? AND principal = ? AND permission = ?',
+      [input.folderId, input.principal, input.permission],
+    );
+
+    return {
+      folder_id: input.folderId,
+      principal: input.principal,
+      permission: input.permission,
+    };
+  },
+
+  'drive/list-folder-shares': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId)));
+    // Joined rather than fetched separately: a dialog that renders ULIDs first and names a
+    // moment later is a dialog that flickers, and the roster row may simply not exist.
+    const shares = ctx.sql.query<ShareRow>(
+      `SELECT s.folder_id, s.principal, s.permission, s.granted_at, s.granted_by,
+              p.email AS email, p.name AS name
+         FROM drive_folder_shares s
+         LEFT JOIN drive_people p ON p.principal = s.principal
+        WHERE s.folder_id = ?
+        ORDER BY p.name, p.email, s.principal, s.permission`,
+      [input.folderId],
+    );
+    return { shares };
   },
 
   'drive/record-person': async (ctx, input) => {

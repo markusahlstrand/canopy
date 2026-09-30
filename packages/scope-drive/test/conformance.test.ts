@@ -146,6 +146,27 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
     // half would read as a failure of the check it is not testing.
     'drive/rename-file': { name: 'renamed-by-conformance' },
     'drive/rename-folder': { name: 'renamed-by-conformance' },
+    /**
+     * `drive:manage` rather than `drive:write`, and the reason is the kernel's grant bound
+     * rather than a preference.
+     *
+     * `ctx.grant` re-checks that the caller holds what it is handing out, and the fixture
+     * grants the probe exactly the permission under test — `drive:manage`, since that is what
+     * these two declare. Asking them to share `drive:write` would fail the ALLOWED half for
+     * lack of write, which would read as the permission check refusing when in fact the
+     * delegation bound did.
+     *
+     * The grantee is a principal that exists nowhere: a grant needs no such thing, and using
+     * the probe's own id would let "shared with themselves" hide a check that never ran.
+     */
+    'drive/share-folder': {
+      principal: '01JCONFORMANCEGRANTEE0000',
+      permission: 'drive:manage',
+    },
+    'drive/unshare-folder': {
+      principal: '01JCONFORMANCEGRANTEE0000',
+      permission: 'drive:manage',
+    },
   },
   /**
    * Not listed here, and not in `uncovered` either: `drive/move-file` and
