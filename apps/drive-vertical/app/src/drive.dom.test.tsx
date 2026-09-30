@@ -1154,4 +1154,40 @@ describe('sharing a folder', () => {
     expect(field.getAttribute('aria-activedescendant')).toBe(options[1]!.id);
     expect(options[1]!.getAttribute('aria-selected')).toBe('true');
   });
+
+  it('keeps the highlight where the arrows put it when the dialog re-renders', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', { shares: [] });
+    await answer('/api/people', {
+      people: [
+        { principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' },
+        { principal: '01C', email: 'bea@example.com', name: 'Bea', seen_at: 'x' },
+      ],
+    });
+
+    const field = screen.getByRole('combobox', { name: 'Person' });
+    fireEvent.change(field, { target: { value: 'b' } });
+    fireEvent.keyDown(field, { key: 'ArrowDown' });
+    const second = within(screen.getByRole('listbox')).getAllByRole('option')[1]!.id;
+
+    // Any state change in the dialog re-renders it, and the list it passes is derived during
+    // render — a new array with the same people. That must not count as a new list.
+    fireEvent.change(screen.getByLabelText('Access'), { target: { value: 'manage' } });
+    expect(field.getAttribute('aria-activedescendant')).toBe(second);
+  });
+
+  it('says it is you, not that you already have access, when you type your own address', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', { shares: [] });
+    await answer('/api/people', {
+      people: [{ principal: '01ADA', email: 'ada@example.com', name: 'Ada', seen_at: 'x' }],
+    });
+
+    fireEvent.change(screen.getByLabelText('Person'), { target: { value: 'ada@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+
+    expect(screen.getByText(/That is you/)).toBeTruthy();
+    expect(screen.queryByText(/already has access to this folder/)).toBeNull();
+    expect(pending.some((p) => p.method === 'POST')).toBe(false);
+  });
 });

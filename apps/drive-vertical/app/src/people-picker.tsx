@@ -50,6 +50,14 @@ export function PeoplePicker({
   const optionId = (i: number) => `${listId}-option-${i}`;
   const expanded = open && results.length > 0;
 
+  // Keyed on what the list SAYS, not on the array: both callers derive it during render, so
+  // it is a new array every time a parent re-renders — and re-running the match on identity
+  // alone reopened a list the user had just closed with Escape, and snapped the highlight
+  // back to the first suggestion mid-arrow. The ref carries the list the key describes.
+  const peopleRef = useRef(people);
+  peopleRef.current = people;
+  const peopleKey = people.map((p) => `${p.principal}\u0000${p.name ?? ''}\u0000${p.email ?? ''}`).join('\u0001');
+
   // Filtered from what the caller already has. No request, so no debounce and no race —
   // the two things the portal's version needed a timer and a cancellation flag for.
   useEffect(() => {
@@ -59,13 +67,13 @@ export function PeoplePicker({
       setOpen(false);
       return;
     }
-    const matches = people.filter((p) =>
+    const matches = peopleRef.current.filter((p) =>
       [p.name, p.email].some((field) => field?.toLowerCase().includes(term)),
     );
     setResults(matches);
     setActive(0);
     setOpen(matches.length > 0);
-  }, [value, people]);
+  }, [value, peopleKey]);
 
   // Close when clicking outside the picker.
   useEffect(() => {

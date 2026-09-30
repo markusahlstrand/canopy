@@ -207,6 +207,12 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
               (person) => person.email?.toLowerCase() === address.toLowerCase(),
             );
             if (known) {
+              // Checked before the general case, whose message would be false here: the
+              // caller may hold no share on this folder at all — they hold the space.
+              if (me !== undefined && known.principal === me) {
+                setError('That is you — you already have this whole space.');
+                return;
+              }
               if (!shareable.includes(known)) {
                 setError(`${label(known)} already has access to this folder.`);
                 return;
