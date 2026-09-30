@@ -224,6 +224,32 @@ describe('a space is a scope', () => {
       .toBe(updated.current_version_id);
   });
 
+  it('advances across an empty candidate window without ending the walk', async () => {
+    const stub = await host.getScope(ada, tenant, scope);
+    const files: FileRow[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      files.push(await write(ada, ROOT_FOLDER_ID, `already-extracted-${i}.pdf`, 'bytes'));
+    }
+    files.sort((a, b) => a.id.localeCompare(b.id));
+    for (const file of files.slice(0, -1)) {
+      await stub.invoke('drive/record-text', {
+        fileId: file.id, versionId: file.current_version_id,
+        status: 'unsupported', extractorRevision: 'pdf-v1',
+      });
+    }
+    const first = await stub.invoke<{ files: { id: string }[]; next: string | null }>(
+      'drive/list-extraction-candidates',
+      { after: files[0]!.id, limit: 1, extractorRevision: 'pdf-v1' },
+    );
+    expect(first.files).toEqual([]);
+    expect(first.next).not.toBeNull();
+    const second = await stub.invoke<{ files: { id: string }[] }>(
+      'drive/list-extraction-candidates',
+      { after: first.next, limit: 1, extractorRevision: 'pdf-v1' },
+    );
+    expect(second.files.map((file) => file.id)).toEqual([files.at(-1)!.id]);
+  });
+
   it('a version cannot name another file\'s bytes, or bytes that do not exist', async () => {
     const stub = await host.getScope(ada, tenant, scope);
     scratch = (

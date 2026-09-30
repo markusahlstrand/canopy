@@ -808,19 +808,38 @@ const operations = {
 
   'drive/list-extraction-candidates': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
-    const rows = ctx.sql.query<{ id: string; versionId: string; name: string; mime: string; blobRef: string }>(
-      `SELECT f.id, v.id AS versionId, f.name, v.mime, v.blob_ref AS blobRef
+    // A limit on ELIGIBLE rows can still scan the entire scope when few files
+    // need work. Read a fixed window of file ids, then choose at most `limit`
+    // candidates from it. The cursor tracks the last file EXAMINED, even if
+    // none in the window needed extraction.
+    const scanLimit = input.limit * 10;
+    const rows = ctx.sql.query<{
+      id: string; versionId: string | null; name: string; mime: string | null;
+      blobRef: string | null; source: string | null; textId: string | null;
+      textVersionId: string | null; status: string | null; extractorRevision: string | null;
+    }>(
+      `SELECT f.id, v.id AS versionId, f.name, v.mime, v.blob_ref AS blobRef,
+              v.source, t.id AS textId, t.version_id AS textVersionId,
+              t.status, t.extractor_revision AS extractorRevision
        FROM drive_files f
-       JOIN drive_file_versions v ON v.id = f.current_version_id AND v.file_id = f.id
+       LEFT JOIN drive_file_versions v ON v.id = f.current_version_id AND v.file_id = f.id
        LEFT JOIN drive_file_text t ON t.file_id = f.id
-       WHERE f.state = 'live' AND f.id > ? AND v.source = 'blob' AND v.blob_ref IS NOT NULL
-         AND (t.id IS NULL OR t.version_id != v.id OR t.status = 'failed'
-              OR (t.status = 'unsupported' AND t.extractor_revision != ?))
+       WHERE f.state = 'live' AND f.id > ?
        ORDER BY f.id LIMIT ?`,
-      [input.after ?? '', input.extractorRevision, input.limit + 1],
+      [input.after ?? '', scanLimit + 1],
     );
-    const files = rows.slice(0, input.limit);
-    return { files, next: rows.length > input.limit ? files.at(-1)!.id : null };
+    const files: { id: string; versionId: string; name: string; mime: string; blobRef: string }[] = [];
+    let examined = 0;
+    for (const row of rows.slice(0, scanLimit)) {
+      examined += 1;
+      if (row.versionId && row.blobRef && row.mime && row.source === 'blob' &&
+          (!row.textId || row.textVersionId !== row.versionId || row.status === 'failed' ||
+           (row.status === 'unsupported' && row.extractorRevision !== input.extractorRevision))) {
+        files.push({ id: row.id, versionId: row.versionId, name: row.name, mime: row.mime, blobRef: row.blobRef });
+      }
+      if (files.length === input.limit) break;
+    }
+    return { files, next: rows.length > examined ? rows[examined - 1]!.id : null };
   },
 
   'drive/share-folder': async (ctx, input) => {

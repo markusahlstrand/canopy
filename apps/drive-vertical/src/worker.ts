@@ -238,7 +238,7 @@ function hostFor(env: Env): CloudflareScopeHost {
       limit: BACKFILL_BATCH,
       extractorRevision: EXTRACTOR_REVISION,
     });
-    if (page.files.length === 0) return { done: true };
+    if (page.files.length === 0) return { cursor: page.next ?? pass.cursor, done: page.next === null };
     const attachments = await (host as CloudflareScopeHost & {
       getSystemAttachments: (moduleId: typeof driveManifest.id, tenant: TenantId, scope: ScopeId) =>
         Promise<Pick<ScopeAttachments, 'open'>>;

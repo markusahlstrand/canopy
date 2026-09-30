@@ -647,7 +647,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     http: { method: 'GET', path: '/files/{fileId}/text' },
   },
 
-  /** Bounded, keyset-paged work for the system extraction job. */
+  /** Bounded, keyset-paged work for the system extraction job. Each call scans at most 10 × limit file rows. */
   'drive/list-extraction-candidates': {
     summary: 'List current blob versions needing text extraction',
     permission: 'drive:read',
