@@ -342,10 +342,32 @@ export const listFolderShares = (folderId: string) =>
  * member, and the folder is already theirs to edit.
  *
  * Returns the accept link, because that link IS the invitation — nothing is emailed.
+ *
+ * A share that fails after the invitation was made is UNDONE, not left for a retry to pile on.
+ * By then the seat holds the member role and maybe the first of the level's two keys; a
+ * failure reported over a live invitation would leave both standing, and trying again would
+ * mint a second seat beside it. So the invitation is revoked first — that alone makes the seat
+ * unreachable, since nobody can bind to a principal whose invitation is gone — and then the
+ * seat is removed like any person, which takes the role and whatever grants landed. Both are
+ * idempotent. If the undo fails too, the error says what is still open and where to close it.
  */
 export async function shareFolderWithEmail(folderId: string, email: string, level: ShareLevel) {
   const invited = await createInvite(MEMBER_ROLE_FALLBACK, email);
-  await shareFolder(folderId, invited.principal, level);
+  try {
+    await shareFolder(folderId, invited.principal, level);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    try {
+      await revokeInvite(invited.principal);
+    } catch {
+      throw new Error(
+        `${reason} — and the invitation for ${email} could not be withdrawn. Revoke it from People.`,
+      );
+    }
+    // Tidying only: with the invitation gone, what is left of the seat is held by nobody.
+    await removePerson(invited.principal).catch(() => undefined);
+    throw new Error(`${reason} — nothing was shared and ${email} was not invited.`);
+  }
   return { acceptUrl: invited.acceptUrl, principal: invited.principal, email };
 }
 

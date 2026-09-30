@@ -66,6 +66,14 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
   const [typed, setTyped] = useState('');
   /** A just-made invitation, held so its link can be copied. Shown once. */
   const [invited, setInvited] = useState<{ email: string; acceptUrl: string } | null>(null);
+  /**
+   * An address waiting to be confirmed before it becomes an invitation.
+   *
+   * Asked, not assumed, because an invitation is more than this folder: it makes the person a
+   * MEMBER, and a member reads everything in the space. Sharing one folder with a stranger
+   * must not quietly hand them the rest.
+   */
+  const [confirming, setConfirming] = useState<string | null>(null);
   const [level, setLevel] = useState<ShareLevel>('edit');
   const reads = useRef(latestOnly());
   /** The folder on screen NOW, for actions that resolve after it changed. */
@@ -117,6 +125,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
       setError(null);
       setTyped('');
       setInvited(null);
+      setConfirming(null);
       setLevel('edit');
       return;
     }
@@ -192,16 +201,30 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
             e.preventDefault();
             const address = typed.trim();
             if (!address || !folderId) return;
-            setTyped('');
-            void act(async () => {
-              const made = await shareFolderWithEmail(folderId, address, level);
-              setInvited(made);
-            });
+            // An address somebody in the space already signed in with is that person, not a
+            // stranger: inviting it would mint a second seat for them.
+            const known = (people ?? []).find(
+              (person) => person.email?.toLowerCase() === address.toLowerCase(),
+            );
+            if (known) {
+              if (!shareable.includes(known)) {
+                setError(`${label(known)} already has access to this folder.`);
+                return;
+              }
+              setTyped('');
+              void act(() => shareFolder(folderId, known.principal, level));
+              return;
+            }
+            setConfirming(address);
           }}
         >
           <PeoplePicker
             value={typed}
-            onChange={setTyped}
+            onChange={(v) => {
+              setTyped(v);
+              // Editing the address withdraws the question about the old one.
+              setConfirming(null);
+            }}
             people={shareable}
             disabled={busy}
             placeholder="Add by name or email…"
@@ -226,6 +249,42 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
             Share
           </Button>
         </form>
+
+        {confirming ? (
+          <div className="rounded-md border border-border bg-muted/40 p-3" role="alertdialog" aria-label="Invite to this space">
+            <p className="text-[13px]">
+              <span className="font-medium">{confirming}</span> is not in this space yet. Sharing
+              invites them as a member of the whole space: they will be able to{' '}
+              <span className="font-medium">read everything in it</span>, and{' '}
+              {level === 'manage' ? 'edit and share' : 'edit'} “{folder?.name}”.
+            </p>
+            <div className="mt-2.5 flex justify-end gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setConfirming(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy || !folderId}
+                onClick={() => {
+                  const address = confirming;
+                  const startedOn = folderId!;
+                  setConfirming(null);
+                  setTyped('');
+                  void act(async () => {
+                    const made = await shareFolderWithEmail(startedOn, address, level);
+                    // The same guard `act` applies after `fn`, needed here because this write
+                    // happens INSIDE it: closed or moved on while the invite was in flight, and
+                    // this link would reappear on whatever folder is open next.
+                    if (openFolder.current === startedOn) setInvited(made);
+                  });
+                }}
+              >
+                Invite and share
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         {/* The invitation's link, shown once — see the People dialog for why nothing is
             emailed and why an existing invitation's link cannot be shown again. */}

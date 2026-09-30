@@ -1052,6 +1052,12 @@ describe('sharing a folder', () => {
     expect(screen.queryByText('Bjorn')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    // Not yet: an invitation makes them a member of the WHOLE space, which reads everything,
+    // and the dialog says so before doing it rather than after.
+    expect(pending.some((p) => p.url.includes('/api/invites'))).toBe(false);
+    expect(screen.getByText(/read everything in it/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Invite and share' }));
+
     const invite = pending.find((p) => p.url.includes('/api/invites'));
     expect(invite?.method).toBe('POST');
     expect(invite?.body).toContain('nobody@example.com');
@@ -1069,5 +1075,83 @@ describe('sharing a folder', () => {
     // And the link is shown once, because that link IS the invitation.
     await answer('/folders/01F/shares', { folder_id: '01F', principal: '01NEW', permission: 'drive:write' });
     expect(screen.getByDisplayValue('https://drive.example/?invite=tok')).toBeTruthy();
+  });
+
+  /** Type an unknown address, confirm, and let the invitation come back as 01NEW. */
+  async function inviteNobody(): Promise<void> {
+    await answer('/folders/01F/shares', { shares: [] });
+    await answer('/api/people', { people: [] });
+    fireEvent.change(screen.getByLabelText('Person'), { target: { value: 'nobody@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Invite and share' }));
+    await answer('/api/invites', {
+      principal: '01NEW',
+      roleKey: 'member',
+      email: 'nobody@example.com',
+      acceptUrl: 'https://drive.example/?invite=tok',
+    });
+  }
+
+  it('undoes the invitation when the share after it fails', async () => {
+    await openShare();
+    await inviteNobody();
+    await answerWith('/folders/01F/shares', 500, { error: 'boom' });
+
+    // The invitation goes FIRST — that alone makes the seat unreachable — and then the seat
+    // is removed like a person, taking the member role and any key that did land. Left
+    // standing, a retry would mint a second seat beside a live first one.
+    const revoke = pending.find((p) => p.url.includes('/api/invites/01NEW/revoke'));
+    expect(revoke?.method).toBe('POST');
+    expect(pending.some((p) => p.url.includes('/people/01NEW'))).toBe(false);
+    await answer('/api/invites/01NEW/revoke', null);
+
+    const removal = pending.find((p) => p.url.includes('/people/01NEW'));
+    expect(removal?.method).toBe('DELETE');
+    await answer('/people/01NEW', { principal: '01NEW', revoked: 1, unbound: 0 });
+
+    expect(screen.getByText(/was not invited/)).toBeTruthy();
+    expect(screen.queryByDisplayValue('https://drive.example/?invite=tok')).toBeNull();
+  });
+
+  it('does not bring an invitation link back after the dialog moved on', async () => {
+    await openShare();
+    await inviteNobody();
+    // Closed while the grant is still in flight.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await answer('/folders/01F/shares', { folder_id: '01F', principal: '01NEW', permission: 'drive:write' });
+
+    // Reopened: the link belonged to the dialog that was closed, and a late answer must not
+    // restore it onto whatever folder is open now.
+    const row = screen.getByText('Papers').closest('tr') ?? screen.getByText('Papers');
+    fireEvent.keyDown(within(row as HTMLElement).getByRole('button'), { key: 'Enter' });
+    fireEvent.click(screen.getByText('Share'));
+    expect(screen.queryByDisplayValue('https://drive.example/?invite=tok')).toBeNull();
+  });
+
+  it('exposes its suggestions as a combobox and the highlighted one as active', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', { shares: [] });
+    await answer('/api/people', {
+      people: [
+        { principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' },
+        { principal: '01C', email: 'bea@example.com', name: 'Bea', seen_at: 'x' },
+      ],
+    });
+
+    const field = screen.getByRole('combobox', { name: 'Person' });
+    expect(field.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.change(field, { target: { value: 'b' } });
+
+    expect(field.getAttribute('aria-expanded')).toBe('true');
+    const listbox = screen.getByRole('listbox');
+    expect(field.getAttribute('aria-controls')).toBe(listbox.id);
+    const options = within(listbox).getAllByRole('option');
+    expect(options).toHaveLength(2);
+
+    // What Enter would pick is what the reader announces, and it follows the arrows.
+    expect(field.getAttribute('aria-activedescendant')).toBe(options[0]!.id);
+    fireEvent.keyDown(field, { key: 'ArrowDown' });
+    expect(field.getAttribute('aria-activedescendant')).toBe(options[1]!.id);
+    expect(options[1]!.getAttribute('aria-selected')).toBe('true');
   });
 });

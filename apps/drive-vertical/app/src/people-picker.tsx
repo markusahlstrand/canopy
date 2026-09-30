@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Input, PersonAvatar, cn } from '@canopy/ui';
 import type { Person } from './api';
 
@@ -44,6 +44,11 @@ export function PeoplePicker({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const boxRef = useRef<HTMLDivElement>(null);
+  // The combobox wiring: the field owns the list, and names the option Enter would pick, so a
+  // screen reader announces the suggestions and the highlighted one as the arrows move.
+  const listId = useId();
+  const optionId = (i: number) => `${listId}-option-${i}`;
+  const expanded = open && results.length > 0;
 
   // Filtered from what the caller already has. No request, so no debounce and no race —
   // the two things the portal's version needed a timer and a cancellation flag for.
@@ -104,21 +109,33 @@ export function PeoplePicker({
           }
         }}
         placeholder={placeholder}
+        role="combobox"
         aria-label={label}
+        aria-autocomplete="list"
+        aria-expanded={expanded}
+        aria-controls={expanded ? listId : undefined}
+        aria-activedescendant={expanded ? optionId(active) : undefined}
         disabled={disabled}
         autoComplete="off"
         data-bwignore
         data-1p-ignore
         data-lpignore="true"
       />
-      {open && results.length > 0 && (
-        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border bg-popover p-1 shadow-md">
+      {expanded && (
+        <div
+          id={listId}
+          role="listbox"
+          aria-label={label}
+          className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border bg-popover p-1 shadow-md"
+        >
           {results.map((p, i) => (
-            <button
+            <div
               key={p.principal}
-              type="button"
+              id={optionId(i)}
+              role="option"
+              aria-selected={i === active}
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left",
+                "flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left",
                 i === active ? "bg-accent" : "hover:bg-accent",
               )}
               onMouseEnter={() => setActive(i)}
@@ -131,7 +148,7 @@ export function PeoplePicker({
                   <span className="block truncate text-[11.5px] text-muted-foreground">{p.email}</span>
                 )}
               </span>
-            </button>
+            </div>
           ))}
         </div>
       )}
