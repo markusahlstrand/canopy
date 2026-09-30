@@ -18,6 +18,7 @@
  * 3. **Facts leave as events**, not as writes into someone else's table.
  */
 import {
+  dataSubjectId,
   operationInputsOf,
   permissionKey,
   principalId,
@@ -939,6 +940,15 @@ const operations = {
       [input.folderId, input.principal, input.permission, granted_at, ctx.principal],
     );
 
+    ctx.emit({
+      type: 'drive.folder-shared',
+      schemaVersion: 1,
+      entity: folderRef(input.folderId),
+      piiClass: 'pseudonymous',
+      subjectId: dataSubjectId.parse(input.principal),
+      payload: { principal: input.principal, permission: input.permission },
+    });
+
     return {
       folder_id: input.folderId,
       principal: input.principal,
@@ -960,10 +970,21 @@ const operations = {
       folderRef(input.folderId),
     );
 
-    ctx.sql.exec(
+    const removed = ctx.sql.exec(
       'DELETE FROM drive_folder_shares WHERE folder_id = ? AND principal = ? AND permission = ?',
       [input.folderId, input.principal, input.permission],
     );
+
+    if (removed.changes > 0) {
+      ctx.emit({
+        type: 'drive.folder-unshared',
+        schemaVersion: 1,
+        entity: folderRef(input.folderId),
+        piiClass: 'pseudonymous',
+        subjectId: dataSubjectId.parse(input.principal),
+        payload: { principal: input.principal, permission: input.permission },
+      });
+    }
 
     return {
       folder_id: input.folderId,
@@ -994,6 +1015,9 @@ const operations = {
     const email = input.email ?? null;
     const name = input.name ?? null;
     const seen = ctx.now();
+    const before = ctx.sql.query<Pick<PersonRow, 'email' | 'name'>>(
+      'SELECT email, name FROM drive_people WHERE principal = ?', [ctx.principal],
+    )[0];
     // `ctx.principal`, never an input: the fields say what to call the caller and the
     // context says who the caller is. There is no shape of this operation that lets one
     // person write another's row.
@@ -1003,6 +1027,18 @@ const operations = {
          seen_at = excluded.seen_at`,
       [ctx.principal, email, name, seen],
     );
+    if (!before || before.email !== email || before.name !== name) {
+      // The display values stay in the row, never in the event. A repeated /api/me
+      // only refreshes seen_at and must not flood the spine with identical facts.
+      ctx.emit({
+        type: 'drive.person-recorded',
+        schemaVersion: 1,
+        entity: { entityType: 'person', entityId: ctx.principal },
+        piiClass: 'pseudonymous',
+        subjectId: dataSubjectId.parse(ctx.principal),
+        payload: { principal: ctx.principal },
+      });
+    }
     return { principal: ctx.principal, email, name, seen_at: seen };
   },
 
@@ -1034,6 +1070,17 @@ const operations = {
 
     const forgotten =
       ctx.sql.exec('DELETE FROM drive_people WHERE principal = ?', [input.principal]).changes > 0;
+
+    if (held.length > 0 || forgotten) {
+      ctx.emit({
+        type: 'drive.person-forgotten',
+        schemaVersion: 1,
+        entity: { entityType: 'person', entityId: input.principal },
+        piiClass: 'pseudonymous',
+        subjectId: dataSubjectId.parse(input.principal),
+        payload: { principal: input.principal, revoked: held.length },
+      });
+    }
 
     return { principal: input.principal, revoked: held.length, forgotten };
   },
