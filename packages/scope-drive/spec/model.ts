@@ -932,31 +932,35 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
 
   /**
-   * The first offline-mirror projection over the scope's event spine. Event ids are
+   * The offline-mirror projection over the scope's event spine. Event ids are
    * monotonic in this scope; the cursor is the LAST SCANNED id, even when the caller
-   * was not allowed to see that file. A short page can therefore still advance.
-   * The file is hydrated from current state so an old write never resurrects a
+   * was not allowed to see that entity. A short page can therefore still advance.
+   * Rows are hydrated from current state so an old write never resurrects a
    * file that has since been trashed. This is a metadata feed, not a byte feed.
    *
    * The outbox is a kernel table, so K-41 cannot compose this read from an entity.
    * Rule 3 permits a read-only spine projection while Substrat #1582 develops a
-   * supported scope-wide helper. Every returned file is checked separately.
+   * supported scope-wide helper. Every returned entity is checked separately.
    */
   'drive/changes': {
-    summary: 'File metadata changes after an event cursor',
+    summary: 'Drive metadata changes after an event cursor',
     permission: 'drive:read',
     input: z.object({
       after: z.string().length(26).optional(),
       limit: z.number().int().positive().max(100).optional(),
     }),
     output: z.object({
-      changes: z.array(z.object({
-        id: z.string(),
-        type: z.string(),
-        fileId: z.string(),
-        /** Null means remove this row from the metadata mirror. */
-        file: driveEntities.file.fields.nullable(),
-      })),
+      changes: z.array(z.discriminatedUnion('entityType', [
+        z.object({
+          id: z.string(), type: z.string(), entityType: z.literal('file'), entityId: z.string(),
+          /** Null means remove this row from the metadata mirror. */
+          file: driveEntities.file.fields.nullable(),
+        }),
+        z.object({
+          id: z.string(), type: z.string(), entityType: z.literal('folder'), entityId: z.string(),
+          folder: driveEntities.folder.fields.nullable(),
+        }),
+      ])),
       cursor: z.string().nullable(),
       hasMore: z.boolean(),
     }),

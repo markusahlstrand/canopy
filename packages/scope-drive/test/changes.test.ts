@@ -9,7 +9,14 @@ import { ulid, type ScopeHost } from '@substrat-run/kernel';
 import { DRIVE_PERM, ROOT_FOLDER_ID, driveManifest, driveModule } from '../src/index.js';
 import { ROLES } from '../src/provision.js';
 
-type Change = { id: string; type: string; fileId: string; file: { id: string; name: string } | null };
+type Change = {
+  id: string;
+  type: string;
+  entityType: 'file' | 'folder';
+  entityId: string;
+  file?: { id: string; name: string } | null;
+  folder?: { id: string; name: string; parent_id: string } | null;
+};
 type Feed = { changes: Change[]; cursor: string | null; hasMore: boolean };
 
 let dir: string;
@@ -61,28 +68,46 @@ describe('file changes over the scope spine', () => {
     expect(first.hasMore).toBe(true);
     expect(first.changes).toHaveLength(1);
     expect(first.changes[0]).toMatchObject({
-      type: 'drive.file-created', fileId: created.id, file: { name: 'final.txt' },
+      type: 'drive.file-created', entityType: 'file', entityId: created.id, file: { name: 'final.txt' },
     });
     const second = await reader.invoke<Feed>('drive/changes', { after: first.cursor, limit: 1 });
     expect(second.hasMore).toBe(false);
     expect(second.changes).toHaveLength(1);
     expect(second.changes[0]).toMatchObject({
-      type: 'drive.file-renamed', fileId: created.id, file: { name: 'final.txt' },
+      type: 'drive.file-renamed', entityType: 'file', entityId: created.id, file: { name: 'final.txt' },
     });
     expect(second.cursor! > first.cursor!).toBe(true);
 
     await writer.invoke('drive/trash-file', { fileId: created.id });
     const trashed = await reader.invoke<Feed>('drive/changes', { after: second.cursor });
     expect(trashed.changes).toMatchObject([{
-      type: 'drive.file-trashed', fileId: created.id, file: null,
+      type: 'drive.file-trashed', entityType: 'file', entityId: created.id, file: null,
     }]);
 
     await writer.invoke('drive/restore-file', { fileId: created.id });
     const restored = await reader.invoke<Feed>('drive/changes', { after: trashed.cursor });
     expect(restored.changes).toMatchObject([{
-      type: 'drive.file-restored', fileId: created.id, file: { name: 'final.txt' },
+      type: 'drive.file-restored', entityType: 'file', entityId: created.id, file: { name: 'final.txt' },
     }]);
     expect((await reader.invoke<Feed>('drive/changes', { after: restored.cursor })).changes).toEqual([]);
+  });
+
+  it('replays folder events as current parent edges and names', async () => {
+    const writer = await host.getScope(ada, tenant, scope);
+    const before = await writer.invoke<Feed>('drive/changes', {});
+    const parent = await writer.invoke<{ id: string }>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID, name: 'Old',
+    });
+    await writer.invoke('drive/rename-folder', { folderId: parent.id, name: 'New' });
+    const page = await (await host.getScope(bjorn, tenant, scope)).invoke<Feed>(
+      'drive/changes', { after: before.cursor },
+    );
+    expect(page.changes).toMatchObject([
+      { type: 'drive.folder-created', entityType: 'folder', entityId: parent.id,
+        folder: { name: 'New', parent_id: ROOT_FOLDER_ID } },
+      { type: 'drive.folder-renamed', entityType: 'folder', entityId: parent.id,
+        folder: { name: 'New', parent_id: ROOT_FOLDER_ID } },
+    ]);
   });
 
   it('refuses a caller without scope read before touching the spine', async () => {
