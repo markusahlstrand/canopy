@@ -52,9 +52,9 @@ import {
   instanceAuthFor,
   mintOwnerClaimLink,
   observePlace,
-  unbindMember,
   placesReporter,
   reportScopeMembers,
+  resetPlacesMemo,
   sha256Hex,
   type AuthProvider,
   type IdentityStub,
@@ -68,7 +68,7 @@ import {
 import { mountInviteRoutes } from '@substrat-run/vertical-auth/invite-routes';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
-import { ScanSaturated, removeMember, unbindEveryBinding } from './remove-member.js';
+import { removeMember } from './remove-member.js';
 import { MEMBER_ROLE_KEY, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
@@ -443,34 +443,6 @@ mountInviteRoutes<Env, Node>(app, {
 });
 
 /**
- * `removeMember`, with its one expected refusal turned into an answer a client can act on.
- *
- * A saturated subject scan is not a bug and not the caller's mistake: this space has more bound
- * logins than the directory can be scanned for one principal, and nothing was changed. 503
- * rather than 500 because it is a limit of this route, and the message says what to do about it
- * — which is to give the directory a reverse lookup (substrat-run/substrat#1939), not to raise
- * the limit.
- */
-async function removeMemberOrExplain(steps: Parameters<typeof removeMember>[0]) {
-  try {
-    return await removeMember(steps);
-  } catch (e) {
-    if (e instanceof ScanSaturated) throw new HTTPException(503, { message: e.message });
-    throw e;
-  }
-}
-
-/**
- * How many bindings this route will walk looking for a principal's subject.
- *
- * The directory maps subject → principal and offers no reverse lookup, so finding whose
- * binding to remove means resolving the scope's subjects until one matches. Bounded rather
- * than unbounded: a family space has a handful, and a scope with more than this needs the
- * reverse lookup rather than a bigger loop here.
- */
-const UNBIND_SCAN_LIMIT = 500;
-
-/**
  * Remove somebody from this space (#79) — all three parts of it, in the order that fails safe.
  *
  * Membership is not one fact. A person reaches this drive through a subject bound to a
@@ -527,20 +499,23 @@ app.delete('/api/people/:principal', async (c) => {
   // The order lives in `remove-member.ts`, where it is tested — including what each failure
   // leaves behind, which is the half that cannot be checked by reading. This route's job is to
   // supply the three steps against the real bindings.
-  const outcome = await removeMemberOrExplain({
+  const outcome = await removeMember({
     unbind: async () => {
       const instance = await instanceFor(c.env, baseNode(c.req.raw, c.env));
-      // The scan and its refusal live in `remove-member.ts`: a full scan cannot prove it found
-      // every binding, and unbinding what it happened to see would report a removal with another
-      // login still live. This is wiring.
-      return unbindEveryBinding({
-        list: (limit) => directory.subjectsOf(node.scopeId, limit),
-        principalOf: (sub) => directory.resolvePrincipal(node.scopeId, sub),
-        unbind: async (sub) =>
-          (await unbindMember(directory, reporterFor(instance.identity), node.scopeId, sub)).unbound,
-        target,
-        limit: UNBIND_SCAN_LIMIT,
-      });
+      // Substrat #1951 adds this principal-wide operation. The installed release's
+      // IdentityStub type has not caught up yet; this draft must wait for that release.
+      const principalDirectory = directory as typeof directory & {
+        unbindPrincipal(scopeId: string, principal: string): Promise<string[]>;
+      };
+      const subs = await principalDirectory.unbindPrincipal(node.scopeId, target);
+      const reporter = reporterFor(instance.identity);
+      // A prior present report may be memoized in this isolate. Flush that memo so a
+      // subsequent login observes the now-absent place even if an issuer report was lost.
+      // Switch to upstream unbindPrincipalMember when it is published; it clears only
+      // these subjects' memo entries.
+      resetPlacesMemo();
+      for (const sub of subs) await reporter?.absent(node.scopeId, sub);
+      return subs.length;
     },
     forgetGrants: () =>
       stub.invoke<{ revoked: number; forgotten: boolean }>('drive/forget-person', {
