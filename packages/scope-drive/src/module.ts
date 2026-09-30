@@ -898,6 +898,35 @@ const operations = {
     return { principal: ctx.principal, email, name, seen_at: seen };
   },
 
+  'drive/forget-person': async (ctx, input) => {
+    // Node-level: removing somebody from the space is not a folder's authority.
+    assertAllowed(await ctx.check(DRIVE_PERM.manage));
+
+    const held = ctx.sql.query<{ folder_id: string; permission: string }>(
+      'SELECT folder_id, permission FROM drive_folder_shares WHERE principal = ?',
+      [input.principal],
+    );
+
+    /**
+     * The grants FIRST, one at a time, and the rows after.
+     *
+     * `ctx.revoke` carries the same guardrail as the grant — you may withdraw only what you
+     * could have given — so an owner can take back any of these and somebody who cannot
+     * would fail here, taking the whole operation with them rather than leaving a person
+     * half removed.
+     */
+    const who = principalId.parse(input.principal);
+    for (const grant of held) {
+      await ctx.revoke(who, permissionKey.parse(grant.permission), folderRef(grant.folder_id));
+    }
+    ctx.sql.exec('DELETE FROM drive_folder_shares WHERE principal = ?', [input.principal]);
+
+    const forgotten =
+      ctx.sql.exec('DELETE FROM drive_people WHERE principal = ?', [input.principal]).changes > 0;
+
+    return { principal: input.principal, revoked: held.length, forgotten };
+  },
+
   'drive/list-people': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
     // Someone with a name or an address first — a row that can only show a ULID is the

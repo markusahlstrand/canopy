@@ -52,6 +52,7 @@ import {
   instanceAuthFor,
   mintOwnerClaimLink,
   observePlace,
+  unbindMember,
   placesReporter,
   reportScopeMembers,
   sha256Hex,
@@ -403,20 +404,31 @@ app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
  * One invitable role. See `MEMBER_ROLE_KEY` for why that is a safety property and not a
  * simplification.
  */
+/**
+ * The gate on every people route, and it answers WHO is asking.
+ *
+ * The decision itself is `drive/people-access` — an operation, because an app-side stub can
+ * only invoke and the alternative is re-deciding authorization out here from a role name. The
+ * principal comes back because the removal route needs it: to act as somebody, and to refuse
+ * removing them.
+ */
+async function requirePeopleAdmin(c: Context<{ Bindings: Env }>): Promise<PrincipalId> {
+  const principal = await principalFor(c.env, c.req.raw);
+  // 401 and 403 are different answers and these routes let us say which: nobody is signed in,
+  // versus signed in and not the person who administers this space.
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, c.env);
+  const stub = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+  const { canManage } = await stub.invoke<{ canManage: boolean }>('drive/people-access');
+  if (!canManage) {
+    throw new HTTPException(403, { message: 'only an owner can manage the people in this space' });
+  }
+  return principal;
+}
+
 mountInviteRoutes<Env, Node>(app, {
   nodeFor,
-  requireAdmin: async (c) => {
-    const principal = await principalFor(c.env, c.req.raw);
-    // 401 and 403 are different answers and the invite routes let us say which: nobody is
-    // signed in, versus signed in and not the person who administers this space.
-    if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
-    const node = await nodeFor(c.req.raw, c.env);
-    const stub = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
-    const { canManage } = await stub.invoke<{ canManage: boolean }>('drive/people-access');
-    if (!canManage) {
-      throw new HTTPException(403, { message: 'only an owner can manage the people in this space' });
-    }
-  },
+  requireAdmin: requirePeopleAdmin,
   roles: [MEMBER_ROLE_KEY],
   directory: (env, node) => identityDo(env, node),
   // Scope-local, no control plane: the role lands in the same store the checker reads.
@@ -427,6 +439,81 @@ mountInviteRoutes<Env, Node>(app, {
   // The INSTALL's provider, never the selected space's: identity is the install's and
   // membership is the space's, the same split `/api/me` documents.
   authProvider: (env, req) => providerFor(env, baseNode(req, env)),
+});
+
+/**
+ * How many bindings this route will walk looking for a principal's subject.
+ *
+ * The directory maps subject → principal and offers no reverse lookup, so finding whose
+ * binding to remove means resolving the scope's subjects until one matches. Bounded rather
+ * than unbounded: a family space has a handful, and a scope with more than this needs the
+ * reverse lookup rather than a bigger loop here.
+ */
+const UNBIND_SCAN_LIMIT = 500;
+
+/**
+ * Remove somebody from this space (#79) — all three parts of it, in the order that fails safe.
+ *
+ * Membership is not one fact. A person reaches this drive through a subject bound to a
+ * principal, a role held at the scope, and whatever folder grants they were given — and the
+ * drive owns only the last of those. Doing one and not the others is the failure mode worth
+ * designing against: until now nothing removed anybody at all, and the People dialog had to
+ * say so.
+ *
+ * The ORDER is the safety property, because any step can fail:
+ *
+ *  1. **Folder grants first** (`drive/forget-person`). A grant is enough on its own — somebody
+ *     with no role but a grant on a folder can still write in it — so these are what a failure
+ *     must never leave behind.
+ *  2. **Then the roles**, which removes space-wide read.
+ *  3. **Then the binding**, so the next sign-in resolves to nobody rather than to a principal
+ *     that holds nothing, which would render a drive where every read is refused.
+ *
+ * Stop anywhere and the person has strictly less than before, and a retry finishes the job:
+ * every step is idempotent.
+ */
+app.delete('/api/people/:principal', async (c) => {
+  const asking = await requirePeopleAdmin(c);
+  const target = c.req.param('principal');
+
+  // Not yourself. Nothing else guarantees an administrator remains — every other owner could
+  // be removed by one who then removes themselves, leaving a space nobody can administer, and
+  // the platform's claim link is a poor answer to "I locked myself out of my own drive".
+  if (target === asking) {
+    throw new HTTPException(400, {
+      message: 'you cannot remove yourself from a space you administer',
+    });
+  }
+
+  const node = await nodeFor(c.req.raw, c.env);
+  const host = hostFor(c.env);
+
+  // 1. The drive's own, in one transaction: grants revoked, rows gone.
+  const stub = await host.getScope(asking, node.tenantId, node.scopeId);
+  const forgotten = await stub.invoke<{ revoked: number; forgotten: boolean }>(
+    'drive/forget-person',
+    { principal: target },
+  );
+
+  // 2. Every role this vertical defines, not just the one invites use: a co-owner must be
+  // removable, and a role left behind is space-wide read left behind.
+  const removed = principalId.parse(target);
+  for (const role of ROLES) {
+    await host.revokeScopeRole(node.scopeId, removed, role.key);
+  }
+
+  // 3. The binding, which is what makes them signed out rather than empty-handed.
+  const directory = identityDo(c.env, node);
+  const instance = await instanceFor(c.env, baseNode(c.req.raw, c.env));
+  const subjects = await directory.subjectsOf(node.scopeId, UNBIND_SCAN_LIMIT);
+  let unbound = 0;
+  for (const sub of subjects) {
+    if ((await directory.resolvePrincipal(node.scopeId, sub)) !== target) continue;
+    const result = await unbindMember(directory, reporterFor(instance.identity), node.scopeId, sub);
+    if (result.unbound) unbound += 1;
+  }
+
+  return c.json({ principal: target, ...forgotten, roles: ROLES.length, unbound });
 });
 
 /**

@@ -796,6 +796,48 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
 
   /**
+   * Take everything this space gave a person (#79).
+   *
+   * The other half of membership, and the reason it is one operation rather than a loop in
+   * the worker: removing somebody has to take their SHARES with it, and the shares are the
+   * drive's own — the worker can revoke a scope role and unbind a subject, and would leave
+   * behind every folder grant the person held. A removal that leaves grants standing is the
+   * worst kind: the roster stops naming them and the access remains.
+   *
+   * What it does, all in one transaction: revoke every folder grant recorded for them,
+   * delete those rows, and forget what we called them. What it does NOT do is the
+   * membership itself — the scope role and the subject binding are the platform's, and the
+   * worker takes those either side of this call.
+   *
+   * `drive:manage` node-level, like `people-access`: administering who is in a space is not
+   * something a grant on one folder can confer, and the kernel's narrowing rule is what
+   * keeps that true.
+   *
+   * Idempotent. Somebody with no grants and no roster row is somebody already forgotten,
+   * and answering is more useful than refusing — a removal that fails halfway will be
+   * retried, and the retry must be able to finish.
+   *
+   * **No `http` block, and here the reason is that this is HALF of an act.** Removing somebody
+   * is three things: their folder grants (this), their role, and their subject binding — and
+   * the last two are the platform's, so only the worker can do all three. A derived route
+   * would let a caller do this one alone and believe somebody had been removed, when what
+   * they would have is a member who still reads the whole space. The worker's own
+   * `DELETE /api/people/:principal` is the only way in.
+   */
+  'drive/forget-person': {
+    summary: "Revoke a person's folder grants and forget them (worker-only: no HTTP route)",
+    permission: 'drive:manage',
+    input: z.object({ principal: z.string().min(1) }),
+    output: z.object({
+      principal: z.string(),
+      /** How many grants were taken back — 0 when there was nothing to take. */
+      revoked: z.number().int(),
+      /** Whether a roster row existed to delete. */
+      forgotten: z.boolean(),
+    }),
+  },
+
+  /**
    * The people this install has seen in this space — the share dialog's picker.
    *
    * A projection of sign-ins, not the roster of record. Membership is a role at this node

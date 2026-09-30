@@ -374,6 +374,20 @@ export async function unshareFolder(
   }
 }
 
+/**
+ * Remove somebody from this space: their folder grants, their role, their binding.
+ *
+ * A worker route rather than a derived one, because only the worker can do all three — the
+ * drive owns the grants and the platform owns the rest, and doing one alone leaves a member
+ * who still reads everything. Refuses removing yourself: somebody has to be left who can
+ * administer the space.
+ */
+export const removePerson = (principal: string) =>
+  call<{ principal: string; revoked: number; unbound: number }>(
+    `/people/${encodeURIComponent(principal)}`,
+    { method: 'DELETE' },
+  );
+
 /** Whether this login administers the people in this space — `drive/people-access`. */
 export const peopleAccess = () => call<{ canManage: boolean }>('/people/access');
 
