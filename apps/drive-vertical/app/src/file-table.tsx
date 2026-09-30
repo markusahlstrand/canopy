@@ -55,6 +55,8 @@ interface FileTableProps {
    *  placeholders instead of an empty table (gated on `files.length === 0`, so a
    *  background re-sync over already-listed files never flashes the skeleton). */
   loading?: boolean;
+  /** Offline metadata can be browsed, but bytes and mutations are unavailable. */
+  readOnly?: boolean;
 }
 
 // Varied bar widths so skeleton rows/cards read as real names, not a grid of equals.
@@ -150,7 +152,8 @@ const COLUMNS: { key: SortKey; label: string; className: string }[] = [
  * is the same one the rest of this UI follows: an item that does nothing is worse than an
  * item that is absent.
  */
-export function actionsFor(file: FileItem): string[] {
+export function actionsFor(file: FileItem, readOnly = false): string[] {
+  if (readOnly) return file.isFolder ? ['Open'] : [];
   // Share is a FOLDER action and only a folder action: a grant narrows onto a folder and
   // reaches what is under it, so there is no such thing as sharing one file here.
   return file.isFolder
@@ -158,7 +161,9 @@ export function actionsFor(file: FileItem): string[] {
     : ['Open', 'Download', 'Rename', 'Move', 'Delete'];
 }
 
-function RowActions({ file, onAction }: { file: FileItem; onAction: (action: string, f: FileItem) => void }) {
+function RowActions({ file, onAction, readOnly }: { file: FileItem; onAction: (action: string, f: FileItem) => void; readOnly: boolean }) {
+  const actions = actionsFor(file, readOnly);
+  if (actions.length === 0) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -170,7 +175,7 @@ function RowActions({ file, onAction }: { file: FileItem; onAction: (action: str
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
-        {actionsFor(file).map((a) => (
+        {actions.map((a) => (
           <DropdownMenuItem
             key={a}
             variant={a === "Delete" ? "destructive" : undefined}
@@ -197,6 +202,7 @@ export function FileTable({
   pluginMenuItems,
   previewOpen = false,
   loading = false,
+  readOnly = false,
 }: FileTableProps) {
   const lastIndex = useRef<number | null>(null);
   // Internal file→folder drag-and-drop. The dragged file is held in a ref;
@@ -350,7 +356,8 @@ export function FileTable({
         <tbody>
           {files.map((f, i) => {
             const selected = selection.has(f.id);
-            const pluginItems = pluginMenuItems(f.kind);
+            const pluginItems = readOnly ? [] : pluginMenuItems(f.kind);
+            const actions = actionsFor(f, readOnly);
             return (
               <ContextMenu key={f.id}>
                 <ContextMenuTrigger asChild>
@@ -389,12 +396,13 @@ export function FileTable({
                     </td>
                     <td className="px-3 font-mono text-[12.5px] text-muted-foreground">{f.modified}</td>
                     <td className="px-2">
-                      <RowActions file={f} onAction={onAction} />
+                      <RowActions file={f} onAction={onAction} readOnly={readOnly} />
                     </td>
                   </tr>
                 </ContextMenuTrigger>
+                {actions.length > 0 || pluginItems.length > 0 ? (
                 <ContextMenuContent className="w-48">
-                  {actionsFor(f).map((a) =>
+                  {actions.map((a) =>
                     a === "Open" ? (
                       // Open is the double-click, so it goes straight there rather than
                       // through `onAction` — the one item with a shorter path.
@@ -419,6 +427,7 @@ export function FileTable({
                     </ContextMenuItem>
                   ))}
                 </ContextMenuContent>
+                ) : null}
               </ContextMenu>
             );
           })}

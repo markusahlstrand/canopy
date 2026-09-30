@@ -16,6 +16,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import App from './App';
 import { DriveScreen } from './drive';
 import { currentSite, selectSite } from './api';
+import { indexedMirror } from './scope-mirror';
 
 /** One pending answer, and the handle a test resolves it with. */
 interface Pending {
@@ -274,6 +275,28 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     expect(screen.getByText('at-the-root.md')).toBeTruthy();
     expect(screen.queryByText('renamed.pdf')).toBeNull();
     expect(screen.queryByText('lease.pdf')).toBeNull();
+  });
+});
+
+describe('offline metadata from the scope event mirror', () => {
+  it('shows saved folder rows after a network failure and keeps Refresh available', async () => {
+    vi.spyOn(indexedMirror, 'folder').mockResolvedValue({
+      folders: [{ id: '01F', parent_id: 'root', name: 'Saved folder', path: 'Saved folder' }],
+      files: [file('01A', 'saved.txt')],
+    });
+    await renderDrive();
+
+    fireEvent.click(screen.getByLabelText('Refresh'));
+    await flush();
+    const request = pending.find((p) => p.url.includes('/folders/root/files'));
+    expect(request).toBeTruthy();
+    await act(async () => request!.reject(new TypeError('network unavailable')));
+
+    expect(screen.getByRole('status').textContent).toContain('Offline');
+    expect(screen.getByText('Saved folder')).toBeTruthy();
+    expect(screen.getByText('saved.txt')).toBeTruthy();
+    expect((screen.getByLabelText('Refresh') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByLabelText('Search this space') as HTMLInputElement).disabled).toBe(true);
   });
 });
 

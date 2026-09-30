@@ -85,6 +85,7 @@ interface SidebarProps {
   onNavigate: (id: NavId) => void;
   onNewFolder: () => void;
   onUpload: () => void;
+  offline?: boolean;
 }
 
 function NavRow({
@@ -95,6 +96,7 @@ function NavRow({
   active,
   collapsed,
   onClick,
+  disabled = false,
 }: {
   icon: string;
   label: string;
@@ -103,12 +105,15 @@ function NavRow({
   active: boolean;
   collapsed: boolean;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   const row = (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={cn(
         'flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] transition-colors',
+        disabled && 'opacity-50',
         collapsed && 'justify-center px-0',
         active ? 'bg-accent font-medium text-foreground' : 'text-foreground/80 hover:bg-accent/60',
       )}
@@ -136,7 +141,7 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [sites, setSites] = useState<Site[] | null>(null);
   /**
@@ -199,7 +204,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload }: SidebarPr
         <div className={cn('shrink-0 px-3 pb-2', collapsed && 'px-2')}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button className="w-full justify-center gap-1.5" size={collapsed ? 'icon' : 'default'}>
+              <Button disabled={offline} className="w-full justify-center gap-1.5" size={collapsed ? 'icon' : 'default'}>
                 <Icon name="plus" size={16} strokeWidth={2.25} />
                 {!collapsed && (
                   <>
@@ -229,6 +234,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload }: SidebarPr
               label={n.label}
               active={active === n.id}
               collapsed={collapsed}
+              disabled={offline && n.id !== 'drive'}
               onClick={() => onNavigate(n.id)}
             />
           ))}
@@ -264,6 +270,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload }: SidebarPr
                 <button
                   key={s.slug}
                   aria-current={s.current ? 'true' : undefined}
+                  disabled={offline}
                   onClick={() => {
                     if (s.current) return;
                     // A full reload rather than a re-render: every read on the screen

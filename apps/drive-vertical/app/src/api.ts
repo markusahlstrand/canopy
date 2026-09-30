@@ -96,6 +96,21 @@ export interface DriveFolder {
   path: string;
 }
 
+/** A metadata invalidation from the scope's event spine, hydrated to current state. */
+export type DriveChange =
+  | { id: string; type: string; entityType: 'file'; entityId: string; file: DriveFile | null }
+  | { id: string; type: string; entityType: 'folder'; entityId: string; folder: DriveFolder | null };
+
+export interface DriveChanges {
+  changes: DriveChange[];
+  /** Exclusive event-id cursor; null before the first event. */
+  cursor: string | null;
+  hasMore: boolean;
+}
+
+export const changes = (after: string | null, limit = 100) =>
+  call<DriveChanges>(`/changes?limit=${limit}${after ? `&after=${encodeURIComponent(after)}` : ''}`);
+
 export interface Site {
   slug: string;
   name: string;

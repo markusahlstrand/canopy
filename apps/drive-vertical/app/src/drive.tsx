@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, cn } from '@canopy/ui';
 import { latestOnly } from './reads';
+import { indexedMirror, syncMirror } from './scope-mirror';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
@@ -32,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from '@canopy/ui';
 import {
+  ApiError,
   ROOT_FOLDER_ID,
   SEARCH_MIN,
   contentUrl,
@@ -149,6 +151,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [folders, setFolders] = useState<DriveFolder[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [busy, setBusy] = useState(false);
+  const [offline, setOffline] = useState(false);
   const [view, setView] = useState<'drive' | 'trash' | 'search'>('drive');
   const [term, setTerm] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -207,17 +210,39 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         if (!reads.current.current(ticket)) return;
         setFolders(subfolders);
         setFiles(contents);
+        // The online listing stays the hot path. The spine feed updates the offline
+        // metadata mirror in the background; a failed cache write cannot fail a read.
+        if (auth.principal) void syncMirror(auth.principal).catch(() => {});
       }
+      setOffline(false);
       onError(null);
     } catch (e: unknown) {
       // A stale failure is as misleading as a stale answer: the folder it belonged to
       // is not the one on screen.
       if (!reads.current.current(ticket)) return;
+      if (view === 'drive' && auth.principal &&
+          (e instanceof TypeError || (e instanceof ApiError && e.status >= 500))) {
+        try {
+          const saved = await indexedMirror.folder(auth.principal, folderId);
+          if (!reads.current.current(ticket)) return;
+          if (saved) {
+            setFolders(saved.folders);
+            setFiles(saved.files);
+            setPreviewing(null);
+            setCmdOpen(false);
+            setOffline(true);
+            onError(null);
+            return;
+          }
+        } catch {
+          // IndexedDB can be unavailable; surface the original network failure.
+        }
+      }
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, term, onError]);
+  }, [folderId, view, term, onError, auth.principal]);
 
   useEffect(() => {
     refreshRef.current = refresh;
@@ -234,6 +259,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   /** ⌘K / Ctrl-K opens the palette — the shortcut the portal had, and the reason it exists. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (offline) return;
       if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setCmdOpen((was) => !was);
@@ -241,7 +267,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [offline]);
 
   useEffect(() => {
     // A pause, not a keystroke: the index is per scope and cheap, but a request per
@@ -289,6 +315,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   };
 
   const act = async (fn: () => Promise<unknown>) => {
+    if (offline) return;
     try {
       await fn();
       // Through the ref: whatever the screen shows NOW, which may not be where this
@@ -311,6 +338,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * component moved rather than wired to nothing here.
    */
   const onAction = (action: string, item: FileItem) => {
+    if (offline && (action !== 'Open' || !item.isFolder)) return;
     if (action === 'Open') {
       const folder = folders.find((f) => f.id === item.id);
       if (folder) open(folder);
@@ -357,6 +385,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * where the screen now is.
    */
   const startWrite = (begin: () => void) => {
+    if (offline) return;
     if (view !== 'drive') navigate('drive');
     begin();
   };
@@ -381,6 +410,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onNavigate={navigate}
         onNewFolder={() => startWrite(() => setCreating(true))}
         onUpload={() => startWrite(() => uploadRef.current?.click())}
+        offline={offline}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -392,7 +422,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onUpload={() => startWrite(() => uploadRef.current?.click())}
         onRefresh={() => void refresh()}
         syncing={busy}
-        onOpenPeople={canManagePeople ? () => setPeopleOpen(true) : undefined}
+        onOpenPeople={canManagePeople && !offline ? () => setPeopleOpen(true) : undefined}
+        offline={offline}
         auth={auth}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
@@ -424,6 +455,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       {/* The one scrolling region: the rail and the topbar stay put. */}
       <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-4">
       <div className="min-w-0 flex-1">
+      {offline ? (
+        <p role="status" className="mb-3 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+          Offline — showing saved file and folder names. File content and changes are unavailable.
+        </p>
+      ) : null}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative">
           <Icon
@@ -432,6 +468,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           />
           <Input
             value={term}
+            disabled={offline}
             placeholder="Search this space"
             aria-label="Search this space"
             className="h-8 w-44 pl-8 sm:w-56"
@@ -498,17 +535,18 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onOpen={(item) => {
             const folder = folders.find((f) => f.id === item.id);
             if (folder) open(folder);
-            else setPreviewing(item.id);
+            else if (!offline) setPreviewing(item.id);
           }}
           sort={sort}
           onSort={onSort}
           view={layout}
           onAction={onAction}
           // Drag a file onto a folder: the move the platform's relink makes safe (#75).
-          onMove={(item, folder) => void act(() => moveFile(item.id, folder.id))}
+          onMove={offline ? undefined : (item, folder) => void act(() => moveFile(item.id, folder.id))}
           pluginMenuItems={() => []}
           previewOpen={previewing !== null}
           loading={busy}
+          readOnly={offline}
         />
       )}
       </div>

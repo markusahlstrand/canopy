@@ -23,6 +23,7 @@ import {
   whoami,
 } from './api';
 import { DriveScreen } from './drive';
+import { clearMirror } from './scope-mirror';
 
 /** Nobody is signed in yet, somebody is, or we have not asked. */
 type Session = { state: 'loading' } | { state: 'out' } | { state: 'in'; principal: string };
@@ -273,7 +274,11 @@ export default function App() {
           onError={setError}
           auth={{ user: { name: session.principal }, principal: session.principal }}
           onSignIn={() => (window.location.href = LOGIN_URL)}
-          onSignOut={() => (window.location.href = LOGOUT_URL)}
+          onSignOut={() => {
+            void clearMirror()
+              .catch(() => {})
+              .finally(() => { window.location.href = LOGOUT_URL; });
+          }}
         />
       )}
     </div>

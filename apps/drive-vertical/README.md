@@ -132,11 +132,16 @@ currently unavailable.
 Substrat outbox, using event ids as exclusive cursors. Each returned entity is
 checked with `drive:read`; a trashed file is returned as a tombstone (`file: null`).
 The response contains current metadata so replaying an old event cannot resurrect
-an obsolete name or version. It contains no bytes. The browser's offline mirror
-consumer is the next part of #47.
+an obsolete name or version. It contains no bytes. The browser applies pages into
+IndexedDB, committing rows and cursor together under the current scope principal.
+After an online listing, it catches up in the background. If the network fails while
+the signed-in drive is open, folder browsing falls back to those saved names; writes,
+search, trash and content previews remain unavailable until Refresh reconnects.
+Signing out clears the saved metadata. A cold offline load still needs an online
+`/api/me` before it knows which principal's mirror may be shown.
 
 ## Not yet wired
 
-Offline mirror consumption, WebDAV, connector-backed reads, and any migration of
+Cold-start offline identity, WebDAV, connector-backed reads, and any migration of
 existing canopy spaces. See
 [`documentation/planning/scope-model-mapping.md`](../../documentation/planning/scope-model-mapping.md) §3.
