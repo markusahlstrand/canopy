@@ -199,6 +199,20 @@ const drivePerson = z.object({
   seen_at: z.string(),
 });
 
+/**
+ * A share as the drive recorded it: which folder, who, and what they were given.
+ *
+ * `granted_by` is kept because "who let them in" is the first question asked when somebody
+ * turns out to be somewhere they should not be.
+ */
+const driveShare = z.object({
+  folder_id: z.string(),
+  principal: z.string(),
+  permission: z.string(),
+  granted_at: z.string(),
+  granted_by: z.string(),
+});
+
 export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS)({
   /**
    * The hot read, and the one S10 converts first.
@@ -646,6 +660,112 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * kernel's index answers ids and says to hydrate through your own read path —
    * this is that read path, and the check is what makes it one.
    */
+  /**
+   * Share a folder with someone, which is the whole of #79.
+   *
+   * Everything beneath it comes with it: the kernel walks the declared `parents` edge, so a
+   * grant on "Papers" reaches every folder and file under it without a row per descendant.
+   * That is the design `provision.ts` states — members read the space, writing is granted on
+   * a folder — expressed as an operation at last.
+   *
+   * **Two writes, and the second is only for looking at.** `ctx.grant` is what makes the
+   * access real; the row in `drive_folder_shares` exists because nothing can ask the kernel
+   * who holds a grant, so a share dialog would otherwise have nothing to show. They commit
+   * together — a grant made by an operation that throws never happened — and if they ever
+   * part company the row is the one that grants nothing.
+   *
+   * `drive:manage` on the folder is the gate: sharing is an owner's act on that folder, not
+   * a right that comes with being able to write in it. The kernel adds its own bound on top,
+   * and it is the one that matters — `ctx.grant` re-checks that the CALLER holds what it is
+   * handing out, so no operation can give away more than it has. Delegation, never
+   * elevation.
+   *
+   * Read is not shareable, and its absence is the model: a member already reads the whole
+   * space, so "share read" would be a no-op dressed as an action.
+   */
+  'drive/share-folder': {
+    summary: 'Give someone write or manage on a folder and everything under it',
+    permission: { key: 'drive:manage', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({
+      folderId: z.string(),
+      /** Who gets it. A principal, which is why the roster exists to put a name to one. */
+      principal: z.string().min(1),
+      permission: z.enum(['drive:write', 'drive:manage']),
+    }),
+    output: driveShare,
+    http: { method: 'POST', path: '/folders/{folderId}/shares' },
+    emits: {
+      entity: 'folder',
+      entityIdFrom: 'folder_id',
+      type: 'drive.folder-shared',
+      schemaVersion: 1,
+      // The principal is in the payload: "who was given access to what" is the event an
+      // audit exists for, and a share event without the grantee says nothing.
+      piiClass: 'none',
+      payload: ['folder_id', 'principal', 'permission'],
+    },
+  },
+
+  /**
+   * Take a share back.
+   *
+   * The same gate and the same pair of writes in reverse. `ctx.revoke` carries the same
+   * guardrail as the grant — you may withdraw only what you could have given — so this
+   * cannot be used to strip access somebody else conferred at a level above you.
+   *
+   * Idempotent on purpose: withdrawing a share that is not there answers rather than
+   * refusing, because the state the caller wanted is the state they get.
+   */
+  'drive/unshare-folder': {
+    summary: 'Withdraw a share from a folder',
+    permission: { key: 'drive:manage', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({
+      folderId: z.string(),
+      principal: z.string().min(1),
+      permission: z.enum(['drive:write', 'drive:manage']),
+    }),
+    output: z.object({ folder_id: z.string(), principal: z.string(), permission: z.string() }),
+    http: { method: 'DELETE', path: '/folders/{folderId}/shares' },
+    emits: {
+      entity: 'folder',
+      entityIdFrom: 'folder_id',
+      type: 'drive.folder-unshared',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['folder_id', 'principal', 'permission'],
+    },
+  },
+
+  /**
+   * Who a folder is shared with — the drive's own record, not the kernel's.
+   *
+   * There is no read that enumerates grants, so this is a projection and it says so. What it
+   * is good for is a dialog; what it must not be used for is a decision. Every access
+   * question goes through `ctx.check`, which reads the tuples this table merely mirrors.
+   *
+   * Display identity comes along, because a list of ULIDs is not a list of people — the
+   * roster is joined here rather than fetched separately so the dialog cannot render half of
+   * itself while the other half is in flight.
+   *
+   * `drive:manage` to look: who else has access is an administrative question about a
+   * folder, not something every reader of it needs to know.
+   */
+  'drive/list-folder-shares': {
+    summary: 'Who this folder is shared with, as the drive recorded it',
+    permission: { key: 'drive:manage', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({ folderId: z.string() }),
+    output: z.object({
+      shares: z.array(
+        driveShare.extend({
+          /** From the roster, and null for somebody this install has never seen sign in. */
+          email: z.string().nullable(),
+          name: z.string().nullable(),
+        }),
+      ),
+    }),
+    http: { method: 'GET', path: '/folders/{folderId}/shares' },
+  },
+
   /**
    * Remember what to call the caller — and no route, deliberately.
    *

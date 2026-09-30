@@ -20,6 +20,7 @@ import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
 import { Sidebar, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
+import { ShareDialog } from './share-dialog';
 import { CommandPalette } from './command-palette';
 import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
@@ -157,6 +158,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
+  /** The folder whose sharing is open. Null is closed — one dialog, one folder at a time. */
+  const [sharing, setSharing] = useState<{ id: string; name: string } | null>(null);
   /**
    * Whether this login administers the people here — asked once, on mount.
    *
@@ -312,6 +315,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       const folder = folders.find((f) => f.id === item.id);
       if (folder) open(folder);
       else setPreviewing(item.id);
+      return;
+    }
+    if (action === 'Share') {
+      // Folders only, and the table only offers it for folders — but an action name is a
+      // string, and a file id handed to `list-folder-shares` is a 404 rather than a refusal.
+      if (item.isFolder) setSharing({ id: item.id, name: item.name });
       return;
     }
     if (action === 'Rename') {
@@ -515,6 +524,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* the column beside the rail */}
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
+
+      <ShareDialog folder={sharing} onClose={() => setSharing(null)} me={auth.principal} />
 
       {creating ? (
         <NameDialog

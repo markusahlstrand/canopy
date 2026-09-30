@@ -270,6 +270,110 @@ export interface Person {
  */
 export const listPeople = () => call<{ people: Person[] }>('/people');
 
+/**
+ * A share as the drive recorded it, with the roster's name joined on.
+ *
+ * `permission` is a kernel key, one row per key — so somebody who may edit AND share a
+ * folder is two rows. `sharesByPerson` below is what turns that into something to render.
+ */
+export interface Share {
+  folder_id: string;
+  principal: string;
+  permission: string;
+  granted_at: string;
+  granted_by: string;
+  email: string | null;
+  name: string | null;
+}
+
+/**
+ * What a person can do with a shared folder, as a UI offers it.
+ *
+ * The kernel's three keys are INDEPENDENT — `drive:manage` is the authority to share a
+ * folder and delete what is in it, and does not include putting anything in it. The ladder
+ * canopy came from was nested (viewer ⊂ editor ⊂ owner), so the two have to be mapped
+ * rather than assumed equal: "can edit and share" is two grants, and this is where that
+ * fact is turned into one choice instead of being left to whoever writes the dialog.
+ */
+export type ShareLevel = 'edit' | 'manage';
+
+const LEVEL_KEYS: Record<ShareLevel, string[]> = {
+  edit: ['drive:write'],
+  manage: ['drive:write', 'drive:manage'],
+};
+
+/** One row per person, with the level their keys add up to. */
+export interface PersonShare {
+  principal: string;
+  email: string | null;
+  name: string | null;
+  level: ShareLevel;
+}
+
+export function sharesByPerson(shares: Share[]): PersonShare[] {
+  const byPrincipal = new Map<string, PersonShare>();
+  for (const share of shares) {
+    const seen = byPrincipal.get(share.principal);
+    // Manage wins: it is the higher of the two offered levels, so a person holding both
+    // keys reads as the level that includes them.
+    const level: ShareLevel =
+      share.permission === 'drive:manage' || seen?.level === 'manage' ? 'manage' : 'edit';
+    byPrincipal.set(share.principal, {
+      principal: share.principal,
+      email: share.email,
+      name: share.name,
+      level,
+    });
+  }
+  return [...byPrincipal.values()];
+}
+
+/** Who this folder is shared with — the drive's own record, not the kernel's. */
+export const listFolderShares = (folderId: string) =>
+  call<{ shares: Share[] }>(`/folders/${encodeURIComponent(folderId)}/shares`);
+
+/**
+ * Share a folder at a level, which is one call per key the level carries.
+ *
+ * Sequential, and not `Promise.all`: two grants on one folder, and a failure halfway leaves
+ * the person with the first key rather than with a half-applied pair nobody can reason
+ * about. The keys are applied in order, so the weaker one lands first.
+ */
+export async function shareFolder(folderId: string, principal: string, level: ShareLevel) {
+  for (const permission of LEVEL_KEYS[level]) {
+    await call<Share>(`/folders/${encodeURIComponent(folderId)}/shares`, {
+      method: 'POST',
+      body: JSON.stringify({ principal, permission }),
+    });
+  }
+}
+
+/**
+ * Withdraw access — by default all of it, or exactly the keys named.
+ *
+ * Withdrawing a key nobody holds is not an error (the operation answers rather than
+ * refusing), so "Remove" does not need to know which keys somebody had.
+ *
+ * The named form exists for LOWERING a level, and the reason is worth stating: taking
+ * everything away and granting the lower level back is two operations where the second can
+ * fail — a network error, or a sharer who holds `drive:manage` but not `drive:write`, whom
+ * `ctx.grant` would refuse. Either way the person ends with nothing when the intent was to
+ * leave them editing. Removing only the surplus key cannot fail that way, because there is
+ * nothing to put back.
+ */
+export async function unshareFolder(
+  folderId: string,
+  principal: string,
+  permissions: readonly string[] = ['drive:manage', 'drive:write'],
+) {
+  for (const permission of permissions) {
+    await call<unknown>(`/folders/${encodeURIComponent(folderId)}/shares`, {
+      method: 'DELETE',
+      body: JSON.stringify({ principal, permission }),
+    });
+  }
+}
+
 /** Whether this login administers the people in this space — `drive/people-access`. */
 export const peopleAccess = () => call<{ canManage: boolean }>('/people/access');
 

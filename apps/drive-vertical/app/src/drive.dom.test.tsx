@@ -20,6 +20,10 @@ import { currentSite, selectSite } from './api';
 /** One pending answer, and the handle a test resolves it with. */
 interface Pending {
   url: string;
+  /** The method, so a test can tell a grant from a withdrawal of the same path. */
+  method: string;
+  /** The body as sent, for the operations whose subject is IN it rather than in the URL. */
+  body: string | null;
   resolve: (body: unknown, status?: number) => void;
   /** For the cases that are about a failure arriving late. */
   reject: (error: Error) => void;
@@ -33,10 +37,12 @@ let pending: Pending[] = [];
  */
 function queueFetch() {
   pending = [];
-  vi.stubGlobal('fetch', (url: string) =>
+  vi.stubGlobal('fetch', (url: string, init?: RequestInit) =>
     new Promise((resolveFetch, rejectFetch) => {
       pending.push({
         url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : null,
         reject: (error: Error) => rejectFetch(error),
         resolve: (body: unknown, status = 200) =>
           resolveFetch({
@@ -845,5 +851,136 @@ describe('the People surface is offered only to whoever may use it', () => {
     expect(screen.getByText('01NAMELESS')).toBeTruthy();
     expect(screen.getByText('bjorn@example.com')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Withdraw' })).toBeTruthy();
+  });
+});
+
+describe('sharing a folder', () => {
+  /** Open the share dialog on the one folder in the listing, via the row menu. */
+  async function openShare(): Promise<void> {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
+    await answer('/people/access', { canManage: true });
+    // The row's own Radix menu, which answers the keyboard rather than `click`.
+    const row = screen.getByText('Papers').closest('tr') ?? screen.getByText('Papers');
+    fireEvent.keyDown(within(row as HTMLElement).getByRole('button'), { key: 'Enter' });
+    fireEvent.click(screen.getByText('Share'));
+  }
+
+  it('lists who has access, with the level their keys add up to', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', {
+      shares: [
+        // Two rows, one person: the keys are independent, and the dialog has to add them up
+        // rather than render the same person twice at two levels.
+        //
+        // MANAGE FIRST, which is the order the server actually returns — its `ORDER BY`
+        // sorts by permission, and 'drive:manage' sorts before 'drive:write'. With the rows
+        // this way round, an aggregation that simply takes the last row seen downgrades
+        // Bjorn to "can edit"; my first version of this test listed write first and would
+        // have passed against exactly that bug.
+        { folder_id: '01F', principal: '01B', permission: 'drive:manage', granted_at: 'x', granted_by: '01ADA', email: 'bjorn@example.com', name: 'Bjorn' },
+        { folder_id: '01F', principal: '01B', permission: 'drive:write', granted_at: 'x', granted_by: '01ADA', email: 'bjorn@example.com', name: 'Bjorn' },
+        { folder_id: '01F', principal: '01C', permission: 'drive:write', granted_at: 'x', granted_by: '01ADA', email: null, name: null },
+      ],
+    });
+    await answer('/api/people', { people: [] });
+
+    expect(screen.getAllByText('Bjorn')).toHaveLength(1);
+    // The higher level wins for somebody holding both keys.
+    expect((screen.getByLabelText('Access for Bjorn') as HTMLSelectElement).value).toBe('manage');
+    // And an unseen person reads as their id rather than as a blank row.
+    expect((screen.getByLabelText('Access for 01C') as HTMLSelectElement).value).toBe('edit');
+  });
+
+  it('shares at a level, which is one call per key it carries', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', { shares: [] });
+    await answer('/api/people', {
+      people: [{ principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' }],
+    });
+
+    fireEvent.change(screen.getByLabelText('Person'), { target: { value: '01B' } });
+    fireEvent.change(screen.getByLabelText('Access'), { target: { value: 'manage' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+
+    // `write` FIRST: the keys are applied weakest-first, so a failure halfway leaves the
+    // lesser access rather than the greater.
+    const first = pending.find((p) => p.url.includes('/folders/01F/shares'));
+    expect(first).toBeTruthy();
+    await answer('/folders/01F/shares', { folder_id: '01F', principal: '01B', permission: 'drive:write' });
+    await answer('/folders/01F/shares', { folder_id: '01F', principal: '01B', permission: 'drive:manage' });
+
+    // Then it re-reads, which is how the row appears without a second click.
+    expect(pending.some((p) => p.url.includes('/folders/01F/shares'))).toBe(true);
+  });
+
+  it('lowers a level by removing one key, never by removing both and re-granting', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', {
+      shares: [
+        { folder_id: '01F', principal: '01B', permission: 'drive:manage', granted_at: 'x', granted_by: '01ADA', email: 'bjorn@example.com', name: 'Bjorn' },
+        { folder_id: '01F', principal: '01B', permission: 'drive:write', granted_at: 'x', granted_by: '01ADA', email: 'bjorn@example.com', name: 'Bjorn' },
+      ],
+    });
+    await answer('/api/people', { people: [] });
+
+    fireEvent.change(screen.getByLabelText('Access for Bjorn'), { target: { value: 'edit' } });
+
+    // The first call is a DELETE of the manage key either way — the calls are sequential, so
+    // asserting here alone would pass against the version that removes both and re-grants,
+    // which is what my first draft of this test did.
+    const first = pending.filter((p) => p.url.includes('/folders/01F/shares') && p.method !== 'GET');
+    expect(first).toHaveLength(1);
+    expect(first[0]!.method).toBe('DELETE');
+    expect(first[0]!.body).toContain('drive:manage');
+
+    // So answer it and look at what FOLLOWS. Nothing should: taking both keys away and
+    // granting write back is two operations whose second can fail — `ctx.grant` refuses a
+    // sharer holding manage but not write — and then a downgrade has become a removal.
+    await answer('/folders/01F/shares', {});
+    const after = pending.filter((p) => p.url.includes('/folders/01F/shares') && p.method !== 'GET');
+    expect(after).toHaveLength(0);
+    // What does follow is the re-read, which is how the row shows its new level.
+    expect(pending.some((p) => p.url.includes('/folders/01F/shares') && p.method === 'GET')).toBe(true);
+  });
+
+  it('drops a mutation that finishes after the dialog moved on', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', {
+      shares: [
+        { folder_id: '01F', principal: '01B', permission: 'drive:write', granted_at: 'x', granted_by: '01ADA', email: null, name: null },
+      ],
+    });
+    await answer('/api/people', { people: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    // The dialog is closed while the withdrawal is still in flight.
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    // Both keys are withdrawn by a removal; answer them after the close.
+    await answer('/folders/01F/shares', {});
+    await answer('/folders/01F/shares', {});
+
+    // No re-read of 01F's shares: the action belonged to a folder nobody is looking at, and
+    // its `load` would have taken a fresh ticket and so passed the staleness check — writing
+    // 01F's access list under whatever folder is opened next.
+    expect(pending.filter((p) => p.url.includes('/folders/01F/shares') && p.method === 'GET')).toHaveLength(0);
+  });
+
+  it('does not offer to share a folder with the person doing the sharing', async () => {
+    await openShare();
+    await answer('/folders/01F/shares', { shares: [] });
+    await answer('/api/people', {
+      people: [
+        // `shell.auth.principal` is 01ADA — the caller. They hold the space already, so
+        // offering it would be an action that does nothing.
+        { principal: '01ADA', email: 'ada@example.com', name: 'Ada', seen_at: 'x' },
+        { principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' },
+      ],
+    });
+
+    const picker = screen.getByLabelText('Person') as HTMLSelectElement;
+    const offered = [...picker.options].map((o) => o.textContent);
+    expect(offered).toContain('Bjorn');
+    expect(offered).not.toContain('Ada');
   });
 });
