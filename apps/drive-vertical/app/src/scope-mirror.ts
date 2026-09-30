@@ -42,30 +42,41 @@ export interface MirrorStore {
   folder(principal: string, folderId: string): Promise<{ files: DriveFile[]; folders: DriveFolder[] } | null>;
 }
 
+async function applyIndexed(
+  principal: string,
+  page: DriveChanges,
+  stillCurrent: () => boolean = () => true,
+): Promise<void> {
+  const database = await db();
+  // Check AFTER opening the database, immediately before starting a transaction.
+  // Logout may have cleared this principal while an old openDB awaited.
+  if (!stillCurrent()) throw new Error('the mirror session ended');
+  // Rows and cursor commit together. A browser crash cannot remember an event id
+  // whose corresponding metadata was never written.
+  const tx = database.transaction(['files', 'folders', 'progress'], 'readwrite');
+  for (const change of page.changes) {
+    if (change.entityType === 'file') {
+      if (change.file) tx.objectStore('files').put({ ...change.file, principal });
+      else tx.objectStore('files').delete([principal, change.entityId]);
+    } else {
+      if (change.folder) tx.objectStore('folders').put({ ...change.folder, principal });
+      else tx.objectStore('folders').delete([principal, change.entityId]);
+    }
+  }
+  const previous = await tx.objectStore('progress').get(principal);
+  tx.objectStore('progress').put({
+    principal, cursor: page.cursor, ready: previous?.ready || !page.hasMore,
+  });
+  await tx.done;
+}
+
 export const indexedMirror: MirrorStore = {
   async progress(principal) {
     return (await db()).get('progress', principal);
   },
 
   async apply(principal, page) {
-    const database = await db();
-    // Rows and cursor commit together. A browser crash cannot remember an event id
-    // whose corresponding metadata was never written.
-    const tx = database.transaction(['files', 'folders', 'progress'], 'readwrite');
-    for (const change of page.changes) {
-      if (change.entityType === 'file') {
-        if (change.file) tx.objectStore('files').put({ ...change.file, principal });
-        else tx.objectStore('files').delete([principal, change.entityId]);
-      } else {
-        if (change.folder) tx.objectStore('folders').put({ ...change.folder, principal });
-        else tx.objectStore('folders').delete([principal, change.entityId]);
-      }
-    }
-    const previous = await tx.objectStore('progress').get(principal);
-    tx.objectStore('progress').put({
-      principal, cursor: page.cursor, ready: previous?.ready || !page.hasMore,
-    });
-    await tx.done;
+    await applyIndexed(principal, page);
   },
 
   async folder(principal, folderId) {
@@ -110,12 +121,9 @@ export function syncMirror(principal: string): Promise<void> {
   const generation = generations.get(principal) ?? 0;
   const store: MirrorStore = {
     ...indexedMirror,
-    apply: (who, page) => {
-      if ((generations.get(principal) ?? 0) !== generation) {
-        throw new Error('the mirror session ended');
-      }
-      return indexedMirror.apply(who, page);
-    },
+    apply: (who, page) => applyIndexed(
+      who, page, () => (generations.get(principal) ?? 0) === generation,
+    ),
   };
   const run = syncFromSpine(principal, store, changes).finally(() => {
     if (inFlight.get(principal) === run) inFlight.delete(principal);
