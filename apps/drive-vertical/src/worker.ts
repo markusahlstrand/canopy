@@ -68,7 +68,7 @@ import {
 import { mountInviteRoutes } from '@substrat-run/vertical-auth/invite-routes';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
-import { removeMember } from './remove-member.js';
+import { ScanSaturated, removeMember, unbindEveryBinding } from './remove-member.js';
 import { MEMBER_ROLE_KEY, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 
 /**
@@ -443,6 +443,24 @@ mountInviteRoutes<Env, Node>(app, {
 });
 
 /**
+ * `removeMember`, with its one expected refusal turned into an answer a client can act on.
+ *
+ * A saturated subject scan is not a bug and not the caller's mistake: this space has more bound
+ * logins than the directory can be scanned for one principal, and nothing was changed. 503
+ * rather than 500 because it is a limit of this route, and the message says what to do about it
+ * — which is to give the directory a reverse lookup (substrat-run/substrat#1939), not to raise
+ * the limit.
+ */
+async function removeMemberOrExplain(steps: Parameters<typeof removeMember>[0]) {
+  try {
+    return await removeMember(steps);
+  } catch (e) {
+    if (e instanceof ScanSaturated) throw new HTTPException(503, { message: e.message });
+    throw e;
+  }
+}
+
+/**
  * How many bindings this route will walk looking for a principal's subject.
  *
  * The directory maps subject → principal and offers no reverse lookup, so finding whose
@@ -509,19 +527,20 @@ app.delete('/api/people/:principal', async (c) => {
   // The order lives in `remove-member.ts`, where it is tested — including what each failure
   // leaves behind, which is the half that cannot be checked by reading. This route's job is to
   // supply the three steps against the real bindings.
-  const outcome = await removeMember({
+  const outcome = await removeMemberOrExplain({
     unbind: async () => {
-      // Resolved before anything is unbound, because this lookup is how we find whose binding
-      // to remove — the directory maps subject → principal and offers no reverse.
       const instance = await instanceFor(c.env, baseNode(c.req.raw, c.env));
-      const subjects = await directory.subjectsOf(node.scopeId, UNBIND_SCAN_LIMIT);
-      let unbound = 0;
-      for (const sub of subjects) {
-        if ((await directory.resolvePrincipal(node.scopeId, sub)) !== target) continue;
-        const gone = await unbindMember(directory, reporterFor(instance.identity), node.scopeId, sub);
-        if (gone.unbound) unbound += 1;
-      }
-      return unbound;
+      // The scan and its refusal live in `remove-member.ts`: a full scan cannot prove it found
+      // every binding, and unbinding what it happened to see would report a removal with another
+      // login still live. This is wiring.
+      return unbindEveryBinding({
+        list: (limit) => directory.subjectsOf(node.scopeId, limit),
+        principalOf: (sub) => directory.resolvePrincipal(node.scopeId, sub),
+        unbind: async (sub) =>
+          (await unbindMember(directory, reporterFor(instance.identity), node.scopeId, sub)).unbound,
+        target,
+        limit: UNBIND_SCAN_LIMIT,
+      });
     },
     forgetGrants: () =>
       stub.invoke<{ revoked: number; forgotten: boolean }>('drive/forget-person', {

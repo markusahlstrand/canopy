@@ -5,7 +5,7 @@
  * described the wrong order confidently, and review caught it rather than the suite.
  */
 import { describe, expect, it } from 'vitest';
-import { removeMember, type RemovalSteps } from './remove-member.js';
+import { ScanSaturated, removeMember, unbindEveryBinding, type RemovalSteps } from './remove-member.js';
 
 /** Steps that record the order they were called in, and can be told to fail. */
 function recorder(fail?: { at: keyof RemovalSteps; after?: number }) {
@@ -91,5 +91,52 @@ describe('the order somebody is removed in', () => {
       forgotten: false,
       roles: 2,
     });
+  });
+});
+
+describe('finding every binding, or refusing to try', () => {
+  /** A directory of `count` subjects, two of which belong to the target. */
+  function directory(count: number) {
+    const subjects = Array.from({ length: count }, (_, i) => `sub-${i}`);
+    const mine = new Set(['sub-1', 'sub-2']);
+    const unbound: string[] = [];
+    return {
+      unbound,
+      deps: {
+        list: async (limit: number) => subjects.slice(0, limit),
+        principalOf: async (sub: string) => (mine.has(sub) ? 'target' : 'somebody-else'),
+        unbind: async (sub: string) => {
+          unbound.push(sub);
+          return true;
+        },
+        target: 'target',
+        limit: 10,
+      },
+    };
+  }
+
+  it('unbinds every binding the principal has, and nobody else’s', async () => {
+    const { deps, unbound } = directory(5);
+    expect(await unbindEveryBinding(deps)).toBe(2);
+    expect(unbound).toEqual(['sub-1', 'sub-2']);
+  });
+
+  it('refuses a SATURATED scan rather than unbinding what it happened to see', async () => {
+    // Exactly `limit` subjects come back, so the scan cannot prove it saw them all — and
+    // therefore cannot prove it found every binding this principal has. Unbinding the matches it
+    // did find and carrying on would report a removal with another binding still live.
+    const { deps, unbound } = directory(10);
+    await expect(unbindEveryBinding(deps)).rejects.toBeInstanceOf(ScanSaturated);
+    // NOTHING was unbound: the refusal comes before any change, which is only safe because this
+    // is the first step of the removal.
+    expect(unbound).toEqual([]);
+  });
+
+  it('does not decide on how many it unbound', async () => {
+    // A nonzero count proves a binding was found, never that all of them were — so the guard
+    // cannot be "did we unbind at least one". A full scan refuses even though two matches were
+    // sitting in it.
+    const { deps } = directory(10);
+    await expect(unbindEveryBinding(deps)).rejects.toThrow(/at least 10 bound logins/);
   });
 });
