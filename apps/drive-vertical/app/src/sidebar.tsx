@@ -86,6 +86,28 @@ interface SidebarProps {
   onNewFolder: () => void;
   onUpload: () => void;
   offline?: boolean;
+  sites: Site[] | null;
+  failed: boolean;
+  onRetry: () => void;
+  /** The mobile sheet always uses the expanded rail. */
+  mobile?: boolean;
+}
+
+/** One space read shared by the desktop rail and the mobile sheet. */
+export function useSites() {
+  const [sites, setSites] = useState<Site[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const retry = useCallback(() => {
+    setFailed(false);
+    listSites()
+      .then(setSites)
+      .catch(() => {
+        setSites([]);
+        setFailed(true);
+      });
+  }, []);
+  useEffect(retry, [retry]);
+  return { sites, failed, retry };
 }
 
 function NavRow({
@@ -141,19 +163,9 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
-  const [sites, setSites] = useState<Site[] | null>(null);
-  /**
-   * The rail's own error, NOT the shell's banner.
-   *
-   * Sharing the shell's `onError` made this message's survival depend on response order:
-   * the drive's refresh calls `onError(null)` when it succeeds, and it runs concurrently
-   * with this read, so a good folder listing erased "could not list spaces" whenever it
-   * landed second. A failure about the rail belongs in the rail, where nothing else
-   * clears it.
-   */
-  const [failed, setFailed] = useState(false);
+  const narrow = mobile ? false : collapsed;
 
   const toggle = () =>
     setCollapsed((was) => {
@@ -161,52 +173,35 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
       return !was;
     });
 
-  const load = useCallback(() => {
-    setFailed(false);
-    listSites()
-      .then((found) => {
-        setSites(found);
-      })
-      .catch(() => {
-        // Not the drive's failure: it still renders against whatever space the hostname
-        // routed to. The rail says so about itself and offers another go, because the
-        // alternative to a retry here is reloading the page.
-        setSites([]);
-        setFailed(true);
-      });
-  }, []);
-
-  useEffect(load, [load]);
-
   return (
     <TooltipProvider>
-      <aside className={cn('flex h-full shrink-0 flex-col border-r bg-card', collapsed ? 'w-16' : 'w-60')}>
+      <aside className={cn('flex h-full shrink-0 flex-col bg-card', mobile ? 'w-full' : narrow ? 'w-16 border-r' : 'w-60 border-r')}>
         {/* Logo row */}
-        <div className={cn('flex h-14 shrink-0 items-center gap-2 px-3', collapsed && 'justify-center px-0')}>
+        <div className={cn('flex h-14 shrink-0 items-center gap-2 px-3', narrow && 'justify-center px-0', mobile && 'pr-12')}>
           <div className="grid size-[26px] shrink-0 place-items-center rounded-md bg-primary text-primary-foreground">
             <CanopyMark size={16} />
           </div>
-          {!collapsed && (
+          {!narrow && (
             <>
               <span className="flex-1 text-[15.5px] font-semibold tracking-tight">Canopy</span>
-              <button
+              {!mobile && <button
                 onClick={toggle}
                 aria-label="Collapse sidebar"
                 className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent"
               >
                 <Icon name="panel-left" size={16} />
-              </button>
+              </button>}
             </>
           )}
         </div>
 
         {/* New — a folder, or bytes. Both are operations the scope actually has. */}
-        <div className={cn('shrink-0 px-3 pb-2', collapsed && 'px-2')}>
+        <div className={cn('shrink-0 px-3 pb-2', narrow && 'px-2')}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button disabled={offline} className="w-full justify-center gap-1.5" size={collapsed ? 'icon' : 'default'}>
+              <Button disabled={offline} className="w-full justify-center gap-1.5" size={narrow ? 'icon' : 'default'}>
                 <Icon name="plus" size={16} strokeWidth={2.25} />
-                {!collapsed && (
+                {!narrow && (
                   <>
                     <span className="flex-1 text-left">New</span>
                     <Icon name="chevron-down" size={14} />
@@ -226,14 +221,14 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
         </div>
 
         {/* Main nav */}
-        <nav className={cn('flex shrink-0 flex-col gap-0.5 px-3', collapsed && 'px-2')} aria-label="Views">
+        <nav className={cn('flex shrink-0 flex-col gap-0.5 px-3', narrow && 'px-2')} aria-label="Views">
           {NAV.map((n) => (
             <NavRow
               key={n.id}
               icon={n.icon}
               label={n.label}
               active={active === n.id}
-              collapsed={collapsed}
+              collapsed={narrow}
               disabled={offline && n.id !== 'drive'}
               onClick={() => onNavigate(n.id)}
             />
@@ -248,17 +243,17 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
           button with it.
         */}
         <div className="min-h-0 flex-1 overflow-y-auto">
-        {failed && !collapsed && (
+        {failed && !narrow && (
           <div className="mt-4 px-3">
             <p className="px-2.5 text-[12px] text-muted-foreground">
               Couldn’t list your spaces.{' '}
-              <button onClick={load} className="underline hover:text-foreground">
+              <button onClick={onRetry} className="underline hover:text-foreground">
                 Try again
               </button>
             </p>
           </div>
         )}
-        {!collapsed && sites && sites.length > 0 && (
+        {!narrow && sites && sites.length > 0 && (
           <div className="mt-4 px-3">
             <div className="mb-1 flex items-center justify-between px-2.5">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -313,7 +308,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
         )}
         </div>
 
-        {collapsed && (
+        {narrow && (
           <button
             onClick={toggle}
             className="mb-2 grid h-8 shrink-0 place-items-center text-muted-foreground hover:bg-accent"

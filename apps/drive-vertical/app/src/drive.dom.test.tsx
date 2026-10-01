@@ -510,8 +510,101 @@ describe('the shell the portal had, on the vertical', () => {
     // The portal's topbar rendered a fabricated persona when nobody was signed in; this
     // one takes the principal it was handed and nothing else. Scoped to the header,
     // because the rail says "My Drive" too.
-    expect(within(screen.getByRole('banner')).getByText('My Drive')).toBeTruthy();
+    expect(screen.getByRole('banner').textContent).toContain('My Drive');
     expect(screen.queryByText(/Log in/)).toBeNull();
+  });
+});
+
+describe('the mobile drive shell and empty views', () => {
+  it('refreshes an already empty destination when its rail item is chosen again', async () => {
+    await renderDrive();
+    fireEvent.click(rail().getByText('My Drive'));
+    expect(pending.some((p) => p.url.includes('/folders/root/folders'))).toBe(true);
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.getByText('Your drive is empty')).toBeTruthy();
+
+    fireEvent.click(rail().getByText('Trash'));
+    await flush();
+    await answer('/trash', []);
+    fireEvent.click(rail().getByText('Trash'));
+    expect(pending.some((p) => p.url.includes('/trash'))).toBe(true);
+    await answer('/trash', []);
+    expect(screen.getByText('Trash is empty')).toBeTruthy();
+  });
+
+  it('opens the space and view rail from the compact header without another site read', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    const sheet = screen.getByRole('dialog', { name: 'Drive navigation' });
+    expect(within(sheet).getByText('My Drive')).toBeTruthy();
+    expect(pending.filter((p) => p.url.includes('/api/sites'))).toHaveLength(0);
+
+    fireEvent.click(within(sheet).getByText('Trash'));
+    await flush();
+    await answer('/trash', []);
+    expect(screen.getByText('Trash is empty')).toBeTruthy();
+    expect(screen.getByRole('banner').textContent).toContain('Trash');
+  });
+
+  it('explains an empty drive and gives actions that exist', async () => {
+    await renderDrive();
+    expect(screen.getByText('Your drive is empty')).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('status')).getByText('New folder'));
+    expect(screen.getByRole('dialog', { name: '' })).toBeTruthy();
+    expect(screen.getByLabelText('New folder')).toBeTruthy();
+  });
+
+  it('distinguishes a short search from a completed search with no matches', async () => {
+    await renderDrive();
+    const box = screen.getByLabelText('Search this space');
+    fireEvent.change(box, { target: { value: 'a' } });
+    await flush();
+    expect(screen.getByText('Enter at least 2 characters to find files.')).toBeTruthy();
+
+    fireEvent.change(box, { target: { value: 'absent' } });
+    await flush();
+    await answer('term=absent', { hits: [] });
+    expect(screen.getByText('No matches for “absent”')).toBeTruthy();
+  });
+
+  it('opens a file with one tap at the mobile breakpoint', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 767px)', media: query,
+      addListener: () => {}, removeListener: () => {},
+      addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+    }));
+    await renderDrive([], [file('01A', 'lease.pdf')]);
+    expect(screen.getByRole('button', { name: 'Actions for lease.pdf' })).toBeTruthy();
+    fireEvent.click(screen.getByText('lease.pdf'));
+    expect(screen.getByRole('complementary', { name: 'Preview' })).toBeTruthy();
+    expect(pending.some((p) => p.url.endsWith('/files/01A'))).toBe(true);
+  });
+
+  it('closes a mobile preview when navigating to another view', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 767px)', media: query,
+      addListener: () => {}, removeListener: () => {},
+      addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+    }));
+    await renderDrive([], [file('01A', 'lease.pdf')]);
+    fireEvent.click(screen.getByText('lease.pdf'));
+    expect(screen.getByRole('complementary', { name: 'Preview' })).toBeTruthy();
+    fireEvent.click(within(screen.getAllByRole('complementary')[0]!).getByText('Trash'));
+    expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull();
+  });
+
+  it('selects a mobile grid card without opening it', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 767px)', media: query,
+      addListener: () => {}, removeListener: () => {},
+      addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+    }));
+    await renderDrive([], [file('01A', 'lease.pdf')]);
+    fireEvent.click(screen.getByLabelText('Switch to grid'));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select lease.pdf' }));
+    expect(screen.getByRole('checkbox', { name: 'Select lease.pdf' }).getAttribute('data-state')).toBe('checked');
+    expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull();
   });
 });
 

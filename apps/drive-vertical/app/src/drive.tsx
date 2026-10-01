@@ -13,25 +13,18 @@
  * like — but they are two reads and two entity types underneath, and the actions differ.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Icon, Input, cn } from '@canopy/ui';
+import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
 import { latestOnly } from './reads';
 import { indexedMirror, syncMirror } from './scope-mirror';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
-import { Sidebar, type NavId } from './sidebar';
+import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
 import { CommandPalette } from './command-palette';
 import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@canopy/ui';
 import {
   ApiError,
   ROOT_FOLDER_ID,
@@ -77,6 +70,9 @@ export const DRIVE_ICONS = [
   // The topbar's, which this screen renders and so is answerable for.
   'refresh',
   'log-out',
+  'panel-left',
+  'chevron-left',
+  'alert-triangle',
 ] as const;
 export type IconName = (typeof DRIVE_ICONS)[number];
 
@@ -150,7 +146,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
   const [folders, setFolders] = useState<DriveFolder[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [offline, setOffline] = useState(false);
   const [view, setView] = useState<'drive' | 'trash' | 'search'>('drive');
   const [term, setTerm] = useState('');
@@ -160,6 +157,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [creating, setCreating] = useState(false);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
   /** The folder whose sharing is open. Null is closed — one dialog, one folder at a time. */
   const [sharing, setSharing] = useState<{ id: string; name: string } | null>(null);
@@ -171,6 +169,16 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * routes gate on, so the menu cannot offer what the routes would refuse.
    */
   const [canManagePeople, setCanManagePeople] = useState(false);
+  const siteList = useSites();
+
+  useEffect(() => {
+    if (!mobileNavOpen || !window.matchMedia) return;
+    const desktop = window.matchMedia('(min-width: 768px)');
+    const closeOnDesktop = () => { if (desktop.matches) setMobileNavOpen(false); };
+    desktop.addEventListener('change', closeOnDesktop);
+    closeOnDesktop();
+    return () => desktop.removeEventListener('change', closeOnDesktop);
+  }, [mobileNavOpen]);
   /** The topbar's Upload button and the palette's action both reach the one file input. */
   const uploadRef = useRef<HTMLInputElement>(null);
   const [selection, setSelection] = useState<Set<string>>(new Set());
@@ -191,6 +199,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const refresh = useCallback(async () => {
     const ticket = reads.current.take();
     setBusy(true);
+    setLoadFailed(false);
     try {
       if (view === 'search') {
         // Below the floor there is nothing to ask for, and asking would be a 400.
@@ -215,6 +224,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         if (auth.principal) void syncMirror(auth.principal).catch(() => {});
       }
       setOffline(false);
+      setLoadFailed(false);
       onError(null);
     } catch (e: unknown) {
       // A stale failure is as misleading as a stale answer: the folder it belonged to
@@ -231,6 +241,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             setPreviewing(null);
             setCmdOpen(false);
             setOffline(true);
+            setLoadFailed(false);
             onError(null);
             return;
           }
@@ -238,6 +249,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           // IndexedDB can be unavailable; surface the original network failure.
         }
       }
+      setLoadFailed(true);
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
@@ -285,11 +297,20 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * view, so its My Drive left you looking at a subfolder labelled as the root.
    */
   const navigate = useCallback((id: NavId) => {
+    if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
+    const alreadyHere = id === 'trash'
+      ? view === 'trash'
+      : view === 'drive' && folderId === ROOT_FOLDER_ID;
+    if (alreadyHere) {
+      void refreshRef.current();
+      return;
+    }
     // Whatever is in flight belongs to the view being left.
     reads.current.invalidate();
     setTerm('');
     setHits([]);
     setSelection(new Set());
+    setBusy(true);
     if (id === 'trash') {
       setView('trash');
       return;
@@ -297,18 +318,20 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     setCrumbs([]);
     setFolderId(ROOT_FOLDER_ID);
     setView('drive');
-  }, []);
+  }, [folderId, view]);
 
   const open = (folder: DriveFolder) => {
     // The listing on screen belongs to the folder being left; nothing in flight for it
     // may land here.
     reads.current.invalidate();
+    if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
     setCrumbs((c) => [...c, { id: folder.id, name: folder.name }]);
     setFolderId(folder.id);
   };
 
   const upTo = (index: number) => {
     reads.current.invalidate();
+    if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
     // -1 is the root: the crumb trail holds everything below it.
     setCrumbs((c) => c.slice(0, index + 1));
     setFolderId(index < 0 ? ROOT_FOLDER_ID : crumbs[index]!.id);
@@ -401,23 +424,67 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     });
   };
 
+  const empty = loadFailed ? (
+    <EmptyList icon="alert-triangle" title="Couldn't load this view" description="Check the connection and try again."
+      actions={[{ label: 'Try again', onClick: () => void refresh() }]} />
+  ) : view === 'trash' ? (
+    <EmptyList icon="trash" title="Trash is empty" description="Deleted files will appear here." />
+  ) : view === 'search' ? (
+    term.trim().length < SEARCH_MIN
+      ? <EmptyList icon="search" title="Search this space" description={`Enter at least ${SEARCH_MIN} characters to find files.`} />
+      : <EmptyList icon="search" title={`No matches for “${term.trim()}”`} description="Try another name or phrase from a file." />
+  ) : offline ? (
+    <EmptyList icon="folder" title="No saved files here" description="This folder has no file names saved for offline browsing." />
+  ) : (
+    <EmptyList
+      icon="folder"
+      title={folderId === ROOT_FOLDER_ID ? 'Your drive is empty' : 'This folder is empty'}
+      description="Create a folder or upload files to get started."
+      actions={[
+        { label: 'New folder', onClick: () => setCreating(true) },
+        { label: 'Upload files', onClick: () => uploadRef.current?.click() },
+      ]}
+    />
+  );
+
   return (
     <div className="flex min-h-0 flex-1">
-      <Sidebar
-        // Searching is still the drive, not a third place — the rail should not go blank
-        // while you type.
-        active={view === 'trash' ? 'trash' : 'drive'}
-        onNavigate={navigate}
-        onNewFolder={() => startWrite(() => setCreating(true))}
-        onUpload={() => startWrite(() => uploadRef.current?.click())}
-        offline={offline}
-      />
+      <div className="hidden md:block">
+        <Sidebar
+          active={view === 'trash' ? 'trash' : 'drive'}
+          onNavigate={navigate}
+          onNewFolder={() => startWrite(() => setCreating(true))}
+          onUpload={() => startWrite(() => uploadRef.current?.click())}
+          offline={offline}
+          sites={siteList.sites}
+          failed={siteList.failed}
+          onRetry={siteList.retry}
+        />
+      </div>
+
+      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <SheetContent side="left" showCloseButton className="w-[min(20rem,85vw)] gap-0 p-0 md:hidden">
+          <SheetTitle className="sr-only">Drive navigation</SheetTitle>
+          <Sidebar
+            mobile
+            active={view === 'trash' ? 'trash' : 'drive'}
+            onNavigate={(id) => { navigate(id); setMobileNavOpen(false); }}
+            onNewFolder={() => { setMobileNavOpen(false); startWrite(() => setCreating(true)); }}
+            onUpload={() => { setMobileNavOpen(false); startWrite(() => uploadRef.current?.click()); }}
+            offline={offline}
+            sites={siteList.sites}
+            failed={siteList.failed}
+            onRetry={siteList.retry}
+          />
+        </SheetContent>
+      </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
       <Topbar
-        breadcrumb={['My Drive', ...crumbs.map((c) => c.name)]}
+        breadcrumb={view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : ['My Drive', ...crumbs.map((c) => c.name)]}
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
-        onCrumbClick={(index) => upTo(index - 1)}
+        onCrumbClick={view === 'drive' ? (index) => upTo(index - 1) : undefined}
+        onOpenMenu={() => setMobileNavOpen(true)}
         onOpenCmd={() => setCmdOpen(true)}
         onUpload={() => startWrite(() => uploadRef.current?.click())}
         onRefresh={() => void refresh()}
@@ -453,7 +520,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       />
 
       {/* The one scrolling region: the rail and the topbar stay put. */}
-      <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-4">
+      <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-3 sm:p-4">
       <div className="min-w-0 flex-1">
       {offline ? (
         <p role="status" className="mb-3 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -513,6 +580,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onAction={onAction}
           pluginMenuItems={() => []}
           loading={busy}
+          empty={empty}
         />
       ) : view === 'trash' ? (
         <FileTable
@@ -526,6 +594,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onAction={onAction}
           pluginMenuItems={() => []}
           loading={busy}
+          empty={empty}
         />
       ) : (
         <FileTable
@@ -547,16 +616,19 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           previewOpen={previewing !== null}
           loading={busy}
           readOnly={offline}
+          empty={empty}
         />
       )}
       </div>
 
       {previewing ? (
-        <PreviewPanel
-          fileId={previewing}
-          onClose={() => setPreviewing(null)}
-          onError={onError}
-        />
+        <div className="fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0">
+          <PreviewPanel
+            fileId={previewing}
+            onClose={() => setPreviewing(null)}
+            onError={onError}
+          />
+        </div>
       ) : null}
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
@@ -593,6 +665,30 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+function EmptyList({ icon, title, description, actions = [] }: {
+  icon: string;
+  title: string;
+  description: string;
+  actions?: Array<{ label: string; onClick: () => void }>;
+}) {
+  return (
+    <div role="status" className="flex min-h-56 flex-col items-center justify-center rounded-lg border border-dashed px-4 py-8 text-center">
+      <Icon name={icon} size={24} className="mb-3 text-muted-foreground" />
+      <h2 className="text-sm font-medium">{title}</h2>
+      <p className="mt-1 max-w-sm text-sm text-muted-foreground">{description}</p>
+      {actions.length > 0 && (
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          {actions.map((action, index) => (
+            <Button key={action.label} size="sm" variant={index === 0 ? 'default' : 'outline'} onClick={action.onClick}>
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
