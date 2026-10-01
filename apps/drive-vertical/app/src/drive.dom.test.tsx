@@ -516,6 +516,23 @@ describe('the shell the portal had, on the vertical', () => {
 });
 
 describe('the mobile drive shell and empty views', () => {
+  it('refreshes an already empty destination when its rail item is chosen again', async () => {
+    await renderDrive();
+    fireEvent.click(rail().getByText('My Drive'));
+    expect(pending.some((p) => p.url.includes('/folders/root/folders'))).toBe(true);
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.getByText('Your drive is empty')).toBeTruthy();
+
+    fireEvent.click(rail().getByText('Trash'));
+    await flush();
+    await answer('/trash', []);
+    fireEvent.click(rail().getByText('Trash'));
+    expect(pending.some((p) => p.url.includes('/trash'))).toBe(true);
+    await answer('/trash', []);
+    expect(screen.getByText('Trash is empty')).toBeTruthy();
+  });
+
   it('opens the space and view rail from the compact header without another site read', async () => {
     await renderDrive();
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
@@ -562,6 +579,32 @@ describe('the mobile drive shell and empty views', () => {
     fireEvent.click(screen.getByText('lease.pdf'));
     expect(screen.getByRole('complementary', { name: 'Preview' })).toBeTruthy();
     expect(pending.some((p) => p.url.endsWith('/files/01A'))).toBe(true);
+  });
+
+  it('closes a mobile preview when navigating to another view', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 767px)', media: query,
+      addListener: () => {}, removeListener: () => {},
+      addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+    }));
+    await renderDrive([], [file('01A', 'lease.pdf')]);
+    fireEvent.click(screen.getByText('lease.pdf'));
+    expect(screen.getByRole('complementary', { name: 'Preview' })).toBeTruthy();
+    fireEvent.click(within(screen.getAllByRole('complementary')[0]!).getByText('Trash'));
+    expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull();
+  });
+
+  it('selects a mobile grid card without opening it', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 767px)', media: query,
+      addListener: () => {}, removeListener: () => {},
+      addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+    }));
+    await renderDrive([], [file('01A', 'lease.pdf')]);
+    fireEvent.click(screen.getByLabelText('Switch to grid'));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select lease.pdf' }));
+    expect(screen.getByRole('checkbox', { name: 'Select lease.pdf' }).getAttribute('data-state')).toBe('checked');
+    expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull();
   });
 });
 

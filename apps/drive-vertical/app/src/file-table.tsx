@@ -314,6 +314,17 @@ export function FileTable({
             <div className="flex items-start justify-between">
               <FileIcon kind={f.kind} size={38} />
               <div className="flex items-center gap-1">
+                <Checkbox
+                  aria-label={`Select ${f.name}`}
+                  checked={selection.has(f.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  onCheckedChange={() => {
+                    const next = new Set(selection);
+                    if (next.has(f.id)) next.delete(f.id);
+                    else next.add(f.id);
+                    onSelectionChange(next);
+                  }}
+                />
                 <RowActions file={f} onAction={onAction} readOnly={readOnly} />
               </div>
             </div>

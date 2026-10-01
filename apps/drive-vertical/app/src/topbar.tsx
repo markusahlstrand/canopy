@@ -212,7 +212,7 @@ export function Topbar({
           title={offline ? "You're offline" : undefined}
           className="gap-1.5 sm:w-auto sm:px-3"
         >
-          <Icon name="log-out" size={16} className="rotate-180" /> <span className="hidden sm:inline">Log in</span>
+          <Icon name="log-out" size={16} className="rotate-180" /> <span className="sr-only sm:not-sr-only">Log in</span>
         </Button>
       ) : (
         <DropdownMenu>

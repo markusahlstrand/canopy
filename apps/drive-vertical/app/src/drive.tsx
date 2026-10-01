@@ -297,6 +297,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * view, so its My Drive left you looking at a subfolder labelled as the root.
    */
   const navigate = useCallback((id: NavId) => {
+    if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
+    const alreadyHere = id === 'trash'
+      ? view === 'trash'
+      : view === 'drive' && folderId === ROOT_FOLDER_ID;
+    if (alreadyHere) {
+      void refreshRef.current();
+      return;
+    }
     // Whatever is in flight belongs to the view being left.
     reads.current.invalidate();
     setTerm('');
@@ -310,18 +318,20 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     setCrumbs([]);
     setFolderId(ROOT_FOLDER_ID);
     setView('drive');
-  }, []);
+  }, [folderId, view]);
 
   const open = (folder: DriveFolder) => {
     // The listing on screen belongs to the folder being left; nothing in flight for it
     // may land here.
     reads.current.invalidate();
+    if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
     setCrumbs((c) => [...c, { id: folder.id, name: folder.name }]);
     setFolderId(folder.id);
   };
 
   const upTo = (index: number) => {
     reads.current.invalidate();
+    if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
     // -1 is the root: the crumb trail holds everything below it.
     setCrumbs((c) => c.slice(0, index + 1));
     setFolderId(index < 0 ? ROOT_FOLDER_ID : crumbs[index]!.id);
