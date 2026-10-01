@@ -123,7 +123,74 @@ const fileRef = (id: string) => ({ entityType: 'file', entityId: id }) as const;
 const versionRef = (id: string) => ({ entityType: 'file_version', entityId: id }) as const;
 const fileTextRef = (id: string) => ({ entityType: 'file_text', entityId: id }) as const;
 
+/** Events that invalidate a mirrored file row. Shares only change write/manage
+ * authority, and text extraction is a search concern rather than listing metadata. */
+const FILE_CHANGE_TYPES = [
+  'drive.file-created',
+  'drive.file-written',
+  'drive.file-renamed',
+  'drive.file-moved',
+  'drive.file-trashed',
+  'drive.file-restored',
+] as const;
+const FOLDER_CHANGE_TYPES = [
+  'drive.folder-created',
+  'drive.folder-renamed',
+  'drive.folder-moved',
+] as const;
+const MIRROR_CHANGE_TYPES = [...FILE_CHANGE_TYPES, ...FOLDER_CHANGE_TYPES] as const;
+
+interface MirrorChangeEvent {
+  id: string;
+  type: string;
+  entity_type: string;
+  entity_id: string;
+}
+
 const operations = {
+  'drive/changes': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    const limit = input.limit ?? 50;
+    const placeholders = MIRROR_CHANGE_TYPES.map(() => '?').join(', ');
+    // The extra row answers hasMore without returning an event we have not scanned.
+    // `id` is the spine's monotonic ULID and survives scope restore; a timestamp
+    // cursor would drop events emitted by the same invocation.
+    const events = ctx.sql.query<MirrorChangeEvent>(
+      `SELECT id, type, entity_type, entity_id FROM _substrat_outbox ` +
+        `WHERE type IN (${placeholders})` +
+        (input.after ? ' AND id > ?' : '') +
+        ' ORDER BY id LIMIT ?',
+      [...MIRROR_CHANGE_TYPES, ...(input.after ? [input.after] : []), limit + 1],
+    );
+    const page = events.slice(0, limit);
+    const changes: (
+      | { id: string; type: string; entityType: 'file'; entityId: string; file: FileRow | null }
+      | { id: string; type: string; entityType: 'folder'; entityId: string; folder: FolderRow | null }
+    )[] = [];
+    for (const event of page) {
+      if (event.entity_type === 'file') {
+        if (!(await ctx.check(DRIVE_PERM.read, fileRef(event.entity_id))).allowed) continue;
+        const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [event.entity_id])[0];
+        changes.push({
+          id: event.id, type: event.type, entityType: 'file', entityId: event.entity_id,
+          file: file?.state === 'live' ? file : null,
+        });
+      } else if (event.entity_type === 'folder') {
+        if (!(await ctx.check(DRIVE_PERM.read, folderRef(event.entity_id))).allowed) continue;
+        const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [event.entity_id])[0];
+        changes.push({
+          id: event.id, type: event.type, entityType: 'folder', entityId: event.entity_id,
+          folder: folder ?? null,
+        });
+      }
+    }
+    return {
+      changes,
+      cursor: page.at(-1)?.id ?? input.after ?? null,
+      hasMore: events.length > limit,
+    };
+  },
+
   'drive/list-folder': async (ctx, input) => {
     // The declaration names the permission; the handler still asks the checker.
     // That split is the conversion of `authz.ts`: canopy's `pathRole(space, path)`

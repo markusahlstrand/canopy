@@ -21,6 +21,7 @@ describe('the derived route table', () => {
     expect(mounted.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
       'DELETE /api/files/:fileId',
       'DELETE /api/folders/:folderId/shares',
+      'GET /api/changes',
       'GET /api/files/:fileId',
       'GET /api/files/:fileId/text',
       'GET /api/files/:fileId/versions',
