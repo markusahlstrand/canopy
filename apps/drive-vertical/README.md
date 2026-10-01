@@ -143,6 +143,16 @@ principal's saved names when `/api/me` is unreachable. An online 401 or sign-out
 clears the mirror, including the offline identity; sign-out in another tab also hides
 an already-open offline view.
 
+## Live updates
+
+`GET /api/live` is Substrat's WebSocket subscription for authenticated pages. The
+worker resolves the selected space and principal through its normal session path;
+the scope sends only file and folder invalidations that pass `drive:read` on the
+changed entity. The browser re-reads the current view and syncs the event mirror
+when a frame arrives. It also polls once a minute and on returning to a visible
+tab, covering disconnected sockets, unsupported network paths, and changes that
+cannot be pushed after a permission is revoked.
+
 ## Not yet wired
 
 WebDAV, connector-backed reads, and any migration of existing canopy spaces. See

@@ -47,7 +47,7 @@ import {
 } from '@substrat-run/adapter-cloudflare';
 import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
 import { readRoutedNode, RouterAssertionError, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
-import { mountPlatformSurface } from '@substrat-run/vertical-host';
+import { mountLiveReads, mountPlatformSurface } from '@substrat-run/vertical-host';
 import {
   AuthConfigError,
   IdentityDO,
@@ -1061,6 +1061,16 @@ app.get('/api/files/:fileId/content', async (c) => {
  * who resolves to no principal never reaches a stub, so an unauthenticated request
  * is refused before any scope is touched.
  */
+mountLiveReads(app, {
+  live: (c) => hostFor(c.env).liveReads,
+  subscriber: async (c) => {
+    const principal = await principalFor(c.env, c.req.raw);
+    if (!principal) return null;
+    const node = await nodeFor(c.req.raw, c.env);
+    return { ...node, principal };
+  },
+});
+
 mountApi(app, async (c): Promise<ScopeStub> => {
   const env = c.env as Env;
   const principal = await principalFor(env, c.req.raw);

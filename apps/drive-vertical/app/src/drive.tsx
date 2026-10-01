@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
 import { latestOnly } from './reads';
 import { indexedMirror, syncMirror } from './scope-mirror';
+import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
@@ -259,6 +260,37 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
+
+  useEffect(() => {
+    const principal = auth.principal;
+    if (!principal) return;
+    let active = true;
+    let refreshing = false;
+    let pending = false;
+    const refreshLive = async () => {
+      if (!active) return;
+      if (refreshing) {
+        pending = true;
+        return;
+      }
+      refreshing = true;
+      try {
+        do {
+          pending = false;
+          void syncMirror(principal).catch(() => {});
+          await refreshRef.current();
+          // Use the current view for the trailing read; navigation still owns its tickets.
+        } while (active && pending);
+      } finally {
+        refreshing = false;
+      }
+    };
+    const stop = watchDriveChanges(() => { void refreshLive(); });
+    return () => {
+      active = false;
+      stop();
+    };
+  }, [auth.principal]);
 
   useEffect(() => {
     // A failure is an answer here: no menu item. It is not worth the shell's banner —
