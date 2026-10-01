@@ -170,6 +170,19 @@ export const driveEntities = defineEntities({
     key: ['file_id'],
     parents: ['file'],
   },
+
+  /** Display identity only. The principal is the row key; no permission is granted on it. */
+  person: {
+    table: 'drive_people',
+    fields: z.object({
+      principal: z.string(),
+      email: z.string().nullable(),
+      name: z.string().nullable(),
+      seen_at: z.string(),
+    }),
+    primaryKey: ['principal'],
+    erasable: ['email', 'name'],
+  },
 });
 
 /**
@@ -190,15 +203,10 @@ export const DRIVE_PERMISSIONS = ['drive:read', 'drive:write', 'drive:manage'] a
 /**
  * A person as this drive displays them: a principal, and what to call it.
  *
- * Not an entity. Nothing is granted on a person and nothing pages over them — this is a
- * row shape shared by the operation that writes it and the one that reads it back.
+ * Nothing is granted on a person and nothing pages over them. The declaration above
+ * names the existing table so the roster events can name their actual entity.
  */
-const drivePerson = z.object({
-  principal: z.string(),
-  email: z.string().nullable(),
-  name: z.string().nullable(),
-  seen_at: z.string(),
-});
+const drivePerson = driveEntities.person.fields;
 
 /**
  * A share as the drive recorded it: which folder, who, and what they were given.
@@ -714,8 +722,9 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       schemaVersion: 1,
       // The principal is in the payload: "who was given access to what" is the event an
       // audit exists for, and a share event without the grantee says nothing.
-      piiClass: 'none',
-      payload: ['folder_id', 'principal', 'permission'],
+      piiClass: 'pseudonymous',
+      subjectId: 'principal',
+      payload: ['principal', 'permission'],
     },
   },
 
@@ -744,8 +753,9 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       entityIdFrom: 'folder_id',
       type: 'drive.folder-unshared',
       schemaVersion: 1,
-      piiClass: 'none',
-      payload: ['folder_id', 'principal', 'permission'],
+      piiClass: 'pseudonymous',
+      subjectId: 'principal',
+      payload: ['principal', 'permission'],
     },
   },
 
@@ -806,6 +816,15 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       name: z.string().nullable().optional(),
     }),
     output: drivePerson,
+    emits: {
+      entity: 'person',
+      entityIdFrom: 'principal',
+      type: 'drive.person-recorded',
+      schemaVersion: 1,
+      piiClass: 'pseudonymous',
+      subjectId: 'principal',
+      payload: ['principal'],
+    },
   },
 
   /**
@@ -855,6 +874,15 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       /** Whether a roster row existed to delete. */
       forgotten: z.boolean(),
     }),
+    emits: {
+      entity: 'person',
+      entityIdFrom: 'principal',
+      type: 'drive.person-forgotten',
+      schemaVersion: 1,
+      piiClass: 'pseudonymous',
+      subjectId: 'principal',
+      payload: ['principal', 'revoked'],
+    },
   },
 
   /**

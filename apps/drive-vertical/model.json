@@ -215,6 +215,46 @@
       "key": [
         "path"
       ]
+    },
+    "person": {
+      "table": "drive_people",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "principal": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seen_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal",
+          "email",
+          "name",
+          "seen_at"
+        ],
+        "additionalProperties": false
+      },
+      "primaryKey": [
+        "principal"
+      ],
+      "erasable": [
+        "email",
+        "name"
+      ]
     }
   }
 }
