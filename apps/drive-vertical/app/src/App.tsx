@@ -23,10 +23,13 @@ import {
   whoami,
 } from './api';
 import { DriveScreen } from './drive';
-import { clearMirror, resumeMirror } from './scope-mirror';
+import { clearMirror, offlineIdentity, onMirrorLogout, rememberOfflineIdentity, resumeMirror } from './scope-mirror';
 
 /** Nobody is signed in yet, somebody is, or we have not asked. */
 type Session = { state: 'loading' } | { state: 'out' } | { state: 'in'; principal: string };
+
+/** The last verified principal is an offline hint for this routed site only. */
+const offlineSiteKey = () => JSON.stringify([window.location.origin, currentSite()]);
 
 /**
  * The two credentials that arrive as a LINK, and what to do with each.
@@ -219,6 +222,10 @@ export default function App() {
             );
             return null;
           }
+        } else if (e instanceof TypeError || (e instanceof ApiError && e.status >= 500)) {
+          // A disconnected tab cannot redeem the link yet. Keep its token for the next
+          // online load instead of treating a network failure as an invalid invitation.
+          stash(kind, token);
         } else {
           // A dead link is worth SAYING — somebody followed one they were given, and
           // silence would leave them looking at a drive that is not the one they were
@@ -235,18 +242,41 @@ export default function App() {
     boot()
       .then((me) => {
         if (me) {
-          void resumeMirror().catch(() => {}).finally(() => {
-            setSession({ state: 'in', principal: me.principal });
-          });
+          void resumeMirror()
+            .then(() => rememberOfflineIdentity(offlineSiteKey(), me.principal))
+            .catch(() => {})
+            .finally(() => setSession({ state: 'in', principal: me.principal }));
         }
       })
       // A 401 is the logged-out state, not a failure — anything else is.
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.status === 401) return setSession({ state: 'out' });
+      .catch(async (e: unknown) => {
+        if (e instanceof ApiError && e.status === 401) {
+          setSession({ state: 'out' });
+          // The server answered: this is not an outage, so its old offline identity
+          // must not be used on a later disconnected load.
+          void clearMirror().catch(() => {});
+          return;
+        }
+        if (e instanceof TypeError || (e instanceof ApiError && e.status >= 500)) {
+          try {
+            const principal = await offlineIdentity(offlineSiteKey());
+            if (principal) {
+              setSession({ state: 'in', principal });
+              return;
+            }
+          } catch {
+            // IndexedDB may be blocked; the signed-out/error state remains honest.
+          }
+        }
         setSession({ state: 'out' });
         setError(e instanceof Error ? e.message : String(e));
       });
   }, []);
+
+  useEffect(() => onMirrorLogout(() => {
+    setSession({ state: 'out' });
+    setError(null);
+  }), []);
 
   /**
    * A full-height shell, not a centred column.

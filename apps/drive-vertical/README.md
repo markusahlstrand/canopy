@@ -137,11 +137,13 @@ IndexedDB, committing rows and cursor together under the current scope principal
 After an online listing, it catches up in the background. If the network fails while
 the signed-in drive is open, folder browsing falls back to those saved names; writes,
 search, trash and content previews remain unavailable until Refresh reconnects.
-Signing out clears the saved metadata. A cold offline load still needs an online
-`/api/me` before it knows which principal's mirror may be shown.
+The browser remembers the last authenticated principal for the current origin and
+selected site. Once the first feed pass has completed, a cold load can show that
+principal's saved names when `/api/me` is unreachable. An online 401 or sign-out
+clears the mirror, including the offline identity; sign-out in another tab also hides
+an already-open offline view.
 
 ## Not yet wired
 
-Cold-start offline identity, WebDAV, connector-backed reads, and any migration of
-existing canopy spaces. See
+WebDAV, connector-backed reads, and any migration of existing canopy spaces. See
 [`documentation/planning/scope-model-mapping.md`](../../documentation/planning/scope-model-mapping.md) §3.
