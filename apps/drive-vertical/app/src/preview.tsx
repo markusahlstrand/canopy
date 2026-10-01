@@ -8,12 +8,12 @@
  * cannot work is worse than a panel that does less. Each is a small ticket the day
  * somebody wants it.
  *
- * Plugin viewers are absent for a different reason. The portal mounts them in a sandboxed
- * iframe, which is a runtime microfrontend and exactly what K-15 rejects for a hosted
- * vertical — so built-in types render here and the plugin seam waits for #73.
+ * The image viewer is bundled as a trusted web component (#73). Other browser-native
+ * types remain here until there is a first-party viewer that improves on them.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, cn } from '@canopy/ui';
+import type { FileViewerElement } from '@canopy/plugin-sdk/web-component';
 import {
   contentUrl,
   fileBodyAsText,
@@ -25,6 +25,9 @@ import {
   type FileVersion,
 } from './api';
 import { latestOnly } from './reads';
+import { IMAGE_VIEWER_TAG, registerImageViewer } from './image-viewer';
+
+registerImageViewer();
 
 type Tab = 'file' | 'versions' | 'text';
 
@@ -74,6 +77,7 @@ export function textStatusLabel(row: FileTextRow | null): string {
   }
 }
 
+/** Load the current file's metadata and render only the preview surfaces the API supports. */
 export function PreviewPanel({
   fileId,
   onClose,
@@ -234,11 +238,7 @@ export function PreviewPanel({
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : shape === 'image' ? (
-            <img
-              src={contentUrl(fileId)}
-              alt={file?.name ?? ''}
-              className="mx-auto max-h-full rounded-md"
-            />
+            <ImagePreview fileId={fileId} name={file?.name ?? ''} mime={version.mime} />
           ) : shape === 'pdf' ? (
             // `object` rather than `iframe`: it falls back to its children when the
             // browser has no PDF viewer, instead of rendering an empty frame.
@@ -303,6 +303,29 @@ export function PreviewPanel({
   );
 }
 
+/** Mount the trusted web component and retire its file when this preview closes. */
+function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mime: string }) {
+  const host = useRef<HTMLDivElement>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const element = document.createElement(IMAGE_VIEWER_TAG) as FileViewerElement;
+    const onError = () => setFailed(true);
+    setFailed(false);
+    element.addEventListener('viewer-error', onError);
+    element.file = { id: fileId, name, mime, contentUrl: contentUrl(fileId) };
+    host.current?.append(element);
+    return () => {
+      element.file = null;
+      element.removeEventListener('viewer-error', onError);
+      element.remove();
+    };
+  }, [fileId, name, mime]);
+
+  return failed ? <Empty>Could not render {name}.</Empty> : <div ref={host} className="h-full w-full" />;
+}
+
+/** Keep an empty or failed preview legible in the space used by the file body. */
 function Empty({ children }: { children: React.ReactNode }) {
   return <p className="px-2 py-8 text-center text-sm text-muted-foreground">{children}</p>;
 }
