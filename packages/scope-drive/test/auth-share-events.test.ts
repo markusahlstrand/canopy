@@ -70,6 +70,7 @@ describe('drive auth and share events', () => {
 
     await memberScope.invoke('drive/record-person', { email: 'member@example.test', name: 'Member' });
     await memberScope.invoke('drive/record-person', { email: 'member@example.test', name: 'Member' });
+    await memberScope.invoke('drive/record-person', { email: 'member@example.test', name: 'Renamed Member' });
     await ownerScope.invoke('drive/share-folder', {
       folderId: folder.id, principal: member, permission: 'drive:write',
     });
@@ -83,23 +84,44 @@ describe('drive auth and share events', () => {
 
     const events = await mutationEvents();
     expect(events.map((event) => event.type)).toEqual([
-      'drive.person-recorded', 'drive.folder-shared',
+      'drive.person-recorded', 'drive.person-recorded', 'drive.folder-shared',
       'drive.folder-unshared', 'drive.person-forgotten',
     ]);
     expect(events.map((event) => event.operation)).toEqual([
-      'drive/record-person', 'drive/share-folder',
+      'drive/record-person', 'drive/record-person', 'drive/share-folder',
       'drive/unshare-folder', 'drive/forget-person',
     ]);
-    expect(events.map((event) => event.subject_id)).toEqual([member, member, member, member]);
+    expect(events.map((event) => event.subject_id)).toEqual([member, member, member, member, member]);
     expect(events.every((event) => event.pii_class === 'pseudonymous')).toBe(true);
-    expect(events.map((event) => event.entity_id)).toEqual([member, folder.id, folder.id, member]);
+    expect(events.map((event) => event.entity_id)).toEqual([member, member, folder.id, folder.id, member]);
     expect(events.map((event) => JSON.parse(event.authorization) as unknown[]).every((checks) => checks.length > 0)).toBe(true);
     expect(JSON.stringify(events)).not.toContain('member@example.test');
+    expect(JSON.stringify(events)).not.toContain('Member');
     expect(events.map((event) => JSON.parse(event.payload) as object)).toEqual([
+      { principal: member },
       { principal: member },
       { principal: member, permission: 'drive:write' },
       { principal: member, permission: 'drive:write' },
       { principal: member, revoked: 0 },
     ]);
+  });
+
+  it('forgets an active grant even when the grantee has no display roster row', async () => {
+    const grantOnly = principalId.parse(ulid());
+    const ownerScope = await host.getScope(owner, tenant, scope);
+    const folder = await ownerScope.invoke<{ id: string }>('drive/create-folder', {
+      parentId: ROOT_FOLDER_ID, name: 'Grant only',
+    });
+    const before = (await mutationEvents()).length;
+    await ownerScope.invoke('drive/share-folder', {
+      folderId: folder.id, principal: grantOnly, permission: 'drive:write',
+    });
+    const result = await ownerScope.invoke<{ revoked: number; forgotten: boolean }>('drive/forget-person', {
+      principal: grantOnly,
+    });
+    expect(result).toEqual({ principal: grantOnly, revoked: 1, forgotten: false });
+    const events = (await mutationEvents()).slice(before);
+    expect(events.map((event) => event.type)).toEqual(['drive.folder-shared', 'drive.person-forgotten']);
+    expect(JSON.parse(events[1]!.payload)).toEqual({ principal: grantOnly, revoked: 1 });
   });
 });
