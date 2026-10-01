@@ -64,6 +64,12 @@ export const driveManifest = moduleManifest.parse({
       writePermission: DRIVE_PERM.write,
     },
   ],
+  // Live frames carry only the changed id. The scope checks drive:read on that
+  // exact entity for each subscriber before it sends an invalidation.
+  liveTargets: [
+    { entityType: 'folder', readPermission: DRIVE_PERM.read },
+    { entityType: 'file', readPermission: DRIVE_PERM.read },
+  ],
   lists: listsDeclaredBy(driveOperations, driveEntities),
   entitlementKey: 'drive',
 });

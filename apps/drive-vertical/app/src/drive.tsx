@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
 import { latestOnly } from './reads';
 import { indexedMirror, syncMirror } from './scope-mirror';
+import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
@@ -259,6 +260,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
+
+  useEffect(() => {
+    const principal = auth.principal;
+    if (!principal) return;
+    return watchDriveChanges(() => {
+      void syncMirror(principal).catch(() => {});
+      void refreshRef.current();
+    });
+  }, [auth.principal]);
 
   useEffect(() => {
     // A failure is an answer here: no menu item. It is not worth the shell's banner —
