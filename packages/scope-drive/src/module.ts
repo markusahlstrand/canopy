@@ -80,6 +80,7 @@ interface FileTextRow {
   text: string;
   chars: number;
   extracted_at: string;
+  extractor_revision: string;
   detail: string | null;
 }
 
@@ -742,9 +743,12 @@ const operations = {
     // confusion `status` exists to prevent.
     const text = input.status === 'indexed' ? (input.text ?? '') : '';
     const existing = ctx.sql.query<FileTextRow>(
-      'SELECT id FROM drive_file_text WHERE file_id = ?',
+      'SELECT * FROM drive_file_text WHERE file_id = ?',
       [input.fileId],
     )[0];
+    if (existing && existing.version_id === input.versionId && existing.status === input.status &&
+        existing.text === text && existing.detail === (input.detail ?? null) &&
+        existing.extractor_revision === input.extractorRevision) return existing;
 
     const row: FileTextRow = {
       // The id is STABLE across re-extraction: it is an entity in its own right,
@@ -756,18 +760,19 @@ const operations = {
       text,
       chars: text.length,
       extracted_at: ctx.now(),
+      extractor_revision: input.extractorRevision,
       detail: input.detail ?? null,
     };
 
     if (existing) {
       ctx.sql.exec(
-        'UPDATE drive_file_text SET version_id = ?, status = ?, text = ?, chars = ?, extracted_at = ?, detail = ? WHERE file_id = ?',
-        [row.version_id, row.status, row.text, row.chars, row.extracted_at, row.detail, row.file_id],
+        'UPDATE drive_file_text SET version_id = ?, status = ?, text = ?, chars = ?, extracted_at = ?, detail = ?, extractor_revision = ? WHERE file_id = ?',
+        [row.version_id, row.status, row.text, row.chars, row.extracted_at, row.detail, row.extractor_revision, row.file_id],
       );
     } else {
       ctx.sql.exec(
-        'INSERT INTO drive_file_text (id, file_id, version_id, status, text, chars, extracted_at, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [row.id, row.file_id, row.version_id, row.status, row.text, row.chars, row.extracted_at, row.detail],
+        'INSERT INTO drive_file_text (id, file_id, version_id, status, text, chars, extracted_at, detail, extractor_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [row.id, row.file_id, row.version_id, row.status, row.text, row.chars, row.extracted_at, row.detail, row.extractor_revision],
       );
       // Only on insert: the edge is a fact about this row's identity, and
       // re-linking an existing one on every re-extraction would be a write with
@@ -794,11 +799,47 @@ const operations = {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
     liveFile(ctx, input.fileId);
     const row = ctx.sql.query<FileTextRow>(
-      'SELECT id, file_id, version_id, status, chars, extracted_at, detail FROM drive_file_text WHERE file_id = ?',
+      'SELECT id, file_id, version_id, status, chars, extracted_at, detail, extractor_revision FROM drive_file_text WHERE file_id = ?',
       [input.fileId],
     )[0];
     // Null is the answer, not the absence of one: it says nobody has looked yet.
     return row ?? null;
+  },
+
+  'drive/list-extraction-candidates': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    // A limit on ELIGIBLE rows can still scan the entire scope when few files
+    // need work. Read a fixed window of file ids, then choose at most `limit`
+    // candidates from it. The cursor tracks the last file EXAMINED, even if
+    // none in the window needed extraction.
+    const scanLimit = input.limit * 10;
+    const rows = ctx.sql.query<{
+      id: string; versionId: string | null; name: string; mime: string | null;
+      blobRef: string | null; source: string | null; textId: string | null;
+      textVersionId: string | null; status: string | null; extractorRevision: string | null;
+    }>(
+      `SELECT f.id, v.id AS versionId, f.name, v.mime, v.blob_ref AS blobRef,
+              v.source, t.id AS textId, t.version_id AS textVersionId,
+              t.status, t.extractor_revision AS extractorRevision
+       FROM drive_files f
+       LEFT JOIN drive_file_versions v ON v.id = f.current_version_id AND v.file_id = f.id
+       LEFT JOIN drive_file_text t ON t.file_id = f.id
+       WHERE f.state = 'live' AND f.id > ?
+       ORDER BY f.id LIMIT ?`,
+      [input.after ?? '', scanLimit + 1],
+    );
+    const files: { id: string; versionId: string; name: string; mime: string; blobRef: string }[] = [];
+    let examined = 0;
+    for (const row of rows.slice(0, scanLimit)) {
+      examined += 1;
+      if (row.versionId && row.blobRef && row.mime && row.source === 'blob' &&
+          (!row.textId || row.textVersionId !== row.versionId || row.status === 'failed' ||
+           (row.status === 'unsupported' && row.extractorRevision !== input.extractorRevision))) {
+        files.push({ id: row.id, versionId: row.versionId, name: row.name, mime: row.mime, blobRef: row.blobRef });
+      }
+      if (files.length === input.limit) break;
+    }
+    return { files, next: rows.length > examined ? rows[examined - 1]!.id : null };
   },
 
   'drive/share-folder': async (ctx, input) => {
@@ -997,7 +1038,14 @@ const operations = {
         "SELECT * FROM drive_files WHERE id = ? AND state = 'live'",
         [fileId],
       )[0];
-      if (file) hits.push({ ...file, via });
+      if (!file) continue;
+      if (via === 'content') {
+        const text = ctx.sql.query<{ version_id: string; status: string }>(
+          'SELECT version_id, status FROM drive_file_text WHERE file_id = ?', [fileId],
+        )[0];
+        if (text?.version_id !== file.current_version_id || text.status !== 'indexed') continue;
+      }
+      hits.push({ ...file, via });
     }
     return { hits };
   },

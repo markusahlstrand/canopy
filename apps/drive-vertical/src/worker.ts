@@ -29,6 +29,7 @@ import { z } from 'zod';
 import {
   blobStoreBindingName,
   errorCodeOf,
+  platformActorId,
   principalId,
   scopeId,
   tenantId,
@@ -41,10 +42,11 @@ import {
   defineScopeDO,
   defineScopeSweeperDO,
   SCOPE_SWEEPER_NAME,
+  type ScopeSweepHost,
   type ScopeSweeperDo,
 } from '@substrat-run/adapter-cloudflare';
 import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
-import { readRoutedNode, RouterAssertionError, type ScopeStub } from '@substrat-run/kernel';
+import { readRoutedNode, RouterAssertionError, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
 import { mountPlatformSurface } from '@substrat-run/vertical-host';
 import {
   AuthConfigError,
@@ -70,6 +72,12 @@ import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
 import { ScanSaturated, removeMember, unbindEveryBinding } from './remove-member.js';
 import { MEMBER_ROLE_KEY, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
+import { driveManifest, DRIVE_PERM } from '@canopy/scope-drive';
+
+const EXTRACTOR_REVISION = 'pdf-v1';
+const BACKFILL_JOB = 'text-backfill';
+const BACKFILL_BATCH = 20;
+const BACKFILL_ACTOR = platformActorId.parse('01JZ00000000000000000SYS01');
 
 /**
  * The scope-DO class = the app binary: kernel + the drive module, bundled. One
@@ -85,11 +93,19 @@ export { IdentityDO };
  * provisioned scope's due recurring work. Empty roster costs nothing, and the drive
  * will need it the moment indexing arrives.
  */
-export const SweeperDO = defineScopeSweeperDO<Env>({
+const sweeperConfig = {
   versionId: (env) => env.SUBSTRAT_VERSION_ID ?? null,
   intervalMs: 120_000,
   host: hostFor,
-});
+  runJobs: true,
+  jobStartIntervalMs: 12 * 60 * 60 * 1000,
+  startJobs: async (host: ScopeSweepHost, tenant: TenantId, scope: ScopeId) => {
+    await (host as CloudflareScopeHost).startJobRun(tenant, scope, {
+      moduleId: driveManifest.id, job: BACKFILL_JOB, payload: { tenant, scope },
+    });
+  },
+} satisfies Parameters<typeof defineScopeSweeperDO<Env>>[0];
+export const SweeperDO = defineScopeSweeperDO<Env>(sweeperConfig);
 
 export interface Env {
   SUBSTRAT_VERSION_ID?: string;
@@ -207,6 +223,38 @@ function hostFor(env: Env): CloudflareScopeHost {
     attachmentBuckets: (tid) => env[blobStoreBindingName('BLOBS', tid)] as R2Bucket | undefined,
   });
   for (const m of MODULES) host.registerModule(m);
+  host.registerJob(driveManifest.id, BACKFILL_JOB, async (pass: JobPassContext) => {
+    const { tenant, scope: scopeId } = pass.payload as { tenant: TenantId; scope: ScopeId };
+    const scope = await pass.scope();
+    const page = await scope.invoke<{
+      files: { id: string; versionId: string; name: string; mime: string; blobRef: string }[];
+      next: string | null;
+    }>('drive/list-extraction-candidates', {
+      after: (pass.cursor as string | null) ?? undefined,
+      limit: BACKFILL_BATCH,
+      extractorRevision: EXTRACTOR_REVISION,
+    });
+    if (page.files.length === 0) return { cursor: page.next ?? pass.cursor, done: page.next === null };
+    const attachments = await host.getSystemAttachments(driveManifest.id, tenant, scopeId);
+    for (const file of page.files) {
+      await pass.step(`${file.id}:${file.versionId}`, async () => {
+        const opened = await attachments.open(file.blobRef);
+        if (!opened) {
+          await scope.invoke('drive/record-text', {
+            fileId: file.id, versionId: file.versionId, extractorRevision: EXTRACTOR_REVISION,
+            status: 'failed', detail: 'attachment bytes are missing',
+          }).catch((error: unknown) => {
+            if (errorCodeOf(error) !== 'conflict') throw error;
+          });
+          return true;
+        }
+        await extractAndRecord(scope, { id: file.id, versionId: file.versionId, name: file.name, mime: file.mime }, opened.body);
+        return true;
+      });
+      pass.count('examined');
+    }
+    return { cursor: page.next ?? page.files.at(-1)?.id ?? pass.cursor, done: page.next === null };
+  });
   return host;
 }
 
@@ -333,6 +381,25 @@ mountPlatformSurface<Env>(app, {
    */
   onProvision: async (env, b) => {
     const node = { tenantId: b.tenantId, scopeId: b.scopeId };
+    const host = hostFor(env);
+    const switchedOff = (await host.systemGrantsStatusLocal(b.scopeId)).some(
+      (entry) => entry.moduleId === driveManifest.id && entry.schedules === 'off',
+    );
+    if (!switchedOff) {
+      for (const permission of [DRIVE_PERM.read, DRIVE_PERM.write]) {
+        await host.admin.grantToSystem(BACKFILL_ACTOR, {
+          moduleId: driveManifest.id,
+          permission,
+          node,
+          grantedBy: BACKFILL_ACTOR,
+        });
+      }
+      await host.startJobRun(b.tenantId, b.scopeId, {
+        moduleId: driveManifest.id,
+        job: BACKFILL_JOB,
+        payload: { tenant: b.tenantId, scope: b.scopeId },
+      });
+    }
     await identityDo(env, node).setPendingOwner(b.scopeId, b.owner);
     // This space, in the vertical's OWN per-tenant registry (M2 of
     // `multi-scope-manyfold.md`). It is what lets the app list and switch spaces
@@ -429,12 +496,14 @@ async function requirePeopleAdmin(c: Context<{ Bindings: Env }>): Promise<Princi
 
 mountInviteRoutes<Env, Node>(app, {
   nodeFor,
-  requireAdmin: requirePeopleAdmin,
+  requireAdmin: async (c) => ({ principal: await requirePeopleAdmin(c) }),
+  canAssign: (env, node, principal, roleKey) =>
+    hostFor(env).canAssign(node.tenantId, node.scopeId, principal, roleKey),
+  assignScopeRoleBounded: (env, node, caller, assignee, roleKey) =>
+    hostFor(env).assignScopeRoleBounded(node.tenantId, node.scopeId, caller, assignee, roleKey),
   roles: [MEMBER_ROLE_KEY],
   directory: (env, node) => identityDo(env, node),
-  // Scope-local, no control plane: the role lands in the same store the checker reads.
-  assignScopeRole: (env, scopeId, principal, roleKey) =>
-    hostFor(env).assignScopeRole(scopeId, principal, roleKey),
+  // Scope-local, no control plane: the bounded grant lands where the checker reads.
   revokeScopeRole: (env, scopeId, principal, roleKey) =>
     hostFor(env).revokeScopeRole(scopeId, principal, roleKey),
   // The INSTALL's provider, never the selected space's: identity is the install's and
@@ -817,7 +886,7 @@ const MAX_INDEXED_CHARS = 200_000;
 /**
  * Extract a file's text and record what came of it — INCLUDING nothing.
  *
- * Runs after the upload's response, never inside it. Extraction is slow enough to
+ * Runs after the upload's response or in a durable backfill pass. Extraction is slow enough to
  * notice on a large PDF and it must never be the reason a file failed to store:
  * the bytes and the version are the upload, and the text is a thing we learn
  * about them afterwards. So every path here ends in a `drive/record-text` call —
@@ -838,7 +907,7 @@ async function extractAndRecord(
 ): Promise<void> {
   const record = async (body: Record<string, unknown>) => {
     try {
-      await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, ...body });
+      await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, extractorRevision: EXTRACTOR_REVISION, ...body });
     } catch (e) {
       // The file moved on while this was parsing — a newer upload is already
       // current, and its own extraction owns the text now. Extraction runs off
@@ -852,8 +921,8 @@ async function extractAndRecord(
 
   try {
     // Imported HERE, not at the top. `@canopy/docworker/pdf` pulls in pdf.js —
-    // about 570 KB gzipped of the worker's 1.26 MB — and this function runs on an
-    // upload, never on a read. A static import would instantiate that module graph
+    // about 570 KB gzipped of the worker's 1.26 MB — and this function runs on
+    // uploads and backfill, never on a read. A static import would instantiate that module graph
     // in every isolate that serves a folder listing. The bytes are in the bundle
     // either way; what this saves is the startup cost of evaluating them.
     const { isPdf, pdfText } = await import('@canopy/docworker/pdf');
@@ -937,6 +1006,15 @@ app.post('/api/folders/:folderId/content', async (c) => {
   // from the store would be a second full download of something we are holding.
   // `waitUntil` is what keeps the runtime alive for it without the caller waiting.
   if (written.current_version_id) {
+    await hostFor(env).startJobRun(node.tenantId, node.scopeId, {
+      moduleId: driveManifest.id,
+      job: BACKFILL_JOB,
+      payload: { tenant: node.tenantId, scope: node.scopeId },
+    }).catch((error: unknown) => {
+      console.error('drive.backfill.queue-failed', {
+        fileId: file.id, error: error instanceof Error ? error.message : String(error),
+      });
+    });
     const work = extractAndRecord(
       stub,
       { id: file.id, versionId: written.current_version_id, name, mime: contentType },
@@ -946,6 +1024,23 @@ app.post('/api/folders/:folderId/content', async (c) => {
   }
 
   return c.json(written, 201);
+});
+
+/** An administrator can request a fresh, coalesced pass without waiting for the timer. */
+app.post('/api/maintenance/text-backfill', async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, c.env);
+  const host = hostFor(c.env);
+  const stub = await host.getScope(principal, node.tenantId, node.scopeId);
+  const access = await stub.invoke<{ canManage: boolean }>('drive/people-access');
+  if (!access.canManage) throw new HTTPException(403, { message: 'manage access required' });
+  const run = await host.startJobRun(node.tenantId, node.scopeId, {
+    moduleId: driveManifest.id,
+    job: BACKFILL_JOB,
+    payload: { tenant: node.tenantId, scope: node.scopeId },
+  });
+  return c.json({ runId: run.id, status: run.status }, 202);
 });
 
 /**

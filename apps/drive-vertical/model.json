@@ -82,6 +82,9 @@
           "extracted_at": {
             "type": "string"
           },
+          "extractor_revision": {
+            "type": "string"
+          },
           "detail": {
             "type": [
               "string",
@@ -97,6 +100,7 @@
           "text",
           "chars",
           "extracted_at",
+          "extractor_revision",
           "detail"
         ],
         "additionalProperties": false

@@ -21,7 +21,7 @@ export const DRIVE_PERM = {
 
 export const driveManifest = moduleManifest.parse({
   id: '@canopy/scope-drive',
-  version: '0.1.0',
+  version: '0.2.0',
   kernelContract: '^0.0.1',
   migrations: { journalDir: './migrations', compatibleFrom: '0.1.0' },
   ...manifestOperations(driveOperations, {
