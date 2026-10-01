@@ -264,10 +264,32 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => {
     const principal = auth.principal;
     if (!principal) return;
-    return watchDriveChanges(() => {
-      void syncMirror(principal).catch(() => {});
-      void refreshRef.current();
-    });
+    let active = true;
+    let refreshing = false;
+    let pending = false;
+    const refreshLive = async () => {
+      if (!active) return;
+      if (refreshing) {
+        pending = true;
+        return;
+      }
+      refreshing = true;
+      try {
+        do {
+          pending = false;
+          void syncMirror(principal).catch(() => {});
+          await refreshRef.current();
+          // Use the current view for the trailing read; navigation still owns its tickets.
+        } while (active && pending);
+      } finally {
+        refreshing = false;
+      }
+    };
+    const stop = watchDriveChanges(() => { void refreshLive(); });
+    return () => {
+      active = false;
+      stop();
+    };
   }, [auth.principal]);
 
   useEffect(() => {

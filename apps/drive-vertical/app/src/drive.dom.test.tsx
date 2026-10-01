@@ -17,6 +17,7 @@ import App from './App';
 import { DriveScreen } from './drive';
 import { currentSite, selectSite } from './api';
 import { indexedMirror } from './scope-mirror';
+import * as liveUpdates from './live-updates';
 
 /** One pending answer, and the handle a test resolves it with. */
 interface Pending {
@@ -275,6 +276,75 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     expect(screen.getByText('at-the-root.md')).toBeTruthy();
     expect(screen.queryByText('renamed.pdf')).toBeNull();
     expect(screen.queryByText('lease.pdf')).toBeNull();
+  });
+});
+
+describe('live refreshes', () => {
+  function watch() {
+    let notify = () => {};
+    const stop = vi.fn();
+    vi.spyOn(liveUpdates, 'watchDriveChanges').mockImplementation((onChange) => {
+      notify = onChange;
+      return stop;
+    });
+    return { notify: () => act(() => notify()), stop };
+  }
+
+  it('finishes slow reads while notifications continue and coalesces one trailing read', async () => {
+    const live = watch();
+    await renderDrive();
+    live.notify();
+    for (let i = 0; i < 5; i++) {
+      await flush(150);
+      live.notify();
+    }
+    expect(pending.filter((p) => p.url.includes('/folders/root/files'))).toHaveLength(1);
+
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [file('01A', 'first.txt')]);
+    expect(screen.getByText('first.txt')).toBeTruthy();
+    expect(pending.filter((p) => p.url.includes('/folders/root/files'))).toHaveLength(1);
+
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [file('01B', 'latest.txt')]);
+    expect(screen.getByText('latest.txt')).toBeTruthy();
+    expect(screen.queryByText('first.txt')).toBeNull();
+    expect(pending.filter((p) => p.url.includes('/folders/root/'))).toHaveLength(0);
+    expect((screen.getByLabelText('Refresh') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('keeps navigation authoritative and refreshes the current folder on the trailing read', async () => {
+    const live = watch();
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }]);
+    live.notify();
+    live.notify();
+    fireEvent.doubleClick(screen.getByText('Papers'));
+    await flush();
+    await answer('/folders/01F/folders', []);
+    await answer('/folders/01F/files', [file('01B', 'papers.txt')]);
+
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [file('01A', 'stale-root.txt')]);
+    expect(screen.queryByText('stale-root.txt')).toBeNull();
+    expect(screen.getByText('papers.txt')).toBeTruthy();
+    expect(pending.filter((p) => p.url.includes('/folders/root/'))).toHaveLength(0);
+    expect(pending.filter((p) => p.url.includes('/folders/01F/files'))).toHaveLength(1);
+
+    await answer('/folders/01F/folders', []);
+    await answer('/folders/01F/files', [file('01C', 'updated-papers.txt')]);
+    expect(screen.getByText('updated-papers.txt')).toBeTruthy();
+  });
+
+  it('cancels the queued trailing refresh when the screen unmounts', async () => {
+    const live = watch();
+    await renderDrive();
+    live.notify();
+    live.notify();
+    cleanup();
+    expect(live.stop).toHaveBeenCalledTimes(1);
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(pending.filter((p) => p.url.includes('/folders/root/'))).toHaveLength(0);
   });
 });
 
