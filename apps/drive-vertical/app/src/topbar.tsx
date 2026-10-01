@@ -45,6 +45,7 @@ function crumbModel(breadcrumb: string[]): CrumbItem[] {
 interface TopbarProps {
   breadcrumb: string[];
   onCrumbClick?: (index: number) => void;
+  onOpenMenu: () => void;
   onOpenCmd: () => void;
   onUpload: () => void;
   auth: Me;
@@ -66,6 +67,7 @@ interface TopbarProps {
 export function Topbar({
   breadcrumb,
   onCrumbClick,
+  onOpenMenu,
   onOpenCmd,
   onUpload,
   auth,
@@ -89,9 +91,25 @@ export function Topbar({
       }
     : { name: "Not signed in", email: "", initials: "?" };
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:gap-3 sm:px-4">
+      <button
+        onClick={onOpenMenu}
+        aria-label="Open navigation"
+        className="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent md:hidden"
+      >
+        <Icon name="panel-left" size={18} />
+      </button>
+      {/* One current folder and a back action fit where a full breadcrumb does not. */}
+      <div className="flex min-w-0 flex-1 items-center gap-1 text-sm md:hidden">
+        {onCrumbClick && breadcrumb.length > 1 && (
+          <button onClick={() => onCrumbClick(breadcrumb.length - 2)} aria-label="Back to parent folder" className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent">
+            <Icon name="chevron-left" size={17} />
+          </button>
+        )}
+        <span className="truncate font-semibold" title={breadcrumb.at(-1)}>{breadcrumb.at(-1)}</span>
+      </div>
       {/* Breadcrumb */}
-      <div className="flex min-w-0 items-center gap-1.5 text-[14px]">
+      <div className="hidden min-w-0 items-center gap-1.5 text-[14px] md:flex">
         {crumbModel(breadcrumb).map((item) => {
           if (item.kind === "ellipsis") {
             return (
@@ -144,18 +162,19 @@ export function Topbar({
         })}
       </div>
 
-      <div className="flex-1" />
+      <div className="hidden flex-1 md:block" />
 
       {/* Search trigger */}
       <button
         onClick={onOpenCmd}
         disabled={offline}
-        className="flex h-9 w-[280px] items-center gap-2 rounded-md border bg-background px-3 text-[13.5px] text-muted-foreground transition-colors hover:bg-accent/40"
+        aria-label="Search or jump to"
+        className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-background text-[13.5px] text-muted-foreground transition-colors hover:bg-accent/40 md:w-[280px] md:justify-start md:gap-2 md:px-3"
       >
         <Icon name="search" size={15} />
-        <span className="flex-1 text-left">Search or jump to…</span>
-        <kbd className="rounded bg-muted px-1.5 font-mono text-[10.5px]">⌘</kbd>
-        <kbd className="rounded bg-muted px-1.5 font-mono text-[10.5px]">K</kbd>
+        <span className="hidden flex-1 text-left md:inline">Search or jump to…</span>
+        <kbd className="hidden rounded bg-muted px-1.5 font-mono text-[10.5px] md:inline">⌘</kbd>
+        <kbd className="hidden rounded bg-muted px-1.5 font-mono text-[10.5px] md:inline">K</kbd>
       </button>
 
       {/* Refresh — force a re-sync + reload of the current view */}
@@ -174,23 +193,26 @@ export function Topbar({
           writable by whoever holds drive:write, and the operation refuses the rest. */}
       <Button
         onClick={onUpload}
+        size="icon"
         disabled={offline}
         title={offline ? "Unavailable while offline" : undefined}
-        className="gap-1.5"
+        aria-label="Upload files"
+        className="shrink-0 gap-1.5 sm:w-auto sm:px-3"
       >
         <Icon name="upload" size={16} />
-        Upload
+        <span className="hidden sm:inline">Upload</span>
       </Button>
 
       {/* Account: square login button when logged out, avatar menu otherwise */}
       {loggedOut ? (
         <Button
           onClick={onSignIn}
+          size="icon"
           disabled={offline}
           title={offline ? "You're offline" : undefined}
-          className="gap-1.5"
+          className="gap-1.5 sm:w-auto sm:px-3"
         >
-          <Icon name="log-out" size={16} className="rotate-180" /> Log in
+          <Icon name="log-out" size={16} className="rotate-180" /> <span className="hidden sm:inline">Log in</span>
         </Button>
       ) : (
         <DropdownMenu>

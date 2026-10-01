@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import type { FileItem } from './items';
 import { FileIcon } from './file-icon';
@@ -57,6 +57,8 @@ interface FileTableProps {
   loading?: boolean;
   /** Offline metadata can be browsed, but bytes and mutations are unavailable. */
   readOnly?: boolean;
+  /** The view owns the reason its result is empty and the useful next action. */
+  empty?: ReactNode;
 }
 
 // Varied bar widths so skeleton rows/cards read as real names, not a grid of equals.
@@ -107,16 +109,10 @@ function FileTableSkeleton({ view }: { view: "list" | "grid" }) {
                   <Skeleton className={cn("h-3.5", SKELETON_NAME_W[i % SKELETON_NAME_W.length])} />
                 </div>
               </td>
-              <td className="px-3">
+              <td className="hidden px-3 md:table-cell">
                 <Skeleton className="h-3.5 w-16" />
               </td>
-              <td className="px-3">
-                <Skeleton className="h-3 w-14" />
-              </td>
-              <td className="px-3">
-                <Skeleton className="ml-auto h-3 w-10" />
-              </td>
-              <td className="px-2" />
+              <td className="px-2"><Skeleton className="size-5 rounded" /></td>
             </tr>
           ))}
         </tbody>
@@ -141,7 +137,7 @@ const isFolderDropTarget = (f: FileItem) => f.isFolder;
 
 const COLUMNS: { key: SortKey; label: string; className: string }[] = [
   { key: "name", label: "Name", className: "" },
-  { key: "modified", label: "Modified", className: "w-[124px]" },
+  { key: "modified", label: "Modified", className: "hidden w-[124px] md:table-cell" },
 ];
 
 /**
@@ -169,7 +165,8 @@ function RowActions({ file, onAction, readOnly }: { file: FileItem; onAction: (a
       <DropdownMenuTrigger asChild>
         <button
           onClick={(e) => e.stopPropagation()}
-          className="grid size-7 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100 data-[state=open]:opacity-100"
+          aria-label={`Actions for ${file.name}`}
+          className="grid size-7 place-items-center rounded-md text-muted-foreground opacity-100 transition-opacity hover:bg-accent md:opacity-0 md:group-hover:opacity-100 data-[state=open]:opacity-100"
         >
           <Icon name="more" size={16} />
         </button>
@@ -203,6 +200,7 @@ export function FileTable({
   previewOpen = false,
   loading = false,
   readOnly = false,
+  empty,
 }: FileTableProps) {
   const lastIndex = useRef<number | null>(null);
   // Internal file→folder drag-and-drop. The dragged file is held in a ref;
@@ -257,8 +255,14 @@ export function FileTable({
   }
 
   function handleRowClick(e: React.MouseEvent, index: number, id: string) {
-    const next = new Set(selection);
     const plain = !e.shiftKey && !e.metaKey && !e.ctrlKey;
+    // On a phone, tapping a row opens it. Selection still has its checkbox; asking for
+    // a double-tap makes the drive feel inert because that gesture zooms in browsers.
+    if (plain && window.matchMedia?.('(max-width: 767px)').matches) {
+      onOpen(files[index]!);
+      return;
+    }
+    const next = new Set(selection);
     if (e.shiftKey && lastIndex.current != null) {
       const [a = 0, b = 0] = [lastIndex.current, index].sort((x, y) => x - y);
       for (let i = a; i <= b; i++) {
@@ -286,6 +290,7 @@ export function FileTable({
   // Cold load: nothing cached to show yet. (Navigating between cached folders keeps
   // the previous list visible until the new one resolves, so no skeleton there.)
   if (loading && files.length === 0) return <FileTableSkeleton view={view} />;
+  if (files.length === 0) return <>{empty}</>;
 
   if (view === "grid") {
     return (
@@ -309,6 +314,7 @@ export function FileTable({
             <div className="flex items-start justify-between">
               <FileIcon kind={f.kind} size={38} />
               <div className="flex items-center gap-1">
+                <RowActions file={f} onAction={onAction} readOnly={readOnly} />
               </div>
             </div>
             <div className="truncate text-[13.5px] font-medium">{f.name}</div>
@@ -388,13 +394,13 @@ export function FileTable({
                         }}
                       />
                     </td>
-                    <td className="px-3">
-                      <div className="flex items-center gap-3">
+                    <td className="min-w-0 px-3">
+                      <div className="flex min-w-0 items-center gap-3">
                         <FileIcon kind={f.kind} />
-                        <span className="truncate font-medium">{f.name}</span>
+                        <span className="max-w-[calc(100vw-9rem)] truncate font-medium md:max-w-none">{f.name}</span>
                       </div>
                     </td>
-                    <td className="px-3 font-mono text-[12.5px] text-muted-foreground">{f.modified}</td>
+                    <td className="hidden px-3 font-mono text-[12.5px] text-muted-foreground md:table-cell">{f.modified}</td>
                     <td className="px-2">
                       <RowActions file={f} onAction={onAction} readOnly={readOnly} />
                     </td>
