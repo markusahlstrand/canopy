@@ -149,6 +149,7 @@ export function Topbar({
       {/* Search trigger */}
       <button
         onClick={onOpenCmd}
+        disabled={offline}
         className="flex h-9 w-[280px] items-center gap-2 rounded-md border bg-background px-3 text-[13.5px] text-muted-foreground transition-colors hover:bg-accent/40"
       >
         <Icon name="search" size={15} />
@@ -161,8 +162,7 @@ export function Topbar({
       {onRefresh && (
         <button
           onClick={onRefresh}
-          disabled={offline}
-          title={offline ? "Unavailable while offline" : "Refresh"}
+          title={offline ? "Retry connection" : "Refresh"}
           aria-label="Refresh"
           className="grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-accent disabled:opacity-50"
         >

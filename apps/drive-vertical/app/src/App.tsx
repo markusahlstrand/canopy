@@ -23,6 +23,7 @@ import {
   whoami,
 } from './api';
 import { DriveScreen } from './drive';
+import { clearMirror, resumeMirror } from './scope-mirror';
 
 /** Nobody is signed in yet, somebody is, or we have not asked. */
 type Session = { state: 'loading' } | { state: 'out' } | { state: 'in'; principal: string };
@@ -233,7 +234,11 @@ export default function App() {
 
     boot()
       .then((me) => {
-        if (me) setSession({ state: 'in', principal: me.principal });
+        if (me) {
+          void resumeMirror().catch(() => {}).finally(() => {
+            setSession({ state: 'in', principal: me.principal });
+          });
+        }
       })
       // A 401 is the logged-out state, not a failure — anything else is.
       .catch((e: unknown) => {
@@ -273,7 +278,11 @@ export default function App() {
           onError={setError}
           auth={{ user: { name: session.principal }, principal: session.principal }}
           onSignIn={() => (window.location.href = LOGIN_URL)}
-          onSignOut={() => (window.location.href = LOGOUT_URL)}
+          onSignOut={() => {
+            void clearMirror()
+              .catch(() => {})
+              .finally(() => { window.location.href = LOGOUT_URL; });
+          }}
         />
       )}
     </div>
