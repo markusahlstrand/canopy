@@ -8,7 +8,7 @@ import { changes, type DriveChange, type DriveChanges, type DriveFile, type Driv
 
 interface SavedFile extends DriveFile { principal: string }
 interface SavedFolder extends DriveFolder { principal: string }
-interface Progress { principal: string; cursor: string | null; ready: boolean; epoch?: number; revoked?: boolean }
+interface Progress { principal: string; cursor: string | null; ready: boolean; epoch?: number; revoked?: boolean; offlinePrincipal?: string }
 
 interface MirrorDb extends DBSchema {
   files: {
@@ -24,9 +24,11 @@ interface MirrorDb extends DBSchema {
 
 let dbPromise: Promise<IDBPDatabase<MirrorDb>> | undefined;
 const SESSION_KEY = '__mirror_session__';
+const IDENTITY_PREFIX = '__offline_identity__:';
 const CHANNEL = 'canopy.scope-mirror.session';
 let blocked = false;
 let channel: BroadcastChannel | undefined;
+const logoutListeners = new Set<() => void>();
 function sessionChannel(): BroadcastChannel | undefined {
   if (typeof BroadcastChannel === 'undefined') return undefined;
   if (!channel) {
@@ -37,9 +39,17 @@ function sessionChannel(): BroadcastChannel | undefined {
         generations.set(principal, (generations.get(principal) ?? 0) + 1);
       }
       inFlight.clear();
+      for (const listener of logoutListeners) listener();
     };
   }
   return channel;
+}
+
+/** A second tab's logout must hide an already-open offline view too. */
+export function onMirrorLogout(listener: () => void): () => void {
+  sessionChannel();
+  logoutListeners.add(listener);
+  return () => logoutListeners.delete(listener);
 }
 const db = () => (dbPromise ??= openDB<MirrorDb>('canopy.scope-mirror', 1, {
   upgrade(database) {
@@ -138,6 +148,37 @@ export const indexedMirror: MirrorStore = {
     };
   },
 };
+
+/** Remember only the principal, scoped to the routed hostname and selected site.
+ * The mirror rows remain keyed by principal and are shown only after an initial sync
+ * completed. Logout clears this pointer with the rows in one transaction. */
+export async function rememberOfflineIdentity(siteKey: string, principal: string): Promise<void> {
+  const database = await db();
+  const tx = database.transaction('progress', 'readwrite');
+  const session = await tx.store.get(SESSION_KEY);
+  if (blocked || session?.revoked) {
+    tx.abort();
+    await tx.done.catch(() => {});
+    throw new SessionEnded('the mirror session ended');
+  }
+  await tx.store.put({ principal: `${IDENTITY_PREFIX}${siteKey}`, cursor: null, ready: false, offlinePrincipal: principal });
+  await tx.done;
+}
+
+/** A network failure may use saved names only for the last authenticated site and
+ * only after its first event-feed pass finished. An online 401 never calls this. */
+export async function offlineIdentity(siteKey: string): Promise<string | null> {
+  sessionChannel();
+  if (blocked) return null;
+  const database = await db();
+  const tx = database.transaction('progress', 'readonly');
+  const session = await tx.store.get(SESSION_KEY);
+  const marker = await tx.store.get(`${IDENTITY_PREFIX}${siteKey}`);
+  const progress = marker?.offlinePrincipal ? await tx.store.get(marker.offlinePrincipal) : undefined;
+  await tx.done;
+  if (blocked || session?.revoked || !progress?.ready) return null;
+  return marker?.offlinePrincipal ?? null;
+}
 
 /** Consume every available page. The supplied store makes the cursor rule testable
  * without depending on a browser's IndexedDB implementation. */

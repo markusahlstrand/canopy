@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import { openDB } from 'idb';
-import { clearMirror, indexedMirror, syncFromSpine, type MirrorStore } from './scope-mirror';
+import { clearMirror, indexedMirror, offlineIdentity, rememberOfflineIdentity, syncFromSpine, type MirrorStore } from './scope-mirror';
 import type { DriveChange, DriveChanges, DriveFile, DriveFolder } from './api';
 
 function memoryStore() {
@@ -94,7 +94,10 @@ describe('IndexedDB mirror', () => {
   it('commits rows and cursor atomically, indexes folders, applies tombstones, and clears every principal', async () => {
     await indexedMirror.apply(principal, page('1', [folderChange(folder), fileChange(file)], true), null, 0);
     expect(await indexedMirror.folder(principal, 'docs')).toBeNull(); // Initial sync is incomplete.
+    await rememberOfflineIdentity('https://drive.test|home', principal);
+    expect(await offlineIdentity('https://drive.test|home')).toBeNull();
     await indexedMirror.apply(principal, page('2', [], false), '1', 0);
+    expect(await offlineIdentity('https://drive.test|home')).toBe(principal);
     expect(await indexedMirror.folder(principal, 'docs')).toEqual({ files: [file], folders: [] });
     expect(await indexedMirror.folder(principal, 'root')).toEqual({ files: [], folders: [folder] });
     await expect(indexedMirror.apply(principal, page('stale', [fileChange({ ...file, name: 'Old tab' })]), '1', 0))
@@ -115,7 +118,11 @@ describe('IndexedDB mirror', () => {
     expect(await indexedMirror.folder(principal, 'root')).toEqual({ files: [], folders: [] });
     await indexedMirror.apply('other', page('1', [fileChange(file)]), null, 0);
 
+    expect(await offlineIdentity('https://drive.test|home')).toBe(principal);
+    expect(await offlineIdentity('https://drive.test|family')).toBeNull();
+
     await clearMirror();
+    expect(await offlineIdentity('https://drive.test|home')).toBeNull();
     const database = await openDB('canopy.scope-mirror', 1);
     expect(await database.getAll('files')).toEqual([]);
     expect(await database.getAll('folders')).toEqual([]);
