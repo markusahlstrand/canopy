@@ -3,6 +3,7 @@ import { currentSite } from './api';
 const POLL_MS = 60_000;
 const COALESCE_MS = 150;
 const MAX_RETRY_MS = 60_000;
+const STABLE_CONNECTION_MS = 10_000;
 
 /** The selected site cannot ride a WebSocket header, so use the same checked
  * `?site=` address that download links use. The worker still resolves the scope
@@ -27,7 +28,7 @@ export function watchDriveChanges(onChange: () => void): () => void {
 
   const changed = () => {
     if (!active || document.visibilityState === 'hidden') return;
-    if (coalesced) clearTimeout(coalesced);
+    if (coalesced !== null) return;
     coalesced = setTimeout(() => {
       coalesced = null;
       if (active) onChange();
@@ -45,14 +46,19 @@ export function watchDriveChanges(onChange: () => void): () => void {
     if (!active || typeof WebSocket === 'undefined') return;
     try {
       socket = new WebSocket(liveUrl());
-      socket.onopen = () => { retryMs = 1_000; };
+      let openedAt: number | null = null;
+      socket.onopen = () => { openedAt = Date.now(); };
       socket.onmessage = (event) => {
         try {
           const frame = JSON.parse(String(event.data)) as { kind?: string; entityType?: string };
           if (frame.kind === 'change' && (frame.entityType === 'file' || frame.entityType === 'folder')) changed();
         } catch { /* An unknown frame is not a reason to refresh the drive. */ }
       };
-      socket.onclose = retryLater;
+      socket.onclose = () => {
+        // Brief successful handshakes must not undo the reconnect backoff.
+        if (openedAt !== null && Date.now() - openedAt >= STABLE_CONNECTION_MS) retryMs = 1_000;
+        retryLater();
+      };
     } catch {
       retryLater();
     }
