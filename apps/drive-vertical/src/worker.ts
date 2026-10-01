@@ -46,7 +46,7 @@ import {
   type ScopeSweeperDo,
 } from '@substrat-run/adapter-cloudflare';
 import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
-import { readRoutedNode, RouterAssertionError, type JobPassContext, type ScopeAttachments, type ScopeStub } from '@substrat-run/kernel';
+import { readRoutedNode, RouterAssertionError, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
 import { mountPlatformSurface } from '@substrat-run/vertical-host';
 import {
   AuthConfigError,
@@ -104,11 +104,7 @@ const sweeperConfig = {
       moduleId: driveManifest.id, job: BACKFILL_JOB, payload: { tenant, scope },
     });
   },
-} satisfies Parameters<typeof defineScopeSweeperDO<Env>>[0] & {
-  runJobs: boolean;
-  jobStartIntervalMs: number;
-  startJobs: (host: ScopeSweepHost, tenant: TenantId, scope: ScopeId) => Promise<void>;
-};
+} satisfies Parameters<typeof defineScopeSweeperDO<Env>>[0];
 export const SweeperDO = defineScopeSweeperDO<Env>(sweeperConfig);
 
 export interface Env {
@@ -239,10 +235,7 @@ function hostFor(env: Env): CloudflareScopeHost {
       extractorRevision: EXTRACTOR_REVISION,
     });
     if (page.files.length === 0) return { cursor: page.next ?? pass.cursor, done: page.next === null };
-    const attachments = await (host as CloudflareScopeHost & {
-      getSystemAttachments: (moduleId: typeof driveManifest.id, tenant: TenantId, scope: ScopeId) =>
-        Promise<Pick<ScopeAttachments, 'open'>>;
-    }).getSystemAttachments(driveManifest.id, tenant, scopeId);
+    const attachments = await host.getSystemAttachments(driveManifest.id, tenant, scopeId);
     for (const file of page.files) {
       await pass.step(`${file.id}:${file.versionId}`, async () => {
         const opened = await attachments.open(file.blobRef);
@@ -503,12 +496,14 @@ async function requirePeopleAdmin(c: Context<{ Bindings: Env }>): Promise<Princi
 
 mountInviteRoutes<Env, Node>(app, {
   nodeFor,
-  requireAdmin: requirePeopleAdmin,
+  requireAdmin: async (c) => ({ principal: await requirePeopleAdmin(c) }),
+  canAssign: (env, node, principal, roleKey) =>
+    hostFor(env).canAssign(node.tenantId, node.scopeId, principal, roleKey),
+  assignScopeRoleBounded: (env, node, caller, assignee, roleKey) =>
+    hostFor(env).assignScopeRoleBounded(node.tenantId, node.scopeId, caller, assignee, roleKey),
   roles: [MEMBER_ROLE_KEY],
   directory: (env, node) => identityDo(env, node),
-  // Scope-local, no control plane: the role lands in the same store the checker reads.
-  assignScopeRole: (env, scopeId, principal, roleKey) =>
-    hostFor(env).assignScopeRole(scopeId, principal, roleKey),
+  // Scope-local, no control plane: the bounded grant lands where the checker reads.
   revokeScopeRole: (env, scopeId, principal, roleKey) =>
     hostFor(env).revokeScopeRole(scopeId, principal, roleKey),
   // The INSTALL's provider, never the selected space's: identity is the install's and
