@@ -70,6 +70,7 @@ import {
 import { mountInviteRoutes } from '@substrat-run/vertical-auth/invite-routes';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
+import { mountFileContent, type FileContentRecord } from './file-content.js';
 import { removeMember } from './remove-member.js';
 import { MEMBER_ROLE_KEY, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 import { driveManifest, DRIVE_PERM } from '@canopy/scope-drive';
@@ -1023,37 +1024,19 @@ app.post('/api/maintenance/text-backfill', async (c) => {
  * this caller may have them, checking the declared target's read key against the
  * owning file — the same key that let them see the row.
  */
-app.get('/api/files/:fileId/content', async (c) => {
-  const env = c.env;
-  const principal = await principalFor(env, c.req.raw);
-  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
-  const node = await nodeFor(c.req.raw, env);
-
-  const stub = await hostFor(env).getScope(principal, node.tenantId, node.scopeId);
-  const { file, version } = await stub.invoke<{
-    file: { name: string };
-    version: { source: string; blob_ref: string | null; mime: string } | null;
-  }>('drive/get-file', { fileId: c.req.param('fileId') });
-  if (!version) throw new HTTPException(404, { message: 'this file has no content yet' });
-
-  // A connector-backed version's bytes are not ours: they live in the source system,
-  // and resolving them means a connector this vertical does not have yet. Say that
-  // plainly rather than serving an empty body that reads as an empty file.
-  if (version.source !== 'blob' || !version.blob_ref) {
-    throw new HTTPException(501, {
-      message: 'this version lives in a connected source, and connector reads are not wired yet',
-    });
-  }
-
-  const attachments = await hostFor(env).attachments(principal, node.tenantId, node.scopeId);
-  const opened = await attachments.open(version.blob_ref);
-  if (!opened) throw new HTTPException(404, { message: 'the bytes this version names are gone' });
-  return new Response(opened.body, {
-    headers: {
-      'content-type': opened.contentType || version.mime,
-      'content-disposition': `inline; filename="${encodeURIComponent(file.name)}"`,
-    },
-  });
+mountFileContent(app, async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) return null;
+  const node = await nodeFor(c.req.raw, c.env);
+  const host = hostFor(c.env);
+  const stub = await host.getScope(principal, node.tenantId, node.scopeId);
+  return {
+    getFile: (fileId, versionId) => stub.invoke<FileContentRecord>(
+      versionId ? 'drive/get-version' : 'drive/get-file',
+      versionId ? { fileId, versionId } : { fileId },
+    ),
+    openAttachment: async (id) => (await host.attachments(principal, node.tenantId, node.scopeId)).open(id),
+  };
 });
 
 /**
