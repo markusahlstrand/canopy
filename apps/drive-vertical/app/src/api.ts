@@ -537,6 +537,13 @@ export interface FileTextRow {
   detail: string | null;
 }
 
+export interface FileDetails {
+  fileId: string; description: string; labels: string[]; revision: number; canWrite: boolean;
+}
+export const fileDetails = (fileId: string) => call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`);
+export const updateFileDetails = (fileId: string, description: string, labels: string[], expectedRevision: number) =>
+  call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`, { method: 'PATCH', body: JSON.stringify({ description, labels, expectedRevision }) });
+
 /** A file's versions, newest first. Paged, so again a bare array. */
 export const fileVersions = (fileId: string) =>
   call<FileVersion[]>(`/files/${encodeURIComponent(fileId)}/versions`);

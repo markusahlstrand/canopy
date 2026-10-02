@@ -11,6 +11,7 @@ function mockHistory(canWrite = true, fail = false) {
   let restored = false;
   let kept = false;
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/details')) return new Response(JSON.stringify({ fileId: 'file', description: 'Details in preview', labels: [], revision: 0, canWrite }));
     if (init?.method === 'PATCH') {
       if (fail) return new Response('refused', { status: 403 });
       kept = JSON.parse(init.body as string).keep;
@@ -36,6 +37,14 @@ async function versions(onError = vi.fn(), onChanged = vi.fn()) {
 }
 
 describe('restoring from version history', () => {
+  it('mounts descriptive metadata when the Details tab is selected', async () => {
+    mockHistory(false);
+    render(<PreviewPanel fileId="file" onClose={() => {}} onError={() => {}} />);
+    await screen.findByText('archive.zip');
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    await screen.findByText('Details in preview');
+  });
+
   it('confirms before writing and refreshes the current marker and parent listing', async () => {
     const fetch = mockHistory();
     const changed = vi.fn();
