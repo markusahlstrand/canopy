@@ -1022,7 +1022,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
 
   'drive/search': {
-    summary: 'Find files by name or by content',
+    summary: 'Find files by name, content, description or labels',
     permission: 'drive:read',
     input: z.object({
       term: z.string().min(2),
@@ -1032,7 +1032,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       hits: z.array(
         driveEntities.file.fields.extend({
           /** Which index matched — the UI says "in the name" or "in the document". */
-          via: z.enum(['name', 'content']),
+          via: z.enum(['name', 'content', 'metadata']),
         }),
       ),
     }),

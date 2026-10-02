@@ -1218,9 +1218,10 @@ const operations = {
     // work rather than walking the scope.
     const reach = Math.min(limit * 3, 100);
 
-    const [byName, byText] = await Promise.all([
+    const [byName, byText, byDetails] = await Promise.all([
       ctx.search('file', input.term, { limit: reach }),
       ctx.search('file_text', input.term, { limit: reach }),
+      ctx.search('file_details', input.term, { limit: reach }),
     ]);
 
     // A file_text hit is an id in ITS table; what the caller wants is the file.
@@ -1235,13 +1236,17 @@ const operations = {
     // bm25: lower is better. A name match and a body match are the same question,
     // so they merge into one list — and a file matching BOTH is reported once, as
     // a name hit, because that is the stronger thing to say about it.
-    const merged = new Map<string, { rank: number; via: 'name' | 'content' }>();
+    const merged = new Map<string, { rank: number; via: 'name' | 'content' | 'metadata' }>();
     for (const [id, rank] of textFileIds) merged.set(id, { rank, via: 'content' });
+    for (const hit of byDetails) {
+      const details = ctx.sql.query<{ file_id: string }>('SELECT file_id FROM drive_file_details WHERE id = ?', [hit.id])[0];
+      if (details) merged.set(details.file_id, { rank: hit.rank, via: 'metadata' });
+    }
     for (const hit of byName) merged.set(hit.id, { rank: hit.rank, via: 'name' });
 
     const ranked = [...merged.entries()].sort((a, b) => a[1].rank - b[1].rank);
 
-    const hits: (FileRow & { via: 'name' | 'content' })[] = [];
+    const hits: (FileRow & { via: 'name' | 'content' | 'metadata' })[] = [];
     for (const [fileId, { via }] of ranked) {
       if (hits.length === limit) break;
       // Per hit, and deliberately not a bulk filter: the checker's answer is the
