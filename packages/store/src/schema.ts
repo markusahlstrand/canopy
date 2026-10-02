@@ -616,6 +616,17 @@ export const MIGRATIONS: { version: number; statements: string[] }[] = [
       `DROP TABLE index_runs`,
     ],
   },
+  {
+    version: 25,
+    statements: [
+      `CREATE TABLE share_sessions (
+         token_hash TEXT PRIMARY KEY,
+         share_id TEXT NOT NULL,
+         expires_at TEXT NOT NULL
+       )`,
+      `CREATE INDEX idx_share_sessions_expiry ON share_sessions (expires_at)`,
+    ],
+  },
 ];
 
 /** Apply any migrations newer than what's recorded. Safe to call on every boot. */

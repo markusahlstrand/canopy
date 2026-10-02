@@ -70,10 +70,12 @@ import {
 import { listMcpClients as listMcpClientRows, recordMcpClient as recordMcpClientRow, type McpClient } from "./mcp-clients";
 import {
   createShare as createShareRow,
+  createShareSession as createShareSessionRow,
   getShare as getShareRow,
   listShares as listShareRows,
   revokeShare as revokeShareRow,
   verifyShare as verifyShareRow,
+  verifyShareSession as verifyShareSessionRow,
   type ShareFilter,
   type ShareInfo,
   type VerifiedShare,
@@ -1896,6 +1898,14 @@ export class FileService {
   /** Resolve a share secret to its capability (no auth — this *is* the auth). For WebDAV / `/s`. */
   verifyShare(secret: string): Promise<VerifiedShare | null> {
     return verifyShareRow(this.db, secret);
+  }
+
+  createShareSession(secret: string) {
+    return createShareSessionRow(this.db, secret);
+  }
+
+  verifyShareSession(shareId: string, token: string): Promise<VerifiedShare | null> {
+    return verifyShareSessionRow(this.db, shareId, token);
   }
 
   /**
