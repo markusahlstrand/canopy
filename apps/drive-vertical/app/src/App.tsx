@@ -22,6 +22,7 @@ import {
   selectSite,
   whoami,
 } from './api';
+import { confirmNavigation } from './navigation-guards';
 import { DriveScreen } from './drive';
 import { clearMirror, offlineIdentity, onMirrorLogout, rememberOfflineIdentity, resumeMirror } from './scope-mirror';
 
@@ -309,6 +310,7 @@ export default function App() {
           auth={{ user: { name: session.principal }, principal: session.principal }}
           onSignIn={() => (window.location.href = LOGIN_URL)}
           onSignOut={() => {
+            if (!confirmNavigation()) return;
             void clearMirror()
               .catch(() => {})
               .finally(() => { window.location.href = LOGOUT_URL; });
