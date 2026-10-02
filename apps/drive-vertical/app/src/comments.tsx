@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@canopy/ui';
 import { appendRows, commentPage, postComment, deleteComment, type FileComment } from './api';
 import { latestOnly } from './reads';
+import { useUnsavedDraft } from './drafts';
 
 /** Plain text only. Every reader may comment; moderation rights come from the API. */
 export function CommentsPanel({ fileId }: { fileId: string }) {
@@ -9,6 +10,7 @@ export function CommentsPanel({ fileId }: { fileId: string }) {
   const [comments, setComments] = useState<FileComment[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  useUnsavedDraft(draft.length > 0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);

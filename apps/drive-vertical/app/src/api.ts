@@ -679,6 +679,7 @@ export const search = (term: string, limit?: number) =>
   );
 
 export interface SearchHit extends DriveFile {
+  snippet?: string | null;
   via: 'name' | 'content' | 'metadata';
 }
 
