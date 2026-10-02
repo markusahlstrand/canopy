@@ -11,6 +11,7 @@ function mockHistory(canWrite = true, fail = false) {
   let restored = false;
   let kept = false;
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/comments')) return new Response(JSON.stringify([{ id: 'comment', body: 'Preview thread', authorLabel: 'Ada', created_at: old.created_at, canDelete: false }]));
     if (url.endsWith('/details')) return new Response(JSON.stringify({ fileId: 'file', description: 'Details in preview', labels: [], revision: 0, canWrite }));
     if (init?.method === 'PATCH') {
       if (fail) return new Response('refused', { status: 403 });
@@ -37,6 +38,14 @@ async function versions(onError = vi.fn(), onChanged = vi.fn()) {
 }
 
 describe('restoring from version history', () => {
+  it('mounts a comment thread when Comments is selected', async () => {
+    mockHistory(false);
+    render(<PreviewPanel fileId="file" onClose={() => {}} onError={() => {}} />);
+    await screen.findByText('archive.zip');
+    fireEvent.click(screen.getByRole('button', { name: 'Comments' }));
+    await screen.findByText('Preview thread');
+  });
+
   it('mounts descriptive metadata when the Details tab is selected', async () => {
     mockHistory(false);
     render(<PreviewPanel fileId="file" onClose={() => {}} onError={() => {}} />);
