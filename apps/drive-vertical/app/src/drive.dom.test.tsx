@@ -628,6 +628,25 @@ describe('move destination picker', () => {
   });
 });
 
+describe('shared-folder discovery', () => {
+  it('lists direct shares and opens a nested folder by its identity', async () => {
+    await renderDrive([], [file('01A', 'lease.pdf')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
+    await flush();
+    await answer('/folders/shared-with-me', { folders: [
+      { id: '01N', parent_id: '01P', path: 'Papers/Leases', name: 'Leases' },
+    ] });
+    expect(screen.queryByText('lease.pdf')).toBeNull();
+    fireEvent.doubleClick(screen.getByText('Leases'));
+    await flush();
+    expect(pending.some((p) => p.url.includes('/folders/01N/files'))).toBe(true);
+    await answer('/folders/01N/folders', []);
+    await answer('/folders/01N/files', [file('01L', 'shared.pdf')]);
+    expect(screen.getByText('shared.pdf')).toBeTruthy();
+    expect(screen.getAllByText('Papers/Leases').length).toBeGreaterThan(0);
+  });
+});
+
 describe('the shell the portal had, on the vertical', () => {
   it('opens the palette on ⌘K and searches the drive with it', async () => {
     await renderDrive([], [file('01A', 'lease.pdf')]);

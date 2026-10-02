@@ -789,6 +789,14 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     http: { method: 'GET', path: '/folders/{folderId}/shares' },
   },
 
+  'drive/list-shared-folders': {
+    summary: 'Folders shared directly with the caller in this space',
+    permission: 'drive:read',
+    input: z.object({}),
+    output: z.object({ folders: z.array(driveEntities.folder.fields) }),
+    http: { method: 'GET', path: '/folders/shared-with-me' },
+  },
+
   /**
    * Remember what to call the caller — and no route, deliberately.
    *

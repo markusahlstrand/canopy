@@ -1009,6 +1009,22 @@ const operations = {
     return { shares };
   },
 
+  'drive/list-shared-folders': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    const candidates = ctx.sql.query<FolderRow>(
+      `SELECT DISTINCT f.* FROM drive_folders f
+         JOIN drive_folder_shares s ON s.folder_id = f.id
+        WHERE s.principal = ? ORDER BY f.path`,
+      [ctx.principal],
+    );
+    // The projection supplies discovery, while the kernel still decides visibility.
+    const folders: FolderRow[] = [];
+    for (const folder of candidates) {
+      if ((await ctx.check(DRIVE_PERM.read, folderRef(folder.id))).allowed) folders.push(folder);
+    }
+    return { folders };
+  },
+
   'drive/record-person': async (ctx, input) => {
     // A member may record themselves; that is all this writes.
     assertAllowed(await ctx.check(DRIVE_PERM.read));

@@ -29,6 +29,7 @@ describe('the derived route table', () => {
       'GET /api/folders/:folderId/folders',
       'GET /api/folders/:folderId/shares',
       'GET /api/folders/by-path',
+      'GET /api/folders/shared-with-me',
       'GET /api/people',
       'GET /api/people/access',
       'GET /api/search',
