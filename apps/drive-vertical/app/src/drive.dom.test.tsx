@@ -51,6 +51,7 @@ function queueFetch() {
             ok: status < 400,
             status,
             statusText: 'stubbed',
+            headers: new Headers(),
             json: () => Promise.resolve(body),
             // The preview reads a text body with `.text()`, not `.json()`. Without this
             // the call rejected and the panel merely reported an error — which a test
@@ -714,6 +715,18 @@ describe('the shell the portal had, on the vertical', () => {
     // half of search that content extraction paid for.
     await answer('term=lease', { hits: [{ ...file('01A', 'lease.pdf'), via: 'content' }] });
     expect(screen.getByText(/matched inside the document/)).toBeTruthy();
+  });
+
+  it('identifies description/label matches in the command palette', async () => {
+    await renderDrive([], []);
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    fireEvent.change(screen.getByPlaceholderText(/Search files/), { target: { value: 'insurance' } });
+    await flush();
+    await answer('term=insurance', { hits: [{ ...file('01A', 'agreement.pdf'), via: 'metadata' }] });
+    expect(screen.getByText('matched in description or labels')).toBeTruthy();
+    fireEvent.click(screen.getByText('agreement.pdf'));
+    await flush();
+    expect(pending.some(request => request.url.endsWith('/files/01A'))).toBe(true);
   });
 
   it('closes on a second ⌘K, so the shortcut is a toggle', async () => {

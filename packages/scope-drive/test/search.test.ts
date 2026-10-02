@@ -51,7 +51,7 @@ interface TextRow {
   detail: string | null;
 }
 interface Hits {
-  hits: (FileRow & { via: 'name' | 'content' })[];
+  hits: (FileRow & { via: 'name' | 'content' | 'metadata' })[];
 }
 
 const as = (who: typeof ada) => host.getScope(who, tenant, scope);
@@ -325,5 +325,36 @@ describe('a file is findable by what is inside it', () => {
     const missing = await stub.invoke('drive/folder-by-path', { path: 'Nowhere' });
     expect(refused).toBeNull();
     expect(refused).toEqual(missing);
+  });
+});
+
+
+describe('description and label search', () => {
+  it('indexes metadata immediately and removes superseded terms on edits', async () => {
+    const writer = await as(ada);
+    const file = await fileWithVersion(writer, ROOT_FOLDER_ID, 'metadata-target.pdf');
+    await writer.invoke('drive/update-file-details', { fileId: file.id, description: 'Discusses indexation', labels: ['legal-project'], expectedRevision: 0 });
+    for (const term of ['indexation', 'legal-project']) {
+      const found = await (await as(bjorn)).invoke<Hits>('drive/search', { term });
+      expect(found.hits.find(hit => hit.id === file.id)?.via).toBe('metadata');
+    }
+    await writer.invoke('drive/update-file-details', { fileId: file.id, description: 'Discusses insurance', labels: ['family'], expectedRevision: 1 });
+    for (const term of ['indexation', 'legal-project']) {
+      expect((await writer.invoke<Hits>('drive/search', { term })).hits.map(hit => hit.id)).not.toContain(file.id);
+    }
+    expect((await writer.invoke<Hits>('drive/search', { term: 'insurance' })).hits.find(hit => hit.id === file.id)?.via).toBe('metadata');
+  });
+
+  it('deduplicates name/body/metadata hits, excludes trash, and refuses nonmember searches', async () => {
+    const writer = await as(ada);
+    const file = await fileWithVersion(writer, ROOT_FOLDER_ID, 'zebracontract.pdf');
+    await writer.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, status: 'indexed', text: 'zebracontract in the document' });
+    await writer.invoke('drive/update-file-details', { fileId: file.id, description: 'zebracontract description', labels: ['zebracontract'], expectedRevision: 0 });
+    const found = await writer.invoke<Hits>('drive/search', { term: 'zebracontract' });
+    expect(found.hits.filter(hit => hit.id === file.id)).toHaveLength(1);
+    expect(found.hits.find(hit => hit.id === file.id)?.via).toBe('name');
+    await expect((await as(cleo)).invoke('drive/search', { term: 'zebracontract' })).rejects.toThrow();
+    await writer.invoke('drive/trash-file', { fileId: file.id });
+    expect((await writer.invoke<Hits>('drive/search', { term: 'zebracontract' })).hits.map(hit => hit.id)).not.toContain(file.id);
   });
 });

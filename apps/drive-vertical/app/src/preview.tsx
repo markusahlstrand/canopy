@@ -2,11 +2,9 @@
  * File preview (S12a slice 3, #78) — lifted from the portal's `file-preview.tsx` and
  * cut down to what this vertical can actually answer.
  *
- * The portal's version is 769 lines because it also carries comments, tags, descriptions,
- * version pinning, restore-a-version and a processing log. The drive module has no
- * operations for any of those, so they are not here: a panel offering a button that
- * cannot work is worse than a panel that does less. Each is a small ticket the day
- * somebody wants it.
+ * The preview exposes reads and writes backed by the scope operations: current
+ * content, version history, keep/restore actions, descriptive metadata and extraction
+ * status. Comments and processing logs still need their operation classes ported.
  *
  * The image viewer is bundled as a trusted web component (#73). Other browser-native
  * types remain here until there is a first-party viewer that improves on them.
@@ -19,18 +17,21 @@ import {
   versionContentUrl,
   fileBodyAsText,
   fileText,
-  fileVersions,
+  fileVersionsPage,
   getFile,
+  restoreVersion,
+  keepVersion,
   type DriveFile,
   type FileTextRow,
   type FileVersion,
 } from './api';
+import { FileDetailsPanel } from './file-details';
 import { latestOnly } from './reads';
 import { IMAGE_VIEWER_TAG, registerImageViewer } from './image-viewer';
 
 registerImageViewer();
 
-type Tab = 'file' | 'versions' | 'text';
+type Tab = 'file' | 'versions' | 'text' | 'details';
 
 /** How a file's current version wants to be shown. */
 type Shape = 'image' | 'pdf' | 'text' | 'none';
@@ -83,11 +84,18 @@ export function PreviewPanel({
   fileId,
   onClose,
   onError,
+  onChanged,
 }: {
   fileId: string;
   onClose: () => void;
   onError: (message: string | null) => void;
+  onChanged?: () => void;
 }) {
+  const [historyNext, setHistoryNext] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [canWrite, setCanWrite] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [tab, setTab] = useState<Tab>('file');
   const [file, setFile] = useState<DriveFile | null>(null);
   const [version, setVersion] = useState<FileVersion | null>(null);
@@ -134,16 +142,23 @@ export function PreviewPanel({
   /** The file and its current version: everything else hangs off the version's mime. */
   useEffect(() => {
     const ticket = meta.take();
+    setTab('file');
     setFile(null);
+    setCanWrite(false);
+    setConfirmRestore(null);
+    setRestoring(false);
     setVersion(null);
     setBody(null);
     setExtracted(undefined);
     setVersions(null);
+    setHistoryNext(null);
+    setLoadingMore(false);
     getFile(fileId)
       .then((got) => {
         if (!meta.current(ticket)) return;
         setFile(got.file);
         setVersion(got.version);
+        setCanWrite(got.canWrite === true);
       })
       .catch((e: unknown) => {
         if (!meta.current(ticket)) return;
@@ -174,9 +189,9 @@ export function PreviewPanel({
       setTab(next);
       if (next === 'versions' && versions === null) {
         const ticket = versionReads.take();
-        fileVersions(fileId)
+        fileVersionsPage(fileId)
           .then((got) => {
-            if (versionReads.current(ticket)) setVersions(got);
+            if (versionReads.current(ticket)) { setVersions(got.versions); setHistoryNext(got.next); }
           })
           .catch((e: unknown) => {
             if (versionReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
@@ -196,6 +211,70 @@ export function PreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fileId, versions, extracted, onError],
   );
+
+  const loadMore = async () => {
+    if (!historyNext || loadingMore || restoring) return;
+    const next = historyNext;
+    const ticket = versionReads.take();
+    setLoadingMore(true);
+    try {
+      const got = await fileVersionsPage(fileId, next);
+      if (!versionReads.current(ticket)) return;
+      if (got.next === next) throw new Error('Version history did not advance. Try refreshing.');
+      setVersions((rows) => {
+        const seen = new Set(rows?.map(row => row.id));
+        return [...(rows ?? []), ...got.versions.filter(row => !seen.has(row.id))];
+      });
+      setHistoryNext(got.next);
+    } catch (e: unknown) {
+      if (versionReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (versionReads.current(ticket)) setLoadingMore(false);
+    }
+  };
+
+  const setKeep = async (versionId: string, keep: boolean) => {
+    const ticket = versionReads.take();
+    setRestoring(true);
+    try {
+      const changed = await keepVersion(fileId, versionId, keep);
+      if (versionReads.current(ticket)) {
+        setVersions((rows) => rows?.map((row) => row.id === changed.id ? changed : row) ?? null);
+      }
+    } catch (e: unknown) {
+      if (versionReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (versionReads.current(ticket)) setRestoring(false);
+    }
+  };
+
+  const restore = async (versionId: string) => {
+    const ticket = meta.take();
+    const versionsTicket = versionReads.take();
+    setRestoring(true);
+    try {
+      await restoreVersion(fileId, versionId);
+      if (!meta.current(ticket)) return;
+      // A restore changes HEAD, so every derived read must be retired as well.
+      bodyReads.invalidate();
+      textReads.invalidate();
+      setBody(null);
+      setExtracted(undefined);
+      const [got, history] = await Promise.all([getFile(fileId), fileVersionsPage(fileId)]);
+      if (!meta.current(ticket) || !versionReads.current(versionsTicket)) return;
+      setFile(got.file);
+      setVersion(got.version);
+      setCanWrite(got.canWrite === true);
+      setVersions(history.versions);
+      setHistoryNext(history.next);
+      setConfirmRestore(null);
+      onChanged?.();
+    } catch (e: unknown) {
+      if (meta.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (meta.current(ticket)) setRestoring(false);
+    }
+  };
 
   return (
     <aside
@@ -219,7 +298,7 @@ export function PreviewPanel({
       </header>
 
       <nav className="flex gap-1 border-b border-border px-2 py-1.5" aria-label="Preview sections">
-        {(['file', 'versions', 'text'] as const).map((t) => (
+        {(['file', 'versions', 'text', 'details'] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -229,13 +308,13 @@ export function PreviewPanel({
               tab === t ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60',
             )}
           >
-            {t === 'file' ? 'Preview' : t === 'versions' ? 'Versions' : 'Text'}
+            {t === 'file' ? 'Preview' : t === 'versions' ? 'Versions' : t === 'details' ? 'Details' : 'Text'}
           </button>
         ))}
       </nav>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === 'file' ? (
+        {tab === 'details' ? <FileDetailsPanel key={fileId} fileId={fileId} /> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : shape === 'image' ? (
@@ -270,13 +349,21 @@ export function PreviewPanel({
           versions === null ? (
             <Empty>Loading…</Empty>
           ) : (
+            <div className="space-y-3">
+            {versions.length === 0 ? <Empty>No versions yet.</Empty> : null}
             <ul className="space-y-1.5 text-sm">
               {versions.map((v) => (
-                <li key={v.id} className="flex items-baseline gap-2">
+                <li key={v.id} className="flex flex-wrap items-baseline gap-2">
                   <span className="text-muted-foreground">{new Date(v.created_at).toLocaleString()}</span>
                   <span>{humanSize(v.size)}</span>
                   {v.id === version?.id ? (
                     <span className="rounded bg-muted px-1.5 text-xs">current</span>
+                  ) : null}
+                  {v.keep === 1 ? <span className="rounded bg-muted px-1.5 text-xs">kept</span> : null}
+                  {canWrite ? (
+                    <Button size="sm" variant="ghost" disabled={restoring || loadingMore} onClick={() => void setKeep(v.id, v.keep !== 1)}>
+                      {v.keep === 1 ? 'Unkeep' : 'Keep'}
+                    </Button>
                   ) : null}
                   {v.source === 'blob' && v.blob_ref ? (
                     <a
@@ -288,12 +375,25 @@ export function PreviewPanel({
                       Download
                     </a>
                   ) : null}
+                  {canWrite && v.source === 'blob' && v.blob_ref && v.id !== version?.id ? (
+                    confirmRestore === v.id ? (
+                      <span className="flex flex-col gap-1">
+                        <span className="text-xs">Make this content current as a new version?</span>
+                        <Button size="sm" disabled={restoring || loadingMore} onClick={() => void restore(v.id)}>Confirm restore</Button>
+                        <Button size="sm" variant="ghost" disabled={restoring || loadingMore} onClick={() => setConfirmRestore(null)}>Cancel</Button>
+                      </span>
+                    ) : (
+                      <Button size="sm" variant="ghost" disabled={restoring || loadingMore} onClick={() => setConfirmRestore(v.id)}>Restore</Button>
+                    )
+                  ) : null}
                   {v.source === 'external' ? (
                     <span className="text-xs text-muted-foreground">in a connected source</span>
                   ) : null}
                 </li>
               ))}
             </ul>
+            {historyNext ? <Button variant="outline" size="sm" disabled={loadingMore || restoring} onClick={() => void loadMore()}>{loadingMore ? 'Loading older versions…' : 'Load older versions'}</Button> : null}
+            </div>
           )
         ) : extracted === undefined ? (
           <Empty>Loading…</Empty>

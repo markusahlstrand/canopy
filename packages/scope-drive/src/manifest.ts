@@ -48,6 +48,7 @@ export const driveManifest = moduleManifest.parse({
   ...manifestEntities(driveEntities, {
     searchables: [
       { entityType: 'file', fields: ['name'] },
+      { entityType: 'file_details', fields: ['description', 'labels_json'], tokenizer: 'substring' },
       { entityType: 'file_text', fields: ['text'], tokenizer: 'substring' },
     ],
   }),

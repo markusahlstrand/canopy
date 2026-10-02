@@ -64,6 +64,7 @@ interface VersionRow {
   id: string;
   file_id: string;
   source: string;
+  keep: number;
   blob_ref: string | null;
   external_key: string | null;
   etag: string | null;
@@ -71,6 +72,11 @@ interface VersionRow {
   size: number;
   created_at: string;
   created_by: string;
+}
+
+interface DetailsRow {
+  id: string; file_id: string; description: string; labels_json: string;
+  revision: number; updated_at: string; updated_by: string;
 }
 
 interface FileTextRow {
@@ -364,6 +370,7 @@ const operations = {
       id: ulid(),
       file_id: file.id,
       source: loc.source,
+      keep: 0,
       blob_ref: loc.source === 'blob' ? loc.blobRef : null,
       external_key: loc.source === 'external' ? loc.externalKey : null,
       etag: loc.source === 'external' ? (loc.etag ?? null) : null,
@@ -723,6 +730,55 @@ const operations = {
     return { entries: visible, nextCursor: next } as unknown as HandlerOutput<
       (typeof driveOperations)['drive/list-trash']
     >;
+  },
+
+  'drive/file-details': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
+    const row = ctx.sql.query<DetailsRow>('SELECT * FROM drive_file_details WHERE file_id = ?', [input.fileId])[0];
+    return {
+      fileId: input.fileId, description: row?.description ?? '', labels: row ? JSON.parse(row.labels_json) as string[] : [],
+      revision: row?.revision ?? 0, canWrite: (await ctx.check(DRIVE_PERM.write, fileRef(input.fileId))).allowed,
+    };
+  },
+
+  'drive/update-file-details': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
+    const row = ctx.sql.query<DetailsRow>('SELECT * FROM drive_file_details WHERE file_id = ?', [input.fileId])[0];
+    if ((row?.revision ?? 0) !== input.expectedRevision) {
+      throw substratError('conflict', 'details changed — reload before saving');
+    }
+    const labels = [...new Set(input.labels)];
+    const revision = input.expectedRevision + 1;
+    // Scope invocations are serialized and transactional; the revision comparison and
+    // upsert cannot be separated by another writer. Labels are values, never authority.
+    ctx.sql.exec(`INSERT INTO drive_file_details (id, file_id, description, labels_json, revision, updated_at, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET
+      description = excluded.description, labels_json = excluded.labels_json, revision = excluded.revision,
+      updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+      [input.fileId, input.fileId, input.description, JSON.stringify(labels), revision, ctx.now(), ctx.principal]);
+    ctx.link({ entityType: 'file_details', entityId: input.fileId }, fileRef(input.fileId));
+    ctx.emit({ type: 'drive.file-details-updated', schemaVersion: 1, entity: fileRef(input.fileId), piiClass: 'none',
+      payload: { fileId: input.fileId, revision } });
+    return { fileId: input.fileId, description: input.description, labels, revision, canWrite: true };
+  },
+
+  'drive/keep-version': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
+    const version = ctx.sql.query<VersionRow>(
+      'SELECT * FROM drive_file_versions WHERE id = ? AND file_id = ?', [input.versionId, input.fileId],
+    )[0];
+    if (!version) throw substratError('not_found', 'version not found');
+    const keep = input.keep ? 1 : 0;
+    if (version.keep === keep) return version;
+    ctx.sql.exec('UPDATE drive_file_versions SET keep = ? WHERE id = ? AND file_id = ?', [keep, version.id, input.fileId]);
+    ctx.emit({
+      type: 'drive.version-kept', schemaVersion: 1, entity: fileRef(input.fileId), piiClass: 'none',
+      payload: { id: version.id, keep },
+    });
+    return { ...version, keep };
   },
 
   'drive/restore-version': async (ctx, input): Promise<FileRow> => {
@@ -1162,9 +1218,10 @@ const operations = {
     // work rather than walking the scope.
     const reach = Math.min(limit * 3, 100);
 
-    const [byName, byText] = await Promise.all([
+    const [byName, byText, byDetails] = await Promise.all([
       ctx.search('file', input.term, { limit: reach }),
       ctx.search('file_text', input.term, { limit: reach }),
+      ctx.search('file_details', input.term, { limit: reach }),
     ]);
 
     // A file_text hit is an id in ITS table; what the caller wants is the file.
@@ -1179,13 +1236,17 @@ const operations = {
     // bm25: lower is better. A name match and a body match are the same question,
     // so they merge into one list — and a file matching BOTH is reported once, as
     // a name hit, because that is the stronger thing to say about it.
-    const merged = new Map<string, { rank: number; via: 'name' | 'content' }>();
+    const merged = new Map<string, { rank: number; via: 'name' | 'content' | 'metadata' }>();
     for (const [id, rank] of textFileIds) merged.set(id, { rank, via: 'content' });
+    for (const hit of byDetails) {
+      const details = ctx.sql.query<{ file_id: string }>('SELECT file_id FROM drive_file_details WHERE id = ?', [hit.id])[0];
+      if (details) merged.set(details.file_id, { rank: hit.rank, via: 'metadata' });
+    }
     for (const hit of byName) merged.set(hit.id, { rank: hit.rank, via: 'name' });
 
     const ranked = [...merged.entries()].sort((a, b) => a[1].rank - b[1].rank);
 
-    const hits: (FileRow & { via: 'name' | 'content' })[] = [];
+    const hits: (FileRow & { via: 'name' | 'content' | 'metadata' })[] = [];
     for (const [fileId, { via }] of ranked) {
       if (hits.length === limit) break;
       // Per hit, and deliberately not a bulk filter: the checker's answer is the
