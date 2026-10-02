@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@canopy/ui';
-import { uploadFile } from './api';
+import { useNavigationGuard } from './navigation-guards';
+import { uploadFile, currentSite } from './api';
 
-type Upload = { id: number; folderId: string; destination: string; name: string; file: File | null;
+type Upload = { site: string | null; id: number; folderId: string; destination: string; name: string; file: File | null;
   state: 'queued' | 'uploading' | 'done' | 'failed'; error?: string };
 
 /** Files keep the destination selected when queued. One upload body is in flight at a time. */
@@ -23,6 +24,7 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
   const pump = async () => {
     if (running.current) return;
     running.current = true;
+    let wrote = false;
     try {
       for (;;) {
         if (!mounted.current) break;
@@ -30,30 +32,31 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
         if (!row?.file) break;
         update(row.id, { state: 'uploading', error: undefined });
         try {
-          await uploadFile(row.folderId, row.file);
+          await uploadFile(row.folderId, row.file, row.site);
+          wrote = true;
           update(row.id, { state: 'done', file: null });
         } catch (e: unknown) {
           update(row.id, { state: 'failed', error: e instanceof Error ? e.message || 'Upload failed.' : String(e) });
           continue;
         }
-        if (mounted.current) await changed.current().catch(() => {});
       }
-    } finally { running.current = false; }
+    } finally {
+      running.current = false;
+      if (wrote && mounted.current) await changed.current().catch(() => {});
+    }
   };
   const enqueue = (folderId: string, destination: string, files: File[]) => {
-    queue.current.push(...files.map(file => ({ id: ++sequence.current, folderId, destination, name: file.name, file, state: 'queued' as const })));
+    queue.current.push(...files.map(file => ({ site: currentSite(), id: ++sequence.current, folderId, destination, name: file.name, file, state: 'queued' as const })));
     publish();
     void pump();
   };
   const active = rows.some(row => row.state === 'queued' || row.state === 'uploading');
-  useEffect(() => {
-    if (!active) return;
-    const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
-    window.addEventListener('beforeunload', protect);
-    return () => window.removeEventListener('beforeunload', protect);
-  }, [active]);
+  useNavigationGuard(active);
   const panel = rows.length ? <section aria-label="Uploads" className="max-h-48 shrink-0 overflow-auto border-b border-border px-4 py-2 text-sm">
     <p role="status">{rows.filter(row => row.state === 'done').length} of {rows.length} uploaded</p>
+    {rows.some(row => row.state === 'done') ? <Button size="sm" variant="ghost" onClick={() => {
+      queue.current = queue.current.filter(row => row.state !== 'done'); publish();
+    }}>Clear completed uploads</Button> : null}
     <ul>{rows.map(row => <li key={row.id} className="flex flex-wrap items-center gap-2 py-1">
       <span>{row.name}</span><span className="text-xs text-muted-foreground">to {row.destination}</span>
       <span>{row.state === 'done' ? 'Uploaded' : row.state === 'failed' ? 'Failed' : row.state === 'uploading' ? 'Uploading…' : 'Queued'}</span>

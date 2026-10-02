@@ -33,6 +33,7 @@ import { kindOf, type FileItem } from './items';
 import {
   ApiError,
   ROOT_FOLDER_ID,
+  currentSite,
   SEARCH_MIN,
   contentUrl,
   peopleAccess,
@@ -568,7 +569,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const chosen = Array.from(input.files ?? []);
     input.value = '';
     if (chosen.length === 0) return;
-    if (!offline) uploads.enqueue(folderId, ['My Drive', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
+    if (!offline) uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
   };
 
   const empty = loadFailed ? (
