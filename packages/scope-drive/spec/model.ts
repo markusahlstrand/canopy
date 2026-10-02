@@ -337,6 +337,8 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
      */
     input: z.object({
       fileId: z.string(),
+      /** Optional compare-and-swap for editors; omitted for ordinary uploads. */
+      expectedCurrentVersion: z.string().nullable().optional(),
       location: z.discriminatedUnion('source', [
         // The attachment id. The bytes are already in the platform's per-tenant blob
         // store under a key derived from (scopeId, attachmentId), with a sha256
