@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  Button,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -59,11 +58,13 @@ export function CommandPalette({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const [settledQuery, setSettledQuery] = useState<string | null>(null);
   const searching = query.trim().length >= SEARCH_MIN;
 
   useEffect(() => {
     if (!open) {
       setQuery("");
+      setSettledQuery(null);
       setResults([]);
     }
   }, [open]);
@@ -85,7 +86,10 @@ export function CommandPalette({
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message || 'Search failed.' : String(e));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setSettledQuery(query);
+        }
       }
     }, 180);
     return () => { cancelled = true; clearTimeout(t); };
@@ -98,6 +102,7 @@ export function CommandPalette({
         value={query}
         onValueChange={(next) => {
           setQuery(next);
+          setSettledQuery(null);
           // The previous query's hits are wrong the moment the query changes — and worse
           // than wrong, because cmdk's `value` embeds the new query, so they stay
           // selectable and open an unrelated file.
@@ -105,13 +110,17 @@ export function CommandPalette({
           setError(null);
         }}
       />
-        {error ? <div className="p-3 text-sm"><p role="alert">{error}</p>
-          <Button size="sm" variant="outline" onClick={() => setRetry(value => value + 1)}>Retry search</Button>
-        </div> : null}
       <CommandList className="max-h-[60vh]">
+        {error ? <>
+          <p role="alert" className="p-3 text-sm">{error}</p>
+          <CommandItem value={`retry ${query}`} onSelect={() => {
+            setSettledQuery(null);
+            setRetry(value => value + 1);
+          }}>Retry search</CommandItem>
+        </> : null}
         {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
 
-        {!loading && !error ? <CommandEmpty>No results found.</CommandEmpty> : null}
+        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>No results found.</CommandEmpty> : null}
 
         <CommandGroup heading="Files">
           {searching

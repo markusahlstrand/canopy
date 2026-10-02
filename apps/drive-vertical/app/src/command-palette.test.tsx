@@ -12,7 +12,11 @@ it('distinguishes failed search from no matches and retries the same query', asy
   expect(screen.getByRole('status').textContent).toBe('Searching…');
   await screen.findByText('Connection lost');
   expect(screen.queryByText('No results found.')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Retry search' }));
+  const retry = screen.getByRole('option', { name: 'Retry search' });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowDown' });
+  expect(retry.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect(screen.queryByText('No results found.')).toBeNull();
   await screen.findByText('No results found.');
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole('alert')).toBeNull();
@@ -42,4 +46,17 @@ it('keeps B results when the retired A request resolves last', async () => {
   await act(async () => { pending[0]!(new Response(JSON.stringify({ hits: [{ id: 'a', name: 'A result', via: 'name' }] }))); });
   expect(screen.queryByText('A result')).toBeNull();
   expect(screen.getByText('B result')).toBeTruthy();
+});
+
+it('shows no-results only after the active query settles', async () => {
+  const pending: ((response: Response) => void)[] = [];
+  vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { pending.push(resolve as (response: Response) => void); })));
+  render(<CommandPalette {...props} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'missing' } });
+  expect(screen.queryByText('No results found.')).toBeNull();
+  await vi.waitFor(() => expect(pending).toHaveLength(1));
+  await act(async () => { pending[0]!(new Response(JSON.stringify({ hits: [] }))); });
+  expect(screen.getByText('No results found.')).toBeTruthy();
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'another' } });
+  expect(screen.queryByText('No results found.')).toBeNull();
 });
