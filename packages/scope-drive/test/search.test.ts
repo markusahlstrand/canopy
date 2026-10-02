@@ -51,7 +51,7 @@ interface TextRow {
   detail: string | null;
 }
 interface Hits {
-  hits: (FileRow & { via: 'name' | 'content' | 'metadata' })[];
+  hits: (FileRow & { via: 'name' | 'content' | 'metadata'; snippet: string | null })[];
 }
 
 const as = (who: typeof ada) => host.getScope(who, tenant, scope);
@@ -357,4 +357,16 @@ describe('description and label search', () => {
     await writer.invoke('drive/trash-file', { fileId: file.id });
     expect((await writer.invoke<Hits>('drive/search', { term: 'zebracontract' })).hits.map(hit => hit.id)).not.toContain(file.id);
   });
+});
+
+it('returns bounded plain text context for a current authorized extraction', async () => {
+  const stub = await as(ada);
+  const file = await fileWithVersion(stub, ROOT_FOLDER_ID, 'snippet.pdf');
+  const text = 'x'.repeat(300) + ' Unique context marker <script>plain</script> ' + 'z'.repeat(300);
+  await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, status: 'indexed', text });
+  const got = await stub.invoke<Hits>('drive/search', { term: 'context marker' });
+  const hit = got.hits.find(hit => hit.id === file.id)!;
+  expect(hit.snippet).toContain('context marker');
+  expect(hit.snippet!.length).toBeLessThanOrEqual(242);
+  expect(hit.snippet).toContain('<script>plain</script>');
 });

@@ -79,3 +79,26 @@ it('background replay neither clears a failed post error nor publishes its own f
   expect(screen.getByRole('alert').textContent).toBe('Post denied');
   expect((screen.getByLabelText('New comment') as HTMLTextAreaElement).disabled).toBe(false);
 });
+
+it('defers live refresh during deletion and runs it after deletion completes', async () => {
+  let changed!: () => void;
+  vi.spyOn(live, 'watchDriveChanges').mockImplementation(callback => { changed = callback; return () => {}; });
+  let finishDelete!: (response: Response) => void;
+  let reads = 0;
+  let deleted = false;
+  vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+    if (init?.method === 'DELETE') return new Promise(resolve => { finishDelete = resolve; });
+    reads++;
+    return Promise.resolve(new Response(JSON.stringify(deleted ? [] : [{ id: '01', body: 'Mine', authorLabel: 'Ada', created_at: '2026-01-01', canDelete: true }])));
+  });
+  render(<CommentsPanel fileId="file" />);
+  await screen.findByText('Mine');
+  fireEvent.click(screen.getByRole('button', { name: 'Delete comment' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
+  act(() => { changed(); changed(); });
+  expect(reads).toBe(1);
+  deleted = true;
+  await act(async () => { finishDelete(new Response('{}')); });
+  await screen.findByText('No comments yet.');
+  expect(reads).toBe(2);
+});
