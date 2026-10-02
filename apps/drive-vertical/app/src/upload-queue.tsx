@@ -4,7 +4,7 @@ import { useNavigationGuard } from './navigation-guards';
 import { uploadFile, currentSite } from './api';
 
 type Upload = { site: string | null; id: number; folderId: string; destination: string; name: string; file: File | null;
-  state: 'queued' | 'uploading' | 'done' | 'failed'; error?: string };
+  state: 'queued' | 'uploading' | 'done' | 'failed' | 'cancelled'; error?: string };
 
 /** Files keep the destination selected when queued. One upload body is in flight at a time. */
 export function useUploadQueue(onChanged: () => Promise<void>) {
@@ -50,19 +50,26 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
     publish();
     void pump();
   };
+  const cancel = (id?: number) => {
+    queue.current = queue.current.map(row => row.state === 'queued' && (id === undefined || row.id === id)
+      ? { ...row, state: 'cancelled', file: null, error: undefined } : row);
+    publish();
+  };
   const active = rows.some(row => row.state === 'queued' || row.state === 'uploading');
   useNavigationGuard(active);
   const panel = rows.length ? <section aria-label="Uploads" className="max-h-48 shrink-0 overflow-auto border-b border-border px-4 py-2 text-sm">
-    <p role="status">{rows.filter(row => row.state === 'done').length} of {rows.length} uploaded</p>
+    <p role="status">{rows.filter(row => row.state === 'done').length} of {rows.length} uploaded{rows.some(row => row.state === 'cancelled') ? ` · ${rows.filter(row => row.state === 'cancelled').length} cancelled` : ''}</p>
+    {rows.some(row => row.state === 'queued') ? <Button size="sm" variant="outline" onClick={() => cancel()}>Cancel queued uploads</Button> : null}
     {rows.some(row => row.state === 'done') ? <Button size="sm" variant="ghost" onClick={() => {
       queue.current = queue.current.filter(row => row.state !== 'done'); publish();
     }}>Clear completed uploads</Button> : null}
     <ul>{rows.map(row => <li key={row.id} className="flex flex-wrap items-center gap-2 py-1">
       <span>{row.name}</span><span className="text-xs text-muted-foreground">to {row.destination}</span>
-      <span>{row.state === 'done' ? 'Uploaded' : row.state === 'failed' ? 'Failed' : row.state === 'uploading' ? 'Uploading…' : 'Queued'}</span>
+      <span>{row.state === 'done' ? 'Uploaded' : row.state === 'failed' ? 'Failed' : row.state === 'uploading' ? 'Uploading…' : row.state === 'cancelled' ? 'Cancelled' : 'Queued'}</span>
+      {row.state === 'queued' ? <Button size="sm" variant="outline" onClick={() => cancel(row.id)}>Cancel {row.name}</Button> : null}
       {row.error ? <span role="alert">{row.error}</span> : null}
       {row.state === 'failed' ? <Button size="sm" variant="outline" onClick={() => { update(row.id, { state: 'queued' }); void pump(); }}>Retry {row.name}</Button> : null}
-      {row.state === 'done' || row.state === 'failed' ? <Button size="sm" variant="ghost" aria-label={`Dismiss ${row.name}`} onClick={() => {
+      {row.state === 'done' || row.state === 'failed' || row.state === 'cancelled' ? <Button size="sm" variant="ghost" aria-label={`Dismiss ${row.name}`} onClick={() => {
         queue.current = queue.current.filter(item => item.id !== row.id); publish();
       }}>Dismiss</Button> : null}
     </li>)}</ul>
