@@ -153,6 +153,14 @@ when a frame arrives. It also polls once a minute and on returning to a visible
 tab, covering disconnected sockets, unsupported network paths, and changes that
 cannot be pushed after a permission is revoked.
 
+## Moving files and folders
+
+Move opens a same-space destination picker for one item or a selection. Files and
+folders can also be dragged onto folders. Self/descendant destinations are refused;
+the server checks source and destination authority, and access follows the destination.
+Name conflicts remain errors. Each move is atomic, while selections run sequentially;
+after a partial failure, retry moves only the remaining items.
+
 ## Not yet wired
 
 WebDAV, connector-backed reads, and any migration of existing canopy spaces. See

@@ -121,9 +121,6 @@ function FileTableSkeleton({ view }: { view: "list" | "grid" }) {
   );
 }
 
-/** A real file the user can pick up (folders and synthetic rows aren't draggable). */
-const isDraggableFile = (f: FileItem) => f.kind !== "folder";
-
 /**
  * A folder in this space — a valid move destination.
  *
@@ -210,11 +207,12 @@ export function FileTable({
 
   function canDrop(folder: FileItem): boolean {
     const f = dragged.current;
-    return !!onMove && !!f && isFolderDropTarget(folder) && f.path !== folder.path;
+    return !!onMove && !!f && isFolderDropTarget(folder) && f.id !== folder.id
+      && !(f.isFolder && folder.path?.startsWith(`${f.path}/`));
   }
 
   function dragHandlers(f: FileItem) {
-    if (!onMove || !isDraggableFile(f)) return {};
+    if (!onMove) return {};
     return {
       draggable: true,
       onDragStart: (e: React.DragEvent) => {

@@ -23,6 +23,7 @@ import { Topbar } from './topbar';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
+import { MoveDialog } from './move-dialog';
 import { CommandPalette } from './command-palette';
 import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
@@ -155,6 +156,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [trash, setTrash] = useState<DriveFile[]>([]);
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
+  const [moving, setMoving] = useState<FileItem[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
@@ -419,11 +421,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       return;
     }
     if (action === 'Move') {
-      // Up one level, as before — a destination picker is its own screen.
-      const up = crumbs[crumbs.length - 2]?.id ?? ROOT_FOLDER_ID;
-      if (crumbs.length > 0) {
-        void act(() => (item.isFolder ? moveFolder(item.id, up) : moveFile(item.id, up)));
-      }
+      const visible = view === 'search' ? hits.map((hit) => fileItem(hit))
+        : [...folders.map(folderItem), ...files.map((file) => fileItem(file))];
+      setMoving(selection.has(item.id) ? visible.filter((row) => selection.has(row.id)) : [item]);
     }
   };
 
@@ -643,7 +643,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           view={layout}
           onAction={onAction}
           // Drag a file onto a folder: the move the platform's relink makes safe (#75).
-          onMove={offline ? undefined : (item, folder) => void act(() => moveFile(item.id, folder.id))}
+          onMove={offline ? undefined : (item, folder) => void act(() => item.isFolder
+            ? moveFolder(item.id, folder.id) : moveFile(item.id, folder.id))}
           pluginMenuItems={() => []}
           previewOpen={previewing !== null}
           loading={busy}
@@ -668,6 +669,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 
       <ShareDialog folder={sharing} onClose={() => setSharing(null)} me={auth.principal} />
+
+      {moving ? <MoveDialog items={moving} sourceFolderId={view === 'drive' ? folderId : null}
+        onClose={() => setMoving(null)} onMoved={async () => {
+          setSelection(new Set());
+          await refreshRef.current();
+        }} /> : null}
 
       {creating ? (
         <NameDialog
