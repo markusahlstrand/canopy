@@ -301,7 +301,7 @@ export function PreviewPanel({
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Icon name="file-text" className="size-4 text-muted-foreground" />
         <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{file?.name ?? 'Loading…'}</h2>
-        {version ? (
+        {version?.source === 'blob' ? (
           <Button variant="outline" size="sm" asChild>
             <a href={contentUrl(fileId)} download={file?.name}>
               <Icon name="download" className="size-4" />
@@ -337,7 +337,8 @@ export function PreviewPanel({
           ) : shape === 'image' ? (
             <ImagePreview fileId={fileId} name={file?.name ?? ''} mime={version.mime} />
           ) : shape === 'audio' || shape === 'video' ? (
-            <MediaPreview key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} name={file?.name ?? ''} shape={shape} />
+            version.source === 'blob' ? <MediaPreview key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} name={file?.name ?? ''} shape={shape} />
+              : <Empty>This version lives in a connected source; connector reads are not available.</Empty>
           ) : shape === 'pdf' ? (
             // `object` rather than `iframe`: it falls back to its children when the
             // browser has no PDF viewer, instead of rendering an empty frame.
@@ -470,7 +471,7 @@ function MediaPreview({ fileId, versionId, name, shape }: { fileId: string; vers
     const media = player.current;
     return () => { if (media) { media.pause(); media.removeAttribute('src'); media.load(); } };
   }, [failed]);
-  if (failed) return <Empty>This browser could not play {name}. Download it to open it.</Empty>;
+  if (failed) return <Empty>This browser could not play {name}. <a href={versionContentUrl(fileId, versionId)} download={name} className="underline">Download this version</a> to open it.</Empty>;
   const props = { src: versionContentUrl(fileId, versionId), controls: true, preload: 'metadata', className: 'w-full',
     'aria-label': name, onError: () => setFailed(true), ref: (media: HTMLMediaElement | null) => { player.current = media; } };
   return shape === 'audio' ? <audio {...props} /> : <video {...props} playsInline />;
