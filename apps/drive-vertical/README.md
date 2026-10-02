@@ -152,6 +152,14 @@ through the same authenticated, scope-local read and attachment gates as current
 Historical reads do not change the current version. Trashed files and mismatched
 version ids are refused; connected-source bytes still return 501.
 
+## Descriptions and labels
+
+The preview’s Details tab reads and edits descriptive metadata with file-level
+permissions. Revisions protect against stale edits. Labels carry no access rights.
+Search matches names, current extracted text, descriptions and labels; the kernel’s
+FTS triggers update metadata search in the same write. Metadata hits are distinguished
+in the palette and are filtered through the live file’s read permission.
+
 ## Live updates
 
 `GET /api/live` is Substrat's WebSocket subscription for authenticated pages. The

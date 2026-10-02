@@ -624,7 +624,7 @@ export const search = (term: string, limit?: number) =>
   );
 
 export interface SearchHit extends DriveFile {
-  via: 'name' | 'content';
+  via: 'name' | 'content' | 'metadata';
 }
 
 /** What is in the trash, scope-wide — a trashed file's folder is where it goes back to. */
