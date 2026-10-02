@@ -582,6 +582,30 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     http: { method: 'GET', path: '/files/{fileId}/versions' },
   },
 
+  'drive/add-comment': {
+    summary: 'Post a comment as the reader, preserving legacy viewer semantics',
+    permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string(), body: z.string().trim().min(1).max(10000) }),
+    output: driveEntities.file_comment.fields.extend({ authorLabel: z.string(), canDelete: z.boolean() }),
+    http: { method: 'POST', path: '/files/{fileId}/comments' },
+    emits: {
+      entity: 'file', entityIdFrom: 'file_id', type: 'drive.comment-added', schemaVersion: 1,
+      piiClass: 'pseudonymous', subjectId: 'author', payload: ['id', 'file_id', 'author'],
+    },
+  },
+
+  'drive/delete-comment': {
+    summary: 'Delete a comment as its author or a file moderator',
+    permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string(), commentId: z.string() }),
+    output: driveEntities.file_comment.fields,
+    http: { method: 'DELETE', path: '/files/{fileId}/comments/{commentId}' },
+    emits: {
+      entity: 'file', entityIdFrom: 'file_id', type: 'drive.comment-deleted', schemaVersion: 1,
+      piiClass: 'pseudonymous', subjectId: 'author', payload: ['id', 'file_id', 'author'],
+    },
+  },
+
   'drive/list-comments': {
     summary: 'Read a live file comment thread, oldest first',
     permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },

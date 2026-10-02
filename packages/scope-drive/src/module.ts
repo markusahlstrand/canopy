@@ -736,6 +736,32 @@ const operations = {
     >;
   },
 
+  'drive/add-comment': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
+    const row: CommentRow = { id: ulid(), file_id: input.fileId, author: ctx.principal, body: input.body, created_at: ctx.now(), deleted_at: null };
+    ctx.sql.exec('INSERT INTO drive_file_comments (id, file_id, author, body, created_at) VALUES (?, ?, ?, ?, ?)',
+      [row.id, row.file_id, row.author, row.body, row.created_at]);
+    ctx.link({ entityType: 'file_comment', entityId: row.id }, fileRef(row.file_id));
+    ctx.emit({ type: 'drive.comment-added', schemaVersion: 1, entity: fileRef(row.file_id), piiClass: 'pseudonymous',
+      subjectId: dataSubjectId.parse(row.author), payload: { id: row.id, file_id: row.file_id, author: row.author } });
+    const person = ctx.sql.query<PersonRow>('SELECT * FROM drive_people WHERE principal = ?', [row.author])[0];
+    return { ...row, authorLabel: person?.name || person?.email || row.author, canDelete: true };
+  },
+
+  'drive/delete-comment': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
+    const row = ctx.sql.query<CommentRow>('SELECT * FROM drive_file_comments WHERE id = ? AND file_id = ? AND deleted_at IS NULL', [input.commentId, input.fileId])[0];
+    if (!row) throw substratError('not_found', 'comment not found');
+    if (row.author !== ctx.principal) assertAllowed(await ctx.check(DRIVE_PERM.manage, fileRef(input.fileId)));
+    const deleted_at = ctx.now();
+    ctx.sql.exec('UPDATE drive_file_comments SET deleted_at = ? WHERE id = ?', [deleted_at, row.id]);
+    ctx.emit({ type: 'drive.comment-deleted', schemaVersion: 1, entity: fileRef(row.file_id), piiClass: 'pseudonymous',
+      subjectId: dataSubjectId.parse(row.author), payload: { id: row.id, file_id: row.file_id, author: row.author } });
+    return { ...row, deleted_at };
+  },
+
   'drive/list-comments': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
     liveFile(ctx, input.fileId);

@@ -81,3 +81,55 @@ describe('scope-local comment reads', () => {
     await expect((await as(bjorn)).invoke('drive/list-comments', { fileId: fresh.id })).rejects.toThrow('file not found');
   });
 });
+
+
+describe('comment writes and moderation', () => {
+  it('lets a reader post as themselves and delete their own comment', async () => {
+    const reader = await as(bjorn);
+    const file = await (await as(ada)).invoke<{ id: string }>('drive/ensure-file', { folderId: ROOT_FOLDER_ID, name: 'reader-comments.txt' });
+    const comment = await reader.invoke<Comment>('drive/add-comment', { fileId: file.id, body: '  My comment  ', author: ada });
+    expect(comment).toMatchObject({ author: bjorn, body: 'My comment', canDelete: true });
+    expect((await reader.invoke<Thread>('drive/list-comments', { fileId: file.id })).entries).toHaveLength(1);
+    await reader.invoke('drive/delete-comment', { fileId: file.id, commentId: comment.id });
+    expect((await reader.invoke<Thread>('drive/list-comments', { fileId: file.id })).entries).toHaveLength(0);
+  });
+
+  it('refuses another reader deleting a comment, but allows a file manager', async () => {
+    const owner = await as(ada);
+    const reader = await as(bjorn);
+    const file = await owner.invoke<{ id: string }>('drive/ensure-file', { folderId: ROOT_FOLDER_ID, name: 'moderation.txt' });
+    const owned = await owner.invoke<Comment>('drive/add-comment', { fileId: file.id, body: 'Owner comment' });
+    await expect(reader.invoke('drive/delete-comment', { fileId: file.id, commentId: owned.id })).rejects.toThrow();
+    const posted = await reader.invoke<Comment>('drive/add-comment', { fileId: file.id, body: 'Reader comment' });
+    await owner.invoke('drive/delete-comment', { fileId: file.id, commentId: posted.id });
+    expect((await owner.invoke<Thread>('drive/list-comments', { fileId: file.id })).entries.map(row => row.id)).toEqual([owned.id]);
+  });
+
+  it('refuses mismatched files, outsiders, empty/oversized text and trash', async () => {
+    const owner = await as(ada);
+    const file = await owner.invoke<{ id: string }>('drive/ensure-file', { folderId: ROOT_FOLDER_ID, name: 'comments-boundary.txt' });
+    const other = await owner.invoke<{ id: string }>('drive/ensure-file', { folderId: ROOT_FOLDER_ID, name: 'comments-other.txt' });
+    const comment = await owner.invoke<Comment>('drive/add-comment', { fileId: file.id, body: 'valid' });
+    await expect(owner.invoke('drive/delete-comment', { fileId: other.id, commentId: comment.id })).rejects.toThrow('comment not found');
+    await expect((await as(outsider)).invoke('drive/add-comment', { fileId: file.id, body: 'no' })).rejects.toThrow();
+    await expect((await as(outsider)).invoke('drive/delete-comment', { fileId: file.id, commentId: comment.id })).rejects.toThrow();
+    for (const body of [' ', 'x'.repeat(10001)]) await expect(owner.invoke('drive/add-comment', { fileId: file.id, body })).rejects.toThrow();
+    await owner.invoke('drive/trash-file', { fileId: file.id });
+    await expect(owner.invoke('drive/add-comment', { fileId: file.id, body: 'no' })).rejects.toThrow('file not found');
+    await expect(owner.invoke('drive/delete-comment', { fileId: file.id, commentId: comment.id })).rejects.toThrow('file not found');
+  });
+
+  it('emits file-scoped pseudonymous events without storing comment bodies in the event', async () => {
+    const owner = await as(ada);
+    const file = await owner.invoke<{ id: string }>('drive/ensure-file', { folderId: ROOT_FOLDER_ID, name: 'comment-events.txt' });
+    const comment = await owner.invoke<Comment>('drive/add-comment', { fileId: file.id, body: 'Private body marker' });
+    await owner.invoke('drive/delete-comment', { fileId: file.id, commentId: comment.id });
+    const events = await host.admin.queryScope(staff, tenant, scope, {
+      sql: "SELECT type, entity_type, entity_id, pii_class, payload FROM _substrat_outbox WHERE type IN ('drive.comment-added', 'drive.comment-deleted') ORDER BY id",
+    });
+    const rows = events.rows.map(row => Object.fromEntries(events.columns.map((col, i) => [col, row[i]]))).filter(row => row.entity_id === file.id);
+    expect(rows).toHaveLength(2);
+    expect(rows.every(row => row.entity_type === 'file' && row.pii_class === 'pseudonymous')).toBe(true);
+    expect(JSON.stringify(rows)).not.toContain('Private body marker');
+  });
+});

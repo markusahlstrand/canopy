@@ -76,7 +76,7 @@ async function makeFixture(): Promise<EntityCheckFixture> {
   // The owner's bootstrap grant, as `provision.ts` gives it in a real install:
   // write and manage on the ROOT folder, reaching everything beneath through the
   // declared parent edge.
-  for (const permission of [DRIVE_PERM.write, DRIVE_PERM.manage]) {
+  for (const permission of [DRIVE_PERM.read, DRIVE_PERM.write, DRIVE_PERM.manage]) {
     await host.admin.grant(staff, {
       principalId: owner,
       permission,
@@ -121,6 +121,14 @@ async function makeFixture(): Promise<EntityCheckFixture> {
     },
 
     invoke: async (operation, input) => {
+      if (operation === 'drive/delete-comment') {
+        const comment = await asOwner<{ id: string }>('drive/add-comment', { fileId: input.fileId, body: 'fixture' });
+        // In both halves the probe may moderate this file; the pair then isolates
+        // the separate read check declared by delete-comment, rather than ownership.
+        await host.admin.grant(staff, { principalId: probe, permission: DRIVE_PERM.manage,
+          node: { tenantId: tenant, scopeId: scope }, entity: { entityType: 'file', entityId: input.fileId as string }, grantedBy: owner });
+        input = { ...input, commentId: comment.id };
+      }
       if (operation === 'drive/get-version' || operation === 'drive/restore-version' || operation === 'drive/keep-version') {
         // The kit supplies the file identity; its version must be made by the owner
         // before the probe can exercise read authority on that same file.
@@ -144,6 +152,8 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
    * take nothing else, so they have no entry.
    */
   inputs: {
+    'drive/add-comment': { body: 'conformance' },
+    'drive/delete-comment': { commentId: 'fixture-created-in-invoke' },
     'drive/get-version': { versionId: 'fixture-created-in-invoke' },
     'drive/restore-version': { versionId: 'fixture-created-in-invoke' },
     'drive/update-file-details': { description: 'test', labels: ['contract'], expectedRevision: 0 },
