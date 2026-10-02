@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, within, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, within, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PreviewPanel } from './preview';
 
 const old = { keep: 0, id: 'old', file_id: 'file', source: 'blob', blob_ref: 'old-blob', mime: 'application/zip', size: 1, created_at: '2026-08-01T00:00:00Z' };
@@ -96,5 +96,64 @@ describe('restoring from version history', () => {
     await waitFor(() => expect(error).toHaveBeenCalled());
     expect(changed).not.toHaveBeenCalled();
     expect((screen.getByRole('button', { name: 'Confirm restore' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+
+describe('paged history', () => {
+  it('retires an older-page response when the preview changes files', async () => {
+    let finishOlder!: (response: Response) => void;
+    const fetch = vi.fn((url: string) => {
+      if (url.includes('cursor=')) return new Promise<Response>(resolve => { finishOlder = resolve; });
+      const second = url.includes('/file2');
+      if (url.endsWith('/versions')) return Promise.resolve(new Response(JSON.stringify([second ? { ...current, id: 'current2', file_id: 'file2' } : current]), {
+        headers: second ? {} : { Link: `<${window.location.origin}/api/files/file/versions?cursor=current>; rel="next"` },
+      }));
+      return Promise.resolve(new Response(JSON.stringify({ file: second ? { ...file, id: 'file2', name: 'second.zip' } : file, version: second ? { ...current, id: 'current2', file_id: 'file2' } : current, canWrite: false })));
+    });
+    vi.stubGlobal('fetch', fetch);
+    const error = vi.fn();
+    const view = render(<PreviewPanel fileId="file" onClose={() => {}} onError={error} />);
+    await screen.findByText('archive.zip');
+    fireEvent.click(screen.getByRole('button', { name: 'Versions' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load older versions' }));
+    view.rerender(<PreviewPanel fileId="file2" onClose={() => {}} onError={error} />);
+    await screen.findByText('second.zip');
+    fireEvent.click(screen.getByRole('button', { name: 'Versions' }));
+    await screen.findByText('current');
+    await act(async () => finishOlder(new Response(JSON.stringify([old]))));
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.queryByRole('link', { name: `Download version from ${new Date(old.created_at).toLocaleString()}` })).toBeNull();
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('loads older pages without replacing current rows and retries a failed page', async () => {
+    let olderReads = 0;
+    const origin = window.location.origin;
+    const fetch = vi.fn(async (url: string) => {
+      if (url.includes('cursor=')) {
+        olderReads++;
+        if (olderReads === 1) return new Response(JSON.stringify({ detail: 'Try again' }), { status: 503 });
+        // Duplicate current proves appending a retried page does not duplicate history rows.
+        return new Response(JSON.stringify([current, old]));
+      }
+      if (url.endsWith('/versions')) return new Response(JSON.stringify([current]), {
+        headers: { Link: `<${origin}/api/files/file/versions?cursor=current&limit=1>; rel="next"` },
+      });
+      return new Response(JSON.stringify({ file, version: current, canWrite: false }));
+    });
+    vi.stubGlobal('fetch', fetch);
+    const error = vi.fn();
+    render(<PreviewPanel fileId="file" onClose={() => {}} onError={error} />);
+    await screen.findByText('archive.zip');
+    fireEvent.click(screen.getByRole('button', { name: 'Versions' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load older versions' }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith('Try again'));
+    expect(screen.getByText('current')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load older versions' }));
+    await screen.findByRole('link', { name: `Download version from ${new Date(old.created_at).toLocaleString()}` });
+    expect(fetch).toHaveBeenCalledWith('/api/files/file/versions?cursor=current&limit=1', expect.anything());
+    expect(screen.queryByRole('button', { name: 'Load older versions' })).toBeNull();
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
   });
 });
