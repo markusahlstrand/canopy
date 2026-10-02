@@ -1,4 +1,3 @@
-import { useUploadQueue } from './upload-queue';
 /**
  * The drive screen — the first of the portal's surfaces to run against the vertical
  * (S12, #64).
@@ -25,6 +24,7 @@ import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
 import { MoveDialog } from './move-dialog';
+import { useUploadQueue } from './upload-queue';
 import { CommandPalette } from './command-palette';
 import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
@@ -611,8 +611,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onSignOut={onSignOut}
       />
 
-      {uploads.panel}
-
       <input
         ref={uploadRef}
         type="file"
@@ -620,6 +618,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         className="hidden"
         onChange={(e) => onUpload(e.currentTarget)}
       />
+
+      {uploads.panel}
 
       <CommandPalette
         open={cmdOpen}
