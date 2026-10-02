@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
 import { latestOnly } from './reads';
+import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
 import { indexedMirror, syncMirror } from './scope-mirror';
 import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
@@ -164,7 +165,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [moving, setMoving] = useState<FileItem[] | null>(null);
   const [creating, setCreating] = useState(false);
-  const [previewing, setPreviewing] = useState<string | null>(null);
+  const [previewing, changePreview] = useState<string | null>(null);
+  const previewId = useRef(previewing);
+  previewId.current = previewing;
+  const setPreviewing = useCallback((id: string | null) => {
+    if (id !== previewId.current && !confirmDiscardDrafts()) return false;
+    changePreview(id);
+    return true;
+  }, []);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
@@ -259,7 +267,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           if (saved) {
             setFolders(saved.folders);
             setFiles(saved.files);
-            setPreviewing(null);
+            if (!hasUnsavedDrafts()) changePreview(null);
             setCmdOpen(false);
             setOffline(true);
             setLoadFailed(false);
@@ -401,7 +409,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * view, so its My Drive left you looking at a subfolder labelled as the root.
    */
   const navigate = useCallback((id: NavId) => {
-    if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
+    if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     const alreadyHere = id !== 'drive'
       ? view === id
       : view === 'drive' && folderId === ROOT_FOLDER_ID;
@@ -432,7 +440,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     // The listing on screen belongs to the folder being left; nothing in flight for it
     // may land here.
     reads.current.invalidate();
-    if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
+    if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     if (view === 'shared') {
       setView('drive');
       setCrumbs([{ id: folder.id, name: folder.path }]);
@@ -445,7 +453,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
   const upTo = (index: number) => {
     reads.current.invalidate();
-    if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
+    if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     // -1 is the root: the crumb trail holds everything below it.
     setCrumbs((c) => c.slice(0, index + 1));
     setFolderId(index < 0 ? ROOT_FOLDER_ID : crumbs[index]!.id);
