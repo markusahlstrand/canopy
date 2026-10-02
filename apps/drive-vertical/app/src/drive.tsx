@@ -1,3 +1,4 @@
+import { folderLink } from './folder-links';
 /**
  * The drive screen — the first of the portal's surfaces to run against the vertical
  * (S12, #64).
@@ -34,6 +35,7 @@ import {
   contentUrl,
   peopleAccess,
   createFolder,
+  folderByPath,
   listFolderPage,
   listFoldersPage,
   appendRows,
@@ -146,6 +148,9 @@ export interface DriveScreenProps {
 }
 
 export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
+  const initialPath = useRef(new URL(window.location.href).searchParams.get('path') ?? '').current;
+  const [linkPending, setLinkPending] = useState(!!initialPath);
+  const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
   const [trashNext, setTrashNext] = useState<string | null>(null);
@@ -181,6 +186,19 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const siteList = useSites();
 
   useEffect(() => {
+    if (!initialPath) return;
+    let active = true;
+    folderByPath(initialPath).then(folder => {
+      if (!active) return;
+      if (folder) { setFolderId(folder.id); setCrumbs([{ id: folder.id, name: folder.path }]); }
+      else setLinkMessage('This folder is unavailable or you do not have access.');
+    }).catch(() => {
+      if (active) setLinkMessage('Could not open the folder link. Reload to retry.');
+    }).finally(() => { if (active) setLinkPending(false); });
+    return () => { active = false; };
+  }, [initialPath]);
+
+  useEffect(() => {
     if (!mobileNavOpen || !window.matchMedia) return;
     const desktop = window.matchMedia('(min-width: 768px)');
     const closeOnDesktop = () => { if (desktop.matches) setMobileNavOpen(false); };
@@ -206,6 +224,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async () => {
+    if (linkPending) return;
     const ticket = reads.current.take();
     setBusy(true);
     setLoadingPage(false);
@@ -275,7 +294,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, term, onError, auth.principal]);
+  }, [folderId, view, term, onError, auth.principal, linkPending]);
 
   const moreTrash = async () => {
     if (!trashNext || busy || loadingPage || offline) return;
@@ -388,9 +407,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => {
     // A pause, not a keystroke: the index is per scope and cheap, but a request per
     // character still races its own answers and the last one to land wins.
+    if (linkPending) return;
     const t = setTimeout(() => void refresh(), view === 'search' ? 200 : 0);
     return () => clearTimeout(t);
-  }, [refresh, view]);
+  }, [refresh, view, linkPending]);
 
   /**
    * Switching view, from the rail or from the palette.
@@ -524,7 +544,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * where the screen now is.
    */
   const startWrite = (begin: () => void) => {
-    if (offline) return;
+    if (offline || linkPending) return;
     if (view !== 'drive') navigate('drive');
     begin();
   };
@@ -613,6 +633,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />
+
+      {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
+      {view === 'drive' && !offline && !linkPending ? <div className="px-4 py-2">
+        <Button variant="ghost" size="sm" onClick={() => {
+          void navigator.clipboard.writeText(folderLink(crumbs.map(crumb => crumb.name).join('/')))
+            .then(() => setLinkMessage('Folder link copied. This link does not grant access.'))
+            .catch(() => setLinkMessage('Could not copy the link. Allow clipboard access and try again.'));
+        }}>Copy folder link</Button>
+      </div> : null}
 
       <input
         ref={uploadRef}
