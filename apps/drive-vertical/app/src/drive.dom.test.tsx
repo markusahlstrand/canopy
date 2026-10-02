@@ -1669,3 +1669,22 @@ describe('Trash pages', () => {
     expect(screen.getByText('first.txt')).toBeTruthy();
   });
 });
+
+
+describe('search result explanations', () => {
+  it('shows content snippets and metadata labels in list and grid results', async () => {
+    await renderDrive();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search this space' }), { target: { value: 'budget' } });
+    await flush();
+    await answer('/api/search?', { hits: [
+      { ...file('01A', 'report.txt'), via: 'content', snippet: '<script>budget forecast</script>' },
+      { ...file('01B', 'plans.txt'), via: 'metadata', snippet: null }
+    ] });
+    expect(screen.getByText('<script>budget forecast</script>')).toBeTruthy();
+    expect(screen.getByText('Matched in description or labels')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to grid' }));
+    expect(screen.getByText('<script>budget forecast</script>')).toBeTruthy();
+    expect(screen.getByText('Matched in description or labels')).toBeTruthy();
+    expect(document.querySelector('script')).toBeNull();
+  });
+});

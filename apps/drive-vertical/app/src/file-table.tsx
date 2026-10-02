@@ -330,6 +330,7 @@ export function FileTable({
               </div>
             </div>
             <div className="truncate text-[13.5px] font-medium">{f.name}</div>
+            {f.description ? <p className="line-clamp-2 text-xs text-muted-foreground">{f.description}</p> : null}
             <div className="flex items-center justify-between">
               <span className="font-mono text-[11.5px] text-muted-foreground">{f.modified}</span>
             </div>
@@ -409,7 +410,9 @@ export function FileTable({
                     <td className="min-w-0 px-3">
                       <div className="flex min-w-0 items-center gap-3">
                         <FileIcon kind={f.kind} />
-                        <span className="max-w-[calc(100vw-9rem)] truncate font-medium md:max-w-none">{f.name}</span>
+                        <div className="min-w-0"><span className="block max-w-[calc(100vw-9rem)] truncate font-medium md:max-w-none">{f.name}</span>
+                          {f.description ? <p className="line-clamp-2 text-xs text-muted-foreground">{f.description}</p> : null}
+                        </div>
                       </div>
                     </td>
                     <td className="hidden px-3 font-mono text-[12.5px] text-muted-foreground md:table-cell">{f.modified}</td>
