@@ -164,8 +164,10 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
     const groups = spaces.filter((s) => s.kind === "group");
     if (segs.length) {
       const root = await sharedRoot(userSub, personalId, groups);
-      if (segs[0] === root) {
-        const mount = (await sharedMounts(userSub)).find((m) => m.name === segs[1]);
+      const mounts = segs[0] === root ? await sharedMounts(userSub) : [];
+      // An empty virtual collection must not reserve a personal file/folder name.
+      if (mounts.length) {
+        const mount = mounts.find((m) => m.name === segs[1]);
         if (!mount) throw new NotFoundError();
         // An encoded separator must not turn a child name into a path outside the mount.
         const tail = segs.slice(2);
@@ -287,10 +289,12 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
 
     if (p.kind === 'user' && segs.length === 1) {
       const { personalId, groups } = await resolveUser(p.sub, []);
-      if (segs[0] === await sharedRoot(p.sub, personalId, groups)) {
+      const root = await sharedRoot(p.sub, personalId, groups);
+      const mounts = segs[0] === root ? await sharedMounts(p.sub) : [];
+      if (mounts.length) {
         responses.push(collectionXml(davHref(segs, true), 'Shared with me'));
         if (depth !== '0') {
-          for (const mount of await sharedMounts(p.sub)) {
+          for (const mount of mounts) {
             responses.push(collectionXml(davHref([...segs, mount.name], true), mount.label));
           }
         }
