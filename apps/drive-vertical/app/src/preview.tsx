@@ -36,7 +36,7 @@ registerImageViewer();
 type Tab = 'file' | 'versions' | 'text' | 'details' | 'comments';
 
 /** How a file's current version wants to be shown. */
-type Shape = 'image' | 'pdf' | 'text' | 'none';
+type Shape = 'image' | 'pdf' | 'text' | 'audio' | 'video' | 'none';
 
 /**
  * What the browser can render without help, decided from the version's recorded mime —
@@ -46,6 +46,8 @@ export function shapeOf(mime: string | undefined): Shape {
   if (!mime) return 'none';
   mime = mime.split(';')[0]!.trim().toLowerCase();
   if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('video/')) return 'video';
   if (mime === 'application/pdf') return 'pdf';
   if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') {
     return 'text';
@@ -299,7 +301,7 @@ export function PreviewPanel({
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Icon name="file-text" className="size-4 text-muted-foreground" />
         <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{file?.name ?? 'Loading…'}</h2>
-        {version ? (
+        {version?.source === 'blob' ? (
           <Button variant="outline" size="sm" asChild>
             <a href={contentUrl(fileId)} download={file?.name}>
               <Icon name="download" className="size-4" />
@@ -334,6 +336,9 @@ export function PreviewPanel({
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : shape === 'image' ? (
             <ImagePreview fileId={fileId} name={file?.name ?? ''} mime={version.mime} />
+          ) : shape === 'audio' || shape === 'video' ? (
+            version.source === 'blob' ? <MediaPreview key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} name={file?.name ?? ''} shape={shape} />
+              : <Empty>This version lives in a connected source; connector reads are not available.</Empty>
           ) : shape === 'pdf' ? (
             // `object` rather than `iframe`: it falls back to its children when the
             // browser has no PDF viewer, instead of rendering an empty frame.
@@ -456,4 +461,18 @@ function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mi
 /** Keep an empty or failed preview legible in the space used by the file body. */
 function Empty({ children }: { children: React.ReactNode }) {
   return <p className="px-2 py-8 text-center text-sm text-muted-foreground">{children}</p>;
+}
+
+/** No autoplay or eager download. Immutable version URLs keep playback pinned to HEAD at open. */
+function MediaPreview({ fileId, versionId, name, shape }: { fileId: string; versionId: string; name: string; shape: 'audio' | 'video' }) {
+  const [failed, setFailed] = useState(false);
+  const player = useRef<HTMLMediaElement | null>(null);
+  useEffect(() => {
+    const media = player.current;
+    return () => { if (media) { media.pause(); media.removeAttribute('src'); media.load(); } };
+  }, [failed]);
+  if (failed) return <Empty>This browser could not play {name}. <a href={versionContentUrl(fileId, versionId)} download={name} className="underline">Download this version</a> to open it.</Empty>;
+  const props = { src: versionContentUrl(fileId, versionId), controls: true, preload: 'metadata', className: 'w-full',
+    'aria-label': name, onError: () => setFailed(true), ref: (media: HTMLMediaElement | null) => { player.current = media; } };
+  return shape === 'audio' ? <audio {...props} /> : <video {...props} playsInline />;
 }
