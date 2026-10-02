@@ -1,4 +1,3 @@
-import { folderLink } from './folder-links';
 /**
  * The drive screen — the first of the portal's surfaces to run against the vertical
  * (S12, #64).
@@ -21,6 +20,7 @@ import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
+import { folderLink } from './folder-links';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
