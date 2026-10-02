@@ -549,21 +549,35 @@ export const fileDetails = (fileId: string) => call<FileDetails>(`/files/${encod
 export const updateFileDetails = (fileId: string, description: string, labels: string[], expectedRevision: number) =>
   call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`, { method: 'PATCH', body: JSON.stringify({ description, labels, expectedRevision }) });
 
-/** History is a bare array with its continuation in Link; never infer the end from row count. */
-export async function fileVersionsPage(fileId: string, next: string | null = null): Promise<{ versions: FileVersion[]; next: string | null }> {
-  const path = `${API}/files/${encodeURIComponent(fileId)}/versions`;
+export interface ListingPage<T> { entries: T[]; next: string | null }
+
+/** Follow the server's page link, retaining filters and rejecting another route/origin. */
+async function readPage<T>(route: string, next: string | null, label = 'listing'): Promise<ListingPage<T>> {
+  const path = `${API}${route}`;
   const origin = window.location.origin;
   const continuation = (link: string) => {
     const url = new URL(link, origin);
-    if (url.origin !== origin || url.pathname !== path) throw new Error('Invalid version-history continuation.');
+    if (url.origin !== origin || url.pathname !== path) throw new Error(`Invalid ${label} continuation.`);
     return url;
   };
   const url = next ? continuation(next) : new URL(path, origin);
   const res = await request(`${url.pathname.slice(API.length)}${url.search}`);
-  const versions = await res.json() as FileVersion[];
-  const link = res.headers.get('Link');
-  const match = link?.match(/<([^>]+)>;\s*rel="next"/);
-  return { versions, next: match ? continuation(match[1]!).toString() : null };
+  const entries = await res.json() as T[];
+  const match = res.headers.get('Link')?.match(/<([^>]+)>;\s*rel="next"/);
+  const following = match ? continuation(match[1]!).toString() : null;
+  if (following && following === next) throw new Error('Listing did not advance. Try refreshing.');
+  return { entries, next: following };
+}
+
+export function appendRows<T extends { id: string }>(rows: T[], incoming: T[]): T[] {
+  const seen = new Set(rows.map(row => row.id));
+  return [...rows, ...incoming.filter(row => { if (seen.has(row.id)) return false; seen.add(row.id); return true; })];
+}
+
+/** History is a bare array with its continuation in Link; never infer the end from row count. */
+export async function fileVersionsPage(fileId: string, next: string | null = null): Promise<{ versions: FileVersion[]; next: string | null }> {
+  const page = await readPage<FileVersion>(`/files/${encodeURIComponent(fileId)}/versions`, next, 'version-history');
+  return { versions: page.entries, next: page.next };
 }
 
 export const keepVersion = (fileId: string, versionId: string, keep: boolean) =>
@@ -578,6 +592,9 @@ export const listSites = () => call<Site[]>('/sites');
 /** The folders directly inside a folder. Paged, so a bare array like the file listing. */
 export const listFolders = (folderId: string) =>
   call<DriveFolder[]>(`/folders/${encodeURIComponent(folderId)}/folders`);
+
+export const listFoldersPage = (folderId: string, next: string | null = null) =>
+  readPage<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/folders`, next);
 
 export const listSharedFolders = () => call<{ folders: DriveFolder[] }>('/folders/shared-with-me');
 

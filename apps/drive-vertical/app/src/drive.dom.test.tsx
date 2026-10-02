@@ -26,7 +26,7 @@ interface Pending {
   method: string;
   /** The body as sent, for the operations whose subject is IN it rather than in the URL. */
   body: string | null;
-  resolve: (body: unknown, status?: number) => void;
+  resolve: (body: unknown, status?: number, headers?: HeadersInit) => void;
   /** For the cases that are about a failure arriving late. */
   reject: (error: Error) => void;
 }
@@ -46,12 +46,12 @@ function queueFetch() {
         method: init?.method ?? 'GET',
         body: typeof init?.body === 'string' ? init.body : null,
         reject: (error: Error) => rejectFetch(error),
-        resolve: (body: unknown, status = 200) =>
+        resolve: (body: unknown, status = 200, headers?: HeadersInit) =>
           resolveFetch({
             ok: status < 400,
             status,
             statusText: 'stubbed',
-            headers: new Headers(),
+            headers: new Headers(headers),
             json: () => Promise.resolve(body),
             // The preview reads a text body with `.text()`, not `.json()`. Without this
             // the call rejected and the panel merely reported an error — which a test
@@ -82,12 +82,12 @@ async function answer(match: string, body: unknown): Promise<void> {
 }
 
 /** The same, with a status — for the paths that are about being refused. */
-async function answerWith(match: string, status: number, body: unknown): Promise<void> {
+async function answerWith(match: string, status: number, body: unknown, headers?: HeadersInit): Promise<void> {
   const i = pending.findIndex((p) => p.url.includes(match));
   expect(i, `no pending request matching ${match}; saw ${pending.map((p) => p.url).join(', ')}`).toBeGreaterThan(-1);
   const [target] = pending.splice(i, 1);
   await act(async () => {
-    target!.resolve(body, status);
+    target!.resolve(body, status, headers);
   });
 }
 
@@ -1540,5 +1540,49 @@ describe('sharing a folder', () => {
     expect(screen.getByText(/That is you/)).toBeTruthy();
     expect(screen.queryByText(/already has access to this folder/)).toBeNull();
     expect(pending.some((p) => p.method === 'POST')).toBe(false);
+  });
+});
+
+
+describe('folder pages', () => {
+  const folder = (id: string, name: string) => ({ id, name, parent_id: 'root', path: name });
+  async function firstPage() {
+    render(<DriveScreen {...shell} onError={vi.fn()} />);
+    await flush();
+    await answer('/api/sites', []);
+    await answerWith('/folders/root/folders', 200, [folder('01A', 'Alpha')], { Link: `<${window.location.origin}/api/folders/root/folders?cursor=older>; rel="next"` });
+    await answer('/folders/root/files', []);
+  }
+
+  it('appends more folders while retaining existing rows', async () => {
+    await firstPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more folders' }));
+    await answer('/folders/root/folders?cursor=older', [folder('01A', 'Alpha'), folder('01B', 'Beta')]);
+    expect(screen.getAllByText('Alpha')).toHaveLength(1);
+    expect(screen.getByText('Beta')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Load more folders' })).toBeNull();
+  });
+
+  it('retires an older-folder page after entering a folder', async () => {
+    await firstPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more folders' }));
+    fireEvent.doubleClick(screen.getByText('Alpha'));
+    await flush();
+    await answer('/folders/01A/folders', []);
+    await answer('/folders/01A/files', []);
+    await answer('/folders/root/folders?cursor=older', [folder('01B', 'Beta')]);
+    expect(screen.queryByText('Beta')).toBeNull();
+  });
+
+  it('loads additional destinations in the move picker', async () => {
+    await renderDrive([], [file('01F', 'notes.md')]);
+    fireEvent.contextMenu(screen.getByText('notes.md').closest('tr')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
+    await answerWith('/folders/root/folders', 200, [folder('01A', 'Alpha')], { Link: `<${window.location.origin}/api/folders/root/folders?cursor=older>; rel="next"` });
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Load more folders' }));
+    await answer('/folders/root/folders?cursor=older', [folder('01B', 'Beta')]);
+    expect(within(dialog).getByRole('button', { name: 'Alpha' })).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Beta' })).toBeTruthy();
   });
 });
