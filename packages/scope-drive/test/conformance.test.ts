@@ -121,7 +121,7 @@ async function makeFixture(): Promise<EntityCheckFixture> {
     },
 
     invoke: async (operation, input) => {
-      if (operation === 'drive/get-version' || operation === 'drive/restore-version') {
+      if (operation === 'drive/get-version' || operation === 'drive/restore-version' || operation === 'drive/keep-version') {
         // The kit supplies the file identity; its version must be made by the owner
         // before the probe can exercise read authority on that same file.
         const attachment = await (await host.attachments(owner, tenant, scope)).upload({
@@ -146,6 +146,7 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
   inputs: {
     'drive/get-version': { versionId: 'fixture-created-in-invoke' },
     'drive/restore-version': { versionId: 'fixture-created-in-invoke' },
+    'drive/keep-version': { versionId: 'fixture-created-in-invoke', keep: true },
     'drive/create-folder': { name: 'conformance' },
     'drive/ensure-file': { name: 'conformance' },
     // The `external` branch on purpose: a `blob` version names an attachment the

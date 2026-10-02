@@ -114,6 +114,8 @@ export const driveEntities = defineEntities({
       id: z.string(),
       file_id: z.string(),
       source: z.string(),
+      /** Retention designation; current versions remain protected independently. */
+      keep: z.number().int().min(0).max(1),
       blob_ref: z.string().nullable(),
       external_key: z.string().nullable(),
       etag: z.string().nullable(),
@@ -554,6 +556,18 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     output: driveEntities.file_version.fields,
     paged: { sortKey: 'id' },
     http: { method: 'GET', path: '/files/{fileId}/versions' },
+  },
+
+  'drive/keep-version': {
+    summary: 'Mark or unmark a historical version to keep',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string(), versionId: z.string(), keep: z.boolean() }),
+    output: driveEntities.file_version.fields,
+    http: { method: 'PATCH', path: '/files/{fileId}/versions/{versionId}' },
+    emits: {
+      entity: 'file', entityIdFrom: 'file_id', type: 'drive.version-kept', schemaVersion: 1,
+      piiClass: 'none', payload: ['id', 'keep'],
+    },
   },
 
   'drive/restore-version': {

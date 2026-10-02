@@ -196,6 +196,31 @@ describe('restoring historical content', () => {
   });
 });
 
+describe('retaining historical versions', () => {
+  it('keeps and unkeeps a version without changing HEAD or its bytes', async () => {
+    const first = await write(ada, ROOT_FOLDER_ID, 'keep-history.txt', 'old');
+    const current = await write(ada, ROOT_FOLDER_ID, 'keep-history.txt', 'current');
+    const writer = await host.getScope(ada, tenant, scope);
+    const kept = await writer.invoke<VersionRow & { keep: number }>('drive/keep-version', { fileId: first.id, versionId: first.current_version_id, keep: true });
+    expect(kept.keep).toBe(1);
+    const history = await writer.invoke<{ entries: (VersionRow & { keep: number })[] }>('drive/file-versions', { fileId: first.id });
+    expect(history.entries.find(v => v.id === first.current_version_id)?.keep).toBe(1);
+    expect(history.entries.find(v => v.id === current.current_version_id)?.keep).toBe(0);
+    expect((await writer.invoke<{ file: FileRow }>('drive/get-file', { fileId: first.id })).file.current_version_id).toBe(current.current_version_id);
+    expect((await writer.invoke<{ keep: number }>('drive/keep-version', { fileId: first.id, versionId: first.current_version_id, keep: false })).keep).toBe(0);
+  });
+
+  it('refuses readers, other-file versions, and trashed files', async () => {
+    const first = await write(ada, ROOT_FOLDER_ID, 'keep-boundary.txt', 'a');
+    const foreign = await write(ada, ROOT_FOLDER_ID, 'keep-foreign.txt', 'b');
+    const writer = await host.getScope(ada, tenant, scope);
+    await expect((await host.getScope(bjorn, tenant, scope)).invoke('drive/keep-version', { fileId: first.id, versionId: first.current_version_id, keep: true })).rejects.toThrow();
+    await expect(writer.invoke('drive/keep-version', { fileId: first.id, versionId: foreign.current_version_id, keep: true })).rejects.toThrow('version not found');
+    await writer.invoke('drive/trash-file', { fileId: first.id });
+    await expect(writer.invoke('drive/keep-version', { fileId: first.id, versionId: first.current_version_id, keep: true })).rejects.toThrow('file not found');
+  });
+});
+
 describe('a space is a scope', () => {
   let documents: string;
   let scratch: string;
