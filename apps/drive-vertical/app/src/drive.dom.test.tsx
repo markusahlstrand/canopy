@@ -849,12 +849,12 @@ describe('the palette does not hand back the wrong thing', () => {
     fireEvent.change(input, { target: { value: 'lease' } });
     await flush();
     await answer('term=lease', { hits: [{ ...file('01A', 'lease.pdf'), via: 'name' }] });
-    expect(screen.getByText('lease.pdf')).toBeTruthy();
+    expect(screen.getByRole('option', { name: /^lease\.pdf/ })).toBeTruthy();
 
     // cmdk's item `value` embeds the CURRENT query, so a hit left over from the previous
     // one stays selectable and opens a file nobody searched for.
     fireEvent.change(input, { target: { value: 'invoice' } });
-    expect(screen.queryByText('lease.pdf')).toBeNull();
+    expect(screen.queryByRole('option', { name: /^lease\.pdf/ })).toBeNull();
   });
 
   it('enters a folder chosen in the palette instead of previewing it', async () => {
