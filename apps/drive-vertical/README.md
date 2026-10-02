@@ -143,6 +143,15 @@ principal's saved names when `/api/me` is unreachable. An online 401 or sign-out
 clears the mirror, including the offline identity; sign-out in another tab also hides
 an already-open offline view.
 
+## Historical versions
+
+`GET /api/files/{fileId}/versions/{versionId}` resolves a historical version only
+when it belongs to that live file and the principal holds `drive:read` on the file.
+`GET /api/files/{fileId}/versions/{versionId}/content` opens that version's attachment
+through the same authenticated, scope-local read and attachment gates as current bytes.
+Historical reads do not change the current version. Trashed files and mismatched
+version ids are refused; connected-source bytes still return 501.
+
 ## Live updates
 
 `GET /api/live` is Substrat's WebSocket subscription for authenticated pages. The
@@ -152,15 +161,6 @@ changed entity. The browser re-reads the current view and syncs the event mirror
 when a frame arrives. It also polls once a minute and on returning to a visible
 tab, covering disconnected sockets, unsupported network paths, and changes that
 cannot be pushed after a permission is revoked.
-
-## Historical versions
-
-`GET /api/files/{fileId}/versions/{versionId}` resolves a historical version only
-when it belongs to that live file and the principal holds `drive:read` on the file.
-`GET /api/files/{fileId}/versions/{versionId}/content` opens that version's attachment
-through the same authenticated, scope-local read and attachment gates as current bytes.
-Historical reads do not change the current version. Trashed files and mismatched
-version ids are refused; connected-source bytes still return 501.
 
 ## Not yet wired
 
