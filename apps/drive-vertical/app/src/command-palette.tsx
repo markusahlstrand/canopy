@@ -37,6 +37,7 @@ interface CommandPaletteProps {
   onUpload: () => void;
 }
 
+/** Search and keyboard actions, with visible progress and recoverable failures. */
 export function CommandPalette({
   open,
   onOpenChange,
@@ -54,33 +55,45 @@ export function CommandPalette({
   // local `files` (current folder) are the zero-query "recent" fallback.
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchHit[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  const [settledQuery, setSettledQuery] = useState<string | null>(null);
   const searching = query.trim().length >= SEARCH_MIN;
 
   useEffect(() => {
     if (!open) {
       setQuery("");
+      setSettledQuery(null);
       setResults([]);
     }
   }, [open]);
 
   useEffect(() => {
-    if (!searching) {
+    if (!open || !searching) {
       setResults([]);
+      setLoading(false);
+      setError(null);
       return;
     }
     let cancelled = false;
+    setLoading(true);
+    setError(null);
     const t = setTimeout(async () => {
-      // A failure here leaves the previous results rather than throwing inside a dialog:
-      // the palette is a search box, and an empty list is the honest answer to a search
-      // that did not come back.
-      const hits = await search(query).catch(() => ({ hits: [] }));
-      if (!cancelled) setResults(hits.hits);
-    }, 180); // debounce keystrokes
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [query, searching]);
+      try {
+        const hits = await search(query);
+        if (!cancelled) setResults(hits.hits);
+      } catch (e: unknown) {
+        if (!cancelled) setError(e instanceof Error ? e.message || 'Search failed.' : String(e));
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setSettledQuery(query);
+        }
+      }
+    }, 180);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [query, searching, open, retry]);
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="top-[18%] translate-y-0">
@@ -89,14 +102,25 @@ export function CommandPalette({
         value={query}
         onValueChange={(next) => {
           setQuery(next);
+          setSettledQuery(null);
           // The previous query's hits are wrong the moment the query changes — and worse
           // than wrong, because cmdk's `value` embeds the new query, so they stay
           // selectable and open an unrelated file.
           setResults([]);
+          setError(null);
         }}
       />
       <CommandList className="max-h-[60vh]">
-        <CommandEmpty>No results found.</CommandEmpty>
+        {error ? <>
+          <p role="alert" className="p-3 text-sm">{error}</p>
+          <CommandItem value={`retry ${query}`} onSelect={() => {
+            setSettledQuery(null);
+            setRetry(value => value + 1);
+          }}>Retry search</CommandItem>
+        </> : null}
+        {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
+
+        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>No results found.</CommandEmpty> : null}
 
         <CommandGroup heading="Files">
           {searching
