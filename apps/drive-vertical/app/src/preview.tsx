@@ -9,7 +9,7 @@
  * The image viewer is bundled as a trusted web component (#73). Other browser-native
  * types remain here until there is a first-party viewer that improves on them.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Icon, cn } from '@canopy/ui';
 import type { FileViewerElement } from '@canopy/plugin-sdk/web-component';
 import {
@@ -29,7 +29,7 @@ import { TextEditor } from './text-editor';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
 import { latestOnly } from './reads';
-import { IMAGE_VIEWER_TAG, registerImageViewer } from './image-viewer';
+import { viewerRegistry, registerImageViewer } from './image-viewer';
 
 registerImageViewer();
 
@@ -42,7 +42,8 @@ type Shape = 'image' | 'pdf' | 'text' | 'none';
  * What the browser can render without help, decided from the version's recorded mime —
  * which came from the stored bytes rather than from whatever the uploader claimed.
  */
-export function shapeOf(mime: string | undefined): Shape {
+export function shapeOf(mime: string | undefined, name = ''): Shape {
+  if (viewerRegistry.resolve({ mime: mime ?? '', name })) return 'image';
   if (!mime) return 'none';
   mime = mime.split(';')[0]!.trim().toLowerCase();
   if (mime.startsWith('image/')) return 'image';
@@ -173,7 +174,8 @@ export function PreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, onError]);
 
-  const shape = shapeOf(version?.mime);
+  useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
+  const shape = shapeOf(version?.mime, file?.name);
 
   /** Text bodies are fetched, not linked — everything else the browser fetches itself. */
   useEffect(() => {
@@ -435,9 +437,12 @@ export function PreviewPanel({
 function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mime: string }) {
   const host = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
+  const revision = useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
 
   useEffect(() => {
-    const element = document.createElement(IMAGE_VIEWER_TAG) as FileViewerElement;
+    const viewer = viewerRegistry.resolve({ mime, name });
+    if (!viewer) { setFailed(true); return; }
+    const element = document.createElement(viewer.tagName) as FileViewerElement;
     const onError = () => setFailed(true);
     setFailed(false);
     element.addEventListener('viewer-error', onError);
@@ -448,7 +453,7 @@ function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mi
       element.removeEventListener('viewer-error', onError);
       element.remove();
     };
-  }, [fileId, name, mime]);
+  }, [fileId, name, mime, revision]);
 
   return failed ? <Empty>Could not render {name}.</Empty> : <div ref={host} className="h-full w-full" />;
 }

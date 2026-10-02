@@ -8,7 +8,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./web-component": "./src/web-component.ts"
+    "./web-component": "./src/web-component.ts",
+    "./viewer-registry": "./src/viewer-registry.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
