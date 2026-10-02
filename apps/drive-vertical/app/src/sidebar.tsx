@@ -42,6 +42,7 @@ import { listSites, selectSite, type Site } from './api';
 /** The views this screen has. The portal's Home, Starred and Settings are not among them. */
 const NAV = [
   { id: 'drive', icon: 'my-drive', label: 'My Drive' },
+  { id: 'shared', icon: 'users', label: 'Shared with me' },
   { id: 'trash', icon: 'trash', label: 'Trash' },
 ] as const;
 

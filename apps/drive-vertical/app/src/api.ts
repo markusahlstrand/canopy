@@ -547,6 +547,8 @@ export const listSites = () => call<Site[]>('/sites');
 export const listFolders = (folderId: string) =>
   call<DriveFolder[]>(`/folders/${encodeURIComponent(folderId)}/folders`);
 
+export const listSharedFolders = () => call<{ folders: DriveFolder[] }>('/folders/shared-with-me');
+
 /**
  * A folder by its path, or null. `null` is also the answer for a folder the caller may
  * not read — the worker refuses indistinguishably on purpose, so a path cannot be used

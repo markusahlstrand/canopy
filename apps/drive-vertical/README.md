@@ -161,6 +161,14 @@ the server checks source and destination authority, and access follows the desti
 Name conflicts remain errors. Each move is atomic, while selections run sequentially;
 after a partial failure, retry moves only the remaining items.
 
+## Shared folders
+
+Shared with me lists folders granted directly to the current principal in the selected
+space. The kernel checks visibility; the projection only supplies discovery. Duplicate
+grants produce one row, and renamed folders retain their identity. This view does not
+aggregate other spaces or change the membership model: a member reads the whole space.
+It is unavailable while browsing the offline mirror.
+
 ## Not yet wired
 
 WebDAV, connector-backed reads, and any migration of existing canopy spaces. See

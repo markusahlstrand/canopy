@@ -227,6 +227,24 @@ describe('who may share, and how much', () => {
 });
 
 describe('removing a person takes their access with them', () => {
+  it('discovers only the caller’s directly shared folders and deduplicates their grants', async () => {
+    const owner = await as(ada);
+    const folder = await owner.invoke<FolderRow>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Discovery' });
+    for (const permission of ['drive:write', 'drive:manage']) {
+      await owner.invoke('drive/share-folder', { folderId: folder.id, principal: bjorn, permission });
+    }
+    const mine = () => (as(bjorn).then((stub) => stub.invoke<{ folders: FolderRow[] }>('drive/list-shared-folders', {})));
+    expect((await mine()).folders.filter((f) => f.id === folder.id)).toHaveLength(1);
+    expect((await owner.invoke<{ folders: FolderRow[] }>('drive/list-shared-folders', {})).folders)
+      .not.toContainEqual(expect.objectContaining({ id: folder.id }));
+    await owner.invoke('drive/rename-folder', { folderId: folder.id, name: 'RenamedDiscovery' });
+    expect((await mine()).folders).toContainEqual(expect.objectContaining({ id: folder.id, path: 'RenamedDiscovery' }));
+    for (const permission of ['drive:write', 'drive:manage']) {
+      await owner.invoke('drive/unshare-folder', { folderId: folder.id, principal: bjorn, permission });
+    }
+    expect((await mine()).folders).not.toContainEqual(expect.objectContaining({ id: folder.id }));
+  });
+
   it('revokes every folder grant they held, measured by what they can still do', async () => {
     // Cleo ends the tests above holding write and manage on Papers, and can write there.
     expect(await canWriteIn(cleo, papers, 'before-removal')).toBe(true);
