@@ -164,6 +164,38 @@ describe('historical version reads', () => {
   });
 });
 
+describe('restoring historical content', () => {
+  it('appends a history entry, preserves both old versions, and leaves current restore idempotent', async () => {
+    const first = await write(ada, ROOT_FOLDER_ID, 'restore-history.txt', 'old');
+    const second = await write(ada, ROOT_FOLDER_ID, 'restore-history.txt', 'new');
+    const writer = await host.getScope(ada, tenant, scope);
+    const restored = await writer.invoke<FileRow>('drive/restore-version', { fileId: first.id, versionId: first.current_version_id });
+    expect(restored.current_version_id).not.toBe(first.current_version_id);
+    expect(restored.current_version_id).not.toBe(second.current_version_id);
+    const history = await writer.invoke<{ entries: VersionRow[] }>('drive/file-versions', { fileId: first.id });
+    expect(history.entries).toHaveLength(3);
+    const current = await writer.invoke<{ version: VersionRow; canWrite: boolean }>('drive/get-file', { fileId: first.id });
+    expect(current.canWrite).toBe(true);
+    expect(new TextDecoder().decode((await (await host.attachments(ada, tenant, scope)).open(current.version.blob_ref!))!.body)).toBe('old');
+    expect((await writer.invoke<FileRow>('drive/restore-version', { fileId: first.id, versionId: restored.current_version_id })).current_version_id).toBe(restored.current_version_id);
+  });
+
+  it('refuses readers, other files, external versions, and trash without changing HEAD', async () => {
+    const file = await write(ada, ROOT_FOLDER_ID, 'restore-boundary.txt', 'original');
+    const foreign = await write(ada, ROOT_FOLDER_ID, 'restore-foreign.txt', 'foreign');
+    const writer = await host.getScope(ada, tenant, scope);
+    const reader = await host.getScope(bjorn, tenant, scope);
+    expect((await reader.invoke<{ canWrite: boolean }>('drive/get-file', { fileId: file.id })).canWrite).toBe(false);
+    await expect(reader.invoke('drive/restore-version', { fileId: file.id, versionId: file.current_version_id })).rejects.toThrow();
+    await expect(writer.invoke('drive/restore-version', { fileId: file.id, versionId: foreign.current_version_id })).rejects.toThrow('version not found');
+    const external = await writer.invoke<FileRow>('drive/record-version', { fileId: file.id, location: { source: 'external', externalKey: 'remote', mime: 'text/plain', size: 1 } });
+    await expect(writer.invoke('drive/restore-version', { fileId: file.id, versionId: external.current_version_id })).rejects.toThrow('only stored');
+    expect((await writer.invoke<{ file: FileRow }>('drive/get-file', { fileId: file.id })).file.current_version_id).toBe(external.current_version_id);
+    await writer.invoke('drive/trash-file', { fileId: file.id });
+    await expect(writer.invoke('drive/restore-version', { fileId: file.id, versionId: file.current_version_id })).rejects.toThrow('file not found');
+  });
+});
+
 describe('a space is a scope', () => {
   let documents: string;
   let scratch: string;

@@ -412,7 +412,7 @@ const operations = {
           file.current_version_id,
         ])[0] ?? null)
       : null;
-    return { file, version };
+    return { file, version, canWrite: (await ctx.check(DRIVE_PERM.write, fileRef(file.id))).allowed };
   },
 
   'drive/rename-file': async (ctx, input) => {
@@ -723,6 +723,24 @@ const operations = {
     return { entries: visible, nextCursor: next } as unknown as HandlerOutput<
       (typeof driveOperations)['drive/list-trash']
     >;
+  },
+
+  'drive/restore-version': async (ctx, input): Promise<FileRow> => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    const file = liveFile(ctx, input.fileId);
+    const target = ctx.sql.query<VersionRow>(
+      'SELECT * FROM drive_file_versions WHERE id = ? AND file_id = ?', [input.versionId, file.id],
+    )[0];
+    if (!target) throw substratError('not_found', 'version not found');
+    if (target.source !== 'blob' || !target.blob_ref) {
+      throw substratError('validation_failed', 'only stored versions can be restored');
+    }
+    // Reuse the verified write path: it checks attachment ownership and existence,
+    // links a new history row and emits the normal live/mirror invalidation.
+    if (target.id === file.current_version_id) return file;
+    return operations['drive/record-version'](ctx, {
+      fileId: file.id, location: { source: 'blob', blobRef: target.blob_ref },
+    });
   },
 
   'drive/get-version': async (ctx, input) => {

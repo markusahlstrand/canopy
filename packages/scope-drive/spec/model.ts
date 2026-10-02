@@ -349,6 +349,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       file: driveEntities.file.fields,
       /** Null while a file exists but nothing has been written to it yet. */
       version: driveEntities.file_version.fields.nullable(),
+      canWrite: z.boolean(),
     }),
     http: { method: 'GET', path: '/files/{fileId}' },
   },
@@ -553,6 +554,18 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     output: driveEntities.file_version.fields,
     paged: { sortKey: 'id' },
     http: { method: 'GET', path: '/files/{fileId}/versions' },
+  },
+
+  'drive/restore-version': {
+    summary: 'Restore stored historical content as a new current version',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string(), versionId: z.string() }),
+    output: driveEntities.file.fields,
+    http: { method: 'POST', path: '/files/{fileId}/versions/{versionId}/restore' },
+    emits: {
+      entity: 'file', entityIdFrom: 'id', type: 'drive.file-written', schemaVersion: 1,
+      piiClass: 'none', payload: ['id', 'folder_id', 'current_version_id'],
+    },
   },
 
   'drive/get-version': {
