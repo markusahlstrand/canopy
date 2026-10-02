@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
+import { readViewPreferences, saveViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
 import { indexedMirror, syncMirror } from './scope-mirror';
@@ -224,8 +225,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   /** The topbar's Upload button and the palette's action both reach the one file input. */
   const uploadRef = useRef<HTMLInputElement>(null);
   const [selection, setSelection] = useState<Set<string>>(new Set());
-  const [layout, setLayout] = useState<'list' | 'grid'>('list');
-  const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' });
+  const [savedView] = useState(readViewPreferences);
+  const [layout, setLayout] = useState<'list' | 'grid'>(savedView.layout);
+  const [sort, setSort] = useState<SortState>(savedView.sort);
+  useEffect(() => { saveViewPreferences({ layout, sort }); }, [layout, sort]);
   const reads = useRef(latestOnly());
   /**
    * The CURRENT refresh, not the one an action closed over.
