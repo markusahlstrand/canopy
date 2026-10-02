@@ -121,12 +121,15 @@ async function makeFixture(): Promise<EntityCheckFixture> {
     },
 
     invoke: async (operation, input) => {
-      if (operation === 'drive/get-version') {
+      if (operation === 'drive/get-version' || operation === 'drive/restore-version') {
         // The kit supplies the file identity; its version must be made by the owner
         // before the probe can exercise read authority on that same file.
+        const attachment = await (await host.attachments(owner, tenant, scope)).upload({
+          entity: { entityType: 'file', entityId: input.fileId as string },
+          filename: 'fixture', contentType: 'text/plain', visibility: 'internal', body: new Uint8Array([65]),
+        });
         const file = await asOwner<{ current_version_id: string }>('drive/record-version', {
-          fileId: input.fileId,
-          location: { source: 'external', externalKey: 'fixture', mime: 'text/plain', size: 1 },
+          fileId: input.fileId, location: { source: 'blob', blobRef: attachment.id },
         });
         input = { ...input, versionId: file.current_version_id };
       }
@@ -142,6 +145,7 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
    */
   inputs: {
     'drive/get-version': { versionId: 'fixture-created-in-invoke' },
+    'drive/restore-version': { versionId: 'fixture-created-in-invoke' },
     'drive/create-folder': { name: 'conformance' },
     'drive/ensure-file': { name: 'conformance' },
     // The `external` branch on purpose: a `blob` version names an attachment the
