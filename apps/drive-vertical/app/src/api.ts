@@ -652,6 +652,12 @@ export function contentUrl(fileId: string): string {
   return `${API}/files/${encodeURIComponent(fileId)}/content${q}`;
 }
 
+/** Stream an immutable version through the same selected-space attachment gate. */
+export function versionContentUrl(fileId: string, versionId: string): string {
+  const q = site ? `?site=${encodeURIComponent(site)}` : '';
+  return `${API}/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}/content${q}`;
+}
+
 /** The relying-party routes the worker mounts. Full page loads: the issuer owns the redirect. */
 export const LOGIN_URL = `${API}/auth/login`;
 export const LOGOUT_URL = `${API}/auth/logout`;

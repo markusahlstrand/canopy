@@ -371,6 +371,32 @@ describe('offline metadata from the scope event mirror', () => {
 });
 
 describe('preview shows what the version actually is', () => {
+  it('downloads each stored historical version in the selected space', async () => {
+    selectSite('family');
+    await renderDrive([], [file('01A', 'photo.png')]);
+    fireEvent.doubleClick(screen.getByText('photo.png'));
+    await flush();
+    const current = { id: '01V', file_id: '01A', source: 'blob', blob_ref: '01B', mime: 'image/png', size: 2048, created_at: '2026-09-01T00:00:00.000Z' };
+    await answer('/files/01A', { file: file('01A', 'photo.png'), version: current });
+    fireEvent.click(screen.getByText('Versions'));
+    await answer('/files/01A/versions', [
+      current,
+      { ...current, id: '01OLD', blob_ref: '01OLD-BLOB', created_at: '2026-08-01T00:00:00.000Z' },
+      { ...current, id: '01EXTERNAL', source: 'external', blob_ref: null },
+      { ...current, id: '01MISSING', blob_ref: null },
+    ]);
+    const panel = screen.getByRole('complementary', { name: 'Preview' });
+    const links = within(panel).getAllByRole('link');
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '/api/files/01A/content?site=family',
+      '/api/files/01A/versions/01V/content?site=family',
+      '/api/files/01A/versions/01OLD/content?site=family',
+    ]);
+    for (const link of links) expect(link.getAttribute('download')).toBe('photo.png');
+    expect(within(panel).getByText('current')).toBeTruthy();
+    expect(within(panel).getByText('in a connected source')).toBeTruthy();
+  });
+
   it('renders an image inline and a download for its bytes', async () => {
     await renderDrive([], [file('01A', 'photo.png')]);
 

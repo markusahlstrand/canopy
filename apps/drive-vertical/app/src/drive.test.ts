@@ -16,6 +16,7 @@ import {
   ApiError,
   TEXT_PREVIEW_LIMIT,
   contentUrl,
+  versionContentUrl,
   currentSite,
   fileBodyAsText,
   search,
@@ -61,11 +62,13 @@ describe('the space selection reaches the worker both ways it can', () => {
   it('names no space when none is selected — the hostname already chose', () => {
     expect(siteHeaders()).toEqual({});
     expect(contentUrl('01ABC')).toBe('/api/files/01ABC/content');
+    expect(versionContentUrl('01ABC', '01V')).toBe('/api/files/01ABC/versions/01V/content');
   });
 
   it('escapes what it puts in the URL', () => {
     selectSite('a/b?c');
     expect(contentUrl('x y')).toBe('/api/files/x%20y/content?site=a%2Fb%3Fc');
+    expect(versionContentUrl('x y', 'v/z?')).toBe('/api/files/x%20y/versions/v%2Fz%3F/content?site=a%2Fb%3Fc');
   });
 });
 
