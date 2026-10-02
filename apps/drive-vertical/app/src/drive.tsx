@@ -681,6 +681,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         <div className="fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0">
           <PreviewPanel
             fileId={previewing}
+            onChanged={() => void refresh()}
             onClose={() => setPreviewing(null)}
             onError={onError}
           />

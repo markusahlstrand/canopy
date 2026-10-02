@@ -21,6 +21,7 @@ import {
   fileText,
   fileVersions,
   getFile,
+  restoreVersion,
   type DriveFile,
   type FileTextRow,
   type FileVersion,
@@ -83,11 +84,16 @@ export function PreviewPanel({
   fileId,
   onClose,
   onError,
+  onChanged,
 }: {
   fileId: string;
   onClose: () => void;
   onError: (message: string | null) => void;
+  onChanged?: () => void;
 }) {
+  const [canWrite, setCanWrite] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [tab, setTab] = useState<Tab>('file');
   const [file, setFile] = useState<DriveFile | null>(null);
   const [version, setVersion] = useState<FileVersion | null>(null);
@@ -135,6 +141,9 @@ export function PreviewPanel({
   useEffect(() => {
     const ticket = meta.take();
     setFile(null);
+    setCanWrite(false);
+    setConfirmRestore(null);
+    setRestoring(false);
     setVersion(null);
     setBody(null);
     setExtracted(undefined);
@@ -144,6 +153,7 @@ export function PreviewPanel({
         if (!meta.current(ticket)) return;
         setFile(got.file);
         setVersion(got.version);
+        setCanWrite(got.canWrite === true);
       })
       .catch((e: unknown) => {
         if (!meta.current(ticket)) return;
@@ -196,6 +206,33 @@ export function PreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fileId, versions, extracted, onError],
   );
+
+  const restore = async (versionId: string) => {
+    const ticket = meta.take();
+    const versionsTicket = versionReads.take();
+    setRestoring(true);
+    try {
+      await restoreVersion(fileId, versionId);
+      if (!meta.current(ticket)) return;
+      // A restore changes HEAD, so every derived read must be retired as well.
+      bodyReads.invalidate();
+      textReads.invalidate();
+      setBody(null);
+      setExtracted(undefined);
+      const [got, history] = await Promise.all([getFile(fileId), fileVersions(fileId)]);
+      if (!meta.current(ticket) || !versionReads.current(versionsTicket)) return;
+      setFile(got.file);
+      setVersion(got.version);
+      setCanWrite(got.canWrite === true);
+      setVersions(history);
+      setConfirmRestore(null);
+      onChanged?.();
+    } catch (e: unknown) {
+      if (meta.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (meta.current(ticket)) setRestoring(false);
+    }
+  };
 
   return (
     <aside
@@ -287,6 +324,17 @@ export function PreviewPanel({
                     >
                       Download
                     </a>
+                  ) : null}
+                  {canWrite && v.source === 'blob' && v.blob_ref && v.id !== version?.id ? (
+                    confirmRestore === v.id ? (
+                      <span className="flex flex-col gap-1">
+                        <span className="text-xs">Make this content current as a new version?</span>
+                        <Button size="sm" disabled={restoring} onClick={() => void restore(v.id)}>Confirm restore</Button>
+                        <Button size="sm" variant="ghost" disabled={restoring} onClick={() => setConfirmRestore(null)}>Cancel</Button>
+                      </span>
+                    ) : (
+                      <Button size="sm" variant="ghost" disabled={restoring} onClick={() => setConfirmRestore(v.id)}>Restore</Button>
+                    )
                   ) : null}
                   {v.source === 'external' ? (
                     <span className="text-xs text-muted-foreground">in a connected source</span>

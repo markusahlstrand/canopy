@@ -513,7 +513,7 @@ export const ensureFile = (folderId: string, name: string) =>
 
 /** One file and the version it currently points at — what a preview resolves through. */
 export const getFile = (fileId: string) =>
-  call<{ file: DriveFile; version: FileVersion | null }>(`/files/${encodeURIComponent(fileId)}`);
+  call<{ file: DriveFile; version: FileVersion | null; canWrite: boolean }>(`/files/${encodeURIComponent(fileId)}`);
 
 /**
  * What extraction found, or `null` for "nobody has looked".
@@ -539,6 +539,9 @@ export interface FileTextRow {
 /** A file's versions, newest first. Paged, so again a bare array. */
 export const fileVersions = (fileId: string) =>
   call<FileVersion[]>(`/files/${encodeURIComponent(fileId)}/versions`);
+
+export const restoreVersion = (fileId: string, versionId: string) =>
+  call<DriveFile>(`/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}/restore`, { method: 'POST' });
 
 /** The spaces this login is bound in, one of them flagged as the one in view. */
 export const listSites = () => call<Site[]>('/sites');
