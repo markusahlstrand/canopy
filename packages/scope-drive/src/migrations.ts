@@ -203,4 +203,5 @@ export const driveMigrations: SqlMigration[] = [
     version: '0005',
     sql: `ALTER TABLE drive_file_text ADD COLUMN extractor_revision TEXT NOT NULL DEFAULT 'pdf-v1';`,
   },
+  { version: '0006', sql: 'ALTER TABLE drive_file_versions ADD COLUMN keep INTEGER NOT NULL DEFAULT 0 CHECK (keep IN (0, 1));' },
 ];

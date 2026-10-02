@@ -64,6 +64,7 @@ interface VersionRow {
   id: string;
   file_id: string;
   source: string;
+  keep: number;
   blob_ref: string | null;
   external_key: string | null;
   etag: string | null;
@@ -364,6 +365,7 @@ const operations = {
       id: ulid(),
       file_id: file.id,
       source: loc.source,
+      keep: 0,
       blob_ref: loc.source === 'blob' ? loc.blobRef : null,
       external_key: loc.source === 'external' ? loc.externalKey : null,
       etag: loc.source === 'external' ? (loc.etag ?? null) : null,
@@ -723,6 +725,23 @@ const operations = {
     return { entries: visible, nextCursor: next } as unknown as HandlerOutput<
       (typeof driveOperations)['drive/list-trash']
     >;
+  },
+
+  'drive/keep-version': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
+    const version = ctx.sql.query<VersionRow>(
+      'SELECT * FROM drive_file_versions WHERE id = ? AND file_id = ?', [input.versionId, input.fileId],
+    )[0];
+    if (!version) throw substratError('not_found', 'version not found');
+    const keep = input.keep ? 1 : 0;
+    if (version.keep === keep) return version;
+    ctx.sql.exec('UPDATE drive_file_versions SET keep = ? WHERE id = ? AND file_id = ?', [keep, version.id, input.fileId]);
+    ctx.emit({
+      type: 'drive.version-kept', schemaVersion: 1, entity: fileRef(input.fileId), piiClass: 'none',
+      payload: { id: version.id, keep },
+    });
+    return { ...version, keep };
   },
 
   'drive/restore-version': async (ctx, input): Promise<FileRow> => {

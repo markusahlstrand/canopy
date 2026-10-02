@@ -126,6 +126,11 @@
           "source": {
             "type": "string"
           },
+          "keep": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1
+          },
           "blob_ref": {
             "type": [
               "string",
@@ -161,6 +166,7 @@
           "id",
           "file_id",
           "source",
+          "keep",
           "blob_ref",
           "external_key",
           "etag",
