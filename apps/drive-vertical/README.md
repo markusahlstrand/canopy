@@ -183,6 +183,13 @@ the server checks source and destination authority, and access follows the desti
 Name conflicts remain errors. Each move is atomic, while selections run sequentially;
 after a partial failure, retry moves only the remaining items.
 
+## Paged browsing
+
+The drive and Move picker follow API continuation links for folders. File and Trash
+listings also load more on demand, preserving rows on a failed page for retry.
+An empty filtered Trash page does not end the walk while a continuation exists.
+Refresh/live invalidation starts a fresh listing; offline browsing uses saved names.
+
 ## Shared folders
 
 Shared with me lists folders granted directly to the current principal in the selected

@@ -596,6 +596,8 @@ export const listFolders = (folderId: string) =>
 export const listFolderPage = (folderId: string, next: string | null = null) =>
   readPage<DriveFile>(`/folders/${encodeURIComponent(folderId)}/files`, next);
 
+export const listTrashPage = (next: string | null = null) => readPage<DriveFile>('/trash', next);
+
 export const listFoldersPage = (folderId: string, next: string | null = null) =>
   readPage<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/folders`, next);
 

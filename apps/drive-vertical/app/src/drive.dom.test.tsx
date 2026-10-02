@@ -1636,3 +1636,36 @@ describe('file pages', () => {
     expect(screen.getByText('Trash is empty')).toBeTruthy();
   });
 });
+
+
+describe('Trash pages', () => {
+  it('continues through an empty filtered page and lets an older file be restored', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await flush();
+    await answerWith('/api/trash', 200, [], { Link: `<${window.location.origin}/api/trash?cursor=older>; rel="next"` });
+    expect(screen.queryByText('Trash is empty')).toBeNull();
+    expect(screen.getByText('No files on this page')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more Trash' }));
+    await answer('/api/trash?cursor=older', [file('01A', 'old.txt')]);
+    fireEvent.contextMenu(screen.getByText('old.txt').closest('tr')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Restore' }));
+    await answer('/files/01A/restore', file('01A', 'old.txt'));
+    await answer('/api/trash', []);
+    expect(screen.getByText('Trash is empty')).toBeTruthy();
+  });
+
+  it('retains loaded Trash rows on a failed page and allows retry', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await flush();
+    await answerWith('/api/trash', 200, [file('01A', 'first.txt')], { Link: `<${window.location.origin}/api/trash?cursor=older>; rel="next"` });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more Trash' }));
+    await answerWith('/api/trash?cursor=older', 503, { detail: 'retry' });
+    expect(screen.getByText('first.txt')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more Trash' }));
+    await answer('/api/trash?cursor=older', [file('01B', 'second.txt')]);
+    expect(screen.getByText('second.txt')).toBeTruthy();
+    expect(screen.getByText('first.txt')).toBeTruthy();
+  });
+});
