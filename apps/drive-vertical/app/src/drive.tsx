@@ -1,3 +1,4 @@
+import { useUploadQueue } from './upload-queue';
 /**
  * The drive screen — the first of the portal's surfaces to run against the vertical
  * (S12, #64).
@@ -46,7 +47,6 @@ import {
   restoreFile,
   search,
   trashFile,
-  uploadFile,
   type DriveFile,
   type DriveFolder,
   type SearchHit,
@@ -203,6 +203,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * keeps "refresh what is on screen" true at the moment it is called.
    */
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const uploads = useUploadQueue(() => refreshRef.current());
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async () => {
@@ -533,11 +534,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const chosen = Array.from(input.files ?? []);
     input.value = '';
     if (chosen.length === 0) return;
-    void act(async () => {
-      // Sequential on purpose: each upload is a body the isolate holds while it hashes
-      // it, and three at once is three times the memory for no wall-clock worth having.
-      for (const file of chosen) await uploadFile(folderId, file);
-    });
+    if (!offline) uploads.enqueue(folderId, ['My Drive', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
   };
 
   const empty = loadFailed ? (
@@ -613,6 +610,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />
+
+      {uploads.panel}
 
       <input
         ref={uploadRef}
