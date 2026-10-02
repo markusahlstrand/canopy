@@ -137,7 +137,7 @@ export function CommandPalette({
                     {/* What extraction bought: matching a document's text reads
                         differently to matching its name. */}
                     <span className="truncate text-[11.5px] text-muted-foreground">
-                      {hit.via === 'content' ? 'matched inside the document' : hit.via === 'metadata' ? 'matched in description or labels' : 'matched in the name'}
+                      {hit.snippet || (hit.via === 'content' ? 'matched inside the document' : hit.via === 'metadata' ? 'matched in description or labels' : 'matched in the name')}
                     </span>
                   </span>
                 </CommandItem>

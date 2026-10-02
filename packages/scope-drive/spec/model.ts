@@ -1078,6 +1078,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
         driveEntities.file.fields.extend({
           /** Which index matched — the UI says "in the name" or "in the document". */
           via: z.enum(['name', 'content', 'metadata']),
+          snippet: z.string().nullable(),
         }),
       ),
     }),

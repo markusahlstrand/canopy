@@ -1,3 +1,4 @@
+import { useUnsavedDraft } from './drafts';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@canopy/ui';
 import { ApiError, fileDetails, updateFileDetails, type FileDetails } from './api';
@@ -11,6 +12,7 @@ export function FileDetailsPanel({ fileId }: { fileId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
+  useUnsavedDraft(!!details?.canWrite && (description !== details.description || labels !== details.labels.join('\n')));
   const guard = useRef(latestOnly()).current;
 
   const accept = (got: FileDetails) => {

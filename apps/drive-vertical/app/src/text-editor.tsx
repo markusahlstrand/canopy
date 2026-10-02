@@ -1,3 +1,4 @@
+import { confirmDiscardDrafts, useUnsavedDraft } from './drafts';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@canopy/ui';
 import { ApiError, saveText, TEXT_PREVIEW_LIMIT } from './api';
@@ -13,6 +14,7 @@ export function TextEditor({ fileId, versionId, text, onSaved, onCancel, onReloa
   const [conflict, setConflict] = useState(false);
   const [confirmReload, setConfirmReload] = useState(false);
   const [saved, setSaved] = useState(false);
+  useUnsavedDraft(!saved && draft !== text);
   const guard = useRef(latestOnly()).current;
   useEffect(() => () => guard.invalidate(), [guard]);
   const submit = async (reload = false) => {
@@ -46,7 +48,7 @@ export function TextEditor({ fileId, versionId, text, onSaved, onCancel, onReloa
     {error ? <p role="alert" className="text-sm">{error}</p> : null}
     <div className="flex flex-wrap gap-2">
       <Button size="sm" disabled={busy || conflict || (!saved && draft === text)} onClick={() => void submit()}>{saved ? 'Refresh saved text' : 'Save text'}</Button>
-      <Button size="sm" variant="outline" disabled={busy} onClick={onCancel}>Cancel editing</Button>
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => { if (confirmDiscardDrafts()) onCancel(); }}>Cancel editing</Button>
       {conflict ? <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmReload(true)}>Reload latest</Button> : null}
     </div>
     {confirmReload ? <div className="space-y-2 text-sm"><p>Reloading discards your unsaved edits.</p>

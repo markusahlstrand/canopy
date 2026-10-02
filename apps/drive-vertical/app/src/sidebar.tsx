@@ -37,6 +37,7 @@ import {
   TooltipTrigger,
   cn,
 } from '@canopy/ui';
+import { confirmNavigation } from './navigation-guards';
 import { listSites, selectSite, type Site } from './api';
 
 /** The views this screen has. The portal's Home, Starred and Settings are not among them. */
@@ -284,7 +285,9 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                     //    reload lands back where the parameter says. Arriving through a
                     //    `?site=` link would pin you to that space: every selection would
                     //    persist correctly and none of them would take effect.
+                    if (!confirmNavigation()) return;
                     const url = new URL(window.location.href);
+                    url.searchParams.delete('path');
                     const before = url.search;
                     if (selectSite(s.slug)) url.searchParams.delete('site');
                     else url.searchParams.set('site', s.slug);
