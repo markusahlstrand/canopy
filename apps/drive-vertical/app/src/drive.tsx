@@ -432,6 +432,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       if (!item.isFolder) void act(() => trashFile(item.id));
       return;
     }
+    if (action === 'Restore') {
+      void act(() => restoreFile(item.id));
+      return;
+    }
     if (action === 'Download' && !item.isFolder) {
       window.open(contentUrl(item.id), '_blank', 'noopener');
       return;
@@ -635,6 +639,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       ) : view === 'trash' ? (
         <FileTable
           files={sorted(trash, sort).map((file) => fileItem(file))}
+          trashed
           selection={selection}
           onSelectionChange={setSelection}
           onOpen={(item) => void act(() => restoreFile(item.id))}
