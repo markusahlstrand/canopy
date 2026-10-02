@@ -542,6 +542,14 @@ export interface FileTextRow {
   detail: string | null;
 }
 
+export interface FileComment {
+  id: string; file_id: string; author: string; body: string; created_at: string;
+  deleted_at: string | null; authorLabel: string; canDelete: boolean;
+}
+export const commentPage = (fileId: string, next: string | null = null) => readPage<FileComment>(`/files/${encodeURIComponent(fileId)}/comments`, next);
+export const postComment = (fileId: string, body: string) => call<FileComment>(`/files/${encodeURIComponent(fileId)}/comments`, { method: 'POST', body: JSON.stringify({ body }) });
+export const deleteComment = (fileId: string, commentId: string) => call(`/files/${encodeURIComponent(fileId)}/comments/${encodeURIComponent(commentId)}`, { method: 'DELETE' });
+
 export interface FileDetails {
   fileId: string; description: string; labels: string[]; revision: number; canWrite: boolean;
 }

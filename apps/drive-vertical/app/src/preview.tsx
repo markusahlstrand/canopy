@@ -4,7 +4,7 @@
  *
  * The preview exposes reads and writes backed by the scope operations: current
  * content, version history, keep/restore actions, descriptive metadata and extraction
- * status. Comments and processing logs still need their operation classes ported.
+ * status and comments. Processing logs still need their operation class ported.
  *
  * The image viewer is bundled as a trusted web component (#73). Other browser-native
  * types remain here until there is a first-party viewer that improves on them.
@@ -25,13 +25,14 @@ import {
   type FileTextRow,
   type FileVersion,
 } from './api';
+import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
 import { latestOnly } from './reads';
 import { IMAGE_VIEWER_TAG, registerImageViewer } from './image-viewer';
 
 registerImageViewer();
 
-type Tab = 'file' | 'versions' | 'text' | 'details';
+type Tab = 'file' | 'versions' | 'text' | 'details' | 'comments';
 
 /** How a file's current version wants to be shown. */
 type Shape = 'image' | 'pdf' | 'text' | 'none';
@@ -298,7 +299,7 @@ export function PreviewPanel({
       </header>
 
       <nav className="flex gap-1 border-b border-border px-2 py-1.5" aria-label="Preview sections">
-        {(['file', 'versions', 'text', 'details'] as const).map((t) => (
+        {(['file', 'versions', 'text', 'details', 'comments'] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -308,13 +309,13 @@ export function PreviewPanel({
               tab === t ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60',
             )}
           >
-            {t === 'file' ? 'Preview' : t === 'versions' ? 'Versions' : t === 'details' ? 'Details' : 'Text'}
+            {t === 'file' ? 'Preview' : t === 'versions' ? 'Versions' : t === 'details' ? 'Details' : t === 'comments' ? 'Comments' : 'Text'}
           </button>
         ))}
       </nav>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === 'details' ? <FileDetailsPanel key={fileId} fileId={fileId} /> : tab === 'file' ? (
+        {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <FileDetailsPanel key={fileId} fileId={fileId} /> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : shape === 'image' ? (
