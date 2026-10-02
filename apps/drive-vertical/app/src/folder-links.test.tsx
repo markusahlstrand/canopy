@@ -16,7 +16,7 @@ it('resolves a deep link before reading its folder listing', async () => {
   history.replaceState(null, '', '/?path=Shared%2FPapers');
   const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(
     url.includes('/by-path?') ? { id: 'papers', name: 'Papers', path: 'Shared/Papers' }
-      : url === '/api/sites' ? { sites: [] } : url.endsWith('/access') ? { canManage: false } : [])));
+      : url.endsWith('/access') ? { canManage: false } : [])));
   vi.stubGlobal('fetch', fetch);
   render(<DriveScreen onError={() => {}} auth={{ user: {} }} onSignIn={() => {}} onSignOut={() => {}} />);
   await screen.findAllByText('Shared/Papers');
@@ -38,7 +38,7 @@ it('keeps a credential-free folder destination across sign-in', () => {
 });
 it('cleans up an unavailable link and reports a single unavailable state', async () => {
   history.replaceState(null, '', '/?path=Missing');
-  vi.stubGlobal('fetch', async (url: string) => new Response(JSON.stringify(url.includes('by-path') ? null : url === '/api/sites' ? { sites: [] } : url.endsWith('/access') ? { canManage: false } : [])));
+  vi.stubGlobal('fetch', async (url: string) => new Response(JSON.stringify(url.includes('by-path') ? null : url.endsWith('/access') ? { canManage: false } : [])));
   render(<DriveScreen onError={() => {}} auth={{ user: {} }} onSignIn={() => {}} onSignOut={() => {}} />);
   await screen.findByText('This folder is unavailable or you do not have access.');
   expect(location.search).toBe('');
