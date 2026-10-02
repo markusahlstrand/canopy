@@ -1546,8 +1546,8 @@ describe('sharing a folder', () => {
 
 describe('folder pages', () => {
   const folder = (id: string, name: string) => ({ id, name, parent_id: 'root', path: name });
-  async function firstPage() {
-    render(<DriveScreen {...shell} onError={vi.fn()} />);
+  async function firstPage(onError = vi.fn()) {
+    render(<DriveScreen {...shell} onError={onError} />);
     await flush();
     await answer('/api/sites', []);
     await answerWith('/folders/root/folders', 200, [folder('01A', 'Alpha')], { Link: `<${window.location.origin}/api/folders/root/folders?cursor=older>; rel="next"` });
@@ -1561,6 +1561,19 @@ describe('folder pages', () => {
     expect(screen.getAllByText('Alpha')).toHaveLength(1);
     expect(screen.getByText('Beta')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Load more folders' })).toBeNull();
+  });
+
+  it('clears a failed folder page error after a successful retry', async () => {
+    const onError = vi.fn();
+    await firstPage(onError);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more folders' }));
+    await answerWith('/folders/root/folders?cursor=older', 503, { detail: 'page failed' });
+    expect(onError).toHaveBeenLastCalledWith('page failed');
+    expect(screen.getByText('Alpha')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more folders' }));
+    await answer('/folders/root/folders?cursor=older', [folder('01B', 'Beta')]);
+    expect(screen.getByText('Beta')).toBeTruthy();
+    expect(onError).toHaveBeenLastCalledWith(null);
   });
 
   it('retires an older-folder page after entering a folder', async () => {

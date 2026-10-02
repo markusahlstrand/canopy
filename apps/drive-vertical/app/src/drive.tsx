@@ -280,6 +280,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       if (!reads.current.current(ticket)) return;
       setFolders(rows => appendRows(rows, page.entries));
       setFoldersNext(page.next);
+      onError(null);
     } catch (e: unknown) {
       if (reads.current.current(ticket)) onError(e instanceof Error ? e.message : String(e));
     } finally {
