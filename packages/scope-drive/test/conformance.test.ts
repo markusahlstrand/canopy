@@ -146,6 +146,7 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
   inputs: {
     'drive/get-version': { versionId: 'fixture-created-in-invoke' },
     'drive/restore-version': { versionId: 'fixture-created-in-invoke' },
+    'drive/update-file-details': { description: 'test', labels: ['contract'], expectedRevision: 0 },
     'drive/keep-version': { versionId: 'fixture-created-in-invoke', keep: true },
     'drive/create-folder': { name: 'conformance' },
     'drive/ensure-file': { name: 'conformance' },

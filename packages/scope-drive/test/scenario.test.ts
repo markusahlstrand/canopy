@@ -221,6 +221,34 @@ describe('retaining historical versions', () => {
   });
 });
 
+describe('file descriptions and labels', () => {
+  it('starts empty, normalizes labels, and refuses lost updates without changing bytes', async () => {
+    const file = await write(ada, ROOT_FOLDER_ID, 'file-details.txt', 'content');
+    const writer = await host.getScope(ada, tenant, scope);
+    const reader = await host.getScope(bjorn, tenant, scope);
+    expect(await reader.invoke('drive/file-details', { fileId: file.id })).toMatchObject({ description: '', labels: [], revision: 0, canWrite: false });
+    const saved = await writer.invoke('drive/update-file-details', { fileId: file.id, description: 'Important agreement', labels: [' work ', 'work', 'family'], expectedRevision: 0 });
+    expect(saved).toMatchObject({ labels: ['work', 'family'], revision: 1 });
+    await expect(writer.invoke('drive/update-file-details', { fileId: file.id, description: 'stale', labels: [], expectedRevision: 0 })).rejects.toThrow('details changed');
+    expect(await reader.invoke('drive/file-details', { fileId: file.id })).toMatchObject({ description: 'Important agreement', labels: ['work', 'family'], revision: 1 });
+    expect((await writer.invoke<{ file: FileRow }>('drive/get-file', { fileId: file.id })).file.current_version_id).toBe(file.current_version_id);
+    expect(await writer.invoke('drive/update-file-details', { fileId: file.id, description: '', labels: [], expectedRevision: 1 })).toMatchObject({ description: '', labels: [], revision: 2 });
+  });
+
+  it('checks write/read authority, bounds metadata, and refuses trash', async () => {
+    const file = await write(ada, ROOT_FOLDER_ID, 'details-boundary.txt', 'a');
+    const writer = await host.getScope(ada, tenant, scope);
+    const input = { fileId: file.id, description: 'a', labels: ['a'], expectedRevision: 0 };
+    await expect((await host.getScope(bjorn, tenant, scope)).invoke('drive/update-file-details', input)).rejects.toThrow();
+    await expect((await host.getScope(principalId.parse(ulid()), tenant, scope)).invoke('drive/file-details', { fileId: file.id })).rejects.toThrow();
+    await expect(writer.invoke('drive/update-file-details', { ...input, description: 'x'.repeat(10001) })).rejects.toThrow();
+    await expect(writer.invoke('drive/update-file-details', { ...input, labels: [' '] })).rejects.toThrow();
+    await writer.invoke('drive/trash-file', { fileId: file.id });
+    await expect(writer.invoke('drive/file-details', { fileId: file.id })).rejects.toThrow('file not found');
+    await expect(writer.invoke('drive/update-file-details', input)).rejects.toThrow('file not found');
+  });
+});
+
 describe('a space is a scope', () => {
   let documents: string;
   let scratch: string;
