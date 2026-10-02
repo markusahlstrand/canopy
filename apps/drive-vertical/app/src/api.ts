@@ -144,8 +144,8 @@ export interface FileVersion {
  */
 export const TEXT_PREVIEW_LIMIT = 200_000;
 
-export async function fileBodyAsText(fileId: string): Promise<{ text: string; truncated: boolean }> {
-  const res = await fetch(contentUrl(fileId), { credentials: 'same-origin' });
+export async function fileBodyAsText(fileId: string, versionId?: string): Promise<{ text: string; truncated: boolean }> {
+  const res = await fetch(versionId ? versionContentUrl(fileId, versionId) : contentUrl(fileId), { credentials: 'same-origin' });
   if (!res.ok) throw new ApiError(res.status, res.statusText);
 
   // Read as a STREAM and stop at the limit. `res.text()` would download and decode the
@@ -160,21 +160,26 @@ export async function fileBodyAsText(fileId: string): Promise<{ text: string; tr
   }
 
   const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8', { fatal: !!versionId });
   let text = '';
   let truncated = false;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value, { stream: true });
-    if (text.length >= TEXT_PREVIEW_LIMIT) {
-      truncated = true;
-      // Cancel rather than break: the rest of the body should never leave the server.
-      await reader.cancel();
-      break;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+      if (text.length >= TEXT_PREVIEW_LIMIT) {
+        truncated = true;
+        await reader.cancel();
+        break;
+      }
     }
-  }
-  if (!truncated) text += decoder.decode();
+    if (!truncated) text += decoder.decode();
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally { reader.releaseLock(); }
+
   return { text: text.slice(0, TEXT_PREVIEW_LIMIT), truncated };
 }
 
@@ -725,3 +730,10 @@ export function versionContentUrl(fileId: string, versionId: string): string {
 /** The relying-party routes the worker mounts. Full page loads: the issuer owns the redirect. */
 export const LOGIN_URL = `${API}/auth/login`;
 export const LOGOUT_URL = `${API}/auth/logout`;
+
+/** Conditional text save: the server preserves MIME and compares the version atomically. */
+export function saveText(fileId: string, expectedVersion: string, text: string): Promise<DriveFile> {
+  return call(`/files/${encodeURIComponent(fileId)}/content?expectedVersion=${encodeURIComponent(expectedVersion)}`, {
+    method: 'PUT', headers: { 'content-type': 'text/plain; charset=utf-8' }, body: text,
+  });
+}

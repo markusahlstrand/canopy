@@ -25,6 +25,7 @@ import {
   type FileTextRow,
   type FileVersion,
 } from './api';
+import { TextEditor } from './text-editor';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
 import { latestOnly } from './reads';
@@ -43,6 +44,7 @@ type Shape = 'image' | 'pdf' | 'text' | 'none';
  */
 export function shapeOf(mime: string | undefined): Shape {
   if (!mime) return 'none';
+  mime = mime.split(';')[0]!.trim().toLowerCase();
   if (mime.startsWith('image/')) return 'image';
   if (mime === 'application/pdf') return 'pdf';
   if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') {
@@ -97,6 +99,7 @@ export function PreviewPanel({
   const [canWrite, setCanWrite] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [tab, setTab] = useState<Tab>('file');
   const [file, setFile] = useState<DriveFile | null>(null);
   const [version, setVersion] = useState<FileVersion | null>(null);
@@ -143,6 +146,7 @@ export function PreviewPanel({
   /** The file and its current version: everything else hangs off the version's mime. */
   useEffect(() => {
     const ticket = meta.take();
+    setEditing(false);
     setTab('file');
     setFile(null);
     setCanWrite(false);
@@ -175,7 +179,7 @@ export function PreviewPanel({
   useEffect(() => {
     if (tab !== 'file' || shape !== 'text' || !version) return;
     const ticket = bodyReads.take();
-    fileBodyAsText(fileId)
+    fileBodyAsText(fileId, version.id)
       .then((got) => {
         if (bodyReads.current(ticket)) setBody(got);
       })
@@ -277,6 +281,16 @@ export function PreviewPanel({
     }
   };
 
+  const reloadText = async () => {
+    const ticket = meta.take();
+    const got = await getFile(fileId);
+    if (!meta.current(ticket)) return;
+    bodyReads.invalidate(); textReads.invalidate(); versionReads.invalidate();
+    setBody(null); setExtracted(undefined); setVersions(null); setHistoryNext(null);
+    setFile(got.file); setVersion(got.version); setCanWrite(got.canWrite === true);
+    setEditing(false); onChanged?.();
+  };
+
   return (
     <aside
       aria-label="Preview"
@@ -330,7 +344,9 @@ export function PreviewPanel({
             </object>
           ) : shape === 'text' ? (
             body ? (
-              <>
+              editing ? <TextEditor key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} text={body.text}
+                onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} /> : <>
+                {canWrite && !body.truncated && version.source === 'blob' ? <Button size="sm" variant="outline" className="mb-3" onClick={() => setEditing(true)}>Edit text</Button> : null}
                 <pre className="whitespace-pre-wrap break-words text-xs">{body.text}</pre>
                 {body.truncated ? (
                   <p className="mt-2 text-xs text-muted-foreground">
