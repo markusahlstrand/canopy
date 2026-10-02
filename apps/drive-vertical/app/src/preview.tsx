@@ -2,11 +2,9 @@
  * File preview (S12a slice 3, #78) — lifted from the portal's `file-preview.tsx` and
  * cut down to what this vertical can actually answer.
  *
- * The portal's version is 769 lines because it also carries comments, tags, descriptions,
- * version pinning, restore-a-version and a processing log. The drive module has no
- * operations for any of those, so they are not here: a panel offering a button that
- * cannot work is worse than a panel that does less. Each is a small ticket the day
- * somebody wants it.
+ * The preview exposes reads and writes backed by the scope operations: current
+ * content, version history, keep/restore actions, descriptive metadata and extraction
+ * status. Comments and processing logs still need their operation classes ported.
  *
  * The image viewer is bundled as a trusted web component (#73). Other browser-native
  * types remain here until there is a first-party viewer that improves on them.
@@ -27,12 +25,13 @@ import {
   type FileTextRow,
   type FileVersion,
 } from './api';
+import { FileDetailsPanel } from './file-details';
 import { latestOnly } from './reads';
 import { IMAGE_VIEWER_TAG, registerImageViewer } from './image-viewer';
 
 registerImageViewer();
 
-type Tab = 'file' | 'versions' | 'text';
+type Tab = 'file' | 'versions' | 'text' | 'details';
 
 /** How a file's current version wants to be shown. */
 type Shape = 'image' | 'pdf' | 'text' | 'none';
@@ -272,7 +271,7 @@ export function PreviewPanel({
       </header>
 
       <nav className="flex gap-1 border-b border-border px-2 py-1.5" aria-label="Preview sections">
-        {(['file', 'versions', 'text'] as const).map((t) => (
+        {(['file', 'versions', 'text', 'details'] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -282,13 +281,13 @@ export function PreviewPanel({
               tab === t ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60',
             )}
           >
-            {t === 'file' ? 'Preview' : t === 'versions' ? 'Versions' : 'Text'}
+            {t === 'file' ? 'Preview' : t === 'versions' ? 'Versions' : t === 'details' ? 'Details' : 'Text'}
           </button>
         ))}
       </nav>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === 'file' ? (
+        {tab === 'details' ? <FileDetailsPanel key={fileId} fileId={fileId} /> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : shape === 'image' ? (
@@ -325,7 +324,7 @@ export function PreviewPanel({
           ) : (
             <ul className="space-y-1.5 text-sm">
               {versions.map((v) => (
-                <li key={v.id} className="flex items-baseline gap-2">
+                <li key={v.id} className="flex flex-wrap items-baseline gap-2">
                   <span className="text-muted-foreground">{new Date(v.created_at).toLocaleString()}</span>
                   <span>{humanSize(v.size)}</span>
                   {v.id === version?.id ? (
