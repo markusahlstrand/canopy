@@ -1,3 +1,4 @@
+import { watchDriveChanges } from './live-updates';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@canopy/ui';
 import { appendRows, commentPage, postComment, deleteComment, type FileComment } from './api';
@@ -12,25 +13,49 @@ export function CommentsPanel({ fileId }: { fileId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const working = useRef(false);
+  const pending = useRef(false);
+  const pages = useRef(1);
+  const liveRefresh = useRef<() => void>(() => {});
   const ordered = (rows: FileComment[]) => rows.sort((a, b) => a.id.localeCompare(b.id));
   const message = (e: unknown) => e instanceof Error ? e.message || 'Could not update comments.' : String(e);
 
-  const load = async (more = false) => {
+  const load = async (more = false, replay = false) => {
+    if (working.current) return;
+    working.current = true;
     const ticket = guard.take();
     setBusy(true);
     setError(null);
     try {
       const page = await commentPage(fileId, more ? next : null);
+      let count = 1;
+      if (replay) {
+        const target = pages.current;
+        const visited = new Set<string>();
+        while (count < target && page.next) {
+          if (visited.has(page.next)) throw new Error('Comment pages did not advance.');
+          visited.add(page.next);
+          const older = await commentPage(fileId, page.next);
+          if (!guard.current(ticket)) return;
+          page.entries = appendRows(page.entries, older.entries);
+          page.next = older.next;
+          count++;
+        }
+      }
       if (!guard.current(ticket)) return;
       setComments(rows => ordered(more ? appendRows(rows ?? [], page.entries) : page.entries));
       setNext(page.next);
+      pages.current = more ? pages.current + 1 : count;
     } catch (e: unknown) {
       if (guard.current(ticket)) setError(message(e));
     } finally {
-      if (guard.current(ticket)) setBusy(false);
+      if (guard.current(ticket)) { working.current = false; setBusy(false); }
     }
   };
   useEffect(() => {
+    working.current = false;
+    pending.current = false;
+    pages.current = 1;
     setComments(null);
     setNext(null);
     setDraft('');
@@ -40,8 +65,21 @@ export function CommentsPanel({ fileId }: { fileId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId]);
 
+  liveRefresh.current = () => { void load(false, true); };
+  useEffect(() => {
+    const stop = watchDriveChanges(() => {
+      if (working.current) pending.current = true;
+      else liveRefresh.current();
+    }, { entityType: 'file', entityId: fileId });
+    return () => { pending.current = false; stop(); };
+  }, [fileId]);
+  useEffect(() => {
+    if (!busy && pending.current) { pending.current = false; liveRefresh.current(); }
+  }, [busy]);
+
   const post = async () => {
-    if (busy || !draft.trim() || !comments) return;
+    if (working.current || !draft.trim() || !comments) return;
+    working.current = true;
     const ticket = guard.take();
     setBusy(true);
     setError(null);
@@ -53,10 +91,12 @@ export function CommentsPanel({ fileId }: { fileId: string }) {
     } catch (e: unknown) {
       if (guard.current(ticket)) setError(message(e));
     } finally {
-      if (guard.current(ticket)) setBusy(false);
+      if (guard.current(ticket)) { working.current = false; setBusy(false); }
     }
   };
   const remove = async (id: string) => {
+    if (working.current) return;
+    working.current = true;
     const ticket = guard.take();
     setBusy(true);
     setError(null);
@@ -68,7 +108,7 @@ export function CommentsPanel({ fileId }: { fileId: string }) {
     } catch (e: unknown) {
       if (guard.current(ticket)) setError(message(e));
     } finally {
-      if (guard.current(ticket)) setBusy(false);
+      if (guard.current(ticket)) { working.current = false; setBusy(false); }
     }
   };
 
