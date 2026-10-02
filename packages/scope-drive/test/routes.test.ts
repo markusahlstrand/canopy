@@ -31,6 +31,7 @@ describe('the derived route table', () => {
       'GET /api/files/:fileId/versions/:versionId',
       'GET /api/folders/:folderId/files',
       'GET /api/folders/:folderId/folders',
+      'GET /api/folders/:folderId/metadata',
       'GET /api/folders/:folderId/shares',
       'GET /api/folders/by-path',
       'GET /api/folders/shared-with-me',

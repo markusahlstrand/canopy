@@ -889,6 +889,13 @@ const operations = {
     }) as Page<FolderRow>;
   },
 
+  'drive/get-folder': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
+    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [input.folderId])[0];
+    if (!folder) throw substratError('not_found', 'folder not found');
+    return folder;
+  },
+
   'drive/folder-by-path': async (ctx, input) => {
     // The path is UNIQUE per scope, so this is one row or none.
     const row = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE path = ?', [

@@ -20,7 +20,7 @@ import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
-import { folderLink } from './folder-links';
+import { folderLink, folderPath } from './folder-links';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
@@ -36,6 +36,7 @@ import {
   peopleAccess,
   createFolder,
   folderByPath,
+  getFolder,
   listFolderPage,
   listFoldersPage,
   appendRows,
@@ -148,7 +149,7 @@ export interface DriveScreenProps {
 }
 
 export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
-  const initialPath = useRef(new URL(window.location.href).searchParams.get('path') ?? '').current;
+  const initialPath = useRef(folderPath()).current;
   const [linkPending, setLinkPending] = useState(!!initialPath);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
@@ -186,6 +187,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const siteList = useSites();
 
   useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('path');
+    window.history.replaceState(null, '', url);
     if (!initialPath) return;
     let active = true;
     folderByPath(initialPath).then(folder => {
@@ -197,6 +201,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     }).finally(() => { if (active) setLinkPending(false); });
     return () => { active = false; };
   }, [initialPath]);
+
+  useEffect(() => { setLinkMessage(null); }, [folderId, view]);
 
   useEffect(() => {
     if (!mobileNavOpen || !window.matchMedia) return;
@@ -637,7 +643,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
       {view === 'drive' && !offline && !linkPending ? <div className="px-4 py-2">
         <Button variant="ghost" size="sm" onClick={() => {
-          void navigator.clipboard.writeText(folderLink(crumbs.map(crumb => crumb.name).join('/')))
+          void getFolder(folderId).then(folder => navigator.clipboard.writeText(folderLink(folder.path)))
             .then(() => setLinkMessage('Folder link copied. This link does not grant access.'))
             .catch(() => setLinkMessage('Could not copy the link. Allow clipboard access and try again.'));
         }}>Copy folder link</Button>

@@ -23,6 +23,7 @@ import {
   whoami,
 } from './api';
 import { confirmNavigation } from './navigation-guards';
+import { folderLoginUrl } from './folder-links';
 import { DriveScreen } from './drive';
 import { clearMirror, offlineIdentity, onMirrorLogout, rememberOfflineIdentity, resumeMirror } from './scope-mirror';
 
@@ -163,7 +164,11 @@ const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
     }
 
     try {
-      return await whoami();
+      const me = await whoami();
+      // A fallback changed the target space: the old link's path cannot follow it.
+      url.searchParams.delete('path');
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      return me;
     } catch (retry: unknown) {
       // Put the selection back — and if storage refuses to hold it, put it back where it
       // came from. In a private window the URL is the ONLY carrier (the rail's own rule),
@@ -336,7 +341,7 @@ function SignedOut() {
         principal inside it.
       </p>
       <Button asChild>
-        <a href={LOGIN_URL}>Sign in</a>
+        <a href={folderLoginUrl()}>Sign in</a>
       </Button>
     </div>
   );
