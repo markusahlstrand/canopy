@@ -38,7 +38,7 @@ import {
   listFoldersPage,
   appendRows,
   listSharedFolders,
-  listTrash,
+  listTrashPage,
   moveFile,
   moveFolder,
   renameFile,
@@ -148,6 +148,7 @@ export interface DriveScreenProps {
 export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
+  const [trashNext, setTrashNext] = useState<string | null>(null);
   const [filesNext, setFilesNext] = useState<string | null>(null);
   const [foldersNext, setFoldersNext] = useState<string | null>(null);
   const [loadingPage, setLoadingPage] = useState(false);
@@ -210,6 +211,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     setLoadingPage(false);
     setFoldersNext(null);
     setFilesNext(null);
+    setTrashNext(null);
     setLoadFailed(false);
     try {
       if (view === 'search') {
@@ -227,9 +229,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         setFolders(shared.folders);
         setFiles([]);
       } else if (view === 'trash') {
-        const bin = await listTrash();
+        const bin = await listTrashPage();
         if (!reads.current.current(ticket)) return;
-        setTrash(bin);
+        setTrash(bin.entries);
+        setTrashNext(bin.next);
       } else {
         const [subfolders, contents] = await Promise.all([listFoldersPage(folderId), listFolderPage(folderId)]);
         if (!reads.current.current(ticket)) return;
@@ -273,6 +276,23 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       if (reads.current.current(ticket)) setBusy(false);
     }
   }, [folderId, view, term, onError, auth.principal]);
+
+  const moreTrash = async () => {
+    if (!trashNext || busy || loadingPage || offline) return;
+    const ticket = reads.current.take();
+    setLoadingPage(true);
+    onError(null);
+    try {
+      const page = await listTrashPage(trashNext);
+      if (!reads.current.current(ticket)) return;
+      setTrash(rows => appendRows(rows, page.entries));
+      setTrashNext(page.next);
+    } catch (e: unknown) {
+      if (reads.current.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (reads.current.current(ticket)) setLoadingPage(false);
+    }
+  };
 
   const moreFiles = async () => {
     if (!filesNext || busy || loadingPage || offline) return;
@@ -524,7 +544,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     <EmptyList icon="alert-triangle" title="Couldn't load this view" description="Check the connection and try again."
       actions={[{ label: 'Try again', onClick: () => void refresh() }]} />
   ) : view === 'trash' ? (
-    <EmptyList icon="trash" title="Trash is empty" description="Deleted files will appear here." />
+    <EmptyList icon="trash" title={trashNext ? "No files on this page" : "Trash is empty"} description={trashNext ? "Load more to continue checking Trash." : "Deleted files will appear here."} />
   ) : view === 'shared' ? (
     <EmptyList icon="folder" title="No folders shared with you" description="Direct folder grants in this space will appear here." />
   ) : view === 'search' ? (
@@ -719,6 +739,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           empty={empty}
         />
       )}
+      {view === 'trash' && !offline && trashNext ? (
+        <Button variant="outline" size="sm" disabled={busy || loadingPage} onClick={() => void moreTrash()}>
+          {loadingPage ? 'Loading Trash…' : 'Load more Trash'}
+        </Button>
+      ) : null}
       {view === 'drive' && !offline && filesNext ? (
         <Button variant="outline" size="sm" disabled={busy || loadingPage} onClick={() => void moreFiles()}>
           {loadingPage ? 'Loading files…' : 'Load more files'}
