@@ -1,6 +1,7 @@
 import type { PluginManifest } from "./plugin";
 import type { CapabilityGrants } from "./runtime";
 import { scopedCache, type CacheStore } from "./cache";
+import { scopedQueryIndex, type SearchIndex, type SearchScope } from "./search";
 
 /**
  * The capability broker: turns a plugin's *declared* capabilities into the
@@ -25,19 +26,31 @@ export function kvGrant(cache: CacheStore, ttlMs = DEFAULT_KV_TTL_MS): NonNullab
 }
 
 /**
- * Build the grants a plugin is entitled to. Currently wires the `kv` capability
+ * Build the grants a plugin is entitled to. Wires the `kv` capability
  * to a cache namespaced per **plugin + user**, so plugins can't read each other's
- * (or other users') cached data. Other capabilities are layered on by the host.
+ * (or other users') cached data. `index:query` requires an identified caller and
+ * a trusted host scope resolver. Other capabilities are layered on by the host.
  */
 export function grantsForManifest(
   manifest: PluginManifest,
-  deps: { cache?: CacheStore; userSub?: string },
+  deps: {
+    cache?: CacheStore;
+    userSub?: string;
+    search?: SearchIndex;
+    /** Trusted host lookup, never provided by plugin code. */
+    resolveSearchScope?: (userSub: string) => Promise<SearchScope>;
+  },
 ): CapabilityGrants {
   const grants: CapabilityGrants = {};
   for (const cap of manifest.capabilities) {
     if (cap.kind === "kv" && deps.cache) {
       const ns = `plugin:${manifest.id}:user:${deps.userSub ?? "anon"}`;
       grants.kv = kvGrant(scopedCache(deps.cache, ns));
+    }
+    if (cap.kind === "index:query" && deps.search && deps.userSub && deps.resolveSearchScope) {
+      const sub = deps.userSub;
+      const resolve = deps.resolveSearchScope;
+      grants.queryIndex = scopedQueryIndex(deps.search, () => resolve(sub));
     }
   }
   return grants;
