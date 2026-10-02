@@ -90,6 +90,25 @@ export interface SearchScope {
   spaceIds: string[];
 }
 
+/** Mint a query-only grant; re-resolve access on every call so revocation takes effect. */
+export function scopedQueryIndex(
+  index: SearchIndex,
+  resolveScope: () => Promise<SearchScope>,
+): (query: SearchQuery) => Promise<Page<SearchHit>> {
+  return async (query) => {
+    const { spaceIds } = await resolveScope();
+    if (spaceIds.length === 0) return { items: [] };
+    // Copy the host's scope, and pass only the plugin-facing query fields.
+    return index.query({
+      text: query.text,
+      kinds: query.kinds,
+      filter: query.filter,
+      limit: query.limit,
+      cursor: query.cursor,
+    }, { spaceIds: [...spaceIds] });
+  };
+}
+
 /** One ranked match. Carries enough to render a result without a second fetch. */
 export interface SearchHit {
   /** The matched item id (`SearchDoc.id`). */
