@@ -725,6 +725,17 @@ const operations = {
     >;
   },
 
+  'drive/get-version': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    const file = liveFile(ctx, input.fileId);
+    const version = ctx.sql.query<VersionRow>(
+      'SELECT * FROM drive_file_versions WHERE id = ? AND file_id = ?',
+      [input.versionId, file.id],
+    )[0];
+    if (!version) throw substratError('not_found', 'version not found');
+    return { file, version };
+  },
+
   'drive/file-versions': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
     liveFile(ctx, input.fileId);
