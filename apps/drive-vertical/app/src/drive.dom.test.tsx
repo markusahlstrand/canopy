@@ -51,6 +51,7 @@ function queueFetch() {
             ok: status < 400,
             status,
             statusText: 'stubbed',
+            headers: new Headers(),
             json: () => Promise.resolve(body),
             // The preview reads a text body with `.text()`, not `.json()`. Without this
             // the call rejected and the panel merely reported an error — which a test

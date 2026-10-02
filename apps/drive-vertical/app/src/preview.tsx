@@ -17,7 +17,7 @@ import {
   versionContentUrl,
   fileBodyAsText,
   fileText,
-  fileVersions,
+  fileVersionsPage,
   getFile,
   restoreVersion,
   keepVersion,
@@ -91,6 +91,8 @@ export function PreviewPanel({
   onError: (message: string | null) => void;
   onChanged?: () => void;
 }) {
+  const [historyNext, setHistoryNext] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [canWrite, setCanWrite] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -140,6 +142,7 @@ export function PreviewPanel({
   /** The file and its current version: everything else hangs off the version's mime. */
   useEffect(() => {
     const ticket = meta.take();
+    setTab('file');
     setFile(null);
     setCanWrite(false);
     setConfirmRestore(null);
@@ -148,6 +151,8 @@ export function PreviewPanel({
     setBody(null);
     setExtracted(undefined);
     setVersions(null);
+    setHistoryNext(null);
+    setLoadingMore(false);
     getFile(fileId)
       .then((got) => {
         if (!meta.current(ticket)) return;
@@ -184,9 +189,9 @@ export function PreviewPanel({
       setTab(next);
       if (next === 'versions' && versions === null) {
         const ticket = versionReads.take();
-        fileVersions(fileId)
+        fileVersionsPage(fileId)
           .then((got) => {
-            if (versionReads.current(ticket)) setVersions(got);
+            if (versionReads.current(ticket)) { setVersions(got.versions); setHistoryNext(got.next); }
           })
           .catch((e: unknown) => {
             if (versionReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
@@ -206,6 +211,27 @@ export function PreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fileId, versions, extracted, onError],
   );
+
+  const loadMore = async () => {
+    if (!historyNext || loadingMore || restoring) return;
+    const next = historyNext;
+    const ticket = versionReads.take();
+    setLoadingMore(true);
+    try {
+      const got = await fileVersionsPage(fileId, next);
+      if (!versionReads.current(ticket)) return;
+      if (got.next === next) throw new Error('Version history did not advance. Try refreshing.');
+      setVersions((rows) => {
+        const seen = new Set(rows?.map(row => row.id));
+        return [...(rows ?? []), ...got.versions.filter(row => !seen.has(row.id))];
+      });
+      setHistoryNext(got.next);
+    } catch (e: unknown) {
+      if (versionReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (versionReads.current(ticket)) setLoadingMore(false);
+    }
+  };
 
   const setKeep = async (versionId: string, keep: boolean) => {
     const ticket = versionReads.take();
@@ -234,12 +260,13 @@ export function PreviewPanel({
       textReads.invalidate();
       setBody(null);
       setExtracted(undefined);
-      const [got, history] = await Promise.all([getFile(fileId), fileVersions(fileId)]);
+      const [got, history] = await Promise.all([getFile(fileId), fileVersionsPage(fileId)]);
       if (!meta.current(ticket) || !versionReads.current(versionsTicket)) return;
       setFile(got.file);
       setVersion(got.version);
       setCanWrite(got.canWrite === true);
-      setVersions(history);
+      setVersions(history.versions);
+      setHistoryNext(history.next);
       setConfirmRestore(null);
       onChanged?.();
     } catch (e: unknown) {
@@ -322,6 +349,8 @@ export function PreviewPanel({
           versions === null ? (
             <Empty>Loading…</Empty>
           ) : (
+            <div className="space-y-3">
+            {versions.length === 0 ? <Empty>No versions yet.</Empty> : null}
             <ul className="space-y-1.5 text-sm">
               {versions.map((v) => (
                 <li key={v.id} className="flex flex-wrap items-baseline gap-2">
@@ -332,7 +361,7 @@ export function PreviewPanel({
                   ) : null}
                   {v.keep === 1 ? <span className="rounded bg-muted px-1.5 text-xs">kept</span> : null}
                   {canWrite ? (
-                    <Button size="sm" variant="ghost" disabled={restoring} onClick={() => void setKeep(v.id, v.keep !== 1)}>
+                    <Button size="sm" variant="ghost" disabled={restoring || loadingMore} onClick={() => void setKeep(v.id, v.keep !== 1)}>
                       {v.keep === 1 ? 'Unkeep' : 'Keep'}
                     </Button>
                   ) : null}
@@ -350,11 +379,11 @@ export function PreviewPanel({
                     confirmRestore === v.id ? (
                       <span className="flex flex-col gap-1">
                         <span className="text-xs">Make this content current as a new version?</span>
-                        <Button size="sm" disabled={restoring} onClick={() => void restore(v.id)}>Confirm restore</Button>
-                        <Button size="sm" variant="ghost" disabled={restoring} onClick={() => setConfirmRestore(null)}>Cancel</Button>
+                        <Button size="sm" disabled={restoring || loadingMore} onClick={() => void restore(v.id)}>Confirm restore</Button>
+                        <Button size="sm" variant="ghost" disabled={restoring || loadingMore} onClick={() => setConfirmRestore(null)}>Cancel</Button>
                       </span>
                     ) : (
-                      <Button size="sm" variant="ghost" disabled={restoring} onClick={() => setConfirmRestore(v.id)}>Restore</Button>
+                      <Button size="sm" variant="ghost" disabled={restoring || loadingMore} onClick={() => setConfirmRestore(v.id)}>Restore</Button>
                     )
                   ) : null}
                   {v.source === 'external' ? (
@@ -363,6 +392,8 @@ export function PreviewPanel({
                 </li>
               ))}
             </ul>
+            {historyNext ? <Button variant="outline" size="sm" disabled={loadingMore || restoring} onClick={() => void loadMore()}>{loadingMore ? 'Loading older versions…' : 'Load older versions'}</Button> : null}
+            </div>
           )
         ) : extracted === undefined ? (
           <Empty>Loading…</Empty>

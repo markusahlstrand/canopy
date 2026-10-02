@@ -197,7 +197,7 @@ export function siteHeaders(extra?: HeadersInit): HeadersInit {
   return { ...(site ? { 'x-site': site } : {}), ...extra };
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
+async function request(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(`${API}${path}`, {
     ...init,
     // The session is a cookie the worker set on /api/auth/callback; without this
@@ -217,6 +217,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
         : res.statusText;
     throw new ApiError(res.status, detail);
   }
+  return res;
+}
+
+async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await request(path, init);
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
 
@@ -544,9 +549,22 @@ export const fileDetails = (fileId: string) => call<FileDetails>(`/files/${encod
 export const updateFileDetails = (fileId: string, description: string, labels: string[], expectedRevision: number) =>
   call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`, { method: 'PATCH', body: JSON.stringify({ description, labels, expectedRevision }) });
 
-/** A file's versions, newest first. Paged, so again a bare array. */
-export const fileVersions = (fileId: string) =>
-  call<FileVersion[]>(`/files/${encodeURIComponent(fileId)}/versions`);
+/** History is a bare array with its continuation in Link; never infer the end from row count. */
+export async function fileVersionsPage(fileId: string, next: string | null = null): Promise<{ versions: FileVersion[]; next: string | null }> {
+  const path = `${API}/files/${encodeURIComponent(fileId)}/versions`;
+  const origin = window.location.origin;
+  const continuation = (link: string) => {
+    const url = new URL(link, origin);
+    if (url.origin !== origin || url.pathname !== path) throw new Error('Invalid version-history continuation.');
+    return url;
+  };
+  const url = next ? continuation(next) : new URL(path, origin);
+  const res = await request(`${url.pathname.slice(API.length)}${url.search}`);
+  const versions = await res.json() as FileVersion[];
+  const link = res.headers.get('Link');
+  const match = link?.match(/<([^>]+)>;\s*rel="next"/);
+  return { versions, next: match ? continuation(match[1]!).toString() : null };
+}
 
 export const keepVersion = (fileId: string, versionId: string, keep: boolean) =>
   call<FileVersion>(`/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}`, { method: 'PATCH', body: JSON.stringify({ keep }) });

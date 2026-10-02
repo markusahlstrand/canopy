@@ -16,6 +16,7 @@ import {
   ApiError,
   TEXT_PREVIEW_LIMIT,
   contentUrl,
+  fileVersionsPage,
   versionContentUrl,
   currentSite,
   fileBodyAsText,
@@ -227,5 +228,30 @@ describe('the table offers only what the screen can perform', () => {
     const folder = actionsFor({ id: '01F', name: 'f', kind: 'folder', modified: '—', size: '—', isFolder: true });
     expect(file).not.toContain('Share');
     expect([...file, ...folder]).not.toContain('Reprocess');
+  });
+});
+
+
+describe('history page continuations', () => {
+  it('follows the next link with its page size and space header', async () => {
+    selectSite('family');
+    const origin = window.location.origin;
+    const fetch = vi.fn().mockResolvedValueOnce(new Response('[]', { headers: { Link: `<${origin}/api/files/01A/versions?cursor=v%2F1&limit=10>; rel="next"` } }))
+      .mockResolvedValueOnce(new Response('[]'));
+    vi.stubGlobal('fetch', fetch);
+    const first = await fileVersionsPage('01A');
+    expect(first.next).not.toBeNull();
+    const last = await fileVersionsPage('01A', first.next);
+    expect(fetch).toHaveBeenLastCalledWith('/api/files/01A/versions?cursor=v%2F1&limit=10', expect.objectContaining({ credentials: 'same-origin', headers: { 'x-site': 'family' } }));
+    expect(last.next).toBeNull();
+  });
+
+  it('refuses continuations outside the selected file and origin', async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    for (const next of ['https://other.example/api/files/01A/versions?cursor=x', `${window.location.origin}/api/files/other/versions?cursor=x`]) {
+      await expect(fileVersionsPage('01A', next)).rejects.toThrow('Invalid version-history continuation');
+    }
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
