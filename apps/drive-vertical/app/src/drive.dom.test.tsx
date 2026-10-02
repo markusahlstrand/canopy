@@ -595,6 +595,27 @@ describe('dragging a file onto a folder moves it', () => {
   });
 });
 
+describe('external file drops', () => {
+  it('uploads to the displayed folder and refuses drops while viewing Trash', async () => {
+    await renderDrive([{ id: 'papers', name: 'Papers', path: 'Papers', parent_id: 'root' }]);
+    fireEvent.doubleClick(screen.getByText('Papers'));
+    await flush();
+    await answer('/folders/papers/folders', []);
+    await answer('/folders/papers/files', []);
+    const dataTransfer = { types: ['Files'], files: [new File(['a'], 'drop.txt')], items: [] };
+    fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer });
+    expect(pending.filter(p => p.method === 'POST').map(p => p.url)).toEqual(['/api/folders/papers/content?name=drop.txt']);
+    await answer('/folders/papers/content', file('upload', 'drop.txt'));
+    await answer('/folders/papers/folders', []);
+    await answer('/folders/papers/files', [file('upload', 'drop.txt')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await flush();
+    await answer('/api/trash', []);
+    fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer });
+    expect(pending.filter(p => p.method === 'POST')).toHaveLength(0);
+  });
+});
+
 describe('move destination picker', () => {
   async function pick(items: unknown[] = [file('01A', 'lease.pdf')], selectAll = false) {
     await renderDrive([], items);
@@ -1667,27 +1688,5 @@ describe('Trash pages', () => {
     await answer('/api/trash?cursor=older', [file('01B', 'second.txt')]);
     expect(screen.getByText('second.txt')).toBeTruthy();
     expect(screen.getByText('first.txt')).toBeTruthy();
-  });
-});
-
-
-describe('external file drops', () => {
-  it('uploads to the displayed folder and refuses drops while viewing Trash', async () => {
-    await renderDrive([{ id: 'papers', name: 'Papers', path: 'Papers', parent_id: 'root' }]);
-    fireEvent.doubleClick(screen.getByText('Papers'));
-    await flush();
-    await answer('/folders/papers/folders', []);
-    await answer('/folders/papers/files', []);
-    const dataTransfer = { types: ['Files'], files: [new File(['a'], 'drop.txt')], items: [] };
-    fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer });
-    expect(pending.filter(p => p.method === 'POST').map(p => p.url)).toEqual(['/api/folders/papers/content?name=drop.txt']);
-    await answer('/folders/papers/content', file('upload', 'drop.txt'));
-    await answer('/folders/papers/folders', []);
-    await answer('/folders/papers/files', [file('upload', 'drop.txt')]);
-    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
-    await flush();
-    await answer('/api/trash', []);
-    fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer });
-    expect(pending.filter(p => p.method === 'POST')).toHaveLength(0);
   });
 });
