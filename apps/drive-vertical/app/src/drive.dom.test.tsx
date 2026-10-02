@@ -442,7 +442,7 @@ describe('preview shows what the version actually is', () => {
       version: { id: '01V', file_id: '01A', source: 'blob', blob_ref: '01B', mime: 'text/markdown', size: 4, created_at: '2026-09-01T00:00:00.000Z' },
     });
     // The text shape fetches its body and shows it.
-    await answer('/files/01A/content', '# notes\nthe body renders inline');
+    await answer('/files/01A/versions/01V/content', '# notes\nthe body renders inline');
     expect(screen.getByText(/the body renders inline/)).toBeTruthy();
 
     fireEvent.click(screen.getByText('Text'));

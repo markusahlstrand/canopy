@@ -204,3 +204,5 @@ WebDAV, connector-backed reads, and any migration of existing canopy spaces. See
 [`documentation/planning/scope-model-mapping.md`](../../documentation/planning/scope-model-mapping.md) §3.
 
 Text edits use `PUT /api/files/:fileId/content?expectedVersion=:versionId`. The worker requires write access, stored text content, valid UTF-8, and at most 200,000 characters (800,000 bytes). The scope atomically refuses a stale expected version with 409, including writes that race during attachment upload. As with ordinary uploads, an attachment can remain unreferenced if recording its version fails. The editor must preserve the draft on conflict and reload before retrying.
+
+The preview offers **Edit text** to writers of stored UTF-8 text, Markdown, JSON and XML when the complete body fits the preview limit. Saves create ordinary immutable versions and preserve drafts on failure. A conflicting edit must be copied or discarded before reloading the latest version; there is no live collaborative text editing in this editor.
