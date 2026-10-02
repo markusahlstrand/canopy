@@ -621,6 +621,8 @@ export const listSharedFolders = () => call<{ folders: DriveFolder[] }>('/folder
  * not read — the worker refuses indistinguishably on purpose, so a path cannot be used
  * to probe the tree one guess at a time.
  */
+export const getFolder = (folderId: string) => call<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/metadata`);
+
 export const folderByPath = (path: string) =>
   call<DriveFolder | null>(`/folders/by-path?path=${encodeURIComponent(path)}`);
 

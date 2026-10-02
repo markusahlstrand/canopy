@@ -292,3 +292,12 @@ describe('removing a person takes their access with them', () => {
     ).rejects.toThrow();
   });
 });
+
+it('reads a folder path by stable id after an ancestor rename', async () => {
+  const owner = await as(ada);
+  const parent = await owner.invoke<{ id: string }>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Link parent' });
+  const child = await owner.invoke<{ id: string }>('drive/create-folder', { parentId: parent.id, name: 'Child' });
+  await owner.invoke('drive/rename-folder', { folderId: parent.id, name: 'Renamed link parent' });
+  expect(await owner.invoke('drive/get-folder', { folderId: child.id })).toMatchObject({ path: 'Renamed link parent/Child' });
+  await expect(owner.invoke('drive/get-folder', { folderId: 'missing' })).rejects.toThrow();
+});

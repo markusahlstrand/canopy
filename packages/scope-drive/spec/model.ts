@@ -703,6 +703,14 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * says so out loud, and the conformance kit records it as undrivable rather than
    * letting it read as a node check.
    */
+  'drive/get-folder': {
+    summary: 'Read a folder by id, including its current server path',
+    permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({ folderId: z.string() }),
+    output: driveEntities.folder.fields,
+    http: { method: 'GET', path: '/folders/{folderId}/metadata' },
+  },
+
   'drive/folder-by-path': {
     summary: 'The folder at a path, or null',
     permission: {

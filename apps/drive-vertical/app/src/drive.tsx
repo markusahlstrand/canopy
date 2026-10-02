@@ -21,6 +21,7 @@ import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
+import { folderLink, folderPath } from './folder-links';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
@@ -36,6 +37,8 @@ import {
   contentUrl,
   peopleAccess,
   createFolder,
+  folderByPath,
+  getFolder,
   listFolderPage,
   listFoldersPage,
   appendRows,
@@ -147,6 +150,9 @@ export interface DriveScreenProps {
 }
 
 export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
+  const initialPath = useRef(folderPath()).current;
+  const [linkPending, setLinkPending] = useState(!!initialPath);
+  const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
   const [trashNext, setTrashNext] = useState<string | null>(null);
@@ -189,6 +195,24 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const siteList = useSites();
 
   useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('path');
+    window.history.replaceState(null, '', url);
+    if (!initialPath) return;
+    let active = true;
+    folderByPath(initialPath).then(folder => {
+      if (!active) return;
+      if (folder) { setFolderId(folder.id); setCrumbs([{ id: folder.id, name: folder.path }]); }
+      else setLinkMessage('This folder is unavailable or you do not have access.');
+    }).catch(() => {
+      if (active) setLinkMessage('Could not open the folder link. Reload to retry.');
+    }).finally(() => { if (active) setLinkPending(false); });
+    return () => { active = false; };
+  }, [initialPath]);
+
+  useEffect(() => { setLinkMessage(null); }, [folderId, view]);
+
+  useEffect(() => {
     if (!mobileNavOpen || !window.matchMedia) return;
     const desktop = window.matchMedia('(min-width: 768px)');
     const closeOnDesktop = () => { if (desktop.matches) setMobileNavOpen(false); };
@@ -215,6 +239,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async () => {
+    if (linkPending) return;
     const ticket = reads.current.take();
     setBusy(true);
     setLoadingPage(false);
@@ -284,7 +309,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, term, onError, auth.principal]);
+  }, [folderId, view, term, onError, auth.principal, linkPending]);
 
   const moreTrash = async () => {
     if (!trashNext || busy || loadingPage || offline) return;
@@ -397,9 +422,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => {
     // A pause, not a keystroke: the index is per scope and cheap, but a request per
     // character still races its own answers and the last one to land wins.
+    if (linkPending) return;
     const t = setTimeout(() => void refresh(), view === 'search' ? 200 : 0);
     return () => clearTimeout(t);
-  }, [refresh, view]);
+  }, [refresh, view, linkPending]);
 
   /**
    * Switching view, from the rail or from the palette.
@@ -440,8 +466,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const open = (folder: DriveFolder) => {
     // The listing on screen belongs to the folder being left; nothing in flight for it
     // may land here.
-    reads.current.invalidate();
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
+    reads.current.invalidate();
     if (view === 'shared') {
       setView('drive');
       setCrumbs([{ id: folder.id, name: folder.path }]);
@@ -453,8 +479,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   };
 
   const upTo = (index: number) => {
-    reads.current.invalidate();
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
+    reads.current.invalidate();
     // -1 is the root: the crumb trail holds everything below it.
     setCrumbs((c) => c.slice(0, index + 1));
     setFolderId(index < 0 ? ROOT_FOLDER_ID : crumbs[index]!.id);
@@ -533,7 +559,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * where the screen now is.
    */
   const startWrite = (begin: () => void) => {
-    if (offline) return;
+    if (offline || linkPending) return;
     if (view !== 'drive') navigate('drive');
     begin();
   };
@@ -618,6 +644,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />
+
+      {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
+      {view === 'drive' && !offline && !linkPending ? <div className="px-4 py-2">
+        <Button variant="ghost" size="sm" onClick={() => {
+          void getFolder(folderId).then(folder => navigator.clipboard.writeText(folderLink(folder.path)))
+            .then(() => setLinkMessage('Folder link copied. This link does not grant access.'))
+            .catch(() => setLinkMessage('Could not copy the link. Allow clipboard access and try again.'));
+        }}>Copy folder link</Button>
+      </div> : null}
 
       <input
         ref={uploadRef}
