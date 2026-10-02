@@ -104,6 +104,34 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
   const { service, blobs } = deps;
   const paths = ["/dav", "/dav/*"];
 
+  const read = (fn: (c: Context) => Promise<Response>) => async (c: Context) => {
+    try { return await fn(c); } catch (err) {
+      if (err instanceof PermissionError) return c.body('Forbidden', 403);
+      if (err instanceof NotFoundError) return c.body('Not found', 404);
+      throw err;
+    }
+  };
+
+  async function sharedMounts(userSub: string) {
+    const shared = await service.listSharedFolders(userSub);
+    const mounts = await Promise.all(shared.map(async (folder) => {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([folder.spaceId, folder.path])));
+      const key = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+      const label = base(folder.path) || 'Shared space';
+      return { ...folder, label, name: `${Array.from(label).slice(0, 40).join('')} [${key}]` };
+    }));
+    return mounts;
+  }
+
+  // Preserve a personal folder or group with the same display name as the virtual root.
+  async function sharedRoot(userSub: string, personalId: string, groups: { name: string }[]) {
+    const listing = await service.list(userSub, personalId, '');
+    const occupied = new Set([...listing.folders, ...listing.files.map((f) => f.name), ...groups.map((g) => g.name)]);
+    let name = 'Shared with me';
+    for (let n = 1; occupied.has(name); n++) name = `Shared with me (Canopy ${n})`;
+    return name;
+  }
+
   // Split a /dav URL pathname into decoded segments. We drop "." and ".." so a
   // share mount can never be walked above its rooted subtree (defense in depth).
   const segsFrom = (pathname: string): string[] => {
@@ -135,6 +163,15 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
     const personalId = personal?.id ?? (await service.personalSpace(userSub));
     const groups = spaces.filter((s) => s.kind === "group");
     if (segs.length) {
+      const root = await sharedRoot(userSub, personalId, groups);
+      if (segs[0] === root) {
+        const mount = (await sharedMounts(userSub)).find((m) => m.name === segs[1]);
+        if (!mount) throw new NotFoundError();
+        // An encoded separator must not turn a child name into a path outside the mount.
+        const tail = segs.slice(2);
+        if (tail.some((s) => s.includes('/') || s.includes('\\'))) throw new NotFoundError();
+        return { spaceId: mount.spaceId, path: [mount.path, ...tail].filter(Boolean).join('/'), personalId, groups };
+      }
       const grp = groups.find((g) => g.name === segs[0]);
       if (grp) return { spaceId: grp.id, path: segs.slice(1).join("/"), personalId, groups };
     }
@@ -224,7 +261,7 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
     return c.body(null, 204);
   });
 
-  app.on("PROPFIND", paths, async (c) => {
+  app.on("PROPFIND", paths, read(async (c) => {
     const p = await authPrincipal(c);
     if (!p) return unauthorized(c);
     const segs = segsOf(c);
@@ -240,8 +277,25 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
         for (const folder of listing.folders) responses.push(collectionXml(davHref([folder], true), folder));
         for (const f of listing.files) responses.push(fileXml([f.name], f));
         for (const g of groups) responses.push(collectionXml(davHref([g.name], true), g.name));
+        if ((await sharedMounts(p.sub)).length) {
+          const root = await sharedRoot(p.sub, personalId, groups);
+          responses.push(collectionXml(davHref([root], true), 'Shared with me'));
+        }
       }
       return c.body(multistatus(responses), 207, XML);
+    }
+
+    if (p.kind === 'user' && segs.length === 1) {
+      const { personalId, groups } = await resolveUser(p.sub, []);
+      if (segs[0] === await sharedRoot(p.sub, personalId, groups)) {
+        responses.push(collectionXml(davHref(segs, true), 'Shared with me'));
+        if (depth !== '0') {
+          for (const mount of await sharedMounts(p.sub)) {
+            responses.push(collectionXml(davHref([...segs, mount.name], true), mount.label));
+          }
+        }
+        return c.body(multistatus(responses), 207, XML);
+      }
     }
 
     const loc = await locate(p, segs);
@@ -257,7 +311,7 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
       for (const f of listing.files) responses.push(fileXml([...segs, f.name], f));
     }
     return c.body(multistatus(responses), 207, XML);
-  });
+  }));
 
   // Finder sets properties (timestamps, Finder flags); we don't persist them but
   // must report success so saves go through.
@@ -385,9 +439,9 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
     return c.body(stream);
   };
 
-  app.on("HEAD", paths, (c) => serveFile(c, false));
-  app.get("/dav", (c) => serveFile(c, true));
-  app.get("/dav/*", (c) => serveFile(c, true));
+  app.on("HEAD", paths, read((c) => serveFile(c, false)));
+  app.get("/dav", read((c) => serveFile(c, true)));
+  app.get("/dav/*", read((c) => serveFile(c, true)));
 }
 
 /** Last segment of a virtual path (its display name). */
