@@ -73,6 +73,34 @@ describe("createShare + verifyShare", () => {
   });
 });
 
+describe('browser share sessions', () => {
+  it('stores only a hash, binds to one share and preserves capability scope', async () => {
+    const first = await svc.createShare(owner, { objectType: 'folder', spaceId: space, path: 'Docs' }, { role: 'viewer' });
+    const second = await svc.createShare(owner, { objectType: 'space', spaceId: space }, { role: 'viewer' });
+    const session = (await svc.createShareSession(first.secret))!;
+    expect(session.token).not.toBe(first.secret);
+    const stored = await db.first<{ token_hash: string }>('SELECT token_hash FROM share_sessions');
+    expect(stored!.token_hash).not.toBe(session.token);
+    expect(stored!.token_hash).toHaveLength(64);
+    expect(await svc.verifyShareSession(session.shareId, session.token))
+      .toMatchObject({ id: first.id, objectType: 'folder', path: 'Docs', role: 'viewer' });
+    expect(await svc.verifyShareSession(second.id, session.token)).toBeNull();
+    expect(await svc.verifyShareSession(first.id, first.secret)).toBeNull();
+    expect(await svc.createShareSession('unknown')).toBeNull();
+  });
+
+  it('ends sessions on revocation, original-link expiry and session expiry', async () => {
+    for (const cause of ['revoke', 'link', 'session']) {
+      const link = await svc.createShare(owner, { objectType: 'space', spaceId: space }, { role: 'viewer' });
+      const session = (await svc.createShareSession(link.secret))!;
+      if (cause === 'revoke') await svc.revokeShare(owner, link.id);
+      if (cause === 'link') await db.run('UPDATE shares SET expires_at = ? WHERE id = ?', ['2000-01-01', link.id]);
+      if (cause === 'session') await db.run('UPDATE share_sessions SET expires_at = ?', ['2000-01-01']);
+      expect(await svc.verifyShareSession(link.id, session.token), cause).toBeNull();
+    }
+  });
+});
+
 describe("role cap", () => {
   it("lets a space viewer mint a view link but not an edit link", async () => {
     const group = await createSpace(db, { name: "Family", createdBy: OWNER });
