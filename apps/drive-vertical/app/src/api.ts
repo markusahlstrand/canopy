@@ -688,13 +688,13 @@ export const listTrash = () => call<DriveFile[]>('/trash');
  * composes: ensure-file → attachment upload → record-version. The size and type the
  * version records come from the stored bytes, not from anything said here.
  */
-export async function uploadFile(folderId: string, file: File): Promise<DriveFile> {
+export async function uploadFile(folderId: string, file: File, selectedSite: string | null = currentSite()): Promise<DriveFile> {
   const res = await fetch(
     `${API}/folders/${encodeURIComponent(folderId)}/content?name=${encodeURIComponent(file.name)}`,
     {
       method: 'POST',
       credentials: 'same-origin',
-      headers: siteHeaders({ 'content-type': file.type || 'application/octet-stream' }),
+      headers: { 'content-type': file.type || 'application/octet-stream', ...(selectedSite ? { 'x-site': selectedSite } : {}) },
       body: file,
     },
   );

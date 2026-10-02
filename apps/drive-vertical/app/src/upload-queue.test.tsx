@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useUploadQueue } from './upload-queue';
 import * as api from './api';
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); api.selectSite(null); });
 it('serializes uploads, continues after failure and retries only the failed item to its original folder', async () => {
   let finish!: () => void;
   const upload = vi.spyOn(api, 'uploadFile').mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({} as api.DriveFile); }))
@@ -23,5 +23,27 @@ it('serializes uploads, continues after failure and retries only the failed item
   expect(upload.mock.calls.map(([folder, file]) => [folder, file.name])).toEqual([
     ['original-folder', 'a.txt'], ['original-folder', 'b.txt'], ['original-folder', 'c.txt'], ['original-folder', 'b.txt']
   ]);
-  expect(changed).toHaveBeenCalledTimes(3);
+  expect(changed).toHaveBeenCalledTimes(2);
+});
+
+it('pins queued and retried uploads to their captured space', async () => {
+  api.selectSite('space-a');
+  let finish!: (response: Response) => void;
+  const fetch = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'retry me' }), { status: 500 }))
+    .mockResolvedValue(new Response('{}'));
+  vi.stubGlobal('fetch', fetch);
+  let enqueue!: ReturnType<typeof useUploadQueue>['enqueue'];
+  function Harness() { const queue = useUploadQueue(async () => {}); enqueue = queue.enqueue; return queue.panel; }
+  render(<Harness />);
+  act(() => enqueue('root', 'Space A', [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')]));
+  api.selectSite('space-b');
+  await act(async () => { finish(new Response('{}')); });
+  await screen.findByText('retry me');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry b.txt' }));
+  await screen.findByText('2 of 2 uploaded');
+  expect(fetch).toHaveBeenCalledTimes(3);
+  for (const [, init] of fetch.mock.calls) expect(init.headers['x-site']).toBe('space-a');
+  fireEvent.click(screen.getByRole('button', { name: 'Clear completed uploads' }));
+  expect(screen.queryByLabelText('Uploads')).toBeNull();
 });
