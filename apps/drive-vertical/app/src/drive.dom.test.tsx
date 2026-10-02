@@ -647,6 +647,34 @@ describe('shared-folder discovery', () => {
   });
 });
 
+describe('Trash actions', () => {
+  it('offers Restore instead of live-file actions and removes the restored row', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await flush();
+    await answer('/api/trash', [{ ...file('01A', 'lease.pdf'), state: 'trashed' }]);
+    fireEvent.contextMenu(screen.getByText('lease.pdf').closest('tr')!);
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Restore']);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Restore' }));
+    const restore = pending.find((p) => p.url.endsWith('/files/01A/restore'));
+    expect(restore?.method).toBe('POST');
+    await answer('/files/01A/restore', file('01A', 'lease.pdf'));
+    await answer('/api/trash', []);
+    expect(screen.queryByText('lease.pdf')).toBeNull();
+    expect(screen.getByText('Trash is empty')).toBeTruthy();
+  });
+
+  it('offers the same Restore action from a grid card', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await flush();
+    await answer('/api/trash', [{ ...file('01A', 'lease.pdf'), state: 'trashed' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to grid' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Actions for lease.pdf' }), { button: 0, ctrlKey: false });
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Restore']);
+  });
+});
+
 describe('the shell the portal had, on the vertical', () => {
   it('opens the palette on ⌘K and searches the drive with it', async () => {
     await renderDrive([], [file('01A', 'lease.pdf')]);

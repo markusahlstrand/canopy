@@ -57,6 +57,7 @@ interface FileTableProps {
   loading?: boolean;
   /** Offline metadata can be browsed, but bytes and mutations are unavailable. */
   readOnly?: boolean;
+  trashed?: boolean;
   /** The view owns the reason its result is empty and the useful next action. */
   empty?: ReactNode;
 }
@@ -145,8 +146,9 @@ const COLUMNS: { key: SortKey; label: string; className: string }[] = [
  * is the same one the rest of this UI follows: an item that does nothing is worse than an
  * item that is absent.
  */
-export function actionsFor(file: FileItem, readOnly = false): string[] {
+export function actionsFor(file: FileItem, readOnly = false, trashed = false): string[] {
   if (readOnly) return file.isFolder ? ['Open'] : [];
+  if (trashed) return ['Restore'];
   // Share is a FOLDER action and only a folder action: a grant narrows onto a folder and
   // reaches what is under it, so there is no such thing as sharing one file here.
   return file.isFolder
@@ -154,8 +156,8 @@ export function actionsFor(file: FileItem, readOnly = false): string[] {
     : ['Open', 'Download', 'Rename', 'Move', 'Delete'];
 }
 
-function RowActions({ file, onAction, readOnly }: { file: FileItem; onAction: (action: string, f: FileItem) => void; readOnly: boolean }) {
-  const actions = actionsFor(file, readOnly);
+function RowActions({ file, onAction, readOnly, trashed }: { file: FileItem; onAction: (action: string, f: FileItem) => void; readOnly: boolean; trashed?: boolean }) {
+  const actions = actionsFor(file, readOnly, trashed);
   if (actions.length === 0) return null;
   return (
     <DropdownMenu>
@@ -197,6 +199,7 @@ export function FileTable({
   previewOpen = false,
   loading = false,
   readOnly = false,
+  trashed = false,
   empty,
 }: FileTableProps) {
   const lastIndex = useRef<number | null>(null);
@@ -323,7 +326,7 @@ export function FileTable({
                     onSelectionChange(next);
                   }}
                 />
-                <RowActions file={f} onAction={onAction} readOnly={readOnly} />
+                <RowActions file={f} onAction={onAction} readOnly={readOnly} trashed={trashed} />
               </div>
             </div>
             <div className="truncate text-[13.5px] font-medium">{f.name}</div>
@@ -372,7 +375,7 @@ export function FileTable({
           {files.map((f, i) => {
             const selected = selection.has(f.id);
             const pluginItems = readOnly ? [] : pluginMenuItems(f.kind);
-            const actions = actionsFor(f, readOnly);
+            const actions = actionsFor(f, readOnly, trashed);
             return (
               <ContextMenu key={f.id}>
                 <ContextMenuTrigger asChild>
@@ -411,7 +414,7 @@ export function FileTable({
                     </td>
                     <td className="hidden px-3 font-mono text-[12.5px] text-muted-foreground md:table-cell">{f.modified}</td>
                     <td className="px-2">
-                      <RowActions file={f} onAction={onAction} readOnly={readOnly} />
+                      <RowActions file={f} onAction={onAction} readOnly={readOnly} trashed={trashed} />
                     </td>
                   </tr>
                 </ContextMenuTrigger>
