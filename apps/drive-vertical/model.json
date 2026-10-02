@@ -56,6 +56,50 @@
         "name"
       ]
     },
+    "file_comment": {
+      "table": "drive_file_comments",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "file_id",
+          "author",
+          "body",
+          "created_at",
+          "deleted_at"
+        ],
+        "additionalProperties": false
+      },
+      "parents": [
+        "file"
+      ],
+      "erasable": [
+        "body"
+      ]
+    },
     "file_details": {
       "table": "drive_file_details",
       "fields": {

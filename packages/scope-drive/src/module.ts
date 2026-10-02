@@ -74,6 +74,10 @@ interface VersionRow {
   created_by: string;
 }
 
+interface CommentRow {
+  id: string; file_id: string; author: string; body: string; created_at: string; deleted_at: string | null;
+}
+
 interface DetailsRow {
   id: string; file_id: string; description: string; labels_json: string;
   revision: number; updated_at: string; updated_by: string;
@@ -729,6 +733,24 @@ const operations = {
     const next = last && more ? last.id : null;
     return { entries: visible, nextCursor: next } as unknown as HandlerOutput<
       (typeof driveOperations)['drive/list-trash']
+    >;
+  },
+
+  'drive/list-comments': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
+    const limit = input.limit ?? 50;
+    const rows = ctx.sql.query<CommentRow & { name: string | null; email: string | null }>(
+      `SELECT c.*, p.name, p.email FROM drive_file_comments c LEFT JOIN drive_people p ON p.principal = c.author
+       WHERE c.file_id = ? AND c.deleted_at IS NULL` + (input.cursor ? ' AND c.id > ?' : '') + ' ORDER BY c.id LIMIT ?',
+      [input.fileId, ...(input.cursor ? [input.cursor] : []), limit + 1],
+    );
+    const canManage = (await ctx.check(DRIVE_PERM.manage, fileRef(input.fileId))).allowed;
+    const entries = rows.slice(0, limit).map(({ name, email, ...row }) => ({
+      ...row, authorLabel: name || email || row.author, canDelete: row.author === ctx.principal || canManage,
+    }));
+    return { entries, nextCursor: rows.length > limit ? entries[entries.length - 1]!.id : null } as unknown as HandlerOutput<
+      (typeof driveOperations)['drive/list-comments']
     >;
   },
 

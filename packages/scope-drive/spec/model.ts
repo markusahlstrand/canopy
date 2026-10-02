@@ -173,6 +173,16 @@ export const driveEntities = defineEntities({
     parents: ['file'],
   },
 
+  file_comment: {
+    table: 'drive_file_comments',
+    fields: z.object({
+      id: z.string(), file_id: z.string(), author: z.string(), body: z.string(),
+      created_at: z.string(), deleted_at: z.string().nullable(),
+    }),
+    parents: ['file'],
+    erasable: ['body'],
+  },
+
   /** Optional description and labels, kept off the hot file-listing row. */
   file_details: {
     table: 'drive_file_details',
@@ -570,6 +580,15 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     output: driveEntities.file_version.fields,
     paged: { sortKey: 'id' },
     http: { method: 'GET', path: '/files/{fileId}/versions' },
+  },
+
+  'drive/list-comments': {
+    summary: 'Read a live file comment thread, oldest first',
+    permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }),
+    output: driveEntities.file_comment.fields.extend({ authorLabel: z.string(), canDelete: z.boolean() }),
+    paged: { sortKey: 'id' },
+    http: { method: 'GET', path: '/files/{fileId}/comments' },
   },
 
   'drive/file-details': {
