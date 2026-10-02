@@ -725,6 +725,17 @@ const operations = {
     >;
   },
 
+  'drive/get-version': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    const file = liveFile(ctx, input.fileId);
+    const version = ctx.sql.query<VersionRow>(
+      'SELECT * FROM drive_file_versions WHERE id = ? AND file_id = ?',
+      [input.versionId, file.id],
+    )[0];
+    if (!version) throw substratError('not_found', 'version not found');
+    return { file, version };
+  },
+
   'drive/file-versions': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
     liveFile(ctx, input.fileId);
@@ -1007,6 +1018,22 @@ const operations = {
       [input.folderId],
     );
     return { shares };
+  },
+
+  'drive/list-shared-folders': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    const candidates = ctx.sql.query<FolderRow>(
+      `SELECT DISTINCT f.* FROM drive_folders f
+         JOIN drive_folder_shares s ON s.folder_id = f.id
+        WHERE s.principal = ? ORDER BY f.path`,
+      [ctx.principal],
+    );
+    // The projection supplies discovery, while the kernel still decides visibility.
+    const folders: FolderRow[] = [];
+    for (const folder of candidates) {
+      if ((await ctx.check(DRIVE_PERM.read, folderRef(folder.id))).allowed) folders.push(folder);
+    }
+    return { folders };
   },
 
   'drive/record-person': async (ctx, input) => {

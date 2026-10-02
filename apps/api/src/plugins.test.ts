@@ -1,11 +1,46 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import Ajv from "ajv";
 import type { PluginManifest, ServerPlugin } from "@canopy/core";
+import { grantsForManifest, type SearchIndex } from "@canopy/core";
 import { inProcessJobs, latestRun, runMigrations } from "@canopy/store";
 import { createLibsqlDb } from "@canopy/store/node";
 import { jobsOf } from "./plugins";
+
+describe('index:query capability', () => {
+  const manifest: PluginManifest = {
+    id: 'search', name: 'Search', version: '0.1.0', capabilities: [{ kind: 'index:query' }],
+  };
+
+  it('does not mint search without a declared capability, identity and host scope resolver', () => {
+    const search = { query: vi.fn(), upsert: vi.fn(), delete: vi.fn() } as SearchIndex;
+    const deps = { search, userSub: 'ada', resolveSearchScope: async () => ({ spaceIds: ['private'] }) };
+    expect(grantsForManifest({ ...manifest, capabilities: [] }, deps).queryIndex).toBeUndefined();
+    expect(grantsForManifest(manifest, { search }).queryIndex).toBeUndefined();
+    expect(grantsForManifest(manifest, { search, userSub: 'ada' }).queryIndex).toBeUndefined();
+    expect(grantsForManifest(manifest, { ...deps, userSub: undefined }).queryIndex).toBeUndefined();
+  });
+
+  it('binds access to the caller, ignores forged scope and rechecks revocation', async () => {
+    const query = vi.fn(async () => ({ items: [] }));
+    const search = { query, upsert: vi.fn(), delete: vi.fn() } as SearchIndex;
+    let allowed = ['ada-private'];
+    const resolveSearchScope = vi.fn(async (sub: string) => ({ spaceIds: sub === 'ada' ? allowed : ['bob-private'] }));
+    const deps = { search, resolveSearchScope };
+    const ada = grantsForManifest(manifest, { ...deps, userSub: 'ada' }).queryIndex!;
+    const bob = grantsForManifest(manifest, { ...deps, userSub: 'bob' }).queryIndex!;
+    await ada({ text: 'lease', spaceIds: ['bob-private'], scope: { spaceIds: ['bob-private'] } } as never);
+    expect(query).toHaveBeenLastCalledWith(expect.not.objectContaining({ spaceIds: expect.anything() }), { spaceIds: ['ada-private'] });
+    await bob({ text: 'lease' });
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'lease' }), { spaceIds: ['bob-private'] });
+    allowed = [];
+    query.mockClear();
+    expect(await ada({ text: 'lease' })).toEqual({ items: [] });
+    expect(query).not.toHaveBeenCalled();
+    expect(resolveSearchScope).toHaveBeenLastCalledWith('ada');
+  });
+});
 
 describe("jobsOf (the jobs role registry)", () => {
   const plugin = (id: string, names: string[]): ServerPlugin => ({

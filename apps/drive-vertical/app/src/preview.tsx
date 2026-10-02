@@ -16,6 +16,7 @@ import { Button, Icon, cn } from '@canopy/ui';
 import type { FileViewerElement } from '@canopy/plugin-sdk/web-component';
 import {
   contentUrl,
+  versionContentUrl,
   fileBodyAsText,
   fileText,
   fileVersions,
@@ -276,6 +277,16 @@ export function PreviewPanel({
                   <span>{humanSize(v.size)}</span>
                   {v.id === version?.id ? (
                     <span className="rounded bg-muted px-1.5 text-xs">current</span>
+                  ) : null}
+                  {v.source === 'blob' && v.blob_ref ? (
+                    <a
+                      href={versionContentUrl(fileId, v.id)}
+                      download={file?.name}
+                      aria-label={`Download version from ${new Date(v.created_at).toLocaleString()}`}
+                      className="ml-auto text-primary underline underline-offset-2"
+                    >
+                      Download
+                    </a>
                   ) : null}
                   {v.source === 'external' ? (
                     <span className="text-xs text-muted-foreground">in a connected source</span>

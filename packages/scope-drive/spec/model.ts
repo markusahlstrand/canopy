@@ -555,6 +555,14 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     http: { method: 'GET', path: '/files/{fileId}/versions' },
   },
 
+  'drive/get-version': {
+    summary: 'A live file and one of its historical versions',
+    permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string(), versionId: z.string() }),
+    output: z.object({ file: driveEntities.file.fields, version: driveEntities.file_version.fields }),
+    http: { method: 'GET', path: '/files/{fileId}/versions/{versionId}' },
+  },
+
   /**
    * The folders directly inside a folder.
    *
@@ -787,6 +795,14 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       ),
     }),
     http: { method: 'GET', path: '/folders/{folderId}/shares' },
+  },
+
+  'drive/list-shared-folders': {
+    summary: 'Folders shared directly with the caller in this space',
+    permission: 'drive:read',
+    input: z.object({}),
+    output: z.object({ folders: z.array(driveEntities.folder.fields) }),
+    http: { method: 'GET', path: '/folders/shared-with-me' },
   },
 
   /**

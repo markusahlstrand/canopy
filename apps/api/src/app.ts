@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
+import { getCookie, setCookie } from "hono/cookie";
 import {
   createAiGateway,
   scopedCache,
@@ -23,6 +24,7 @@ import {
   BlobMissingError,
   NotFoundError,
   PermissionError,
+  SHARE_SESSION_SECONDS,
   connectorSpaceId,
   crawlConnector,
   type BlobStore,
@@ -1234,14 +1236,32 @@ export function createApp(deps: AppDeps) {
     return c.json({ ok: true });
   }));
 
-  // Public share landing: the secret in the path IS the credential (token-in-URL,
-  // the convenient-but-logged path; WebDAV instead carries it in the Authorization
-  // header). A file share streams the bytes; a folder/space share returns a
-  // read-only JSON listing. Access runs as the share's creator.
+  app.use('/s/*', async (c, next) => {
+    c.header('Cache-Control', 'no-store');
+    c.header('Referrer-Policy', 'no-referrer');
+    c.header('X-Content-Type-Options', 'nosniff');
+    await next();
+  });
+
+  // The link is used only at landing. Subsequent reads carry a scoped browser cookie.
   app.get("/s/:secret", (c) =>
     handle(c, async () => {
       if (!drive) return c.json({ error: "no drive configured" }, 404);
-      const share = await drive.service.verifyShare(c.req.param("secret")!);
+      const session = await drive.service.createShareSession(c.req.param('secret')!);
+      if (!session) return c.json({ error: 'invalid or expired link' }, 404);
+      const path = `/s/session/${session.shareId}`;
+      setCookie(c, 'canopy_share', session.token, {
+        path, httpOnly: true, secure: new URL(c.req.url).protocol === 'https:',
+        sameSite: 'Lax', maxAge: SHARE_SESSION_SECONDS,
+      });
+      return c.redirect(path, 303);
+    }),
+  );
+
+  app.get('/s/session/:id', (c) =>
+    handle(c, async () => {
+      if (!drive) return c.json({ error: 'no drive configured' }, 404);
+      const share = await drive.service.verifyShareSession(c.req.param('id')!, getCookie(c, 'canopy_share') ?? '');
       if (!share) return c.json({ error: "invalid or expired link" }, 404);
       const asCreator = { sub: share.createdBy };
       if (share.objectType === "file" && share.fileId) {

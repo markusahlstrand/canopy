@@ -135,6 +135,35 @@ beforeAll(async () => {
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
+describe('historical version reads', () => {
+  it('reads immutable old bytes without changing the current version', async () => {
+    const first = await write(ada, ROOT_FOLDER_ID, 'version-history.txt', 'old bytes');
+    const second = await write(ada, ROOT_FOLDER_ID, 'version-history.txt', 'new bytes');
+    const reader = await host.getScope(bjorn, tenant, scope);
+    const old = await reader.invoke<{ file: FileRow; version: VersionRow }>('drive/get-version', {
+      fileId: first.id, versionId: first.current_version_id,
+    });
+    expect(old.file.current_version_id).toBe(second.current_version_id);
+    expect(old.version.id).toBe(first.current_version_id);
+    const bytes = await (await host.attachments(bjorn, tenant, scope)).open(old.version.blob_ref!);
+    expect(new TextDecoder().decode(bytes!.body)).toBe('old bytes');
+    const current = await reader.invoke<{ file: FileRow }>('drive/get-file', { fileId: first.id });
+    expect(current.file.current_version_id).toBe(second.current_version_id);
+  });
+
+  it('refuses foreign versions, unknown versions, unauthorized readers and trashed files', async () => {
+    const first = await write(ada, ROOT_FOLDER_ID, 'history-boundary-a.txt', 'A');
+    const foreign = await write(ada, ROOT_FOLDER_ID, 'history-boundary-b.txt', 'B');
+    const reader = await host.getScope(bjorn, tenant, scope);
+    await expect(reader.invoke('drive/get-version', { fileId: first.id, versionId: foreign.current_version_id })).rejects.toThrow('version not found');
+    await expect(reader.invoke('drive/get-version', { fileId: first.id, versionId: 'missing' })).rejects.toThrow('version not found');
+    const outsider = await host.getScope(principalId.parse(ulid()), tenant, scope);
+    await expect(outsider.invoke('drive/get-version', { fileId: first.id, versionId: first.current_version_id })).rejects.toThrow();
+    await (await host.getScope(ada, tenant, scope)).invoke('drive/trash-file', { fileId: first.id });
+    await expect(reader.invoke('drive/get-version', { fileId: first.id, versionId: first.current_version_id })).rejects.toThrow('file not found');
+  });
+});
+
 describe('a space is a scope', () => {
   let documents: string;
   let scratch: string;

@@ -371,6 +371,32 @@ describe('offline metadata from the scope event mirror', () => {
 });
 
 describe('preview shows what the version actually is', () => {
+  it('downloads each stored historical version in the selected space', async () => {
+    selectSite('family');
+    await renderDrive([], [file('01A', 'photo.png')]);
+    fireEvent.doubleClick(screen.getByText('photo.png'));
+    await flush();
+    const current = { id: '01V', file_id: '01A', source: 'blob', blob_ref: '01B', mime: 'image/png', size: 2048, created_at: '2026-09-01T00:00:00.000Z' };
+    await answer('/files/01A', { file: file('01A', 'photo.png'), version: current });
+    fireEvent.click(screen.getByText('Versions'));
+    await answer('/files/01A/versions', [
+      current,
+      { ...current, id: '01OLD', blob_ref: '01OLD-BLOB', created_at: '2026-08-01T00:00:00.000Z' },
+      { ...current, id: '01EXTERNAL', source: 'external', blob_ref: null },
+      { ...current, id: '01MISSING', blob_ref: null },
+    ]);
+    const panel = screen.getByRole('complementary', { name: 'Preview' });
+    const links = within(panel).getAllByRole('link');
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '/api/files/01A/content?site=family',
+      '/api/files/01A/versions/01V/content?site=family',
+      '/api/files/01A/versions/01OLD/content?site=family',
+    ]);
+    for (const link of links) expect(link.getAttribute('download')).toBe('photo.png');
+    expect(within(panel).getByText('current')).toBeTruthy();
+    expect(within(panel).getByText('in a connected source')).toBeTruthy();
+  });
+
   it('renders an image inline and a download for its bytes', async () => {
     await renderDrive([], [file('01A', 'photo.png')]);
 
@@ -517,6 +543,22 @@ describe('the moved table brings its own behaviour with it', () => {
 });
 
 describe('dragging a file onto a folder moves it', () => {
+  it('moves folders and refuses dropping one onto itself', async () => {
+    await renderDrive([
+      { id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' },
+      { id: '01D', parent_id: 'root', name: 'Archive', path: 'Archive' },
+    ]);
+    const row = screen.getByText('Papers').closest('tr')!;
+    const dataTransfer = { setData: () => {}, effectAllowed: 'none', dropEffect: 'none' };
+    fireEvent.dragStart(row, { dataTransfer });
+    fireEvent.drop(row, { dataTransfer });
+    expect(pending.some((p) => p.url.endsWith('/01F/move'))).toBe(false);
+    fireEvent.drop(screen.getByText('Archive').closest('tr')!, { dataTransfer });
+    expect(pending.find((p) => p.url.endsWith('/folders/01F/move'))?.body)
+      .toBe(JSON.stringify({ parentId: '01D' }));
+  });
+
+
   it('fires the move the prefix check used to swallow', async () => {
     await renderDrive(
       [{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }],
@@ -549,6 +591,113 @@ describe('dragging a file onto a folder moves it', () => {
 
     const moved = pending.find((p) => p.url.includes('/files/01A/move'));
     expect(moved, `no move request; saw ${pending.map((p) => p.url).join(', ')}`).toBeTruthy();
+  });
+});
+
+describe('move destination picker', () => {
+  async function pick(items: unknown[] = [file('01A', 'lease.pdf')], selectAll = false) {
+    await renderDrive([], items);
+    if (selectAll) fireEvent.click(screen.getAllByRole('checkbox')[0]!);
+    fireEvent.contextMenu(screen.getByText('lease.pdf').closest('tr')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
+    await answer('/folders/root/folders', [
+      { id: '01D', parent_id: 'root', name: 'Archive', path: 'Archive' },
+    ]);
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('button', { name: 'Move here' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await answer('/folders/01D/folders', []);
+    return dialog;
+  }
+
+  it('moves a root file into a chosen destination instead of silently doing nothing', async () => {
+    const dialog = await pick();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
+    expect(pending.find((p) => p.url.endsWith('/files/01A/move'))?.body)
+      .toBe(JSON.stringify({ folderId: '01D' }));
+    await answer('/files/01A/move', { ...file('01A', 'lease.pdf'), folder_id: '01D' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.queryByText('lease.pdf')).toBeNull();
+  });
+
+  it('cancelling sends no move', async () => {
+    const dialog = await pick();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(pending.some((p) => p.url.endsWith('/move'))).toBe(false);
+  });
+
+  it('keeps a name conflict visible and allows choosing another destination', async () => {
+    const dialog = await pick();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
+    await answerWith('/files/01A/move', 409, { error: 'name already exists' });
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [file('01A', 'lease.pdf')]);
+    expect(within(dialog).getByRole('alert').textContent).toContain('1 remaining');
+    expect(screen.getByText('lease.pdf')).toBeTruthy();
+  });
+
+  it('moves a selection and retries only the items that failed', async () => {
+    const items = [file('01A', 'lease.pdf'), file('01B', 'other.pdf')];
+    const dialog = await pick(items, true);
+    expect(within(dialog).getByText('Move 2 items')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
+    await answer('/files/01A/move', { ...items[0], folder_id: '01D' });
+    await answerWith('/files/01B/move', 409, { error: 'name already exists' });
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [items[1]]);
+    expect(within(dialog).getByRole('alert').textContent).toContain('1 moved; 1 remaining');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
+    expect(pending.filter((p) => p.url.endsWith('/move')).map((p) => p.url))
+      .toEqual(['/api/files/01B/move']);
+  });
+});
+
+describe('shared-folder discovery', () => {
+  it('lists direct shares and opens a nested folder by its identity', async () => {
+    await renderDrive([], [file('01A', 'lease.pdf')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
+    await flush();
+    await answer('/folders/shared-with-me', { folders: [
+      { id: '01N', parent_id: '01P', path: 'Papers/Leases', name: 'Leases' },
+    ] });
+    expect(screen.queryByText('lease.pdf')).toBeNull();
+    fireEvent.doubleClick(screen.getByText('Leases'));
+    await flush();
+    expect(pending.some((p) => p.url.includes('/folders/01N/files'))).toBe(true);
+    await answer('/folders/01N/folders', []);
+    await answer('/folders/01N/files', [file('01L', 'shared.pdf')]);
+    expect(screen.getByText('shared.pdf')).toBeTruthy();
+    expect(screen.getAllByText('Papers/Leases').length).toBeGreaterThan(0);
+  });
+});
+
+describe('Trash actions', () => {
+  it('offers Restore instead of live-file actions and removes the restored row', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await flush();
+    await answer('/api/trash', [{ ...file('01A', 'lease.pdf'), state: 'trashed' }]);
+    fireEvent.contextMenu(screen.getByText('lease.pdf').closest('tr')!);
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Restore']);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Restore' }));
+    const restore = pending.find((p) => p.url.endsWith('/files/01A/restore'));
+    expect(restore?.method).toBe('POST');
+    await answer('/files/01A/restore', file('01A', 'lease.pdf'));
+    await answer('/api/trash', []);
+    expect(screen.queryByText('lease.pdf')).toBeNull();
+    expect(screen.getByText('Trash is empty')).toBeTruthy();
+  });
+
+  it('offers the same Restore action from a grid card', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await flush();
+    await answer('/api/trash', [{ ...file('01A', 'lease.pdf'), state: 'trashed' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to grid' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Actions for lease.pdf' }), { button: 0, ctrlKey: false });
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Restore']);
   });
 });
 

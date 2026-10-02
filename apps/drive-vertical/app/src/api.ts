@@ -547,6 +547,8 @@ export const listSites = () => call<Site[]>('/sites');
 export const listFolders = (folderId: string) =>
   call<DriveFolder[]>(`/folders/${encodeURIComponent(folderId)}/folders`);
 
+export const listSharedFolders = () => call<{ folders: DriveFolder[] }>('/folders/shared-with-me');
+
 /**
  * A folder by its path, or null. `null` is also the answer for a folder the caller may
  * not read — the worker refuses indistinguishably on purpose, so a path cannot be used
@@ -650,6 +652,12 @@ export async function uploadFile(folderId: string, file: File): Promise<DriveFil
 export function contentUrl(fileId: string): string {
   const q = site ? `?site=${encodeURIComponent(site)}` : '';
   return `${API}/files/${encodeURIComponent(fileId)}/content${q}`;
+}
+
+/** Stream an immutable version through the same selected-space attachment gate. */
+export function versionContentUrl(fileId: string, versionId: string): string {
+  const q = site ? `?site=${encodeURIComponent(site)}` : '';
+  return `${API}/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}/content${q}`;
 }
 
 /** The relying-party routes the worker mounts. Full page loads: the issuer owns the redirect. */

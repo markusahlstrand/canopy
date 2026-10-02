@@ -136,6 +136,10 @@ export async function verifyShare(db: Db, secret: string): Promise<VerifiedShare
   if (!secret) return null;
   const secretHash = await sha256hex(new TextEncoder().encode(secret));
   const row = await db.first<ShareRow>("SELECT * FROM shares WHERE secret_hash = ?", [secretHash]);
+  return verifyRow(db, row);
+}
+
+async function verifyRow(db: Db, row: ShareRow | null): Promise<VerifiedShare | null> {
   if (!row) return null;
   if (row.revoked_at) return null;
   if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) return null;
@@ -149,6 +153,35 @@ export async function verifyShare(db: Db, secret: string): Promise<VerifiedShare
     role: row.role,
     createdBy: row.created_by,
   };
+}
+
+export const SHARE_SESSION_SECONDS = 15 * 60;
+
+/** Exchange the long-lived link for a short-lived, independently random browser token. */
+export async function createShareSession(db: Db, secret: string): Promise<{ shareId: string; token: string } | null> {
+  const share = await verifyShare(db, secret);
+  if (!share) return null;
+  const token = randomSecret();
+  const tokenHash = await sha256hex(new TextEncoder().encode(token));
+  const now = new Date().toISOString();
+  await db.batch([
+    { sql: 'DELETE FROM share_sessions WHERE expires_at <= ?', params: [now] },
+    { sql: 'INSERT INTO share_sessions (token_hash, share_id, expires_at) VALUES (?, ?, ?)',
+      params: [tokenHash, share.id, new Date(Date.now() + SHARE_SESSION_SECONDS * 1000).toISOString()] },
+  ]);
+  return { shareId: share.id, token };
+}
+
+/** Recheck the original link on each read; revocation and expiry end sessions immediately. */
+export async function verifyShareSession(db: Db, shareId: string, token: string): Promise<VerifiedShare | null> {
+  if (!token) return null;
+  const hash = await sha256hex(new TextEncoder().encode(token));
+  const row = await db.first<ShareRow>(
+    `SELECT s.* FROM shares s JOIN share_sessions session ON session.share_id = s.id
+       WHERE session.token_hash = ? AND session.share_id = ? AND session.expires_at > ?`,
+    [hash, shareId, new Date().toISOString()],
+  );
+  return verifyRow(db, row);
 }
 
 /** Active (non-revoked) shares on one object, newest first. */

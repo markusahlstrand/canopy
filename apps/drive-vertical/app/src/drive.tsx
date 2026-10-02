@@ -23,6 +23,7 @@ import { Topbar } from './topbar';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
+import { MoveDialog } from './move-dialog';
 import { CommandPalette } from './command-palette';
 import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
@@ -35,6 +36,7 @@ import {
   createFolder,
   listFolder,
   listFolders,
+  listSharedFolders,
   listTrash,
   moveFile,
   moveFolder,
@@ -150,11 +152,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [busy, setBusy] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [offline, setOffline] = useState(false);
-  const [view, setView] = useState<'drive' | 'trash' | 'search'>('drive');
+  const [view, setView] = useState<'drive' | 'trash' | 'search' | 'shared'>('drive');
   const [term, setTerm] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [trash, setTrash] = useState<DriveFile[]>([]);
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
+  const [moving, setMoving] = useState<FileItem[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
@@ -211,6 +214,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         // for what you typed a moment ago.
         if (!reads.current.current(ticket)) return;
         setHits(found);
+      } else if (view === 'shared') {
+        const shared = await listSharedFolders();
+        if (!reads.current.current(ticket)) return;
+        setFolders(shared.folders);
+        setFiles([]);
       } else if (view === 'trash') {
         const bin = await listTrash();
         if (!reads.current.current(ticket)) return;
@@ -330,8 +338,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    */
   const navigate = useCallback((id: NavId) => {
     if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
-    const alreadyHere = id === 'trash'
-      ? view === 'trash'
+    const alreadyHere = id !== 'drive'
+      ? view === id
       : view === 'drive' && folderId === ROOT_FOLDER_ID;
     if (alreadyHere) {
       void refreshRef.current();
@@ -349,7 +357,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     }
     setCrumbs([]);
     setFolderId(ROOT_FOLDER_ID);
-    setView('drive');
+    if (id === 'shared') {
+      setFolders([]);
+      setFiles([]);
+    }
+    setView(id);
   }, [folderId, view]);
 
   const open = (folder: DriveFolder) => {
@@ -357,6 +369,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     // may land here.
     reads.current.invalidate();
     if (window.matchMedia?.('(max-width: 767px)').matches) setPreviewing(null);
+    if (view === 'shared') {
+      setView('drive');
+      setCrumbs([{ id: folder.id, name: folder.path }]);
+      setFolderId(folder.id);
+      return;
+    }
     setCrumbs((c) => [...c, { id: folder.id, name: folder.name }]);
     setFolderId(folder.id);
   };
@@ -414,16 +432,18 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       if (!item.isFolder) void act(() => trashFile(item.id));
       return;
     }
+    if (action === 'Restore') {
+      void act(() => restoreFile(item.id));
+      return;
+    }
     if (action === 'Download' && !item.isFolder) {
       window.open(contentUrl(item.id), '_blank', 'noopener');
       return;
     }
     if (action === 'Move') {
-      // Up one level, as before — a destination picker is its own screen.
-      const up = crumbs[crumbs.length - 2]?.id ?? ROOT_FOLDER_ID;
-      if (crumbs.length > 0) {
-        void act(() => (item.isFolder ? moveFolder(item.id, up) : moveFile(item.id, up)));
-      }
+      const visible = view === 'search' ? hits.map((hit) => fileItem(hit))
+        : [...folders.map(folderItem), ...files.map((file) => fileItem(file))];
+      setMoving(selection.has(item.id) ? visible.filter((row) => selection.has(row.id)) : [item]);
     }
   };
 
@@ -461,6 +481,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       actions={[{ label: 'Try again', onClick: () => void refresh() }]} />
   ) : view === 'trash' ? (
     <EmptyList icon="trash" title="Trash is empty" description="Deleted files will appear here." />
+  ) : view === 'shared' ? (
+    <EmptyList icon="folder" title="No folders shared with you" description="Direct folder grants in this space will appear here." />
   ) : view === 'search' ? (
     term.trim().length < SEARCH_MIN
       ? <EmptyList icon="search" title="Search this space" description={`Enter at least ${SEARCH_MIN} characters to find files.`} />
@@ -483,7 +505,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     <div className="flex min-h-0 flex-1">
       <div className="hidden md:block">
         <Sidebar
-          active={view === 'trash' ? 'trash' : 'drive'}
+          active={view === 'search' ? 'drive' : view}
           onNavigate={navigate}
           onNewFolder={() => startWrite(() => setCreating(true))}
           onUpload={() => startWrite(() => uploadRef.current?.click())}
@@ -499,7 +521,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           <SheetTitle className="sr-only">Drive navigation</SheetTitle>
           <Sidebar
             mobile
-            active={view === 'trash' ? 'trash' : 'drive'}
+            active={view === 'search' ? 'drive' : view}
             onNavigate={(id) => { navigate(id); setMobileNavOpen(false); }}
             onNewFolder={() => { setMobileNavOpen(false); startWrite(() => setCreating(true)); }}
             onUpload={() => { setMobileNavOpen(false); startWrite(() => uploadRef.current?.click()); }}
@@ -513,7 +535,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       <div className="flex min-w-0 flex-1 flex-col">
       <Topbar
-        breadcrumb={view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : ['My Drive', ...crumbs.map((c) => c.name)]}
+        breadcrumb={view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : ['My Drive', ...crumbs.map((c) => c.name)]}
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
         onCrumbClick={view === 'drive' ? (index) => upTo(index - 1) : undefined}
         onOpenMenu={() => setMobileNavOpen(true)}
@@ -617,6 +639,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       ) : view === 'trash' ? (
         <FileTable
           files={sorted(trash, sort).map((file) => fileItem(file))}
+          trashed
           selection={selection}
           onSelectionChange={setSelection}
           onOpen={(item) => void act(() => restoreFile(item.id))}
@@ -643,7 +666,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           view={layout}
           onAction={onAction}
           // Drag a file onto a folder: the move the platform's relink makes safe (#75).
-          onMove={offline ? undefined : (item, folder) => void act(() => moveFile(item.id, folder.id))}
+          onMove={offline ? undefined : (item, folder) => void act(() => item.isFolder
+            ? moveFolder(item.id, folder.id) : moveFile(item.id, folder.id))}
           pluginMenuItems={() => []}
           previewOpen={previewing !== null}
           loading={busy}
@@ -668,6 +692,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 
       <ShareDialog folder={sharing} onClose={() => setSharing(null)} me={auth.principal} />
+
+      {moving ? <MoveDialog items={moving} sourceFolderId={view === 'drive' ? folderId : null}
+        onClose={() => setMoving(null)} onMoved={async () => {
+          setSelection(new Set());
+          await refreshRef.current();
+        }} /> : null}
 
       {creating ? (
         <NameDialog
