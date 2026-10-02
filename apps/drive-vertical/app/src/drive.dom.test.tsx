@@ -517,6 +517,22 @@ describe('the moved table brings its own behaviour with it', () => {
 });
 
 describe('dragging a file onto a folder moves it', () => {
+  it('moves folders and refuses dropping one onto itself', async () => {
+    await renderDrive([
+      { id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' },
+      { id: '01D', parent_id: 'root', name: 'Archive', path: 'Archive' },
+    ]);
+    const row = screen.getByText('Papers').closest('tr')!;
+    const dataTransfer = { setData: () => {}, effectAllowed: 'none', dropEffect: 'none' };
+    fireEvent.dragStart(row, { dataTransfer });
+    fireEvent.drop(row, { dataTransfer });
+    expect(pending.some((p) => p.url.endsWith('/01F/move'))).toBe(false);
+    fireEvent.drop(screen.getByText('Archive').closest('tr')!, { dataTransfer });
+    expect(pending.find((p) => p.url.endsWith('/folders/01F/move'))?.body)
+      .toBe(JSON.stringify({ parentId: '01D' }));
+  });
+
+
   it('fires the move the prefix check used to swallow', async () => {
     await renderDrive(
       [{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }],
@@ -549,6 +565,66 @@ describe('dragging a file onto a folder moves it', () => {
 
     const moved = pending.find((p) => p.url.includes('/files/01A/move'));
     expect(moved, `no move request; saw ${pending.map((p) => p.url).join(', ')}`).toBeTruthy();
+  });
+});
+
+describe('move destination picker', () => {
+  async function pick(items: unknown[] = [file('01A', 'lease.pdf')], selectAll = false) {
+    await renderDrive([], items);
+    if (selectAll) fireEvent.click(screen.getAllByRole('checkbox')[0]!);
+    fireEvent.contextMenu(screen.getByText('lease.pdf').closest('tr')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
+    await answer('/folders/root/folders', [
+      { id: '01D', parent_id: 'root', name: 'Archive', path: 'Archive' },
+    ]);
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('button', { name: 'Move here' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await answer('/folders/01D/folders', []);
+    return dialog;
+  }
+
+  it('moves a root file into a chosen destination instead of silently doing nothing', async () => {
+    const dialog = await pick();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
+    expect(pending.find((p) => p.url.endsWith('/files/01A/move'))?.body)
+      .toBe(JSON.stringify({ folderId: '01D' }));
+    await answer('/files/01A/move', { ...file('01A', 'lease.pdf'), folder_id: '01D' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.queryByText('lease.pdf')).toBeNull();
+  });
+
+  it('cancelling sends no move', async () => {
+    const dialog = await pick();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(pending.some((p) => p.url.endsWith('/move'))).toBe(false);
+  });
+
+  it('keeps a name conflict visible and allows choosing another destination', async () => {
+    const dialog = await pick();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
+    await answerWith('/files/01A/move', 409, { error: 'name already exists' });
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [file('01A', 'lease.pdf')]);
+    expect(within(dialog).getByRole('alert').textContent).toContain('1 remaining');
+    expect(screen.getByText('lease.pdf')).toBeTruthy();
+  });
+
+  it('moves a selection and retries only the items that failed', async () => {
+    const items = [file('01A', 'lease.pdf'), file('01B', 'other.pdf')];
+    const dialog = await pick(items, true);
+    expect(within(dialog).getByText('Move 2 items')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
+    await answer('/files/01A/move', { ...items[0], folder_id: '01D' });
+    await answerWith('/files/01B/move', 409, { error: 'name already exists' });
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [items[1]]);
+    expect(within(dialog).getByRole('alert').textContent).toContain('1 moved; 1 remaining');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
+    expect(pending.filter((p) => p.url.endsWith('/move')).map((p) => p.url))
+      .toEqual(['/api/files/01B/move']);
   });
 });
 
