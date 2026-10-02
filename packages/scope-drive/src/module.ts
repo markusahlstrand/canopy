@@ -211,9 +211,7 @@ const operations = {
     // The kernel composes the walk from `paged.over` — the sort vocabulary, the
     // keyset comparison and the index behind them are one declared thing. What is
     // left to the handler is the filter that says which folder.
-    // `state: 'live'` is what keeps trashed files out of the drive's hot listing. It
-    // rides as a declared equality filter rather than a hand-written `IS NULL`,
-    // because that is the only shape a kernel-composed page can express (K-41).
+    // `state: 'live'` is what keeps trashed files out of the drive's hot listing.
     return ctx.page<FileRow>('file', {
       ...input,
       filters: { folder_id: input.folderId, state: 'live' },
