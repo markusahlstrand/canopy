@@ -204,4 +204,16 @@ export const driveMigrations: SqlMigration[] = [
     sql: `ALTER TABLE drive_file_text ADD COLUMN extractor_revision TEXT NOT NULL DEFAULT 'pdf-v1';`,
   },
   { version: '0006', sql: 'ALTER TABLE drive_file_versions ADD COLUMN keep INTEGER NOT NULL DEFAULT 0 CHECK (keep IN (0, 1));' },
+  {
+    version: '0007',
+    sql: `CREATE TABLE drive_file_details (
+      id TEXT PRIMARY KEY NOT NULL,
+      file_id TEXT NOT NULL UNIQUE REFERENCES drive_files(id),
+      description TEXT NOT NULL DEFAULT '',
+      labels_json TEXT NOT NULL DEFAULT '[]',
+      revision INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL
+    );`,
+  },
 ];

@@ -56,6 +56,53 @@
         "name"
       ]
     },
+    "file_details": {
+      "table": "drive_file_details",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "labels_json": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "file_id",
+          "description",
+          "labels_json",
+          "revision",
+          "updated_at",
+          "updated_by"
+        ],
+        "additionalProperties": false
+      },
+      "parents": [
+        "file"
+      ],
+      "key": [
+        "file_id"
+      ]
+    },
     "file_text": {
       "table": "drive_file_text",
       "fields": {

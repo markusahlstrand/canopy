@@ -173,6 +173,16 @@ export const driveEntities = defineEntities({
     parents: ['file'],
   },
 
+  /** Optional description and labels, kept off the hot file-listing row. */
+  file_details: {
+    table: 'drive_file_details',
+    fields: z.object({
+      id: z.string(), file_id: z.string(), description: z.string(), labels_json: z.string(),
+      revision: z.number().int(), updated_at: z.string(), updated_by: z.string(),
+    }),
+    key: ['file_id'], parents: ['file'],
+  },
+
   /** Display identity only. The principal is the row key; no permission is granted on it. */
   person: {
     table: 'drive_people',
@@ -222,6 +232,10 @@ const driveShare = z.object({
   permission: z.string(),
   granted_at: z.string(),
   granted_by: z.string(),
+});
+
+export const fileDetails = z.object({
+  fileId: z.string(), description: z.string(), labels: z.array(z.string()), revision: z.number().int(), canWrite: z.boolean(),
 });
 
 export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS)({
@@ -556,6 +570,29 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     output: driveEntities.file_version.fields,
     paged: { sortKey: 'id' },
     http: { method: 'GET', path: '/files/{fileId}/versions' },
+  },
+
+  'drive/file-details': {
+    summary: 'Read a live file description and labels',
+    permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }), output: fileDetails,
+    http: { method: 'GET', path: '/files/{fileId}/details' },
+  },
+
+  'drive/update-file-details': {
+    summary: 'Replace a description and labels if their revision still matches',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({
+      fileId: z.string(), description: z.string().max(10000),
+      labels: z.array(z.string().trim().min(1).max(100)).max(20),
+      expectedRevision: z.number().int().nonnegative(),
+    }),
+    output: fileDetails,
+    http: { method: 'PATCH', path: '/files/{fileId}/details' },
+    emits: {
+      entity: 'file', entityIdFrom: 'fileId', type: 'drive.file-details-updated', schemaVersion: 1,
+      piiClass: 'none', payload: ['fileId', 'revision'],
+    },
   },
 
   'drive/keep-version': {

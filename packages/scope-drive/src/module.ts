@@ -74,6 +74,11 @@ interface VersionRow {
   created_by: string;
 }
 
+interface DetailsRow {
+  id: string; file_id: string; description: string; labels_json: string;
+  revision: number; updated_at: string; updated_by: string;
+}
+
 interface FileTextRow {
   id: string;
   file_id: string;
@@ -725,6 +730,38 @@ const operations = {
     return { entries: visible, nextCursor: next } as unknown as HandlerOutput<
       (typeof driveOperations)['drive/list-trash']
     >;
+  },
+
+  'drive/file-details': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
+    const row = ctx.sql.query<DetailsRow>('SELECT * FROM drive_file_details WHERE file_id = ?', [input.fileId])[0];
+    return {
+      fileId: input.fileId, description: row?.description ?? '', labels: row ? JSON.parse(row.labels_json) as string[] : [],
+      revision: row?.revision ?? 0, canWrite: (await ctx.check(DRIVE_PERM.write, fileRef(input.fileId))).allowed,
+    };
+  },
+
+  'drive/update-file-details': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    liveFile(ctx, input.fileId);
+    const row = ctx.sql.query<DetailsRow>('SELECT * FROM drive_file_details WHERE file_id = ?', [input.fileId])[0];
+    if ((row?.revision ?? 0) !== input.expectedRevision) {
+      throw substratError('conflict', 'details changed — reload before saving');
+    }
+    const labels = [...new Set(input.labels)];
+    const revision = input.expectedRevision + 1;
+    // Scope invocations are serialized and transactional; the revision comparison and
+    // upsert cannot be separated by another writer. Labels are values, never authority.
+    ctx.sql.exec(`INSERT INTO drive_file_details (id, file_id, description, labels_json, revision, updated_at, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET
+      description = excluded.description, labels_json = excluded.labels_json, revision = excluded.revision,
+      updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+      [input.fileId, input.fileId, input.description, JSON.stringify(labels), revision, ctx.now(), ctx.principal]);
+    ctx.link({ entityType: 'file_details', entityId: input.fileId }, fileRef(input.fileId));
+    ctx.emit({ type: 'drive.file-details-updated', schemaVersion: 1, entity: fileRef(input.fileId), piiClass: 'none',
+      payload: { fileId: input.fileId, revision } });
+    return { fileId: input.fileId, description: input.description, labels, revision, canWrite: true };
   },
 
   'drive/keep-version': async (ctx, input) => {
