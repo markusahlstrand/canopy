@@ -1669,3 +1669,13 @@ describe('Trash pages', () => {
     expect(screen.getByText('first.txt')).toBeTruthy();
   });
 });
+
+
+it('opens bundled viewer controls from the account menu', async () => {
+  await renderDrive();
+  accountMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'File viewers…' }));
+  await act(async () => {});
+  expect(screen.getByRole('dialog', { name: 'File viewers' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Disable image viewer' })).toBeTruthy();
+});

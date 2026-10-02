@@ -460,7 +460,10 @@ function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mi
     };
   }, [fileId, name, mime, viewer?.pluginId, viewer?.tagName]);
 
-  return failed ? <Empty>Could not render {name}.</Empty> : <div ref={host} className="h-full w-full" />;
+  return <>
+    <div ref={host} className="h-full w-full" hidden={failed} />
+    {failed ? <Empty>{viewer ? `Could not render ${name}.` : `No enabled viewer for ${name}. Enable image previews in File viewers, or download the file.`}</Empty> : null}
+  </>;
 }
 
 /** Keep an empty or failed preview legible in the space used by the file body. */

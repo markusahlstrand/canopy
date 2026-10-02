@@ -23,6 +23,7 @@ import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
 import { folderLink, folderPath } from './folder-links';
 import { Sidebar, useSites, type NavId } from './sidebar';
+import { ViewersDialog } from './viewers-dialog';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
 import { MoveDialog } from './move-dialog';
@@ -183,6 +184,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [cmdOpen, setCmdOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
+  const [viewersOpen, setViewersOpen] = useState(false);
   /** The folder whose sharing is open. Null is closed — one dialog, one folder at a time. */
   const [sharing, setSharing] = useState<{ id: string; name: string } | null>(null);
   /**
@@ -639,6 +641,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onUpload={() => startWrite(() => uploadRef.current?.click())}
         onRefresh={() => void refresh()}
         syncing={busy}
+        onOpenViewers={() => setViewersOpen(true)}
         onOpenPeople={canManagePeople && !offline ? () => setPeopleOpen(true) : undefined}
         offline={offline}
         auth={auth}
@@ -811,6 +814,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       ) : null}
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
+
+      <ViewersDialog open={viewersOpen} onOpenChange={setViewersOpen} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 
