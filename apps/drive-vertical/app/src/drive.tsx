@@ -35,7 +35,8 @@ import {
   peopleAccess,
   createFolder,
   listFolder,
-  listFolders,
+  listFoldersPage,
+  appendRows,
   listSharedFolders,
   listTrash,
   moveFile,
@@ -147,6 +148,8 @@ export interface DriveScreenProps {
 export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
+  const [foldersNext, setFoldersNext] = useState<string | null>(null);
+  const [loadingPage, setLoadingPage] = useState(false);
   const [folders, setFolders] = useState<DriveFolder[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [busy, setBusy] = useState(true);
@@ -203,6 +206,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const refresh = useCallback(async () => {
     const ticket = reads.current.take();
     setBusy(true);
+    setLoadingPage(false);
+    setFoldersNext(null);
     setLoadFailed(false);
     try {
       if (view === 'search') {
@@ -224,9 +229,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         if (!reads.current.current(ticket)) return;
         setTrash(bin);
       } else {
-        const [subfolders, contents] = await Promise.all([listFolders(folderId), listFolder(folderId)]);
+        const [subfolders, contents] = await Promise.all([listFoldersPage(folderId), listFolder(folderId)]);
         if (!reads.current.current(ticket)) return;
-        setFolders(subfolders);
+        setFolders(subfolders.entries);
+        setFoldersNext(subfolders.next);
         setFiles(contents);
         // The online listing stays the hot path. The spine feed updates the offline
         // metadata mirror in the background; a failed cache write cannot fail a read.
@@ -264,6 +270,23 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       if (reads.current.current(ticket)) setBusy(false);
     }
   }, [folderId, view, term, onError, auth.principal]);
+
+  const moreFolders = async () => {
+    if (!foldersNext || busy || loadingPage || offline) return;
+    const ticket = reads.current.take();
+    setLoadingPage(true);
+    try {
+      const page = await listFoldersPage(folderId, foldersNext);
+      if (!reads.current.current(ticket)) return;
+      setFolders(rows => appendRows(rows, page.entries));
+      setFoldersNext(page.next);
+      onError(null);
+    } catch (e: unknown) {
+      if (reads.current.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (reads.current.current(ticket)) setLoadingPage(false);
+    }
+  };
 
   useEffect(() => {
     refreshRef.current = refresh;
@@ -675,6 +698,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           empty={empty}
         />
       )}
+      {view === 'drive' && !offline && foldersNext ? (
+        <Button variant="outline" size="sm" disabled={busy || loadingPage} onClick={() => void moreFolders()}>
+          {loadingPage ? 'Loading folders…' : 'Load more folders'}
+        </Button>
+      ) : null}
       </div>
 
       {previewing ? (

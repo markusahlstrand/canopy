@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@canopy/ui';
-import { listFolders, moveFile, moveFolder, ROOT_FOLDER_ID, type DriveFolder } from './api';
+import { listFoldersPage, appendRows, moveFile, moveFolder, ROOT_FOLDER_ID, type DriveFolder } from './api';
+import { latestOnly } from './reads';
 import type { FileItem } from './items';
 
 /** Same-space destinations; the server checks source and destination permissions. */
@@ -10,6 +11,9 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   onClose: () => void;
   onMoved: () => Promise<void>;
 }) {
+  const reads = useRef(latestOnly()).current;
+  const [next, setNext] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [trail, setTrail] = useState([{ id: ROOT_FOLDER_ID, name: 'My Drive' }]);
   const [folders, setFolders] = useState<DriveFolder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -19,19 +23,36 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   const destination = trail[trail.length - 1]!;
 
   useEffect(() => {
-    let active = true;
+    const ticket = reads.take();
+    setNext(null);
+    setLoadingMore(false);
     setLoading(true);
     setFolders([]);
     setError(null);
-    listFolders(destination.id).then((answer) => {
-      if (active) setFolders(answer);
+    listFoldersPage(destination.id).then((answer) => {
+      if (reads.current(ticket)) { setFolders(answer.entries); setNext(answer.next); }
     }).catch((e: unknown) => {
-      if (active) setError(e instanceof Error ? e.message : String(e));
+      if (reads.current(ticket)) setError(e instanceof Error ? e.message : String(e));
     }).finally(() => {
-      if (active) setLoading(false);
+      if (reads.current(ticket)) setLoading(false);
     });
-    return () => { active = false; };
+    return () => reads.invalidate();
   }, [destination.id]);
+
+  const more = async () => {
+    if (!next || loadingMore || loading || busy) return;
+    const ticket = reads.take();
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const page = await listFoldersPage(destination.id, next);
+      if (reads.current(ticket)) { setFolders(rows => appendRows(rows, page.entries)); setNext(page.next); }
+    } catch (e: unknown) {
+      if (reads.current(ticket)) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (reads.current(ticket)) setLoadingMore(false);
+    }
+  };
 
   const blocked = (folder: DriveFolder) => remaining.some((item) => item.isFolder && (
     folder.id === item.id || folder.path.startsWith(`${item.path}/`)
@@ -79,6 +100,7 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
               {folder.name}
             </Button>
           ))}
+          {next ? <Button variant="outline" disabled={loadingMore || busy || loading} onClick={() => void more()}>{loadingMore ? 'Loading folders…' : 'Load more folders'}</Button> : null}
           {!loading && !error && folders.length === 0 ? <p>No subfolders</p> : null}
         </div>
         {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
