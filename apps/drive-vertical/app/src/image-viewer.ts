@@ -1,9 +1,12 @@
+import { FileViewerRegistry } from '@canopy/plugin-sdk/viewer-registry';
 /**
  * The first-party image viewer from examples/plugins/image-viewer, now bundled into
  * the vertical as a web component. The hosted app supplies the current file's URL;
  * the scope's attachment route still checks the caller before returning bytes.
  */
-import { defineFileViewer, type FileViewerElement, type ViewerFile } from '@canopy/plugin-sdk/web-component';
+import { type FileViewerElement, type ViewerFile } from '@canopy/plugin-sdk/web-component';
+
+export const viewerRegistry = new FileViewerRegistry();
 
 export const IMAGE_VIEWER_TAG = 'canopy-image-viewer';
 
@@ -52,5 +55,8 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
 
 /** Register the built-in image renderer once during the vertical's bundle startup. */
 export function registerImageViewer(): void {
-  defineFileViewer(IMAGE_VIEWER_TAG, ImageViewer);
+  if (!viewerRegistry.has('image-viewer')) {
+    viewerRegistry.install({ id: 'image-viewer', contributes: { viewers: [{ id: 'image', match: ['image/*'] }] } },
+      { image: { tagName: IMAGE_VIEWER_TAG, constructor: ImageViewer } });
+  }
 }

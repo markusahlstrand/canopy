@@ -10,7 +10,7 @@ import { confirmDiscardDrafts } from './drafts';
  * The image viewer is bundled as a trusted web component (#73). Other browser-native
  * types remain here until there is a first-party viewer that improves on them.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Icon, cn } from '@canopy/ui';
 import type { FileViewerElement } from '@canopy/plugin-sdk/web-component';
 import {
@@ -30,29 +30,28 @@ import { TextEditor } from './text-editor';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
 import { latestOnly } from './reads';
-import { IMAGE_VIEWER_TAG, registerImageViewer } from './image-viewer';
+import { viewerRegistry, registerImageViewer } from './image-viewer';
 
 registerImageViewer();
 
 type Tab = 'file' | 'versions' | 'text' | 'details' | 'comments';
 
 /** How a file's current version wants to be shown. */
-type Shape = 'image' | 'pdf' | 'text' | 'audio' | 'video' | 'none';
+type Shape = 'image' | 'viewer' | 'pdf' | 'text' | 'audio' | 'video' | 'none';
 
 /**
  * What the browser can render without help, decided from the version's recorded mime —
  * which came from the stored bytes rather than from whatever the uploader claimed.
  */
-export function shapeOf(mime: string | undefined): Shape {
-  if (!mime) return 'none';
-  mime = mime.split(';')[0]!.trim().toLowerCase();
-  if (mime.startsWith('image/')) return 'image';
-  if (mime.startsWith('audio/')) return 'audio';
-  if (mime.startsWith('video/')) return 'video';
+export function shapeOf(mime: string | undefined, name = ''): Shape {
+  mime = mime?.split(';')[0]!.trim().toLowerCase();
+  // Native editing, PDF and media controls stay available even if a plugin claims them.
+  if (mime?.startsWith('audio/')) return 'audio';
+  if (mime?.startsWith('video/')) return 'video';
   if (mime === 'application/pdf') return 'pdf';
-  if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') {
-    return 'text';
-  }
+  if (mime?.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') return 'text';
+  if (viewerRegistry.resolve({ mime: mime ?? '', name })) return 'viewer';
+  if (mime?.startsWith('image/')) return 'image';
   return 'none';
 }
 
@@ -176,7 +175,8 @@ export function PreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, onError]);
 
-  const shape = shapeOf(version?.mime);
+  useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
+  const shape = editing ? 'text' : shapeOf(version?.mime, file?.name);
 
   /** Text bodies are fetched, not linked — everything else the browser fetches itself. */
   useEffect(() => {
@@ -336,7 +336,7 @@ export function PreviewPanel({
         {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <FileDetailsPanel key={fileId} fileId={fileId} /> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
-          ) : shape === 'image' ? (
+          ) : shape === 'image' || shape === 'viewer' ? (
             <ImagePreview fileId={fileId} name={file?.name ?? ''} mime={version.mime} />
           ) : shape === 'audio' || shape === 'video' ? (
             version.source === 'blob' ? <MediaPreview key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} name={file?.name ?? ''} shape={shape} />
@@ -442,9 +442,12 @@ export function PreviewPanel({
 function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mime: string }) {
   const host = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
+  useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
+  const viewer = viewerRegistry.resolve({ mime, name });
 
   useEffect(() => {
-    const element = document.createElement(IMAGE_VIEWER_TAG) as FileViewerElement;
+    if (!viewer) { setFailed(true); return; }
+    const element = document.createElement(viewer.tagName) as FileViewerElement;
     const onError = () => setFailed(true);
     setFailed(false);
     element.addEventListener('viewer-error', onError);
@@ -455,7 +458,7 @@ function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mi
       element.removeEventListener('viewer-error', onError);
       element.remove();
     };
-  }, [fileId, name, mime]);
+  }, [fileId, name, mime, viewer?.pluginId, viewer?.tagName]);
 
   return failed ? <Empty>Could not render {name}.</Empty> : <div ref={host} className="h-full w-full" />;
 }
