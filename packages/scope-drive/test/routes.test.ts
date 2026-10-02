@@ -23,6 +23,7 @@ describe('the derived route table', () => {
       'DELETE /api/folders/:folderId/shares',
       'GET /api/changes',
       'GET /api/files/:fileId',
+      'GET /api/files/:fileId/comments',
       'GET /api/files/:fileId/details',
       'GET /api/files/:fileId/text',
       'GET /api/files/:fileId/versions',

@@ -216,4 +216,16 @@ export const driveMigrations: SqlMigration[] = [
       updated_by TEXT NOT NULL
     );`,
   },
+  {
+    version: '0008',
+    sql: `CREATE TABLE drive_file_comments (
+      id TEXT PRIMARY KEY NOT NULL,
+      file_id TEXT NOT NULL REFERENCES drive_files(id),
+      author TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+    CREATE INDEX drive_file_comments_by_file ON drive_file_comments (file_id, id);`,
+  },
 ];
