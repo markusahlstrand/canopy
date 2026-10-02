@@ -36,21 +36,19 @@ registerImageViewer();
 type Tab = 'file' | 'versions' | 'text' | 'details' | 'comments';
 
 /** How a file's current version wants to be shown. */
-type Shape = 'image' | 'pdf' | 'text' | 'none';
+type Shape = 'image' | 'viewer' | 'pdf' | 'text' | 'none';
 
 /**
  * What the browser can render without help, decided from the version's recorded mime —
  * which came from the stored bytes rather than from whatever the uploader claimed.
  */
 export function shapeOf(mime: string | undefined, name = ''): Shape {
-  if (viewerRegistry.resolve({ mime: mime ?? '', name })) return 'image';
-  if (!mime) return 'none';
-  mime = mime.split(';')[0]!.trim().toLowerCase();
-  if (mime.startsWith('image/')) return 'image';
+  mime = mime?.split(';')[0]!.trim().toLowerCase();
+  // Native text editing and PDF rendering stay available even if a plugin claims them.
   if (mime === 'application/pdf') return 'pdf';
-  if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') {
-    return 'text';
-  }
+  if (mime?.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') return 'text';
+  if (viewerRegistry.resolve({ mime: mime ?? '', name })) return 'viewer';
+  if (mime?.startsWith('image/')) return 'image';
   return 'none';
 }
 
@@ -175,7 +173,7 @@ export function PreviewPanel({
   }, [fileId, onError]);
 
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
-  const shape = shapeOf(version?.mime, file?.name);
+  const shape = editing ? 'text' : shapeOf(version?.mime, file?.name);
 
   /** Text bodies are fetched, not linked — everything else the browser fetches itself. */
   useEffect(() => {
@@ -334,7 +332,7 @@ export function PreviewPanel({
         {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <FileDetailsPanel key={fileId} fileId={fileId} /> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
-          ) : shape === 'image' ? (
+          ) : shape === 'image' || shape === 'viewer' ? (
             <ImagePreview fileId={fileId} name={file?.name ?? ''} mime={version.mime} />
           ) : shape === 'pdf' ? (
             // `object` rather than `iframe`: it falls back to its children when the
@@ -437,10 +435,10 @@ export function PreviewPanel({
 function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mime: string }) {
   const host = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
-  const revision = useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
+  useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
+  const viewer = viewerRegistry.resolve({ mime, name });
 
   useEffect(() => {
-    const viewer = viewerRegistry.resolve({ mime, name });
     if (!viewer) { setFailed(true); return; }
     const element = document.createElement(viewer.tagName) as FileViewerElement;
     const onError = () => setFailed(true);
@@ -453,7 +451,7 @@ function ImagePreview({ fileId, name, mime }: { fileId: string; name: string; mi
       element.removeEventListener('viewer-error', onError);
       element.remove();
     };
-  }, [fileId, name, mime, revision]);
+  }, [fileId, name, mime, viewer?.pluginId, viewer?.tagName]);
 
   return failed ? <Empty>Could not render {name}.</Empty> : <div ref={host} className="h-full w-full" />;
 }

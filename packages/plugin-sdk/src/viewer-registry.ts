@@ -1,14 +1,16 @@
-import type { PluginManifest } from '@canopy/core';
+import { viewerMatches, type PluginManifest } from '@canopy/core';
 import { defineFileViewer } from './web-component';
 
 export interface ViewerDefinition { tagName: string; constructor: CustomElementConstructor }
 export interface RegisteredViewer { pluginId: string; id: string; tagName: string; match: readonly string[] }
 
-/** Trusted web components only. This registry is not a sandbox or an arbitrary-code installer. */
+/** Only constructors reviewed and bundled with the app may reach install(); never downloaded code.
+ * Trusted web components only. This registry is not a sandbox or an arbitrary-code installer. */
 export class FileViewerRegistry {
   #plugins = new Map<string, RegisteredViewer[]>();
   #listeners = new Set<() => void>();
   #revision = 0;
+  has = (pluginId: string): boolean => this.#plugins.has(pluginId);
   snapshot = (): number => this.#revision;
   subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
@@ -52,16 +54,16 @@ export class FileViewerRegistry {
   /** Specific matches win; equal matches keep installation order. MIME parameters are ignored. */
   resolve(file: { mime: string; name: string }): RegisteredViewer | null {
     const mime = file.mime.split(';')[0]!.trim().toLowerCase();
-    const name = file.name.toLowerCase();
+    const ext = file.name.includes('.') ? file.name.split('.').at(-1) : undefined;
     let winner: RegisteredViewer | null = null;
     let best = 0;
     for (const viewers of this.#plugins.values()) for (const viewer of viewers) {
       const score = Math.max(0, ...viewer.match.map(pattern => {
         const rule = pattern.trim().toLowerCase();
-        if (!rule) return 0;
+        if (!rule || !viewerMatches([rule], { mime, ext })) return 0;
         if (rule === mime) return 3;
-        if (rule.endsWith('/*') && mime.startsWith(rule.slice(0, -1))) return 1;
-        if (!rule.includes('/') && name.endsWith(rule.startsWith('.') ? rule : `.${rule}`)) return 2;
+        if (rule.endsWith('/*')) return 2;
+        if (!rule.includes('/')) return 1;
         return 0;
       }));
       if (score > best) { winner = viewer; best = score; }

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { FileViewerRegistry } from '@canopy/plugin-sdk/viewer-registry';
 import { PreviewPanel } from './preview';
 import { viewerRegistry } from './image-viewer';
@@ -44,4 +44,33 @@ it('rejects a colliding batch before defining any of its elements', () => {
   })).toThrow('definition collision');
   expect(customElements.get('batch-collision-test')).toBeUndefined();
   expect(registry.snapshot()).toBe(0);
+});
+it('ranks MIME wildcards above renamed file extensions using the core matcher', () => {
+  const registry = new FileViewerRegistry();
+  registry.install({ id: 'extension', contributes: { viewers: [{ id: 'abc', match: ['.abc'] }] } }, { abc: { tagName: 'rename-abc-viewer', constructor: class extends HTMLElement {} } });
+  registry.install({ id: 'images', contributes: { viewers: [{ id: 'images', match: ['image/*'] }] } }, { images: { tagName: 'rename-images-viewer', constructor: class extends HTMLElement {} } });
+  expect(registry.resolve({ mime: 'image/png', name: 'photo.abc' })?.pluginId).toBe('images');
+  expect(registry.resolve({ mime: '', name: 'photo.abc' })?.pluginId).toBe('extension');
+});
+it('does not remount an open viewer for an unrelated installation', async () => {
+  vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ file: { id: 'file', name: 'photo.png' }, version: { id: 'v1', mime: 'image/png' } })));
+  const view = render(<PreviewPanel fileId="file" onClose={() => {}} onError={() => {}} />);
+  await waitFor(() => expect(view.container.querySelector('canopy-image-viewer')).toBeTruthy());
+  const element = view.container.querySelector('canopy-image-viewer');
+  let dispose!: () => void;
+  act(() => { dispose = viewerRegistry.install({ id: 'unrelated', contributes: { viewers: [{ id: 'other', match: ['.other'] }] } }, { other: { tagName: 'unrelated-test-viewer', constructor: class extends HTMLElement {} } }); });
+  expect(view.container.querySelector('canopy-image-viewer')).toBe(element);
+  act(() => dispose());
+});
+
+it('keeps an open text draft and its editor when a viewer claiming text is installed', async () => {
+  vi.stubGlobal('fetch', async (url: string) => url.includes('/content') ? new Response('original') : new Response(JSON.stringify({ file: { id: 'file', name: 'notes.md' }, version: { id: 'v1', mime: 'text/markdown', source: 'blob' }, canWrite: true })));
+  render(<PreviewPanel fileId="file" onClose={() => {}} onError={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit text' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'File text' }), { target: { value: 'Keep this draft' } });
+  let dispose!: () => void;
+  act(() => { dispose = viewerRegistry.install({ id: 'text-test', contributes: { viewers: [{ id: 'text', match: ['text/*', '.md'] }] } }, { text: { tagName: 'text-draft-test-viewer', constructor: class extends HTMLElement {} } }); });
+  expect(screen.getByDisplayValue('Keep this draft')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Save text' })).toBeTruthy();
+  act(() => dispose());
 });

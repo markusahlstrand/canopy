@@ -55,7 +55,7 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
 
 /** Register the built-in image renderer once during the vertical's bundle startup. */
 export function registerImageViewer(): void {
-  if (!viewerRegistry.resolve({ mime: 'image/png', name: '' })) {
+  if (!viewerRegistry.has('image-viewer')) {
     viewerRegistry.install({ id: 'image-viewer', contributes: { viewers: [{ id: 'image', match: ['image/*'] }] } },
       { image: { tagName: IMAGE_VIEWER_TAG, constructor: ImageViewer } });
   }
