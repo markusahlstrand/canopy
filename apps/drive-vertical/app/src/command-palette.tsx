@@ -38,6 +38,7 @@ interface CommandPaletteProps {
   onUpload: () => void;
 }
 
+/** Search and keyboard actions, with visible progress and recoverable failures. */
 export function CommandPalette({
   open,
   onOpenChange,
@@ -104,11 +105,12 @@ export function CommandPalette({
           setError(null);
         }}
       />
-      <CommandList className="max-h-[60vh]">
-        {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
         {error ? <div className="p-3 text-sm"><p role="alert">{error}</p>
           <Button size="sm" variant="outline" onClick={() => setRetry(value => value + 1)}>Retry search</Button>
         </div> : null}
+      <CommandList className="max-h-[60vh]">
+        {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
+
         {!loading && !error ? <CommandEmpty>No results found.</CommandEmpty> : null}
 
         <CommandGroup heading="Files">
