@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  Button,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -54,6 +55,9 @@ export function CommandPalette({
   // local `files` (current folder) are the zero-query "recent" fallback.
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchHit[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const searching = query.trim().length >= SEARCH_MIN;
 
   useEffect(() => {
@@ -64,23 +68,27 @@ export function CommandPalette({
   }, [open]);
 
   useEffect(() => {
-    if (!searching) {
+    if (!open || !searching) {
       setResults([]);
+      setLoading(false);
+      setError(null);
       return;
     }
     let cancelled = false;
+    setLoading(true);
+    setError(null);
     const t = setTimeout(async () => {
-      // A failure here leaves the previous results rather than throwing inside a dialog:
-      // the palette is a search box, and an empty list is the honest answer to a search
-      // that did not come back.
-      const hits = await search(query).catch(() => ({ hits: [] }));
-      if (!cancelled) setResults(hits.hits);
-    }, 180); // debounce keystrokes
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [query, searching]);
+      try {
+        const hits = await search(query);
+        if (!cancelled) setResults(hits.hits);
+      } catch (e: unknown) {
+        if (!cancelled) setError(e instanceof Error ? e.message || 'Search failed.' : String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 180);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [query, searching, open, retry]);
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="top-[18%] translate-y-0">
@@ -93,10 +101,15 @@ export function CommandPalette({
           // than wrong, because cmdk's `value` embeds the new query, so they stay
           // selectable and open an unrelated file.
           setResults([]);
+          setError(null);
         }}
       />
       <CommandList className="max-h-[60vh]">
-        <CommandEmpty>No results found.</CommandEmpty>
+        {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
+        {error ? <div className="p-3 text-sm"><p role="alert">{error}</p>
+          <Button size="sm" variant="outline" onClick={() => setRetry(value => value + 1)}>Retry search</Button>
+        </div> : null}
+        {!loading && !error ? <CommandEmpty>No results found.</CommandEmpty> : null}
 
         <CommandGroup heading="Files">
           {searching
