@@ -748,6 +748,16 @@ describe('the shell the portal had, on the vertical', () => {
   });
 });
 
+it('restores saved layout and ordering, and persists a layout change', async () => {
+  localStorage.setItem('canopy.drive.view', JSON.stringify({ version: 1, layout: 'grid', sort: { key: 'name', dir: 'desc' } }));
+  await renderDrive([], [file('a', 'alpha.txt'), file('z', 'zeta.txt')]);
+  expect(screen.getByRole('button', { name: 'Switch to list' })).toBeTruthy();
+  const names = screen.getAllByText(/^(alpha|zeta)\.txt$/);
+  expect(names.map(node => node.textContent)).toEqual(['zeta.txt', 'alpha.txt']);
+  fireEvent.click(screen.getByRole('button', { name: 'Switch to list' }));
+  expect(JSON.parse(localStorage.getItem('canopy.drive.view')!).layout).toBe('list');
+});
+
 describe('the mobile drive shell and empty views', () => {
   it('refreshes an already empty destination when its rail item is chosen again', async () => {
     await renderDrive();
@@ -1669,15 +1679,4 @@ describe('Trash pages', () => {
     expect(screen.getByText('second.txt')).toBeTruthy();
     expect(screen.getByText('first.txt')).toBeTruthy();
   });
-});
-
-
-it('restores saved layout and ordering, and persists a layout change', async () => {
-  localStorage.setItem('canopy.drive.view', JSON.stringify({ version: 1, layout: 'grid', sort: { key: 'name', dir: 'desc' } }));
-  await renderDrive([], [file('a', 'alpha.txt'), file('z', 'zeta.txt')]);
-  expect(screen.getByRole('button', { name: 'Switch to list' })).toBeTruthy();
-  const names = screen.getAllByText(/^(alpha|zeta)\.txt$/);
-  expect(names.map(node => node.textContent)).toEqual(['zeta.txt', 'alpha.txt']);
-  fireEvent.click(screen.getByRole('button', { name: 'Switch to list' }));
-  expect(JSON.parse(localStorage.getItem('canopy.drive.view')!).layout).toBe('list');
 });
