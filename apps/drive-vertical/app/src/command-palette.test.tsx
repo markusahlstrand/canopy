@@ -42,10 +42,10 @@ it('keeps B results when the retired A request resolves last', async () => {
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'query B' } });
   await vi.waitFor(() => expect(pending).toHaveLength(2));
   await act(async () => { pending[1]!(new Response(JSON.stringify({ hits: [{ id: 'b', name: 'B result', via: 'name' }] }))); });
-  expect(screen.getByText('B result')).toBeTruthy();
+  expect(screen.getByRole('option', { name: /^B result/ })).toBeTruthy();
   await act(async () => { pending[0]!(new Response(JSON.stringify({ hits: [{ id: 'a', name: 'A result', via: 'name' }] }))); });
-  expect(screen.queryByText('A result')).toBeNull();
-  expect(screen.getByText('B result')).toBeTruthy();
+  expect(screen.queryByRole('option', { name: /^A result/ })).toBeNull();
+  expect(screen.getByRole('option', { name: /^B result/ })).toBeTruthy();
 });
 
 it('shows no-results only after the active query settles', async () => {
