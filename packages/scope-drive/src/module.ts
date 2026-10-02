@@ -327,6 +327,10 @@ const operations = {
       throw substratError('conflict', `this file is in the trash — restore it before writing to it`);
     }
 
+    if (input.expectedCurrentVersion !== undefined && input.expectedCurrentVersion !== file.current_version_id) {
+      throw substratError('conflict', 'file changed — reload before saving');
+    }
+
     // One location, guaranteed by the declaration's discriminated union: the columns
     // the other source would use stay null because there is nothing to read them
     // from, not because a check remembered to blank them.

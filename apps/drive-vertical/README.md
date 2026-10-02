@@ -106,7 +106,7 @@ serving an empty body that reads as an empty file.
 
 ## Text extraction and backfill
 
-PDF uploads extract at most 200,000 characters for content search. The scope stores the
+PDF and UTF-8 text uploads extract at most 200,000 characters for content search. The scope stores the
 extractor result as `indexed`, `empty`, `unsupported`, or `failed`, alongside the file
 version and extractor revision. Search ignores text from a superseded version.
 
@@ -202,3 +202,5 @@ It is unavailable while browsing the offline mirror.
 
 WebDAV, connector-backed reads, and any migration of existing canopy spaces. See
 [`documentation/planning/scope-model-mapping.md`](../../documentation/planning/scope-model-mapping.md) §3.
+
+Text edits use `PUT /api/files/:fileId/content?expectedVersion=:versionId`. The worker requires write access, stored text content, valid UTF-8, and at most 200,000 characters (800,000 bytes). The scope atomically refuses a stale expected version with 409, including writes that race during attachment upload. As with ordinary uploads, an attachment can remain unreferenced if recording its version fails. The editor must preserve the draft on conflict and reload before retrying.

@@ -71,11 +71,12 @@ import { mountInviteRoutes } from '@substrat-run/vertical-auth/invite-routes';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
 import { mountFileContent, type FileContentRecord } from './file-content.js';
+import { mountTextContent, editableTextMime, type TextContentRecord } from './text-content.js';
 import { removeMember } from './remove-member.js';
 import { MEMBER_ROLE_KEY, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 import { driveManifest, DRIVE_PERM } from '@canopy/scope-drive';
 
-const EXTRACTOR_REVISION = 'pdf-v1';
+const EXTRACTOR_REVISION = 'pdf-text-v2';
 const BACKFILL_JOB = 'text-backfill';
 const BACKFILL_BATCH = 20;
 const BACKFILL_ACTOR = platformActorId.parse('01JZ00000000000000000SYS01');
@@ -896,6 +897,11 @@ async function extractAndRecord(
   };
 
   try {
+    if (editableTextMime(file.mime)) {
+      const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes).slice(0, MAX_INDEXED_CHARS);
+      await record(text.trim() ? { status: 'indexed', text } : { status: 'empty', detail: 'the document has no text' });
+      return;
+    }
     // Imported HERE, not at the top. `@canopy/docworker/pdf` pulls in pdf.js —
     // about 570 KB gzipped of the worker's 1.26 MB — and this function runs on
     // uploads and backfill, never on a read. A static import would instantiate that module graph
@@ -1024,6 +1030,27 @@ app.post('/api/maintenance/text-backfill', async (c) => {
  * this caller may have them, checking the declared target's read key against the
  * owning file — the same key that let them see the row.
  */
+mountTextContent(app, async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) return null;
+  const node = await nodeFor(c.req.raw, c.env);
+  const host = hostFor(c.env);
+  const stub = await host.getScope(principal, node.tenantId, node.scopeId);
+  return {
+    getFile: (fileId) => stub.invoke<TextContentRecord>('drive/get-file', { fileId }),
+    upload: async (id, name, mime, body) => {
+      const attachment = await (await host.attachments(principal, node.tenantId, node.scopeId)).upload({
+        entity: { entityType: 'file', entityId: id }, filename: name, contentType: mime, visibility: 'internal', body,
+      });
+      return attachment.id;
+    },
+    record: (fileId, blobRef, expectedCurrentVersion) => stub.invoke<{ id: string; current_version_id: string | null }>(
+      'drive/record-version', { fileId, expectedCurrentVersion, location: { source: 'blob', blobRef } },
+    ),
+    afterWrite: (file, bytes) => extractAndRecord(stub, file, bytes),
+  };
+});
+
 mountFileContent(app, async (c) => {
   const principal = await principalFor(c.env, c.req.raw);
   if (!principal) return null;

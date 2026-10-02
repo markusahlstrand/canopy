@@ -488,3 +488,30 @@ describe('a space is a scope', () => {
     expect(page.entries).toEqual([]);
   });
 });
+
+describe('conditional version writes', () => {
+  it('commits only one of two writers based on the same current version', async () => {
+    const file = await write(ada, ROOT_FOLDER_ID, 'concurrent-edit.txt', 'original');
+    const stub = await host.getScope(ada, tenant, scope);
+    const attachments = await host.attachments(ada, tenant, scope);
+    const upload = (text: string) => attachments.upload({ entity: { entityType: 'file', entityId: file.id }, filename: file.name, contentType: 'text/plain', visibility: 'internal', body: new TextEncoder().encode(text) });
+    const [a, b] = await Promise.all([upload('first'), upload('second')]);
+    const results = await Promise.allSettled([a, b].map(attachment => stub.invoke<FileRow>('drive/record-version', {
+      fileId: file.id, expectedCurrentVersion: file.current_version_id, location: { source: 'blob', blobRef: attachment.id },
+    })));
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const refused = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+    expect(refused.reason).toMatchObject({ code: 'conflict' });
+    const versions = await stub.invoke<{ entries: VersionRow[] }>('drive/file-versions', { fileId: file.id });
+    expect(versions.entries).toHaveLength(2);
+  });
+
+  it('compares before attachment lookup and supports a null initial version', async () => {
+    const stub = await host.getScope(ada, tenant, scope);
+    const file = await stub.invoke<FileRow>('drive/ensure-file', { folderId: ROOT_FOLDER_ID, name: 'initial-cas.txt' });
+    await expect(stub.invoke('drive/record-version', { fileId: file.id, expectedCurrentVersion: 'stale', location: { source: 'blob', blobRef: 'missing' } })).rejects.toMatchObject({ code: 'conflict' });
+    const updated = await stub.invoke<FileRow>('drive/record-version', { fileId: file.id, expectedCurrentVersion: null, location: { source: 'external', externalKey: 'first', mime: 'text/plain', size: 1 } });
+    expect(updated.current_version_id).not.toBeNull();
+    await expect(stub.invoke('drive/record-version', { fileId: file.id, expectedCurrentVersion: null, location: { source: 'external', externalKey: 'second', mime: 'text/plain', size: 1 } })).rejects.toMatchObject({ code: 'conflict' });
+  });
+});
