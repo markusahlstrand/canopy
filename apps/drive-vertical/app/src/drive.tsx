@@ -1,4 +1,3 @@
-import { confirmDiscardDrafts } from './drafts';
 /**
  * The drive screen — the first of the portal's surfaces to run against the vertical
  * (S12, #64).
@@ -16,6 +15,7 @@ import { confirmDiscardDrafts } from './drafts';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
 import { latestOnly } from './reads';
+import { confirmDiscardDrafts } from './drafts';
 import { indexedMirror, syncMirror } from './scope-mirror';
 import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
