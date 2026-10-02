@@ -25,3 +25,57 @@ it('refreshes every browsed page on a file event without discarding the draft, a
   view.unmount();
   expect(stop).toHaveBeenCalledOnce();
 });
+it('coalesces hints during post, retains the new row beyond the loaded page, and keeps input usable during replay', async () => {
+  let changed!: () => void;
+  vi.spyOn(live, 'watchDriveChanges').mockImplementation(callback => { changed = callback; return () => {}; });
+  let finishPost!: (response: Response) => void;
+  let finishRefresh!: (response: Response) => void;
+  let reads = 0;
+  const old = { id: '01', body: 'Old', authorLabel: 'Ada', created_at: '2026-01-01', canDelete: false };
+  const page = () => new Response(JSON.stringify([old]), { headers: { Link: '</api/files/file/comments?cursor=01>; rel="next"' } });
+  vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+    if (init?.method === 'POST') return new Promise(resolve => { finishPost = resolve; });
+    reads++;
+    if (reads === 3) return new Promise(resolve => { finishRefresh = resolve; });
+    return Promise.resolve(page());
+  });
+  render(<CommentsPanel fileId="file" />);
+  await screen.findByText('Old');
+  fireEvent.change(screen.getByLabelText('New comment'), { target: { value: 'My newest comment' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Post comment' }));
+  act(() => changed());
+  expect(reads).toBe(1);
+  await act(async () => { finishPost(new Response(JSON.stringify({ ...old, id: '99', body: 'My newest comment', canDelete: true }))); });
+  await vi.waitFor(() => expect(reads).toBe(2));
+  expect(screen.getByText('My newest comment')).toBeTruthy();
+  const input = screen.getByLabelText('New comment') as HTMLTextAreaElement;
+  input.focus();
+  fireEvent.change(input, { target: { value: 'Next draft' } });
+  act(() => changed());
+  expect(input.disabled).toBe(false);
+  expect(document.activeElement).toBe(input);
+  await act(async () => { finishRefresh(page()); });
+  expect(input.value).toBe('Next draft');
+  expect(screen.getByText('My newest comment')).toBeTruthy();
+});
+it('background replay neither clears a failed post error nor publishes its own failure', async () => {
+  let changed!: () => void;
+  vi.spyOn(live, 'watchDriveChanges').mockImplementation(callback => { changed = callback; return () => {}; });
+  let failRead = false;
+  vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+    if (init?.method === 'POST') return new Response(JSON.stringify({ detail: 'Post denied' }), { status: 403 });
+    if (failRead) throw new Error('Background network failure');
+    return new Response(JSON.stringify([]));
+  });
+  render(<CommentsPanel fileId="file" />);
+  await screen.findByText('No comments yet.');
+  fireEvent.change(screen.getByLabelText('New comment'), { target: { value: 'draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Post comment' }));
+  await screen.findByText('Post denied');
+  await act(async () => { changed(); });
+  expect(screen.getByRole('alert').textContent).toBe('Post denied');
+  failRead = true;
+  await act(async () => { changed(); });
+  expect(screen.getByRole('alert').textContent).toBe('Post denied');
+  expect((screen.getByLabelText('New comment') as HTMLTextAreaElement).disabled).toBe(false);
+});
