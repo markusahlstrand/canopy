@@ -19,7 +19,7 @@ export function liveUrl(): string {
 /** Push is only a nudge. A bounded poll catches frames lost during disconnect,
  * permission changes that cannot be announced to the now-unentitled subscriber,
  * and hosts or network paths that cannot carry WebSockets. */
-export function watchDriveChanges(onChange: () => void): () => void {
+export function watchDriveChanges(onChange: () => void, entity?: { entityType: 'file' | 'folder'; entityId: string }): () => void {
   let active = true;
   let socket: WebSocket | null = null;
   let retry: ReturnType<typeof setTimeout> | null = null;
@@ -50,8 +50,9 @@ export function watchDriveChanges(onChange: () => void): () => void {
       socket.onopen = () => { openedAt = Date.now(); };
       socket.onmessage = (event) => {
         try {
-          const frame = JSON.parse(String(event.data)) as { kind?: string; entityType?: string };
-          if (frame.kind === 'change' && (frame.entityType === 'file' || frame.entityType === 'folder')) changed();
+          const frame = JSON.parse(String(event.data)) as { kind?: string; entityType?: string; entityId?: string };
+          if (frame.kind === 'change' && (frame.entityType === 'file' || frame.entityType === 'folder') &&
+              (!entity || (frame.entityType === entity.entityType && frame.entityId === entity.entityId))) changed();
         } catch { /* An unknown frame is not a reason to refresh the drive. */ }
       };
       socket.onclose = () => {

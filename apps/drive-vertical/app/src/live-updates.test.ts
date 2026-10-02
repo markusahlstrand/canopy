@@ -102,3 +102,20 @@ it('backs off short-lived opens to the cap while polling, then resets after a st
   expect(Socket.opened).toHaveLength(count + 1);
   expect(changed).toHaveBeenCalledTimes(3);
 });
+
+it('filters unrelated entity hints while retaining gap polling', () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('WebSocket', Socket);
+  const changed = vi.fn();
+  const stop = watchDriveChanges(changed, { entityType: 'file', entityId: 'open-file' });
+  const frame = (entityType: string, entityId: string) => Socket.opened[0]?.onmessage?.({ data: JSON.stringify({ kind: 'change', entityType, entityId }) });
+  frame('file', 'other-file'); frame('folder', 'open-file');
+  vi.advanceTimersByTime(150);
+  expect(changed).not.toHaveBeenCalled();
+  frame('file', 'open-file');
+  vi.advanceTimersByTime(150);
+  expect(changed).toHaveBeenCalledOnce();
+  vi.advanceTimersByTime(60_000);
+  expect(changed).toHaveBeenCalledTimes(2);
+  stop();
+});
