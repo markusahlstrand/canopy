@@ -1,4 +1,4 @@
-import { searchSnippet } from './search-snippet.js';
+import { searchSnippet, SNIPPET_SCAN_LIMIT } from './search-snippet.js';
 /**
  * The drive's handlers — the first canopy operations written as scope-local code.
  *
