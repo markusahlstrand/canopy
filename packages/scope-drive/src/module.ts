@@ -1,3 +1,4 @@
+import { searchSnippet } from './search-snippet.js';
 /**
  * The drive's handlers — the first canopy operations written as scope-local code.
  *
@@ -1296,7 +1297,7 @@ const operations = {
 
     const ranked = [...merged.entries()].sort((a, b) => a[1].rank - b[1].rank);
 
-    const hits: (FileRow & { via: 'name' | 'content' | 'metadata' })[] = [];
+    const hits: (FileRow & { via: 'name' | 'content' | 'metadata'; snippet: string | null })[] = [];
     for (const [fileId, { via }] of ranked) {
       if (hits.length === limit) break;
       // Per hit, and deliberately not a bulk filter: the checker's answer is the
@@ -1309,13 +1310,15 @@ const operations = {
         [fileId],
       )[0];
       if (!file) continue;
+      let snippet: string | null = null;
       if (via === 'content') {
-        const text = ctx.sql.query<{ version_id: string; status: string }>(
-          'SELECT version_id, status FROM drive_file_text WHERE file_id = ?', [fileId],
+        const text = ctx.sql.query<{ version_id: string; status: string; text: string }>(
+          'SELECT version_id, status, text FROM drive_file_text WHERE file_id = ?', [fileId],
         )[0];
         if (text?.version_id !== file.current_version_id || text.status !== 'indexed') continue;
+        snippet = searchSnippet(text.text, input.term);
       }
-      hits.push({ ...file, via });
+      hits.push({ ...file, via, snippet });
     }
     return { hits };
   },
