@@ -1,3 +1,4 @@
+import { confirmDiscardDrafts } from './drafts';
 /**
  * File preview (S12a slice 3, #78) — lifted from the portal's `file-preview.tsx` and
  * cut down to what this vertical can actually answer.
@@ -191,6 +192,7 @@ export function PreviewPanel({
 
   const loadTab = useCallback(
     (next: Tab) => {
+      if (next !== tab && !confirmDiscardDrafts()) return;
       setTab(next);
       if (next === 'versions' && versions === null) {
         const ticket = versionReads.take();
@@ -214,7 +216,7 @@ export function PreviewPanel({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fileId, versions, extracted, onError],
+    [fileId, versions, extracted, onError, tab],
   );
 
   const loadMore = async () => {

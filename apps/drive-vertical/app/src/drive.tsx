@@ -1,3 +1,4 @@
+import { confirmDiscardDrafts } from './drafts';
 /**
  * The drive screen — the first of the portal's surfaces to run against the vertical
  * (S12, #64).
@@ -164,7 +165,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [moving, setMoving] = useState<FileItem[] | null>(null);
   const [creating, setCreating] = useState(false);
-  const [previewing, setPreviewing] = useState<string | null>(null);
+  const [previewing, changePreview] = useState<string | null>(null);
+  const previewId = useRef(previewing);
+  previewId.current = previewing;
+  const setPreviewing = useCallback((id: string | null) => {
+    if (id === previewId.current || confirmDiscardDrafts()) changePreview(id);
+  }, []);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
