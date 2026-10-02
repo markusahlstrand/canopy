@@ -22,6 +22,7 @@ import {
   fileVersions,
   getFile,
   restoreVersion,
+  keepVersion,
   type DriveFile,
   type FileTextRow,
   type FileVersion,
@@ -207,6 +208,21 @@ export function PreviewPanel({
     [fileId, versions, extracted, onError],
   );
 
+  const setKeep = async (versionId: string, keep: boolean) => {
+    const ticket = versionReads.take();
+    setRestoring(true);
+    try {
+      const changed = await keepVersion(fileId, versionId, keep);
+      if (versionReads.current(ticket)) {
+        setVersions((rows) => rows?.map((row) => row.id === changed.id ? changed : row) ?? null);
+      }
+    } catch (e: unknown) {
+      if (versionReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (versionReads.current(ticket)) setRestoring(false);
+    }
+  };
+
   const restore = async (versionId: string) => {
     const ticket = meta.take();
     const versionsTicket = versionReads.take();
@@ -314,6 +330,12 @@ export function PreviewPanel({
                   <span>{humanSize(v.size)}</span>
                   {v.id === version?.id ? (
                     <span className="rounded bg-muted px-1.5 text-xs">current</span>
+                  ) : null}
+                  {v.keep === 1 ? <span className="rounded bg-muted px-1.5 text-xs">kept</span> : null}
+                  {canWrite ? (
+                    <Button size="sm" variant="ghost" disabled={restoring} onClick={() => void setKeep(v.id, v.keep !== 1)}>
+                      {v.keep === 1 ? 'Unkeep' : 'Keep'}
+                    </Button>
                   ) : null}
                   {v.source === 'blob' && v.blob_ref ? (
                     <a

@@ -125,6 +125,7 @@ export interface Site {
 }
 
 export interface FileVersion {
+  keep: number;
   id: string;
   file_id: string;
   source: string;
@@ -539,6 +540,9 @@ export interface FileTextRow {
 /** A file's versions, newest first. Paged, so again a bare array. */
 export const fileVersions = (fileId: string) =>
   call<FileVersion[]>(`/files/${encodeURIComponent(fileId)}/versions`);
+
+export const keepVersion = (fileId: string, versionId: string, keep: boolean) =>
+  call<FileVersion>(`/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}`, { method: 'PATCH', body: JSON.stringify({ keep }) });
 
 export const restoreVersion = (fileId: string, versionId: string) =>
   call<DriveFile>(`/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}/restore`, { method: 'POST' });

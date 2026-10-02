@@ -1,15 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, within, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PreviewPanel } from './preview';
 
-const old = { id: 'old', file_id: 'file', source: 'blob', blob_ref: 'old-blob', mime: 'application/zip', size: 1, created_at: '2026-08-01T00:00:00Z' };
+const old = { keep: 0, id: 'old', file_id: 'file', source: 'blob', blob_ref: 'old-blob', mime: 'application/zip', size: 1, created_at: '2026-08-01T00:00:00Z' };
 const current = { ...old, id: 'current', blob_ref: 'current-blob', created_at: '2026-09-01T00:00:00Z' };
 const file = { id: 'file', name: 'archive.zip', current_version_id: 'current' };
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 function mockHistory(canWrite = true, fail = false) {
   let restored = false;
+  let kept = false;
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'PATCH') {
+      if (fail) return new Response('refused', { status: 403 });
+      kept = JSON.parse(init.body as string).keep;
+      return new Response(JSON.stringify({ ...old, keep: kept ? 1 : 0 }));
+    }
     if (init?.method === 'POST') {
       if (fail) return new Response('refused', { status: 403 });
       restored = true;
@@ -42,10 +48,33 @@ describe('restoring from version history', () => {
     expect(screen.getByText('current').closest('li')?.textContent).toContain(new Date(old.created_at).toLocaleString());
   });
 
+  it('keeps and unkeeps an old version using the historical endpoint', async () => {
+    const fetch = mockHistory();
+    await versions();
+    const row = screen.getByRole('link', { name: `Download version from ${new Date(old.created_at).toLocaleString()}` }).closest('li')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Keep' }));
+    await waitFor(() => expect(within(row).getByText('kept')).toBeTruthy());
+    expect(fetch).toHaveBeenCalledWith('/api/files/file/versions/old', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ keep: true }) }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Unkeep' }));
+    await waitFor(() => expect(within(row).queryByText('kept')).toBeNull());
+  });
+
+  it('leaves the flag unchanged after a refused keep request', async () => {
+    mockHistory(true, true);
+    const error = vi.fn();
+    await versions(error);
+    const row = screen.getByRole('link', { name: `Download version from ${new Date(old.created_at).toLocaleString()}` }).closest('li')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Keep' }));
+    await waitFor(() => expect(error).toHaveBeenCalled());
+    expect(within(row).queryByText('kept')).toBeNull();
+    expect((within(row).getByRole('button', { name: 'Keep' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('shows no restore action to a reader', async () => {
     mockHistory(false);
     await versions();
     expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Keep' })).toBeNull();
   });
 
   it('keeps the selected version available for retry after refusal', async () => {
