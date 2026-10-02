@@ -57,3 +57,30 @@ describe('current and historical content routes', () => {
     expect((await app.request('/api/files/a/versions/b/content')).status).toBe(404);
   });
 });
+
+it.each([
+  ['bytes=0-1', 206, 'bytes 0-1/10', '01'],
+  ['bytes=7-', 206, 'bytes 7-9/10', '789'],
+  ['bytes=-3', 206, 'bytes 7-9/10', '789'],
+  ['bytes=10-', 416, 'bytes */10', ''],
+  ['bytes=2-1', 416, 'bytes */10', ''],
+  ['bytes=-0', 416, 'bytes */10', ''],
+  ['bytes=0-1,3-4', 416, 'bytes */10', ''],
+])('serves or refuses a single range %s after the attachment gate', async (range, status, contentRange, body) => {
+  const app = new Hono();
+  mountFileContent(app, async () => ({ getFile: async () => record, openAttachment: async () => ({ body: new TextEncoder().encode('0123456789'), contentType: 'video/mp4' }) }));
+  const response = await app.request('/api/files/a/versions/b/content', { headers: { Range: range } });
+  expect(response.status).toBe(status);
+  expect(response.headers.get('content-range')).toBe(contentRange);
+  expect(response.headers.get('accept-ranges')).toBe('bytes');
+  expect(response.headers.get('content-length')).toBe(String(body.length));
+  expect(await response.text()).toBe(body);
+});
+it.each(['text/html', 'image/svg+xml', 'application/xhtml+xml'])('forces active content %s to download with sandboxing', async contentType => {
+  const app = new Hono();
+  mountFileContent(app, async () => ({ getFile: async () => record, openAttachment: async () => ({ body: '<script>unsafe</script>', contentType }) }));
+  const response = await app.request('/api/files/a/content');
+  expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
+  expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+  expect(response.headers.get('content-security-policy')).toContain('sandbox');
+});
