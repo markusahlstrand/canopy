@@ -1599,3 +1599,40 @@ describe('folder pages', () => {
     expect(within(dialog).getByRole('button', { name: 'Beta' })).toBeTruthy();
   });
 });
+
+
+describe('file pages', () => {
+  async function firstPage() {
+    const error = vi.fn();
+    render(<DriveScreen {...shell} onError={error} />);
+    await flush();
+    await answer('/api/sites', []);
+    await answer('/folders/root/folders', []);
+    await answerWith('/folders/root/files', 200, [file('01A', 'first.txt')], { Link: `<${window.location.origin}/api/folders/root/files?cursor=older>; rel="next"` });
+    return error;
+  }
+
+  it('preserves the first page on failure and appends distinct rows on retry', async () => {
+    const error = await firstPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more files' }));
+    await answerWith('/folders/root/files?cursor=older', 503, { detail: 'Page failed' });
+    expect(error).toHaveBeenCalledWith('Page failed');
+    expect(screen.getByText('first.txt')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more files' }));
+    await answer('/folders/root/files?cursor=older', [file('01A', 'first.txt'), file('01B', 'second.txt')]);
+    expect(screen.getAllByText('first.txt')).toHaveLength(1);
+    expect(screen.getByText('second.txt')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Load more files' })).toBeNull();
+  });
+
+  it('discards a page from the drive after navigating to Trash', async () => {
+    await firstPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more files' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await flush();
+    await answer('/api/trash', []);
+    await answer('/folders/root/files?cursor=older', [file('01B', 'second.txt')]);
+    expect(screen.queryByText('second.txt')).toBeNull();
+    expect(screen.getByText('Trash is empty')).toBeTruthy();
+  });
+});

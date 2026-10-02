@@ -593,6 +593,9 @@ export const listSites = () => call<Site[]>('/sites');
 export const listFolders = (folderId: string) =>
   call<DriveFolder[]>(`/folders/${encodeURIComponent(folderId)}/folders`);
 
+export const listFolderPage = (folderId: string, next: string | null = null) =>
+  readPage<DriveFile>(`/folders/${encodeURIComponent(folderId)}/files`, next);
+
 export const listFoldersPage = (folderId: string, next: string | null = null) =>
   readPage<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/folders`, next);
 
