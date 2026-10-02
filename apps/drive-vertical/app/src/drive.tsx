@@ -25,6 +25,7 @@ import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
 import { MoveDialog } from './move-dialog';
+import { useUploadQueue } from './upload-queue';
 import { CommandPalette } from './command-palette';
 import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
@@ -47,7 +48,6 @@ import {
   restoreFile,
   search,
   trashFile,
-  uploadFile,
   type DriveFile,
   type DriveFolder,
   type SearchHit,
@@ -211,6 +211,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * keeps "refresh what is on screen" true at the moment it is called.
    */
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const uploads = useUploadQueue(() => refreshRef.current());
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async () => {
@@ -541,11 +542,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const chosen = Array.from(input.files ?? []);
     input.value = '';
     if (chosen.length === 0) return;
-    void act(async () => {
-      // Sequential on purpose: each upload is a body the isolate holds while it hashes
-      // it, and three at once is three times the memory for no wall-clock worth having.
-      for (const file of chosen) await uploadFile(folderId, file);
-    });
+    if (!offline) uploads.enqueue(folderId, ['My Drive', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
   };
 
   const empty = loadFailed ? (
@@ -629,6 +626,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         className="hidden"
         onChange={(e) => onUpload(e.currentTarget)}
       />
+
+      {uploads.panel}
 
       <CommandPalette
         open={cmdOpen}
