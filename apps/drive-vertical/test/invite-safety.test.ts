@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {Hono} from 'hono';
 import {unknownRoleError} from '@substrat-run/kernel';
 import {claimSafeInvite,mountInviteGuards,projectedInviteRoles,unbindProtectedPrincipal} from '../src/invite-safety';
-import type {DirectorySql} from './space-creation';
+import type {DirectorySql} from '../src/space-creation';
 it('offers only roles present in an older scope and never hides infrastructure failures',async()=>{
  expect(await projectedInviteRoles(['viewer','editor','member'],async role=>{if(role!=='member')throw unknownRoleError(role);return {covered:true};})).toEqual(['member']);
  await expect(projectedInviteRoles(['member'],async()=>{throw new Error('offline');})).rejects.toThrow('offline');
