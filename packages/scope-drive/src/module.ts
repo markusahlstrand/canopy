@@ -173,7 +173,7 @@ const operations = {
   'drive/request-space': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
     const previous = ctx.platformRequests({ kind: PROVISION_SIBLING_KIND, limit: 100 }).find(request => request.requestedBy === ctx.principal && provisionSiblingPayload.safeParse(request.payload).data?.slug === input.slug);
-    if (previous && previous.status !== 'failed') return { id: previous.id, slug: input.slug, name: input.name };
+    if (previous && previous.status !== 'failed') return { id: previous.id, slug: input.slug, name: provisionSiblingPayload.parse(previous.payload).name };
     const payload = provisionSiblingPayload.parse(input);
     const id = ctx.requestPlatform({ kind: PROVISION_SIBLING_KIND, payload });
     return { id, slug: payload.slug, name: payload.name };

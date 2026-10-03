@@ -15,3 +15,9 @@ it('distinguishes failure, loading and having no spaces', () => {
   view.rerender(<SpacesDialog {...props} sites={[]} failed />); fireEvent.click(screen.getByRole('button', { name: 'Retry spaces' })); expect(props.onRetry).toHaveBeenCalledOnce();
   view.rerender(<SpacesDialog {...props} sites={[]} />); expect(screen.getByText(/You have no spaces available/)).toBeTruthy();
 });
+
+it('disables switching and hides management while offline', () => {
+ render(<SpacesDialog {...props} offline canManage={false} sites={[{slug:'family',name:'Family',current:true},{slug:'team',name:'Team',current:false}]} />);
+ expect((screen.getByRole('button',{name:'Open Team'}) as HTMLButtonElement).disabled).toBe(true);
+ expect(screen.queryByRole('button',{name:'Manage members'})).toBeNull();
+});

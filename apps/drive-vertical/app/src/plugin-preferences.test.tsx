@@ -1,12 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { ViewersDialog } from './viewers-dialog';
+import { PluginManagement } from './plugin-management';
 import { PreviewPanel } from './preview';
 import { IMAGE_VIEWER_PREFERENCE, registerImageViewer, setImageViewerEnabled, viewerRegistry } from './image-viewer';
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); setImageViewerEnabled(true); localStorage.removeItem(IMAGE_VIEWER_PREFERENCE); });
 it('enables and disables the bundled image viewer and remembers the choice', () => {
   setImageViewerEnabled(true);
-  render(<ViewersDialog open onOpenChange={() => {}} />);
+  render(<PluginManagement open onOpenChange={() => {}} />);
   fireEvent.click(screen.getByRole('button', { name: 'Disable image viewer' }));
   expect(screen.getByText('Disabled')).toBeTruthy();
   expect(viewerRegistry.has('image-viewer')).toBe(false);
@@ -20,7 +20,7 @@ it('enables and disables the bundled image viewer and remembers the choice', () 
 it('retires an open image on disable and restores it on enable', async () => {
   setImageViewerEnabled(true);
   vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ file: { id: 'file', name: 'photo.png' }, version: { id: 'v1', mime: 'image/png' } })));
-  const view = render(<><PreviewPanel fileId="file" onClose={() => {}} onError={() => {}} /><ViewersDialog open onOpenChange={() => {}} /></>);
+  const view = render(<><PreviewPanel fileId="file" onClose={() => {}} onError={() => {}} /><PluginManagement open onOpenChange={() => {}} /></>);
   await waitFor(() => expect(view.container.querySelector('canopy-image-viewer')).toBeTruthy());
   const old = view.container.querySelector('canopy-image-viewer') as HTMLElement & { file: unknown };
   fireEvent.click(screen.getByRole('button', { name: 'Disable image viewer' }));
