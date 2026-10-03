@@ -48,7 +48,18 @@ export const segment = z
   })
   .refine((v) => v !== '.' && v !== '..', { message: 'a name cannot be . or ..' });
 
+export const installedPluginManifest = z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,48}$/), name: z.string().trim().min(1).max(100), version: z.string().min(1).max(50), description: z.string().max(1000).optional(),
+  capabilities: z.array(z.discriminatedUnion('kind', [z.object({kind: z.literal('item:read')}), z.object({kind: z.literal('item:write')}), z.object({kind: z.literal('net:fetch'), hosts: z.array(z.string().regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)).min(1).max(10)})])).max(10),
+  contributes: z.object({
+    viewers: z.array(z.object({id: z.string().min(1).max(50), title: z.string().max(100).optional(), match: z.array(z.string().min(1).max(100)).min(1).max(100), fill: z.boolean().optional()})).max(10).optional(),
+    detailView: z.object({id: z.string().min(1).max(50), title: z.string().min(1).max(100), nav: z.object({section: z.string().max(50)}).optional(), immersive: z.boolean().optional()}).optional(),
+  }).refine(value => !!value.viewers?.length || !!value.detailView, 'A plugin needs a viewer or app contribution'),
+});
+export const storedPlugin = z.object({ id: z.string(), plugin_id: z.string(), principal: z.string(), manifest_json: z.string(), source: z.string(), enabled: z.number().int(), updated_at: z.string() });
+
 export const driveEntities = defineEntities({
+  plugin_install: { table: 'drive_plugin_installs', fields: storedPlugin, key: ['principal', 'plugin_id'] },
   /**
    * A folder. Explicit rather than derived: canopy's folders are virtual —
    * inferred from files' paths — with a side table so an *empty* folder can
@@ -1105,6 +1116,31 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * Rule 3 permits a read-only spine projection while Substrat #1582 develops a
    * supported scope-wide helper. Every returned entity is checked separately.
    */
+  'drive/request-space': {
+    summary: 'Create a shared space', permission: 'drive:manage',
+    input: z.object({ name: z.string().trim().min(1).max(100), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/), owner: z.string().length(26) }),
+    output: z.object({ id: z.string(), slug: z.string(), name: z.string() }),
+  },
+  'drive/space-requests': {
+    summary: 'Your space creation requests', permission: 'drive:manage', input: z.object({}),
+    output: z.object({ requests: z.array(z.object({ id: z.string(), slug: z.string(), name: z.string(), status: z.enum(['pending', 'done', 'failed']), error: z.string().nullable() })) }),
+  },
+  'drive/list-plugins': {
+    summary: 'Installed plugins for this person and space', permission: 'drive:read', input: z.object({}), output: z.object({plugins: z.array(storedPlugin)}), http: {method: 'GET', path: '/plugins'},
+  },
+  'drive/save-plugin': {
+    summary: 'Install or update a sandboxed plugin', permission: 'drive:read',
+    input: z.object({manifest: installedPluginManifest, source: z.string().min(1).max(256000), forSpace: z.boolean().optional(), expectedRevision: z.string().nullable()}), output: storedPlugin,
+    emits: {type: 'drive.plugin-saved', entity: 'plugin_install', entityIdFrom: 'id', schemaVersion: 1, piiClass: 'none'}, http: {method: 'PUT', path: '/plugins'},
+  },
+  'drive/toggle-plugin': {
+    summary: 'Enable or disable an installed plugin', permission: 'drive:read', input: z.object({id: z.string(), enabled: z.boolean()}), output: storedPlugin,
+    emits: {type: 'drive.plugin-saved', entity: 'plugin_install', entityIdFrom: 'id', schemaVersion: 1, piiClass: 'none'}, http: {method: 'PATCH', path: '/plugins/{id}'},
+  },
+  'drive/remove-plugin': {
+    summary: 'Uninstall a plugin', permission: 'drive:read', input: z.object({id: z.string()}), output: z.object({id: z.string()}),
+    emits: {type: 'drive.plugin-removed', entity: 'plugin_install', entityIdFrom: 'id', schemaVersion: 1, piiClass: 'none'}, http: {method: 'DELETE', path: '/plugins/{id}'},
+  },
   'drive/changes': {
     summary: 'Drive metadata changes after an event cursor',
     permission: 'drive:read',

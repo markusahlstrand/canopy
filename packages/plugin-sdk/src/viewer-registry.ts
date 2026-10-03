@@ -11,6 +11,8 @@ export class FileViewerRegistry {
   #listeners = new Set<() => void>();
   #revision = 0;
   has = (pluginId: string): boolean => this.#plugins.has(pluginId);
+  /** A snapshot of installed contributions; callers cannot mutate selection rules. */
+  list = (): RegisteredViewer[] => [...this.#plugins.values()].flat().map(viewer => ({ ...viewer, match: [...viewer.match] }));
   snapshot = (): number => this.#revision;
   subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);

@@ -1,3 +1,5 @@
+import { matchingPlugins, pluginManifest, refreshPlugins, useInstalledPlugins } from './installed-plugins';
+import { SandboxPlugin } from './sandbox-plugin';
 import { FileMetadata } from './file-metadata';
 import { CsvTable, type CsvDelimiter } from './csv-table';
 import { TextPreview } from './text-preview';
@@ -17,6 +19,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { Button, Icon, cn } from '@canopy/ui';
 import type { FileViewerElement } from '@canopy/plugin-sdk/web-component';
 import {
+  saveText,
   contentUrl,
   versionContentUrl,
   fileBodyAsText,
@@ -105,6 +108,9 @@ export function PreviewPanel({
   onChanged?: () => void;
   navigation?: { previous: string | null; next: string | null; moreAvailable?: boolean; onOpen: (id: string) => void };
 }) {
+  const plugins = useInstalledPlugins();
+  const [pluginId, setPluginId] = useState('');
+  useEffect(() => { refreshPlugins().catch(() => {}); }, []);
   const [comparing, setComparing] = useState<{ selectedId: string; currentId: string } | null>(null);
   const [historyNext, setHistoryNext] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -161,6 +167,7 @@ export function PreviewPanel({
   useEffect(() => {
     const ticket = meta.take();
     setEditing(false);
+    setPluginId('');
     setComparing(null);
     setTab('file');
     setFile(null);
@@ -189,6 +196,8 @@ export function PreviewPanel({
   }, [fileId, onError]);
 
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
+  const matching = matchingPlugins(plugins, version?.mime ?? '', file?.name ?? '');
+  const selectedPlugin = matching.find(row => row.id === pluginId);
   const shape = editing ? 'text' : shapeOf(version?.mime, file?.name);
 
   /** Text bodies are fetched, not linked — everything else the browser fetches itself. */
@@ -308,6 +317,12 @@ export function PreviewPanel({
     setEditing(false); onChanged?.();
   };
 
+  const savePluginText = useCallback(async (text: string) => {
+    if (!version || !canWrite || shapeOf(version.mime) !== 'text') throw new Error('This file cannot be edited as text.');
+    await saveText(fileId, version.id, text);
+    await reloadText();
+  }, [fileId, version?.id, canWrite]);
+
   return (
     <aside
       aria-label="Preview"
@@ -355,13 +370,14 @@ export function PreviewPanel({
         ))}
       </nav>
 
+      {tab === 'file' && matching.length ? <label className="px-3 py-2 text-sm">Open with <select aria-label="Open with" value={selectedPlugin?.id ?? ''} onChange={event => { if (confirmDiscardDrafts()) { setPluginId(event.target.value); setEditing(false); } }}><option value="">Built-in preview</option>{matching.map(row => <option key={row.id} value={row.id}>{pluginManifest(row).name}</option>)}</select></label> : null}
       {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : <Empty>Table preview needs the complete text.</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
-          ) : shape === 'image' || shape === 'viewer' ? (
+          ) : selectedPlugin && file && version.source === 'blob' ? <SandboxPlugin key={`${selectedPlugin.id}:${version.id}`} plugin={selectedPlugin} onSave={canWrite && shapeOf(version.mime) === 'text' ? savePluginText : undefined} file={{id: fileId, versionId: version.id, name: file.name, mime: version.mime, size: version.size}} /> : shape === 'image' || shape === 'viewer' ? (
             <ImagePreview fileId={fileId} name={file?.name ?? ''} mime={version.mime} />
           ) : shape === 'audio' || shape === 'video' ? (
             version.source === 'blob' ? <MediaPreview key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} name={file?.name ?? ''} shape={shape} />

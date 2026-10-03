@@ -352,6 +352,51 @@
         "email",
         "name"
       ]
+    },
+    "plugin_install": {
+      "table": "drive_plugin_installs",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "plugin_id": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "manifest_json": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "plugin_id",
+          "principal",
+          "manifest_json",
+          "source",
+          "enabled",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "key": [
+        "plugin_id",
+        "principal"
+      ]
     }
   }
 }

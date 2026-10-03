@@ -1,3 +1,4 @@
+import { SpaceSettingsDialog } from './space-settings-dialog';
 import { BulkRestore } from './bulk-restore';
 import { BulkTrash } from './bulk-trash';
 import { SearchMatchFilter, filterMatches, type MatchFilter } from './search-match-filter';
@@ -30,7 +31,10 @@ import { folderPath, linkedFolderId } from './folder-links';
 import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
-import { ViewersDialog } from './viewers-dialog';
+import { CreateSpaceDialog } from './create-space-dialog';
+import { openSpace } from './space-navigation';
+import { SpacesDialog } from './spaces-dialog';
+import { PluginManagement } from './plugin-management';
 import { PeopleDialog } from './people-dialog';
 import { CurrentFolderShare } from './current-folder-share';
 import { ShareDialog } from './share-dialog';
@@ -202,6 +206,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   }, []);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false);
+  const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
+  const [spacesOpen, setSpacesOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [viewersOpen, setViewersOpen] = useState(false);
   /** The folder whose sharing is open. Null is closed — one dialog, one folder at a time. */
@@ -713,6 +720,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           offline={offline}
           sites={siteList.sites}
           failed={siteList.failed}
+          onSpaces={() => setSpacesOpen(true)}
           onRetry={siteList.retry}
         />
       </div>
@@ -729,6 +737,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             offline={offline}
             sites={siteList.sites}
             failed={siteList.failed}
+            onSpaces={() => { setMobileNavOpen(false); setSpacesOpen(true); }}
             onRetry={siteList.retry}
           />
         </SheetContent>
@@ -946,7 +955,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
 
-      <ViewersDialog open={viewersOpen} onOpenChange={setViewersOpen} />
+      <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={siteList.retry} />
+      <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
+      <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} canManage={canManagePeople} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
+      <PluginManagement open={viewersOpen} onOpenChange={setViewersOpen} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 
