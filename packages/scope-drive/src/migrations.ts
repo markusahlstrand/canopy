@@ -228,4 +228,9 @@ export const driveMigrations: SqlMigration[] = [
     );
     CREATE INDEX drive_file_comments_by_file ON drive_file_comments (file_id, id);`,
   },
+  {version: '0009', sql: `CREATE TABLE drive_plugin_installs (
+    id TEXT PRIMARY KEY NOT NULL, plugin_id TEXT NOT NULL, principal TEXT NOT NULL,
+    manifest_json TEXT NOT NULL, source TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)), updated_at TEXT NOT NULL,
+    UNIQUE(principal, plugin_id)
+  );`},
 ];

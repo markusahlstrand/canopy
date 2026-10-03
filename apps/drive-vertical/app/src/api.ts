@@ -757,3 +757,9 @@ export function saveText(fileId: string, expectedVersion: string, text: string):
     method: 'PUT', headers: { 'content-type': 'text/plain; charset=utf-8' }, body: text,
   });
 }
+
+export interface PluginInstall { id: string; plugin_id: string; principal: string; manifest_json: string; source: string; enabled: number; updated_at: string }
+export const listPlugins = () => call<{ plugins: PluginInstall[] }>('/plugins');
+export const savePlugin = (manifest: unknown, source: string, expectedRevision: string | null, forSpace = false) => call<PluginInstall>('/plugins', {method: 'PUT', body: JSON.stringify({manifest, source, expectedRevision, forSpace})});
+export const togglePlugin = (id: string, enabled: boolean) => call<PluginInstall>(`/plugins/${encodeURIComponent(id)}`, {method: 'PATCH', body: JSON.stringify({enabled})});
+export const removePlugin = (id: string) => call<{id: string}>(`/plugins/${encodeURIComponent(id)}`, {method: 'DELETE'});

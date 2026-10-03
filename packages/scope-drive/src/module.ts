@@ -36,7 +36,7 @@ import {
   type OperationHandler,
 } from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
-import { driveOperations } from '../spec/model.js';
+import { driveOperations, installedPluginManifest } from '../spec/model.js';
 import { driveManifest } from './manifest.js';
 import { driveMigrations, ROOT_FOLDER_ID } from './migrations.js';
 
@@ -159,7 +159,45 @@ interface MirrorChangeEvent {
   entity_id: string;
 }
 
+interface PluginRow { id: string; plugin_id: string; principal: string; manifest_json: string; source: string; enabled: number; updated_at: string }
+async function pluginForMutation(ctx: OperationContext, id: string) {
+  assertAllowed(await ctx.check(DRIVE_PERM.read));
+  const row = ctx.sql.query<PluginRow>('SELECT * FROM drive_plugin_installs WHERE id = ?', [id])[0];
+  if (!row || (row.principal !== ctx.principal && row.principal !== 'space')) throw substratError('not_found', 'Plugin not found');
+  if (row.principal === 'space') assertAllowed(await ctx.check(DRIVE_PERM.manage));
+  return row;
+}
 const operations = {
+  'drive/list-plugins': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    return {plugins: ctx.sql.query<PluginRow>('SELECT * FROM drive_plugin_installs WHERE principal IN (?, ?) ORDER BY plugin_id LIMIT 100', [ctx.principal, 'space'])};
+  },
+  'drive/save-plugin': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    if (input.forSpace) assertAllowed(await ctx.check(DRIVE_PERM.manage));
+    const manifest = installedPluginManifest.parse(input.manifest), principal = input.forSpace ? 'space' : ctx.principal;
+    const previous = ctx.sql.query<PluginRow>('SELECT * FROM drive_plugin_installs WHERE principal = ? AND plugin_id = ?', [principal, manifest.id])[0];
+    if ((previous?.updated_at ?? null) !== input.expectedRevision) throw substratError('conflict', 'This plugin changed. Reload before replacing it.');
+    const count = ctx.sql.query<{n: number}>('SELECT count(*) AS n FROM drive_plugin_installs WHERE principal = ?', [principal])[0]!.n;
+    if (!previous && count >= 40) throw substratError('conflict', 'Uninstall a plugin before installing another (40 per person or space).');
+    const row: PluginRow = {id: previous?.id ?? ulid(), plugin_id: manifest.id, principal, manifest_json: JSON.stringify(manifest), source: input.source, enabled: 1, updated_at: ulid()};
+    ctx.sql.exec('INSERT INTO drive_plugin_installs (id, plugin_id, principal, manifest_json, source, enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET manifest_json=excluded.manifest_json, source=excluded.source, enabled=1, updated_at=excluded.updated_at', [row.id, row.plugin_id, row.principal, row.manifest_json, row.source, row.enabled, row.updated_at]);
+    ctx.emit({type: 'drive.plugin-saved', schemaVersion: 1, entity: {entityType: 'plugin_install', entityId: row.id}, piiClass: 'none', payload: {pluginId: manifest.id}});
+    return row;
+  },
+  'drive/toggle-plugin': async (ctx, input) => {
+    const row = await pluginForMutation(ctx, input.id);
+    row.enabled = input.enabled ? 1 : 0; row.updated_at = ulid();
+    ctx.sql.exec('UPDATE drive_plugin_installs SET enabled = ?, updated_at = ? WHERE id = ?', [row.enabled, row.updated_at, row.id]);
+    ctx.emit({type: 'drive.plugin-saved', schemaVersion: 1, entity: {entityType: 'plugin_install', entityId: row.id}, piiClass: 'none', payload: {pluginId: row.plugin_id}});
+    return row;
+  },
+  'drive/remove-plugin': async (ctx, input) => {
+    const row = await pluginForMutation(ctx, input.id);
+    ctx.sql.exec('DELETE FROM drive_plugin_installs WHERE id = ?', [row.id]);
+    ctx.emit({type: 'drive.plugin-removed', schemaVersion: 1, entity: {entityType: 'plugin_install', entityId: row.id}, piiClass: 'none', payload: {pluginId: row.plugin_id}});
+    return {id: row.id};
+  },
   'drive/changes': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
     const limit = input.limit ?? 50;

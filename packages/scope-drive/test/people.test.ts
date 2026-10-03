@@ -221,3 +221,32 @@ describe('the roster remembers what to call people', () => {
     await expect((await as(stranger)).invoke('drive/list-people', {})).rejects.toThrow();
   });
 });
+
+describe('persistent plugin installations', () => {
+  const manifest = { id: 'notes-viewer', name: 'Notes', version: '1', capabilities: [{kind: 'item:read'}], contributes: {viewers: [{id: 'notes', match: ['.notes']}]}};
+  it('isolates personal installs and rejects stale replacements', async () => {
+    const owner = await as(ada), member = await as(bjorn);
+    const first = await owner.invoke<{id: string; updated_at: string}>('drive/save-plugin', {manifest, source: 'export default function() {}', expectedRevision: null});
+    expect((await member.invoke<{plugins: unknown[]}>('drive/list-plugins', {})).plugins).toEqual([]);
+    await expect(member.invoke('drive/toggle-plugin', {id: first.id, enabled: false})).rejects.toThrow();
+    await expect(owner.invoke('drive/save-plugin', {manifest, source: 'changed', expectedRevision: null})).rejects.toThrow('changed');
+    const updated = await owner.invoke<{updated_at: string}>('drive/save-plugin', {manifest, source: 'changed', expectedRevision: first.updated_at});
+    expect(updated.updated_at).not.toBe(first.updated_at);
+    await owner.invoke('drive/remove-plugin', {id: first.id});
+    expect((await owner.invoke<{plugins: unknown[]}>('drive/list-plugins', {})).plugins).toEqual([]);
+  });
+  it('lets owners apply a plugin to the space and members use but not change it', async () => {
+    const owner = await as(ada), member = await as(bjorn);
+    await expect(member.invoke('drive/save-plugin', {manifest, source: 'code', forSpace: true, expectedRevision: null})).rejects.toThrow();
+    const install = await owner.invoke<{id: string}>('drive/save-plugin', {manifest, source: 'code', forSpace: true, expectedRevision: null});
+    expect((await member.invoke<{plugins: {id: string}[]}>('drive/list-plugins', {})).plugins[0]?.id).toBe(install.id);
+    await expect(member.invoke('drive/remove-plugin', {id: install.id})).rejects.toThrow();
+    const disabled = await owner.invoke<{enabled: number}>('drive/toggle-plugin', {id: install.id, enabled: false}); expect(disabled.enabled).toBe(0);
+  });
+  it('rejects unsupported capabilities and unsafe network host patterns', async () => {
+    const stub = await as(ada);
+    for (const capabilities of [[{kind: 'storage:read'}], [{kind: 'net:fetch', hosts: ['https://evil.test/; script-src *']} ]]) {
+      await expect(stub.invoke('drive/save-plugin', {manifest: {...manifest, capabilities}, source: 'code', expectedRevision: null})).rejects.toThrow();
+    }
+  });
+});
