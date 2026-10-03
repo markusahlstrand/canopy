@@ -167,6 +167,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const initialFolderId = useRef(linkedFolderId()).current;
   const [linkPending, setLinkPending] = useState(!!initialFileId || !!initialFolderId || !!initialPath);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
+  const skipLinkedListing = useRef(false);
   const [linkListingUnavailable, setLinkListingUnavailable] = useState(false);
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
@@ -232,7 +233,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           setFolderId(folder.id);
           setCrumbs(folder.id === ROOT_FOLDER_ID ? [] : [{ id: folder.id, name: folder.path }]);
         } catch {
-          if (active) { setLinkListingUnavailable(true); setLinkMessage('The file is open, but its folder could not be loaded.'); }
+          if (active) { skipLinkedListing.current = true; setLinkListingUnavailable(true); setLinkMessage('The file is open, but its folder could not be loaded.'); }
         }
       } else {
         const folder = await (initialFolderId ? getFolder(initialFolderId) : folderByPath(initialPath));
@@ -295,7 +296,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async () => {
     if (linkPending) return;
-    if (linkListingUnavailable) { setBusy(false); return; }
+    if (skipLinkedListing.current) { setBusy(false); return; }
     const ticket = reads.current.take();
     setBusy(true);
     setLoadingPage(false);
@@ -365,7 +366,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, term, onError, auth.principal, linkPending, linkListingUnavailable]);
+  }, [folderId, view, term, onError, auth.principal, linkPending]);
 
   const moreTrash = async () => {
     if (!trashNext || busy || loadingPage || offline) return;
@@ -479,7 +480,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     // A pause, not a keystroke: the index is per scope and cheap, but a request per
     // character still races its own answers and the last one to land wins.
     if (linkPending) return;
-    if (linkListingUnavailable) { setBusy(false); return; }
+    if (skipLinkedListing.current) { setBusy(false); return; }
     const t = setTimeout(() => void refresh(), view === 'search' ? 200 : 0);
     return () => clearTimeout(t);
   }, [refresh, view, linkPending]);
@@ -494,6 +495,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    */
   const navigate = useCallback((id: NavId) => {
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
+    skipLinkedListing.current = false;
     setLinkListingUnavailable(false);
     const alreadyHere = !linkListingUnavailable && (id !== 'drive'
       ? view === id
