@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, useLayoutEffect, type ReactNode, type KeyboardEvent } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import type { FileItem } from './items';
 import { SearchHighlight } from "./search-highlight";
@@ -289,6 +289,53 @@ export function FileTable({
     if (plain && previewOpen && files[index]!.kind !== "folder") onOpen(files[index]!);
   }
 
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const ownedFocus = useRef(false);
+  const previousIndex = useRef(0);
+  const foundIndex = files.findIndex(file => file.id === focusedId);
+  const focusedIndex = foundIndex >= 0 ? foundIndex : Math.min(previousIndex.current, Math.max(0, files.length - 1));
+  useLayoutEffect(() => {
+    if (foundIndex < 0 && files.length && ownedFocus.current &&
+        (document.activeElement === document.body || root.current?.contains(document.activeElement))) {
+      root.current?.querySelectorAll<HTMLElement>('[data-file-row]')[focusedIndex]?.focus();
+    }
+    previousIndex.current = focusedIndex;
+  }, [files, foundIndex, focusedIndex]);
+  const focusScope = { ref: root, onFocusCapture: () => { ownedFocus.current = true; },
+    onBlurCapture: (event: React.FocusEvent) => { if (event.relatedTarget && !root.current?.contains(event.relatedTarget as Node)) ownedFocus.current = false; } };
+
+  const keyboard = (index: number) => (event: KeyboardEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget || event.altKey || event.nativeEvent.isComposing) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+      event.preventDefault(); event.stopPropagation(); onSelectionChange(new Set(files.map(file => file.id))); return;
+    }
+    if (event.ctrlKey || event.metaKey || event.shiftKey) return;
+    let next = index;
+    const rows = event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[data-file-row]');
+    const columns = view === 'grid' && rows?.[0]?.offsetWidth
+      ? [...rows].filter(row => row.offsetTop === rows[0]!.offsetTop).length : 1;
+    if (event.key === 'ArrowDown') next += columns;
+    else if (event.key === 'ArrowUp') next -= columns;
+    else if (view === 'grid' && event.key === 'ArrowRight') next++;
+    else if (view === 'grid' && event.key === 'ArrowLeft') next--;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = files.length - 1;
+    else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault(); event.stopPropagation(); if (event.repeat) return;
+      if (event.key === 'Enter') { if (!trashed) onOpen(files[index]!); }
+      else { lastIndex.current = index; const selected = new Set(selection); const id = files[index]!.id; if (selected.has(id)) selected.delete(id); else selected.add(id); onSelectionChange(selected); }
+      return;
+    } else return;
+    event.preventDefault(); event.stopPropagation(); next = Math.max(0, Math.min(files.length - 1, next));
+    setFocusedId(files[next]!.id);
+    (event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[data-file-row]')[next])?.focus();
+  };
+  const rowFocus = (index: number) => ({ 'data-file-row': '', tabIndex: index === focusedIndex ? 0 : -1,
+    onFocus: () => setFocusedId(files[index]!.id), onKeyDown: keyboard(index),
+    'aria-selected': selection.has(files[index]!.id), 'aria-keyshortcuts': 'ArrowDown ArrowUp Home End Enter Space',
+  });
+
   const allSelected = files.length > 0 && files.every((f) => selection.has(f.id));
 
   // Cold load: nothing cached to show yet. (Navigating between cached folders keeps
@@ -298,16 +345,18 @@ export function FileTable({
 
   if (view === "grid") {
     return (
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
-        {files.map((f) => (
+      <div {...focusScope} role="listbox" aria-label="Files" aria-multiselectable="true" className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+        {files.map((f, i) => (
           <div
             key={f.id}
+            role="option"
+            {...rowFocus(i)}
             {...dragHandlers(f)}
             {...dropHandlers(f)}
             onClick={(e) => handleRowClick(e, files.indexOf(f), f.id)}
             onDoubleClick={() => onOpen(f)}
             className={cn(
-              "group flex cursor-default flex-col gap-2.5 rounded-lg border p-3.5 transition-colors",
+              "focus-visible:outline-2 focus-visible:outline-primary group flex cursor-default flex-col gap-2.5 rounded-lg border p-3.5 transition-colors",
               dragOverId === f.id
                 ? "border-primary bg-primary/10 ring-2 ring-primary"
                 : selection.has(f.id)
@@ -344,8 +393,8 @@ export function FileTable({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border">
-      <table className="w-full border-collapse text-[14px]">
+    <div {...focusScope} className="overflow-hidden rounded-lg border">
+      <table role="grid" aria-label="Files" aria-multiselectable="true" className="w-full border-collapse text-[14px]">
         <thead>
           <tr className="border-b bg-muted/40">
             <th className="w-9 px-3 py-2.5">
@@ -384,12 +433,13 @@ export function FileTable({
               <ContextMenu key={f.id}>
                 <ContextMenuTrigger asChild>
                   <tr
+                    {...rowFocus(i)}
                     {...dragHandlers(f)}
                     {...dropHandlers(f)}
                     onClick={(e) => handleRowClick(e, i, f.id)}
                     onDoubleClick={() => onOpen(f)}
                     className={cn(
-                      "group cursor-default border-t transition-colors",
+                      "focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 group cursor-default border-t transition-colors",
                       dragOverId === f.id
                         ? "bg-primary/10 ring-2 ring-inset ring-primary"
                         : selected
