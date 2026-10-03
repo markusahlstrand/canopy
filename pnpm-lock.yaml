@@ -456,6 +456,12 @@ importers:
         specifier: ~7.0.2
         version: 7.0.2
 
+  packages/plugin-validator:
+    dependencies:
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+
   packages/scope-drive:
     dependencies:
       '@substrat-run/contracts':
