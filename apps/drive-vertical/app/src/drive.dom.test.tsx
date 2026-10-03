@@ -382,7 +382,7 @@ describe('offline metadata from the scope event mirror', () => {
     expect(request).toBeTruthy();
     await act(async () => request!.reject(new TypeError('network unavailable')));
 
-    expect(screen.getByRole('status').textContent).toContain('Offline');
+    expect(screen.getByRole('status', { name: '' }).textContent).toContain('Offline');
     expect(screen.getByText('Saved folder')).toBeTruthy();
     expect(screen.getByText('saved.txt')).toBeTruthy();
     expect((screen.getByLabelText('Refresh') as HTMLButtonElement).disabled).toBe(false);
@@ -876,7 +876,7 @@ describe('the mobile drive shell and empty views', () => {
   it('explains an empty drive and gives actions that exist', async () => {
     await renderDrive();
     expect(screen.getByText('Your drive is empty')).toBeTruthy();
-    fireEvent.click(within(screen.getByRole('status')).getByText('New folder'));
+    fireEvent.click(within(screen.getByRole('status', { name: '' })).getByText('New folder'));
     expect(screen.getByRole('dialog', { name: '' })).toBeTruthy();
     expect(screen.getByLabelText('New folder')).toBeTruthy();
   });

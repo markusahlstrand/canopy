@@ -25,6 +25,7 @@ import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
+import { SelectionSummary } from './selection-summary';
 import { folderPath, linkedFolderId } from './folder-links';
 import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
@@ -513,6 +514,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     // may land here.
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     reads.current.invalidate();
+    setSelection(new Set());
     if (view === 'shared') {
       setView('drive');
       setCrumbs([{ id: folder.id, name: folder.path }]);
@@ -526,6 +528,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const upTo = (index: number) => {
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     reads.current.invalidate();
+    setSelection(new Set());
     // -1 is the root: the crumb trail holds everything below it.
     setCrumbs((c) => c.slice(0, index + 1));
     setFolderId(index < 0 ? ROOT_FOLDER_ID : crumbs[index]!.id);
@@ -739,6 +742,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           Offline — showing saved file and folder names. File content and changes are unavailable.
         </p>
       ) : null}
+      <SelectionSummary selection={selection} items={view === 'search' ? previewFiles.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file))]} onClear={() => setSelection(new Set())} />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative">
           <Icon
