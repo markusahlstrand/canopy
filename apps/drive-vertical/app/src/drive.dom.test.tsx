@@ -748,6 +748,15 @@ describe('the shell the portal had, on the vertical', () => {
   });
 });
 
+it('does not write defaults over a newer preference record on mount', async () => {
+  const newer = JSON.stringify({ version: 2, layout: 'grid', newOption: true });
+  localStorage.setItem('canopy.drive.view', newer);
+  await renderDrive();
+  expect(localStorage.getItem('canopy.drive.view')).toBe(newer);
+  fireEvent.click(screen.getByRole('button', { name: 'Switch to grid' }));
+  expect(localStorage.getItem('canopy.drive.view')).toBe(newer);
+});
+
 it('restores saved layout and ordering, and persists a layout change', async () => {
   localStorage.setItem('canopy.drive.view', JSON.stringify({ version: 1, layout: 'grid', sort: { key: 'name', dir: 'desc' } }));
   await renderDrive([], [file('a', 'alpha.txt'), file('z', 'zeta.txt')]);

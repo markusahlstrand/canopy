@@ -18,6 +18,11 @@ export function readViewPreferences(): ViewPreferences {
   } catch { return defaults(); }
 }
 export function saveViewPreferences(value: ViewPreferences): void {
-  try { localStorage.setItem(VIEW_PREFERENCES_KEY, JSON.stringify({ version: 1, ...value })); }
+  try {
+    let existing;
+    try { existing = JSON.parse(localStorage.getItem(VIEW_PREFERENCES_KEY) ?? 'null'); } catch { /* Replace corrupt JSON only after an explicit change. */ }
+    if (existing?.version !== undefined && existing.version !== 1) return;
+    localStorage.setItem(VIEW_PREFERENCES_KEY, JSON.stringify({ version: 1, ...value }));
+  }
   catch { /* Browsing still works with blocked or full storage. */ }
 }

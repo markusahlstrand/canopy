@@ -228,7 +228,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [savedView] = useState(readViewPreferences);
   const [layout, setLayout] = useState<'list' | 'grid'>(savedView.layout);
   const [sort, setSort] = useState<SortState>(savedView.sort);
-  useEffect(() => { saveViewPreferences({ layout, sort }); }, [layout, sort]);
   const reads = useRef(latestOnly());
   /**
    * The CURRENT refresh, not the one an action closed over.
@@ -503,8 +502,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   };
 
   /** Clicking a column header: same key toggles direction, a new key starts ascending. */
-  const onSort = (key: SortKey) =>
-    setSort((s) => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
+  const onSort = (key: SortKey) => {
+    const next: SortState = { key, dir: sort.key === key && sort.dir === 'asc' ? 'desc' : 'asc' };
+    setSort(next);
+    saveViewPreferences({ layout, sort: next });
+  };
 
   /**
    * The table emits action names; this is where they become operations.
@@ -725,7 +727,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         <Button
           variant="outline"
           size="sm"
-          onClick={() => setLayout((l) => (l === 'list' ? 'grid' : 'list'))}
+          onClick={() => {
+            const next = layout === 'list' ? 'grid' : 'list';
+            setLayout(next);
+            saveViewPreferences({ layout: next, sort });
+          }}
           aria-label={layout === 'list' ? 'Switch to grid' : 'Switch to list'}
         >
           <Icon name={layout === 'list' ? 'grid' : 'list'} className="size-4" />

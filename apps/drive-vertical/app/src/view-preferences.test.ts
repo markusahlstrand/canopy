@@ -17,3 +17,10 @@ it('does not break browsing when storage is denied', () => {
   expect(readViewPreferences().layout).toBe('list');
   expect(() => saveViewPreferences({ layout: 'grid', sort: { key: 'name', dir: 'desc' } })).not.toThrow();
 });
+
+it('leaves newer-format preferences alone even after an explicit old-client change', () => {
+  const newer = JSON.stringify({ version: 2, layout: 'grid', extra: 'new preference' });
+  localStorage.setItem(VIEW_PREFERENCES_KEY, newer);
+  saveViewPreferences({ layout: 'list', sort: { key: 'name', dir: 'asc' } });
+  expect(localStorage.getItem(VIEW_PREFERENCES_KEY)).toBe(newer);
+});
