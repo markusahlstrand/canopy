@@ -82,7 +82,7 @@ it('distinguishes transient retry advice from permission and availability refusa
   expect(message).toContain('gone. Refresh to check availability.');
   expect(message).toContain('retry. Retry these files.');
 });
-it('confirms an exact selection and space without mutating until approved', async () => {
+it('retires a confirmation when the space changes without mutating', async () => {
   api.selectSite('original');
   const trash = vi.spyOn(api, 'trashFile').mockResolvedValue({} as api.DriveFile);
   const props = { disabled: false, onTrashed: async () => {} };
@@ -91,11 +91,8 @@ it('confirms an exact selection and space without mutating until approved', asyn
   expect(trash).not.toHaveBeenCalled();
   api.selectSite('other');
   view.rerender(<BulkTrash {...props} files={[{ id: 'b', name: 'Other file' }]} />);
-  expect(screen.getByRole('group').textContent).toContain('Original file');
-  expect(screen.getByRole('group').textContent).not.toContain('Other file');
-  fireEvent.click(screen.getByRole('button', { name: 'Confirm move to Trash' }));
-  await screen.findByText('Moved to Trash: 1 file.');
-  expect(trash).toHaveBeenCalledExactlyOnceWith('a', 'original');
+  expect(screen.queryByRole('group')).toBeNull();
+  expect(trash).not.toHaveBeenCalled();
 });
 it('protects navigation while moving and retires unmounted batches before another request', async () => {
   let finish!: () => void;
@@ -111,4 +108,28 @@ it('protects navigation while moving and retires unmounted batches before anothe
   expect(trash).toHaveBeenCalledOnce(); expect(onTrashed).not.toHaveBeenCalled();
   const after = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(after);
   expect(after.defaultPrevented).toBe(false);
+});
+
+it('retires confirmations on navigation and allows result dismissal', async () => {
+  vi.spyOn(api, 'trashFile').mockResolvedValue({} as api.DriveFile);
+  const props = { files: [{ id: 'a', name: 'A' }], disabled: false, onTrashed: async () => {} };
+  const view = render(<BulkTrash {...props} contextKey="folder-a" />);
+  fireEvent.click(screen.getByRole('button', { name: 'Move 1 selected file to Trash' }));
+  view.rerender(<BulkTrash {...props} contextKey="folder-b" />); expect(screen.queryByRole('group')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Move 1 selected file to Trash' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm move to Trash' })); await screen.findByText('Moved to Trash: 1 file.');
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss Trash result' })); expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('keeps the confirmed snapshot when selection changes within the same context', async () => {
+  const trash = vi.spyOn(api, 'trashFile').mockResolvedValue({} as api.DriveFile);
+  const props = { disabled: false, contextKey: 'same-folder', onTrashed: async () => {} };
+  const view = render(<BulkTrash {...props} files={[{ id: 'a', name: 'Original file' }]} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Move 1 selected file to Trash' }));
+  view.rerender(<BulkTrash {...props} files={[{ id: 'b', name: 'New selection' }]} />);
+  expect(screen.getByRole('group').textContent).toContain('Original file');
+  expect(screen.getByRole('group').textContent).not.toContain('New selection');
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm move to Trash' }));
+  await screen.findByText('Moved to Trash: 1 file.');
+  expect(trash).toHaveBeenCalledExactlyOnceWith('a', null);
 });
