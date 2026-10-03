@@ -1,11 +1,11 @@
 import type { SearchHit } from './api';
 export type MatchFilter = 'all' | SearchHit['via'];
 export const filterMatches = (hits: SearchHit[], filter: MatchFilter) => filter === 'all' ? hits : hits.filter(hit => hit.via === filter);
-export function SearchMatchFilter({ hits, value, onChange }: { hits: SearchHit[]; value: MatchFilter; onChange: (value: MatchFilter) => void }) {
+export function SearchMatchFilter({ hits, value, onChange, busy = false }: { hits: SearchHit[]; value: MatchFilter; busy?: boolean; onChange: (value: MatchFilter) => void }) {
   return <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
     <label>Match type <select aria-label="Filter search matches" value={value} className="rounded border border-border bg-background p-1" onChange={event => onChange(event.target.value as MatchFilter)}>
-      <option value="all">All matches</option><option value="name">Best match: file name</option><option value="content">Best match: contents</option><option value="metadata">Best match: descriptions and labels</option>
+      <option value="all">All matches</option><option value="name">File name</option><option value="content">File contents</option><option value="metadata">Descriptions and labels</option>
     </select></label>
-    <p role="status" className="text-xs text-muted-foreground">Showing {filterMatches(hits, value).length} of {hits.length} returned matches. This filters up to the first 100 returned matches by their strongest match. A file matching its name and contents is classified by name.</p>
+    <p role="status" className="text-xs text-muted-foreground">{busy ? 'Loading matches…' : `Showing ${filterMatches(hits, value).length} of ${hits.length} returned matches.`} The server searches the selected field before returning up to 50 files. A file may match more than one field.</p>
   </div>;
 }

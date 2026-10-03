@@ -297,6 +297,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   }), []);
   const uploads = useUploadQueue(() => refreshRef.current());
 
+  const changeMatchFilter = (value: MatchFilter) => { reads.current.invalidate(); setMatchFilter(value); setSelection(new Set()); setBusy(true); };
+
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async (retryFolder = false) => {
     if (linkPending) return;
@@ -329,7 +331,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       if (view === 'search') {
         // Below the floor there is nothing to ask for, and asking would be a 400.
         const q = term.trim();
-        const found = q.length >= SEARCH_MIN ? (await search(q, 100)).hits : [];
+        const found = q.length >= SEARCH_MIN ? (await search(q, 50, matchFilter === 'all' ? undefined : matchFilter)).hits : [];
         // Checked AFTER the await, every time: an answer that arrives for a term the
         // box no longer holds is stale, and writing it is how a search shows results
         // for what you typed a moment ago.
@@ -387,7 +389,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, term, onError, auth.principal, linkPending]);
+  }, [folderId, view, term, matchFilter, onError, auth.principal, linkPending]);
 
   const moreTrash = async () => {
     if (!trashNext || busy || loadingPage || offline) return;
@@ -683,8 +685,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   ) : view === 'search' ? (
     term.trim().length < SEARCH_MIN
       ? <EmptyList icon="search" title="Search this space" description={`Enter at least ${SEARCH_MIN} characters to find files.`} />
-      : hits.length > 0 && visibleHits.length === 0
-        ? <EmptyList icon="search" title="No matches of this type in the returned results" description={`The filter applies to the first ${hits.length} returned matches, up to 100. Other match types or results beyond this limit may exist.`} actions={[{ label: 'Show all returned matches', onClick: () => { setMatchFilter('all'); setSelection(new Set()); } }]} />
+      : matchFilter !== 'all' && visibleHits.length === 0
+        ? <EmptyList icon="search" title="No matches of this type" description="Try another match type. The selected field is searched directly, returning up to 50 files." actions={[{ label: 'Show all returned matches', onClick: () => changeMatchFilter('all') }]} />
         : <EmptyList icon="search" title={`No matches for “${term.trim()}”`} description="Try another name or phrase from a file." />
   ) : offline ? (
     <EmptyList icon="folder" title="No saved files here" description="This folder has no file names saved for offline browsing." />
@@ -858,7 +860,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       }} />
 
       {view === 'search' ? (
-        <> {term.trim().length >= SEARCH_MIN ? <SearchMatchFilter hits={hits} value={matchFilter} onChange={value => { setMatchFilter(value); setSelection(new Set()); }} /> : null}
+        <> {term.trim().length >= SEARCH_MIN ? <SearchMatchFilter hits={hits} value={matchFilter} busy={busy} onChange={changeMatchFilter} /> : null}
         <FileTable
           searchQuery={term.trim()}
           files={sorted(visibleHits, sort).map((hit) => ({ ...fileItem(hit), snippet: hit.snippet ?? undefined, description: hit.snippet || (hit.via === 'content' ? 'Matched inside the document' : hit.via === 'metadata' ? 'Matched in description or labels' : 'Matched in the name') }))}

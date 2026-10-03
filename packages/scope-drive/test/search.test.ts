@@ -379,3 +379,27 @@ it('keeps a content hit beyond the snippet scan window without materializing its
   const got = await stub.invoke<Hits>('drive/search', { term: 'farawayneedle' });
   expect(got.hits.find(hit => hit.id === file.id)).toMatchObject({ via: 'content', snippet: null });
 });
+
+it('searches the selected match field before filling the result limit', async () => {
+  const writer = await as(ada);
+  for (let i = 0; i < 5; i++) await fileWithVersion(writer, ROOT_FOLDER_ID, `filterprobe-${i}.txt`);
+  const body = await fileWithVersion(writer, ROOT_FOLDER_ID, 'body-only-probe.txt');
+  await writer.invoke('drive/record-text', { fileId: body.id, versionId: body.versionId, status: 'indexed', text: 'filterprobe in the body' });
+  const found = await writer.invoke<Hits>('drive/search', { term: 'filterprobe', via: 'content', limit: 1 });
+  expect(found.hits.map(hit => hit.id)).toEqual([body.id]); expect(found.hits[0]?.via).toBe('content');
+  await expect((await as(cleo)).invoke('drive/search', { term: 'filterprobe', via: 'content' })).rejects.toThrow();
+});
+
+it('does not starve content matches behind more than the candidate reach of name matches', async () => {
+  const writer = await as(ada);
+  for (let i = 0; i < 110; i++) {
+    const file = await fileWithVersion(writer, ROOT_FOLDER_ID, `starve-${i}.txt`);
+    await writer.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, status: 'indexed', text: 'starve starve starve' });
+  }
+  const body = await fileWithVersion(writer, ROOT_FOLDER_ID, 'quiet-body.txt');
+  await writer.invoke('drive/record-text', { fileId: body.id, versionId: body.versionId, status: 'indexed', text: 'starve' });
+  const found = await writer.invoke<Hits>('drive/search', { term: 'starve', via: 'content', limit: 50 });
+  expect(found.hits).toHaveLength(50);
+  expect(found.hits.every(hit => hit.via === 'content')).toBe(true);
+  expect(found.hits.some(hit => hit.name.startsWith('starve-'))).toBe(true);
+});

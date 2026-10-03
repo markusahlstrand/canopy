@@ -1079,6 +1079,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     permission: 'drive:read',
     input: z.object({
       term: z.string().min(2),
+      via: z.enum(['name', 'content', 'metadata']).optional(),
       limit: z.number().int().positive().max(50).optional(),
     }),
     output: z.object({
