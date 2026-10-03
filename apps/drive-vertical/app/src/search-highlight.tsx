@@ -1,6 +1,6 @@
 /** Plain React children: extracted text and file names never become HTML. */
-export function SearchHighlight({ text, query }: { text: string; query: string }) {
-  const tokens = [...new Set(query.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().split(/[^\p{L}\p{N}_]+/u).filter(Boolean))];
+export function SearchHighlight({ text, query, mode }: { text: string; query: string; mode: 'prefix' | 'substring' }) {
+  const tokens = [...new Set(query.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().split(mode === 'prefix' ? /[^\p{L}\p{N}]+/u : /[^\p{L}\p{N}_]+/u).filter(token => token.length >= (mode === 'substring' ? 3 : 1)))];
   let folded = '';
   const offsets: number[] = [];
   let offset = 0;
@@ -16,6 +16,12 @@ export function SearchHighlight({ text, query }: { text: string; query: string }
     while (from < folded.length) {
       const index = folded.indexOf(token, from);
       if (index < 0) break;
+      from = index + token.length;
+      if (mode === 'prefix') {
+        const before = [...folded.slice(0, index)].at(-1) ?? '';
+        const after = [...folded.slice(index + token.length)][0] ?? '';
+        if (/[\p{L}\p{N}]/u.test(before) || (token.length === 1 && /[\p{L}\p{N}]/u.test(after))) continue;
+      }
       const start = offsets[index]!;
       const final = offsets[index + token.length - 1]!;
       const end = final + (text.codePointAt(final)! > 0xffff ? 2 : 1);

@@ -143,11 +143,11 @@ export function CommandPalette({
                 >
                   <FileIcon kind={kindOf(null)} size={22} />
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate"><SearchHighlight text={hit.name} query={query} /></span>
+                    <span className="truncate"><SearchHighlight text={hit.name} query={query} mode="prefix" /></span>
                     {/* What extraction bought: matching a document's text reads
                         differently to matching its name. */}
                     <span className="truncate text-[11.5px] text-muted-foreground">
-                      {hit.snippet ? <SearchHighlight text={hit.snippet} query={query} /> : (hit.via === 'content' ? 'matched inside the document' : hit.via === 'metadata' ? 'matched in description or labels' : 'matched in the name')}
+                      {hit.snippet ? <SearchHighlight text={hit.snippet} query={query} mode="substring" /> : (hit.via === 'content' ? 'matched inside the document' : hit.via === 'metadata' ? 'matched in description or labels' : 'matched in the name')}
                     </span>
                   </span>
                 </CommandItem>
