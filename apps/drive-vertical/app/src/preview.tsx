@@ -1,3 +1,4 @@
+import { FileMetadata } from './file-metadata';
 import { TextPreview } from './text-preview';
 import { confirmDiscardDrafts } from './drafts';
 /**
@@ -350,7 +351,7 @@ export function PreviewPanel({
       </nav>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <FileDetailsPanel key={fileId} fileId={fileId} /> : tab === 'file' ? (
+        {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : shape === 'image' || shape === 'viewer' ? (
