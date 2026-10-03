@@ -24,3 +24,10 @@ it('ignores a late permission response from a folder that was left', async () =>
   await act(async () => { finish(new Response(JSON.stringify({ id: 'a', canManage: true }))); });
   expect(screen.queryByRole('button')).toBeNull();
 });
+
+it('never offers or fetches root sharing', () => {
+  const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+  render(<CurrentFolderShare folderId="root" onShare={() => {}} />);
+  expect(screen.queryByRole('button')).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+});

@@ -1257,16 +1257,21 @@ describe('the People surface is offered only to whoever may use it', () => {
   });
 });
 
-it('opens sharing for the displayed folder after its management decision arrives', async () => {
-  await renderDrive();
-  expect(screen.queryByRole('button', { name: 'Share this folder'})).toBeNull();
-  await answer('/folders/root/metadata', { id: 'root', name: 'Space root', path: '', canManage: true });
-  fireEvent.click(screen.getByRole('button', { name: 'Share this folder'}));
+it('offers sharing for a nested current folder but never the space root', async () => {
+  await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }]);
+  expect(screen.queryByRole('button', { name: 'Share this folder' })).toBeNull();
+  expect(pending.some(p => p.url.includes('/folders/root/metadata'))).toBe(false);
+  fireEvent.doubleClick(screen.getByText('Papers'));
+  await flush();
+  await answer('/folders/01F/folders', []);
+  await answer('/folders/01F/files', []);
+  await answer('/folders/01F/metadata', { id: '01F', name: 'Papers', path: 'Papers', canManage: true });
+  fireEvent.click(screen.getByRole('button', { name: 'Share this folder' }));
   expect(screen.getByRole('dialog')).toBeTruthy();
-  expect(pending.some(p => p.url.includes('/folders/root/shares'))).toBe(true);
+  expect(pending.some(p => p.url.includes('/folders/01F/shares'))).toBe(true);
 });
 
- describe('sharing a folder', () => {
+describe('sharing a folder', () => {
   /** Open the share dialog on the one folder in the listing, via the row menu. */
   async function openShare(): Promise<void> {
     await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
