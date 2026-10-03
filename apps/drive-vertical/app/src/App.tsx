@@ -1,3 +1,4 @@
+import { watchImageViewerPreference } from './image-viewer';
 /**
  * The drive's own front end.
  *
@@ -184,6 +185,7 @@ const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
 };
 
 export default function App() {
+  useEffect(() => watchImageViewerPreference(), []);
   const [session, setSession] = useState<Session>({ state: 'loading' });
   const [error, setError] = useState<string | null>(null);
 

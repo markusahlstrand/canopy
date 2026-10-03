@@ -8,7 +8,7 @@ export function ViewersDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   const enabled = viewerRegistry.has('image-viewer');
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent>
     <DialogHeader><DialogTitle>File viewers</DialogTitle>
-      <DialogDescription>Choose optional previews in this browser. Text, PDF, audio and video previews stay available.</DialogDescription>
+      <DialogDescription>Choose optional previews in this browser. Changes also apply to other open tabs. Text, PDF, audio and video previews stay available.</DialogDescription>
     </DialogHeader>
     <section aria-label="Image viewer" className="flex items-center justify-between gap-4 rounded border p-3">
       <div><h3 className="font-medium">Image viewer</h3><p className="text-sm text-muted-foreground">Preview photos and images inline.</p>
