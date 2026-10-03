@@ -1788,3 +1788,19 @@ it('restores the selected loaded Trash rows as one batch', async () => {
   expect(screen.getByText('Restored 2 files.')).toBeTruthy();
   expect(screen.queryByText('lease.pdf')).toBeNull();
 });
+
+it('retains restore progress and reports the outcome after navigating away from Trash', async () => {
+  await renderDrive();
+  fireEvent.click(screen.getAllByRole('button', { name: /^Trash/ })[0]!);
+  await flush();
+  await answer('/api/trash', [{ ...file('01A', 'lease.pdf'), state: 'trashed' }, { ...file('01B', 'notes.txt'), state: 'trashed' }]);
+  fireEvent.click(screen.getByText('lease.pdf'));
+  fireEvent.click(screen.getByText('notes.txt'), { ctrlKey: true });
+  fireEvent.click(screen.getByRole('button', { name: 'Restore 2 selected files' }));
+  fireEvent.click(rail().getByRole('button', { name: /^My Drive/ }));
+  await flush();
+  expect(screen.getByText('Restoring 0 of 2…')).toBeTruthy();
+  await answer('/files/01A/restore', file('01A', 'lease.pdf'));
+  await answerWith('/files/01B/restore', 403, { detail: 'Denied' });
+  expect(screen.getByText(/No permission to restore 1 file: notes.txt/)).toBeTruthy();
+});
