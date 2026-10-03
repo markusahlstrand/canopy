@@ -21,6 +21,7 @@
     "@canopy/scope-drive": "workspace:*",
     "@canopy/ui": "workspace:*",
     "@substrat-run/adapter-cloudflare": "^0.134.0",
+    "@substrat-run/attachment-extractors": "0.1.1",
     "@substrat-run/contracts": "^0.134.0",
     "@substrat-run/kernel": "^0.134.0",
     "@substrat-run/vertical-auth": "^0.18.3",

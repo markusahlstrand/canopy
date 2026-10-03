@@ -1,3 +1,4 @@
+import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -219,6 +220,7 @@ async function nodeFor(req: Request, env: Env): Promise<Node> {
 function hostFor(env: Env): CloudflareScopeHost {
   const host = new CloudflareScopeHost({
     scope: env.SCOPE,
+    attachmentExtractors: defaultAttachmentExtractors(),
     // The byte side. The vertical never names a bucket: the platform mints one per
     // tenant and attaches it under a derived name, and this resolves that name. The
     // per-SCOPE isolation inside the store is the kernel's key prefix, not ours.

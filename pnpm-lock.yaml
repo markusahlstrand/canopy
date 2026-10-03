@@ -142,6 +142,9 @@ importers:
       '@substrat-run/adapter-cloudflare':
         specifier: ^0.134.0
         version: 0.134.0(zod@4.6.5)
+      '@substrat-run/attachment-extractors':
+        specifier: 0.1.1
+        version: 0.1.1(zod@4.6.5)
       '@substrat-run/contracts':
         specifier: ^0.134.0
         version: 0.134.0(zod@4.6.5)
@@ -2500,6 +2503,9 @@ packages:
   '@substrat-run/adapter-sqlite@0.134.0':
     resolution: {integrity: sha512-tBnQdKoe7GQZhFwZQxtFqZYxa0bZ3L3//unxuCuQa4WWx3NrhezPpiizacf/nBUvjFnlIiQUY6ympJeohCIi9w==}
 
+  '@substrat-run/attachment-extractors@0.1.1':
+    resolution: {integrity: sha512-5e09G3LDd4sIUoOgO8kMLD6tv6Tgg4MRKPSTD7+qcbLXJwuM4WlZLD0hgtsnOKtJdVbEuWHUinkGaF+902wEJQ==}
+
   '@substrat-run/contract-tests@0.134.0':
     resolution: {integrity: sha512-da0Quo0tdOZ4D8zP+fCd2D8tAUx2kd8fsQmTS+Tlt02H+ajOy3wKk9YeUhMX/dzu5xVFG4r9BqY1eFfpoBr9pg==}
     peerDependencies:
@@ -2511,8 +2517,16 @@ packages:
     peerDependencies:
       zod: ^4.4.0
 
+  '@substrat-run/contracts@0.135.0':
+    resolution: {integrity: sha512-ordOlsvu87IHYmT8qv3xXDYP5C7Z2+29IVnNI+ma4zQ8+0I0q6kFaTy7VTlNIHL0ShL46p+laF4P+IqlucS7VQ==}
+    peerDependencies:
+      zod: ^4.4.0
+
   '@substrat-run/kernel@0.134.0':
     resolution: {integrity: sha512-vISUmCeYAnTldqX/4ASQd85WHQforcdWgMOGrMwSsIcAhk48JxSuc1fhwJoo9OpWqG4L7IB3PRkIl+nnK9VLQg==}
+
+  '@substrat-run/kernel@0.135.0':
+    resolution: {integrity: sha512-8ceVTpGq0E95MUa3odxuRPSAS2xm3s7hWfhYi8h+w9WfAgucea9Rn+mBIoxTT6aTMwDDi+Y+8PeHpTRidOgR0A==}
 
   '@substrat-run/model-providers@0.5.24':
     resolution: {integrity: sha512-APXyue8/FAr0T+ulUk56uAueJn3y8Shhej7rJ6nGfduA4kJjNQWXI4X1fndqfjQCXYZlpmefgHG5zwoSP2vXfg==}
@@ -6547,6 +6561,12 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
+  '@substrat-run/attachment-extractors@0.1.1(zod@4.6.5)':
+    dependencies:
+      '@substrat-run/kernel': 0.135.0(zod@4.6.5)
+    transitivePeerDependencies:
+      - zod
+
   '@substrat-run/contract-tests@0.134.0(vitest@5.0.3(@types/node@26.6.3)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.3)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.5)':
     dependencies:
       '@substrat-run/contracts': 0.134.0(zod@4.6.5)
@@ -6558,9 +6578,19 @@ snapshots:
     dependencies:
       zod: 4.6.5
 
+  '@substrat-run/contracts@0.135.0(zod@4.6.5)':
+    dependencies:
+      zod: 4.6.5
+
   '@substrat-run/kernel@0.134.0(zod@4.6.5)':
     dependencies:
       '@substrat-run/contracts': 0.134.0(zod@4.6.5)
+    transitivePeerDependencies:
+      - zod
+
+  '@substrat-run/kernel@0.135.0(zod@4.6.5)':
+    dependencies:
+      '@substrat-run/contracts': 0.135.0(zod@4.6.5)
     transitivePeerDependencies:
       - zod
 
