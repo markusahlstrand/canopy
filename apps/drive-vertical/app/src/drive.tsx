@@ -233,10 +233,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [savedView] = useState(readViewPreferences);
   const [layout, setLayout] = useState<'list' | 'grid'>(savedView.layout);
   const [sort, setSort] = useState<SortState>(savedView.sort);
-  useEffect(() => watchViewPreferences(value => {
-    setLayout(value.layout);
-    setSort(value.sort);
-  }), []);
   const reads = useRef(latestOnly());
   /**
    * The CURRENT refresh, not the one an action closed over.
@@ -247,6 +243,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * keeps "refresh what is on screen" true at the moment it is called.
    */
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => watchViewPreferences(value => {
+    setLayout(value.layout);
+    setSort(value.sort);
+  }), []);
   const uploads = useUploadQueue(() => refreshRef.current());
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
