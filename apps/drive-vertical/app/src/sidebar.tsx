@@ -287,8 +287,9 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                     //    persist correctly and none of them would take effect.
                     if (!confirmNavigation()) return;
                     const url = new URL(window.location.href);
-                    url.searchParams.delete('path');
                     const before = url.search;
+                    url.searchParams.delete('path');
+                    url.searchParams.delete('folder');
                     if (selectSite(s.slug)) url.searchParams.delete('site');
                     else url.searchParams.set('site', s.slug);
                     if (url.search !== before) window.history.replaceState(null, '', url);

@@ -166,8 +166,9 @@ const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
 
     try {
       const me = await whoami();
-      // A fallback changed the target space: the old link's path cannot follow it.
+      // A fallback changed the target space: neither path nor ID can follow it.
       url.searchParams.delete('path');
+      url.searchParams.delete('folder');
       window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
       return me;
     } catch (retry: unknown) {
