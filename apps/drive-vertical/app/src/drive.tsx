@@ -295,7 +295,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       if (view === 'search') {
         // Below the floor there is nothing to ask for, and asking would be a 400.
         const q = term.trim();
-        const found = q.length >= SEARCH_MIN ? (await search(q)).hits : [];
+        const found = q.length >= SEARCH_MIN ? (await search(q, 100)).hits : [];
         // Checked AFTER the await, every time: an answer that arrives for a term the
         // box no longer holds is stale, and writing it is how a search shows results
         // for what you typed a moment ago.
@@ -491,6 +491,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     // Whatever is in flight belongs to the view being left.
     reads.current.invalidate();
     setTerm('');
+    setMatchFilter('all');
     setHits([]);
     setSelection(new Set());
     setBusy(true);
@@ -628,7 +629,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   ) : view === 'search' ? (
     term.trim().length < SEARCH_MIN
       ? <EmptyList icon="search" title="Search this space" description={`Enter at least ${SEARCH_MIN} characters to find files.`} />
-      : <EmptyList icon="search" title={`No matches for “${term.trim()}”`} description="Try another name or phrase from a file." />
+      : hits.length > 0 && visibleHits.length === 0
+        ? <EmptyList icon="search" title="No matches of this type in the returned results" description={`The filter applies to the first ${hits.length} returned matches, up to 100. Other match types or results beyond this limit may exist.`} actions={[{ label: 'Show all returned matches', onClick: () => { setMatchFilter('all'); setSelection(new Set()); } }]} />
+        : <EmptyList icon="search" title={`No matches for “${term.trim()}”`} description="Try another name or phrase from a file." />
   ) : offline ? (
     <EmptyList icon="folder" title="No saved files here" description="This folder has no file names saved for offline browsing." />
   ) : (
@@ -754,6 +757,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
               // previous term is in flight and still holds the ticket until then.
               reads.current.invalidate();
               setTerm(next);
+              setMatchFilter('all');
+              setSelection(new Set());
               // The previous term's hits are wrong the moment the box changes, so they
               // go now rather than lingering until the next answer lands. With `busy`
               // set, the list says "Loading…" instead of "No matches" for a search
@@ -792,7 +797,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       }} />
 
       {view === 'search' ? (
-        <> {!busy && term.trim().length >= SEARCH_MIN ? <SearchMatchFilter hits={hits} value={matchFilter} onChange={value => { setMatchFilter(value); setSelection(new Set()); }} /> : null}
+        <> {term.trim().length >= SEARCH_MIN ? <SearchMatchFilter hits={hits} value={matchFilter} onChange={value => { setMatchFilter(value); setSelection(new Set()); }} /> : null}
         <FileTable
           searchQuery={term.trim()}
           files={sorted(visibleHits, sort).map((hit) => ({ ...fileItem(hit), snippet: hit.snippet ?? undefined, description: hit.snippet || (hit.via === 'content' ? 'Matched inside the document' : hit.via === 'metadata' ? 'Matched in description or labels' : 'Matched in the name') }))}

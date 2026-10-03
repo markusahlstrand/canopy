@@ -1856,3 +1856,16 @@ it('filters search rows, clears hidden selections, and limits preview navigation
   expect(screen.getByRole('button', { name: 'Previous file' }).hasAttribute('disabled')).toBe(true);
   expect(screen.getByRole('button', { name: 'Next file' }).hasAttribute('disabled')).toBe(true);
 });
+
+it('explains empty filtered pages and resets match filters for a new search', async () => {
+  await renderDrive(); fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'report' } }); await flush();
+  expect(pending.find(p => p.url.includes('/api/search'))!.url).toContain('limit=100');
+  await answer('/api/search', { hits: [{ ...file('01A', 'name.txt'), via: 'name' }] });
+  fireEvent.change(screen.getByRole('combobox', { name: 'Filter search matches' }), { target: { value: 'content' } });
+  expect(screen.getByText('No matches of this type in the returned results')).toBeTruthy();
+  expect(screen.queryByText(/No matches for/)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Show all returned matches' })); expect(screen.getByText('name.txt')).toBeTruthy();
+  fireEvent.change(screen.getByRole('combobox', { name: 'Filter search matches' }), { target: { value: 'metadata' } });
+  fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'next' } });
+  expect((screen.getByRole('combobox', { name: 'Filter search matches' }) as HTMLSelectElement).value).toBe('all');
+});
