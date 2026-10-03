@@ -34,7 +34,7 @@ import { Sidebar, useSites, type NavId } from './sidebar';
 import { CreateSpaceDialog } from './create-space-dialog';
 import { openSpace } from './space-navigation';
 import { SpacesDialog } from './spaces-dialog';
-import { ViewersDialog } from './viewers-dialog';
+import { PluginManagement } from './plugin-management';
 import { PeopleDialog } from './people-dialog';
 import { CurrentFolderShare } from './current-folder-share';
 import { ShareDialog } from './share-dialog';
@@ -958,7 +958,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={siteList.retry} />
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
       <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople && !offline} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
-      <ViewersDialog open={viewersOpen} onOpenChange={setViewersOpen} />
+      <PluginManagement open={viewersOpen} onOpenChange={setViewersOpen} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 
