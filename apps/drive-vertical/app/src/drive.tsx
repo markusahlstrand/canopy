@@ -15,7 +15,7 @@ import { BulkRestore } from './bulk-restore';
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
-import { readViewPreferences, saveViewPreferences } from './view-preferences';
+import { readViewPreferences, saveViewPreferences, watchViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
 import { indexedMirror, syncMirror } from './scope-mirror';
@@ -243,6 +243,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * keeps "refresh what is on screen" true at the moment it is called.
    */
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => watchViewPreferences(value => {
+    setLayout(value.layout);
+    setSort(value.sort);
+  }), []);
   const uploads = useUploadQueue(() => refreshRef.current());
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
