@@ -1,3 +1,4 @@
+import { TextPreview } from './text-preview';
 import { confirmDiscardDrafts } from './drafts';
 /**
  * File preview (S12a slice 3, #78) — lifted from the portal's `file-preview.tsx` and
@@ -102,6 +103,7 @@ export function PreviewPanel({
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [wrapText, setWrapText] = useState(true);
   const [tab, setTab] = useState<Tab>('file');
   const [file, setFile] = useState<DriveFile | null>(null);
   const [version, setVersion] = useState<FileVersion | null>(null);
@@ -351,10 +353,10 @@ export function PreviewPanel({
             </object>
           ) : shape === 'text' ? (
             body ? (
-              editing ? <TextEditor key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} text={body.text}
+              editing ? <TextEditor key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} text={body.text} wrap={wrapText}
                 onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} /> : <>
                 {canWrite && !body.truncated && version.source === 'blob' ? <Button size="sm" variant="outline" className="mb-3" onClick={() => setEditing(true)}>Edit text</Button> : null}
-                <pre className="whitespace-pre-wrap break-words text-xs">{body.text}</pre>
+                <TextPreview key={`${fileId}:${version.id}`} text={body.text} wrap={wrapText} onWrapChange={setWrapText} />
                 {body.truncated ? (
                   <p className="mt-2 text-xs text-muted-foreground">
                     Cut off here — download the file to read the rest.

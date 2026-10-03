@@ -4,8 +4,8 @@ import { Button } from '@canopy/ui';
 import { ApiError, saveText, TEXT_PREVIEW_LIMIT } from './api';
 import { latestOnly } from './reads';
 
-export function TextEditor({ fileId, versionId, text, onSaved, onCancel, onReload }: {
-  fileId: string; versionId: string; text: string;
+export function TextEditor({ fileId, versionId, text, wrap = true, onSaved, onCancel, onReload }: {
+  fileId: string; versionId: string; text: string; wrap?: boolean;
   onSaved: () => Promise<void>; onReload: () => Promise<void>; onCancel: () => void;
 }) {
   const [draft, setDraft] = useState(text);
@@ -42,7 +42,7 @@ export function TextEditor({ fileId, versionId, text, onSaved, onCancel, onReloa
   };
   return <div className="space-y-3">
     <label className="block text-sm">File text
-      <textarea aria-label="File text" className="mt-2 min-h-80 w-full rounded border border-border bg-background p-2 font-mono text-xs"
+      <textarea aria-label="File text" wrap={wrap ? 'soft' : 'off'} className={`mt-2 min-h-80 w-full rounded border border-border bg-background p-2 font-mono text-xs ${wrap ? 'whitespace-pre-wrap' : 'whitespace-pre overflow-x-auto'}`}
         maxLength={TEXT_PREVIEW_LIMIT} value={draft} disabled={busy || saved} onChange={event => setDraft(event.target.value)} />
     </label>
     {error ? <p role="alert" className="text-sm">{error}</p> : null}
