@@ -97,3 +97,45 @@ it('does not list a forbidden root for a folder-only reader, and keeps the previ
   expect(fetcher.mock.calls.some(([url]) => url.includes('/folders/root/'))).toBe(false);
   expect(screen.queryByText("Couldn't load this view")).toBeNull();
 });
+
+it('allows search after a failed folder lookup and retries the folder without reading root', async () => {
+  history.replaceState(null, '', '/?file=stable');
+  let available = false;
+  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/files/stable' ? metadata
+    : url === '/api/folders/private-folder/metadata' ? { id: 'private-folder', path: 'Shared folder' }
+    : url.startsWith('/api/search') ? { hits: [] } : []), { status: url === '/api/folders/private-folder/metadata' && !available ? 503 : 200 }));
+  vi.stubGlobal('fetch', fetcher); render(<DriveScreen {...shell} />);
+  await screen.findByText('Folder context unavailable');
+  fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'report' } });
+  await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url.startsWith('/api/search'))).toBe(true));
+  expect(screen.queryByText('Folder context unavailable')).toBeNull();
+  fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: '' } });
+  await screen.findByText('Folder context unavailable');
+  available = true; fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/private-folder/files')).toBe(true));
+  expect(fetcher.mock.calls.some(([url]) => url.includes('/folders/root/'))).toBe(false);
+});
+
+it.each([200, 503])('ignores late folder context after navigation (%s)', async status => {
+  history.replaceState(null, '', '/?file=stable');
+  let finish!: (value: Response) => void;
+  const fetcher = vi.fn((url: string) => url === '/api/folders/private-folder/metadata'
+    ? new Promise<Response>(resolve => { finish = resolve; })
+    : Promise.resolve(new Response(JSON.stringify(url === '/api/files/stable' ? metadata : []))));
+  vi.stubGlobal('fetch', fetcher); render(<DriveScreen {...shell} />);
+  await screen.findByText('Renamed.zip'); await waitFor(() => expect(finish).toBeDefined());
+  fireEvent.click(screen.getByRole('button', { name: /^Trash$/ }));
+  await act(async () => finish(new Response(JSON.stringify({ id: 'private-folder', path: 'Shared folder' }), { status })));
+  await screen.findByText('Trash is empty');
+  expect(screen.queryByText('Folder context unavailable')).toBeNull();
+  expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/private-folder/files')).toBe(false);
+});
+
+it('opens a root file with an empty breadcrumb and a root listing', async () => {
+  history.replaceState(null, '', '/?file=stable');
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/files/stable'
+    ? { ...metadata, file: { ...metadata.file, folder_id: 'root' } }
+    : url === '/api/folders/root/metadata' ? { id: 'root', path: '' } : []))));
+  render(<DriveScreen {...shell} />);
+  await screen.findByText('Renamed.zip'); await screen.findByText('Your drive is empty');
+});
