@@ -268,3 +268,29 @@ describe('persistent plugin installations', () => {
     }
   });
 });
+
+describe('plugin review boundaries',()=>{
+ const manifest={id:'review-viewer',name:'Review',version:'1',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'review',match:['.review']}]}};
+ it('preserves disabled installs, requires exact consent for widened access, and returns metadata without source',async()=>{
+  const owner=await as(ada);const first=await owner.invoke<{id:string;updated_at:string;source_sha256:string}>('drive/save-plugin',{manifest,source:'code',forSpace:true,expectedRevision:null});expect(first.source_sha256).toMatch(/^[a-f0-9]{64}$/);
+  const disabled=await owner.invoke<{updated_at:string}>('drive/toggle-plugin',{id:first.id,enabled:false});const caps=[{kind:'item:read'},{kind:'net:fetch',hosts:['collector.example']}];
+  await expect(owner.invoke('drive/save-plugin',{manifest:{...manifest,capabilities:caps},source:'new',forSpace:true,expectedRevision:disabled.updated_at})).rejects.toThrow('Approve');
+  const updated=await owner.invoke<{enabled:number;updated_at:string}>('drive/save-plugin',{manifest:{...manifest,capabilities:caps},source:'new',forSpace:true,expectedRevision:disabled.updated_at,acceptCapabilities:caps});expect(updated.enabled).toBe(0);
+  const listed=await owner.invoke<{plugins:Record<string,unknown>[]}>('drive/list-plugins',{});expect(listed.plugins.find(row=>row.id===first.id)).not.toHaveProperty('source');
+  await expect(owner.invoke('drive/plugin-source',{id:first.id,revision:disabled.updated_at})).rejects.toThrow('changed');expect((await owner.invoke<{source:string}>('drive/plugin-source',{id:first.id,revision:updated.updated_at})).source).toBe('new');
+ });
+ it('refuses folder-only managers, foreign personal removals, and private network hosts',async()=>{
+  const owner=await as(ada),member=await as(bjorn),narrowed=await as(cleo);
+  const row=await owner.invoke<{id:string}>('drive/save-plugin',{manifest:{...manifest,id:'private-viewer'},source:'code',expectedRevision:null});await expect(member.invoke('drive/remove-plugin',{id:row.id})).rejects.toThrow();
+  await expect(narrowed.invoke('drive/save-plugin',{manifest,source:'code',forSpace:true,expectedRevision:null})).rejects.toThrow();
+  for(const host of ['localhost','127.0.0.1','192.168.1.1','169.254.169.254','nas.local','svc.internal'])await expect(owner.invoke('drive/save-plugin',{manifest:{...manifest,capabilities:[{kind:'net:fetch',hosts:[host]}]},source:'code',expectedRevision:null})).rejects.toThrow();
+ });
+});
+
+it('bounds aggregate plugin bytes and removes personal installs with their member',async()=>{
+ const who=principalId.parse(ulid());await host.admin.assignRole(staff,{principalId:who,roleKey:'member',node:{tenantId:tenant,scopeId:scope}});const member=await host.getScope(who,tenant,scope),owner=await as(ada);
+ const manifest={id:'quota-viewer',name:'Quota',version:'1',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'quota',match:['.quota']}]}};
+ await expect(member.invoke('drive/save-plugin',{manifest,source:'é'.repeat(128001),expectedRevision:null})).rejects.toThrow('256 KB');
+ let refused=false;for(let i=0;i<22;i++){try{await member.invoke('drive/save-plugin',{manifest:{...manifest,id:'quota-viewer-'+i},source:'x'.repeat(250000),expectedRevision:null});}catch(error){expect(String(error)).toContain('5 MB');refused=true;break;}}expect(refused).toBe(true);
+ await owner.invoke('drive/forget-person',{principal:who});expect((await member.invoke<{plugins:unknown[]}>('drive/list-plugins',{})).plugins.filter((row:unknown)=>(row as {principal:string}).principal===who)).toEqual([]);
+});
