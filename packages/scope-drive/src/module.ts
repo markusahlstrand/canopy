@@ -20,6 +20,8 @@ import { searchSnippet, SNIPPET_SCAN_LIMIT } from './search-snippet.js';
  */
 import {
   dataSubjectId,
+  PROVISION_SIBLING_KIND,
+  provisionSiblingPayload,
   operationInputsOf,
   permissionKey,
   principalId,
@@ -168,6 +170,21 @@ async function pluginForMutation(ctx: OperationContext, id: string) {
   return row;
 }
 const operations = {
+  'drive/request-space': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.manage));
+    const previous = ctx.platformRequests({ kind: PROVISION_SIBLING_KIND, limit: 100 }).find(request => request.requestedBy === ctx.principal && provisionSiblingPayload.safeParse(request.payload).data?.slug === input.slug);
+    if (previous && previous.status !== 'failed') return { id: previous.id, slug: input.slug, name: input.name };
+    const payload = provisionSiblingPayload.parse(input);
+    const id = ctx.requestPlatform({ kind: PROVISION_SIBLING_KIND, payload });
+    return { id, slug: payload.slug, name: payload.name };
+  },
+  'drive/space-requests': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.manage));
+    return { requests: ctx.platformRequests({ kind: PROVISION_SIBLING_KIND, limit: 100 }).filter(request => request.requestedBy === ctx.principal).flatMap(request => {
+      const payload = provisionSiblingPayload.safeParse(request.payload);
+      return payload.success ? [{ id: request.id, slug: payload.data.slug, name: payload.data.name, status: request.status, error: request.lastError }] : [];
+    }) };
+  },
   'drive/list-plugins': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
     return {plugins: ctx.sql.query<PluginRow>('SELECT * FROM drive_plugin_installs WHERE principal IN (?, ?) ORDER BY plugin_id LIMIT 100', [ctx.principal, 'space'])};
