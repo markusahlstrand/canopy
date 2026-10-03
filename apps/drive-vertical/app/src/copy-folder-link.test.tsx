@@ -1,0 +1,40 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { ShareDialog } from './share-dialog';
+import { CopyFolderLink } from './copy-folder-link';
+import * as api from './api';
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); api.selectSite(null); });
+it('copies a credential-free navigation link from the share dialog without granting access', async () => {
+  api.selectSite('family');
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => new Response(JSON.stringify(url.endsWith('/shares') ? { shares: [] } : url.endsWith('/people') ? { people: [] } : { id: 'reports', name: 'Reports', path: 'Team/Reports & notes' })));
+  vi.stubGlobal('fetch', fetch);
+  const writeText = vi.fn(async (_text: string) => {});
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  render(<ShareDialog folder={{ id: 'reports', name: 'Reports' }} onClose={() => {}} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
+  await screen.findByText('Folder link copied.');
+  const link = new URL(writeText.mock.calls[0]![0]);
+  expect(link.searchParams.get('site')).toBe('family');
+  expect(link.searchParams.get('path')).toBe('Team/Reports & notes');
+  expect([...link.searchParams.keys()]).toEqual(['site', 'path']);
+  expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+});
+it('reports unavailable clipboard access', async () => {
+  vi.spyOn(api, 'getFolder').mockResolvedValue({ id: 'reports', path: 'Reports' } as Awaited<ReturnType<typeof api.getFolder>>);
+  vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('Denied')) } });
+  render(<CopyFolderLink folderId="reports" />);
+  fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
+  await screen.findByText(/Could not copy the link/);
+  expect(screen.getByRole('button', { name: 'Copy folder link' }).hasAttribute('disabled')).toBe(false);
+});
+it('does not copy a late folder response after the dialog closes', async () => {
+  let finish!: (folder: Awaited<ReturnType<typeof api.getFolder>>) => void;
+  vi.spyOn(api, 'getFolder').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const writeText = vi.fn();
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  const view = render(<CopyFolderLink folderId="reports" />);
+  fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
+  view.unmount();
+  await act(async () => finish({ path: 'Reports' } as Awaited<ReturnType<typeof api.getFolder>>));
+  expect(writeText).not.toHaveBeenCalled();
+});

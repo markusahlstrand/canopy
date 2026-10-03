@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, PersonAvatar, cn } from '@canopy/ui';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@canopy/ui';
 import { latestOnly } from './reads';
+import { CopyFolderLink } from './copy-folder-link';
 import { PeoplePicker } from './people-picker';
 import {
   listFolderShares,
@@ -178,6 +179,8 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
             Everything inside this folder comes with it, however deep.
           </DialogDescription>
         </DialogHeader>
+
+        {folder ? <CopyFolderLink key={folder.id} folderId={folder.id} /> : null}
 
         {error ? (
           <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
