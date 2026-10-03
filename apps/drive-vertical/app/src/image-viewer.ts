@@ -15,6 +15,7 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
   #image: HTMLImageElement;
   #viewport: HTMLDivElement;
   #status: HTMLSpanElement;
+  #hint: HTMLSpanElement;
   #buttons: HTMLButtonElement[] = [];
   #zoom: number | null = null; // null fits the available box without upscaling.
   #loaded = false;
@@ -48,9 +49,9 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
     this.#viewport.tabIndex = 0;
     this.#viewport.setAttribute('role', 'region');
     this.#viewport.setAttribute('aria-label', 'Image viewport');
-    this.#viewport.setAttribute('aria-keyshortcuts', '= - 0 F');
+    this.#viewport.setAttribute('aria-keyshortcuts', 'Plus = - 0 F');
     this.#viewport.setAttribute('aria-describedby', 'zoom-shortcuts');
-    const hint = document.createElement('span'); hint.id = 'zoom-shortcuts';
+    const hint = this.#hint = document.createElement('span'); hint.id = 'zoom-shortcuts';
     hint.textContent = 'Focus the image: +/− zoom, 0 actual size, F fit. Arrow keys scroll.';
     hint.style.font = '12px system-ui';
     this.#viewport.addEventListener('pointerdown', () => this.#viewport.focus({ preventScroll: true }));
@@ -68,7 +69,7 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
       this.#loaded = true; this.#apply();
       this.dispatchEvent(new CustomEvent('viewer-loaded', { detail: { width: this.#image.naturalWidth, height: this.#image.naturalHeight } }));
     });
-    this.#image.addEventListener('error', () => this.dispatchEvent(new CustomEvent('viewer-error')));
+    this.#image.addEventListener('error', () => { this.#loaded = false; this.#apply(); this.dispatchEvent(new CustomEvent('viewer-error')); });
     this.#viewport.append(this.#image); shadow.append(style, toolbar, hint, this.#viewport); this.#apply();
   }
   #minimumZoom() {
@@ -101,6 +102,7 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
   }
   #resetScroll() { this.#viewport.scrollLeft = 0; this.#viewport.scrollTop = 0; }
   #apply() {
+    this.#hint.hidden = !this.#loaded;
     const fit = this.#zoom === null;
     this.#image.style.width = fit ? 'auto' : `${this.#image.naturalWidth * this.#zoom!}px`;
     this.#image.style.height = fit ? 'auto' : `${this.#image.naturalHeight * this.#zoom!}px`;
