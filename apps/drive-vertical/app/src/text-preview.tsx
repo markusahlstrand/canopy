@@ -16,7 +16,7 @@ function findMatches(text: string, query: string) {
 }
 
 /** Display plain text with local find controls; finding never fetches or edits bytes. */
-export function TextPreview({ text, wrap, onWrapChange }: { text: string; wrap: boolean; onWrapChange: (wrap: boolean) => void }) {
+export function TextPreview({ text, wrap, onWrapChange, truncated = false }: { text: string; wrap: boolean; onWrapChange: (wrap: boolean) => void; truncated?: boolean }) {
   const [query, setQuery] = useState('');
   const searchQuery = useDeferredValue(query);
   const pending = searchQuery !== query;
@@ -69,7 +69,7 @@ export function TextPreview({ text, wrap, onWrapChange }: { text: string; wrap: 
         <Button size="sm" variant="ghost" disabled={pending || !matches.length} aria-label="Next match" onClick={() => advance(1)}>↓</Button>
       </div>
       {query ? <p role="status" className="text-xs text-muted-foreground">{pending ? 'Updating matches…' : matches.length ? `${index + 1} of ${matches.length}${limited ? '+' : ''} matches` : 'No matches'}{!pending && limited ? ' · Showing the first 1,000 matches' : ''}</p> : null}
-      <TextStatistics text={text} />
+      <TextStatistics text={text} truncated={truncated} />
     </div>
     <pre aria-busy={pending} className={wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere] text-xs' : 'overflow-x-auto whitespace-pre text-xs'}>{fragments}</pre>
   </div>;
