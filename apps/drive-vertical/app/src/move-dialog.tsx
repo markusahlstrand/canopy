@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@canopy/ui';
-import { currentSite, listFoldersPage, appendRows, moveFile, moveFolder, ROOT_FOLDER_ID, type DriveFolder } from './api';
+import { ApiError, currentSite, listFoldersPage, appendRows, moveFile, moveFolder, ROOT_FOLDER_ID, type DriveFolder } from './api';
 import { latestOnly } from './reads';
 import { useNavigationGuard } from './navigation-guards';
 import type { FileItem } from './items';
@@ -15,7 +15,9 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   const [site] = useState(currentSite);
   const mounted = useRef(true);
   const running = useRef(false);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const cancelled = useRef(false);
+  const completed = useRef(new Set<string>());
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; cancelled.current = true; }; }, []);
   const reads = useRef(latestOnly()).current;
   const [next, setNext] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -25,6 +27,7 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(items);
+  const [failures, setFailures] = useState<{ id: string; message: string }[]>([]);
   useNavigationGuard(busy);
   const destination = trail[trail.length - 1]!;
 
@@ -60,30 +63,59 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
     }
   };
 
-  const blocked = (folder: DriveFolder) => remaining.some((item) => item.isFolder && (
+  const blocked = (folder: DriveFolder) => items.some((item) => item.isFolder && (
     folder.id === item.id || folder.path.startsWith(`${item.path}/`)
   ));
 
+  const changeDestination = (nextTrail: typeof trail) => {
+    if (busy || nextTrail[nextTrail.length - 1]!.id === destination.id) return;
+    setTrail(nextTrail);
+    setRemaining(items.filter(item => !completed.current.has(item.id)));
+    setFailures([]);
+  };
+
   const submit = async () => {
     if (running.current || loading || !remaining.length || destination.id === sourceFolderId) return;
-    running.current = true; setBusy(true); setError(null);
+    running.current = true; cancelled.current = false; setBusy(true); setError(null);
     let left = remaining;
     const moved: string[] = [];
-    let failure: string | null = null;
+    const problems = failures.filter(failure => !remaining.some(item => item.id === failure.id));
+    let attempted = 0;
+    let stopped: string | null = null;
     for (const item of remaining) {
-      if (!mounted.current) break;
+      if (!mounted.current || cancelled.current) break;
       try {
         if (item.isFolder) await moveFolder(item.id, destination.id, site);
         else await moveFile(item.id, destination.id, site);
-        moved.push(item.id); left = left.filter(candidate => candidate.id !== item.id);
-        if (mounted.current) setRemaining(left);
-      } catch (error) { failure = error instanceof Error ? error.message : String(error); break; }
+        moved.push(item.id); completed.current.add(item.id);
+        left = left.filter(candidate => candidate.id !== item.id);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) stopped = 'Your session expired. Sign in before retrying.';
+        else if (error instanceof TypeError) stopped = 'Connection lost. Reconnect before retrying.';
+        else {
+          const permanent = error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 429;
+          const reason = error instanceof ApiError && error.status === 403
+            ? `No permission to move ${item.name} into ${destination.name}. Check source and destination access or choose another folder.`
+            : error instanceof ApiError && error.status === 409 ? `${item.name}: name collision in ${destination.name}. Choose another folder or rename the file.`
+            : `${item.name}: ${error instanceof Error ? error.message : String(error)}.${permanent ? ' Check availability.' : ' Retry this file.'}`;
+          problems.push({ id: item.id, message: reason });
+          if (permanent) left = left.filter(candidate => candidate.id !== item.id);
+        }
+      }
+      attempted++;
+      if (mounted.current) setRemaining(left);
+      if (stopped) break;
     }
     if (mounted.current) {
-      try { await onMoved(moved); } catch { failure = (failure ? failure + ' ' : '') + 'The listing could not refresh. Refresh to check the results.'; }
+      let refreshFailed = false;
+      try { await onMoved(moved); } catch { refreshFailed = true; }
       if (mounted.current) {
-        if (!failure && !left.length) onClose();
-        else setError(`${items.length - left.length} moved; ${left.length} remaining. ${failure ?? 'Stopped.'}`);
+        setFailures(problems);
+        if (!problems.length && !stopped && !left.length && !refreshFailed) onClose();
+        else {
+          const unattempted = remaining.length - attempted;
+          setError(`${completed.current.size} moved; ${left.length} remaining to retry. ${unattempted} not attempted. ${stopped ?? (cancelled.current ? 'Stopped.' : '')} ${refreshFailed ? 'The listing could not refresh. Refresh to check the results.' : ''}`);
+        }
         setBusy(false);
       }
     }
@@ -98,27 +130,28 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
           <DialogDescription>Choose a folder in this space. Access follows the destination; existing names are refused.</DialogDescription>
         </DialogHeader>
         <ul aria-label="Files remaining to move" className="max-h-32 overflow-auto text-sm">{remaining.map(item => <li key={item.id}>{item.name}</li>)}</ul>
-        {busy ? <p role="status">Moved {items.length - remaining.length} of {items.length}…</p> : null}
+        {busy ? <p role="status">Moved {completed.current.size} of {items.length}…</p> : null}
         <nav aria-label="Destination path" className="flex flex-wrap gap-2">
           {trail.map((crumb, index) => (
             <Button key={crumb.id} variant="ghost" size="sm" disabled={busy}
-              onClick={() => setTrail(trail.slice(0, index + 1))}>{crumb.name}</Button>
+              onClick={() => changeDestination(trail.slice(0, index + 1))}>{crumb.name}</Button>
           ))}
         </nav>
         <div aria-label="Destination folders" className="max-h-64 overflow-auto">
           {loading ? <p role="status">Loading folders…</p> : folders.map((folder) => (
             <Button key={folder.id} variant="ghost" className="w-full justify-start"
               disabled={busy || blocked(folder)}
-              onClick={() => setTrail([...trail, { id: folder.id, name: folder.name }])}>
+              onClick={() => changeDestination([...trail, { id: folder.id, name: folder.name }])}>
               {folder.name}
             </Button>
           ))}
           {next ? <Button variant="outline" disabled={loadingMore || busy || loading} onClick={() => void more()}>{loadingMore ? 'Loading folders…' : 'Load more folders'}</Button> : null}
           {!loading && !error && folders.length === 0 ? <p>No subfolders</p> : null}
         </div>
+        {failures.length ? <ul aria-label="Files not moved" className="text-sm text-destructive">{failures.map((failure, i) => <li key={i}>{failure.message}</li>)}</ul> : null}
         {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
         <div className="flex justify-end gap-2">
-          <Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={() => { if (busy) cancelled.current = true; else onClose(); }}>{busy ? 'Cancel remaining moves' : 'Cancel'}</Button>
           <Button disabled={busy || loading || !remaining.length || destination.id === sourceFolderId}
             onClick={() => void submit()}>{busy ? 'Moving…' : 'Move here'}</Button>
         </div>

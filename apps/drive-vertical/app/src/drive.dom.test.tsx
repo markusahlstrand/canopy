@@ -696,7 +696,7 @@ describe('move destination picker', () => {
     await answerWith('/files/01A/move', 409, { error: 'name already exists' });
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', [file('01A', 'lease.pdf')]);
-    expect(within(dialog).getByRole('alert').textContent).toContain('1 remaining');
+    expect(within(dialog).getByLabelText('Files not moved').textContent).toContain('lease.pdf: name collision');
     expect(screen.getByText('lease.pdf', { selector: 'td span' })).toBeTruthy();
   });
 
@@ -706,7 +706,7 @@ describe('move destination picker', () => {
     expect(within(dialog).getByText('Move 2 items')).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
     await answer('/files/01A/move', { ...items[0], folder_id: '01D' });
-    await answerWith('/files/01B/move', 409, { error: 'name already exists' });
+    await answerWith('/files/01B/move', 503, { error: 'temporarily unavailable' });
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', [items[1]]);
     expect(within(dialog).getByRole('alert').textContent).toContain('1 moved; 1 remaining');
