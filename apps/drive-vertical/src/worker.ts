@@ -1,4 +1,5 @@
-import { spaceSettingsSchema, parseSpaceSettings, defaultSpaceSettings, type SpaceSettings } from './space-settings.js';
+import { mountSpaceSettings } from './space-settings-routes.js';
+import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 /**
@@ -471,12 +472,7 @@ mountPlatformSurface<Env>(app, {
     // `multi-scope-manyfold.md`). It is what lets the app list and switch spaces
     // without reaching the control plane — which a sandbox-clean vertical cannot do.
     // Idempotent, and re-run by every reconcile, so a lost record repairs itself.
-    let settings = await directory.readSpaceSettings(b.scopeId);
-    if (!settings) {
-      settings = await directory.readSpaceSettings(`creator:${b.owner}`);
-      if (settings) await directory.writeSpaceSettings(b.scopeId, settings);
-      await directory.deleteSpaceSettings(`creator:${b.owner}`);
-    }
+    const settings = await provisionSpaceSettings(directory, b.scopeId, b.owner);
     if (b.slug && b.name) {
       if ((await directory.ownerSeat(b.scopeId)).state === 'claimed') await directory.recordSite(b.scopeId, b.slug, settings?.name ?? b.name);
       else await directory.deferSite(b.scopeId, b.slug, settings?.name ?? b.name);
@@ -688,22 +684,10 @@ app.delete('/api/people/:principal', async (c) => {
  * Slug and name only. The scope id is the address, and a caller that does not need it
  * should not be handed it; `x-site` takes the slug.
  */
-app.get('/api/space-settings', async (c) => {
-  await requirePeopleAdmin(c);
-  const node = await nodeFor(c.req.raw, c.env), directory = identityDo(c.env, node);
-  const site = (await directory.listSites()).find(site => site.scopeId === node.scopeId);
-  return c.json(await directory.readSpaceSettings(node.scopeId) ?? defaultSpaceSettings(site?.name ?? 'Space'));
-});
-app.patch('/api/space-settings', async (c) => {
-  await requirePeopleAdmin(c);
-  const settings = spaceSettingsSchema.safeParse(await c.req.json());
-  if (!settings.success) throw new HTTPException(400, {message:'Enter a space name and choose a supported icon and color.'});
-  const node = await nodeFor(c.req.raw, c.env), directory = identityDo(c.env, node);
-  const site = (await directory.listSites()).find(site => site.scopeId === node.scopeId);
-  if (!site) throw new HTTPException(404, {message:'Space not found.'});
-  await directory.writeSpaceSettings(node.scopeId, settings.data);
-  await directory.recordSite(node.scopeId, site.slug, settings.data.name);
-  return c.json(settings.data);
+mountSpaceSettings(app, async c => {
+ await requirePeopleAdmin(c);
+ const node=await nodeFor(c.req.raw,c.env);
+ return {scope:node.scopeId,directory:identityDo(c.env,node)};
 });
 app.post('/api/sites', async (c) => {
   const node = await nodeFor(c.req.raw, c.env);

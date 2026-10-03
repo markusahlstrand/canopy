@@ -9,3 +9,17 @@ export function parseSpaceSettings(value?: string): SpaceSettings | null {
   if (!value) return null;
   try { const result = spaceSettingsSchema.safeParse(JSON.parse(value)); return result.success ? result.data : null; } catch { return null; }
 }
+
+export interface SettingsDirectory {
+ readSpaceSettings(scope: string): Promise<SpaceSettings | null>;
+ writeSpaceSettings(scope: string, settings: SpaceSettings): Promise<void>;
+ deleteSpaceSettings(scope: string): Promise<void>;
+ recordSite(scope:string,slug:string,name:string):Promise<void>;
+ listSites():Promise<{scopeId:string;slug:string;name:string}[]>;
+}
+export async function provisionSpaceSettings(directory: SettingsDirectory, scope: string, owner: string): Promise<SpaceSettings | null> {
+ let settings = await directory.readSpaceSettings(scope);
+ if (!settings) { settings = await directory.readSpaceSettings(`creator:${owner}`); if (settings) await directory.writeSpaceSettings(scope, settings); }
+ await directory.deleteSpaceSettings(`creator:${owner}`);
+ return settings;
+}
