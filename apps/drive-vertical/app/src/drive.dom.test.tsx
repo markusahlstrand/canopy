@@ -1859,12 +1859,15 @@ it('filters search rows, clears hidden selections, and limits preview navigation
 
 it('explains empty filtered pages and resets match filters for a new search', async () => {
   await renderDrive(); fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'report' } }); await flush();
-  expect(pending.find(p => p.url.includes('/api/search'))!.url).toContain('limit=100');
+  expect(pending.find(p => p.url.includes('/api/search'))!.url).toContain('limit=50');
   await answer('/api/search', { hits: [{ ...file('01A', 'name.txt'), via: 'name' }] });
   fireEvent.change(screen.getByRole('combobox', { name: 'Filter search matches' }), { target: { value: 'content' } });
-  expect(screen.getByText('No matches of this type in the returned results')).toBeTruthy();
+  await flush(); expect(pending.find(p => p.url.includes('/api/search'))!.url).toContain('via=content');
+  await answer('/api/search', { hits: [] });
+  expect(screen.getByText('No matches of this type')).toBeTruthy();
   expect(screen.queryByText(/No matches for/)).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Show all returned matches' })); expect(screen.getByText('name.txt')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Show all returned matches' })); await flush();
+  await answer('/api/search', { hits: [{ ...file('01A', 'name.txt'), via: 'name' }] }); expect(screen.getByText('name.txt')).toBeTruthy();
   fireEvent.change(screen.getByRole('combobox', { name: 'Filter search matches' }), { target: { value: 'metadata' } });
   fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'next' } });
   expect((screen.getByRole('combobox', { name: 'Filter search matches' }) as HTMLSelectElement).value).toBe('all');

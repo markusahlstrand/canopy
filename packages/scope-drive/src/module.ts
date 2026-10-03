@@ -1307,6 +1307,7 @@ const operations = {
 
     const hits: (FileRow & { via: 'name' | 'content' | 'metadata'; snippet: string | null })[] = [];
     for (const [fileId, { via }] of ranked) {
+      if (input.via && via !== input.via) continue;
       if (hits.length === limit) break;
       // Per hit, and deliberately not a bulk filter: the checker's answer is the
       // only thing that knows about a grant three folders up. A principal with a

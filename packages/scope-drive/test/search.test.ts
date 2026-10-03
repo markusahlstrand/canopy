@@ -379,3 +379,13 @@ it('keeps a content hit beyond the snippet scan window without materializing its
   const got = await stub.invoke<Hits>('drive/search', { term: 'farawayneedle' });
   expect(got.hits.find(hit => hit.id === file.id)).toMatchObject({ via: 'content', snippet: null });
 });
+
+it('filters strongest match type before filling the result limit', async () => {
+  const writer = await as(ada);
+  for (let i = 0; i < 5; i++) await fileWithVersion(writer, ROOT_FOLDER_ID, `filterprobe-${i}.txt`);
+  const body = await fileWithVersion(writer, ROOT_FOLDER_ID, 'body-only-probe.txt');
+  await writer.invoke('drive/record-text', { fileId: body.id, versionId: body.versionId, status: 'indexed', text: 'filterprobe in the body' });
+  const found = await writer.invoke<Hits>('drive/search', { term: 'filterprobe', via: 'content', limit: 1 });
+  expect(found.hits.map(hit => hit.id)).toEqual([body.id]); expect(found.hits[0]?.via).toBe('content');
+  await expect((await as(cleo)).invoke('drive/search', { term: 'filterprobe', via: 'content' })).rejects.toThrow();
+});

@@ -682,9 +682,9 @@ export const restoreFile = (fileId: string, selectedSite = site) =>
  */
 export const SEARCH_MIN = 2;
 
-export const search = (term: string, limit?: number) =>
+export const search = (term: string, limit?: number, via?: SearchHit['via']) =>
   call<{ hits: SearchHit[] }>(
-    `/search?term=${encodeURIComponent(term)}${limit ? `&limit=${limit}` : ''}`,
+    `/search?term=${encodeURIComponent(term)}${limit ? `&limit=${limit}` : ''}${via ? `&via=${encodeURIComponent(via)}` : ''}`,
   );
 
 export interface SearchHit extends DriveFile {
