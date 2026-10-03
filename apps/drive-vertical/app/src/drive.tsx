@@ -791,6 +791,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         await refreshRef.current();
       }} />
 
+      {(view === 'drive' || view === 'search') && previewFiles.some(file => selection.has(file.id)) ? <Button variant="outline" size="sm" className="mb-3" disabled={offline || busy} onClick={() => {
+        setMoving(previewFiles.filter(file => selection.has(file.id)).map(file => fileItem(file)));
+      }}>Move selected files…</Button> : null}
+
       <BulkRestore visible={view === 'trash'} files={trash.filter(file => selection.has(file.id))} disabled={offline || busy} onRestored={async ids => {
         setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
         await refreshRef.current();
@@ -890,8 +894,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <ShareDialog folder={sharing} onClose={() => setSharing(null)} me={auth.principal} />
 
       {moving ? <MoveDialog items={moving} sourceFolderId={view === 'drive' ? folderId : null}
-        onClose={() => setMoving(null)} onMoved={async () => {
-          setSelection(new Set());
+        onClose={() => setMoving(null)} onMoved={async ids => {
+          setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
           await refreshRef.current();
         }} /> : null}
 
