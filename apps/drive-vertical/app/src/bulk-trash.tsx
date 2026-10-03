@@ -2,15 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@canopy/ui';
 import { ApiError, currentSite, trashFile } from './api';
 import { useNavigationGuard } from './navigation-guards';
-import { confirmDiscardDrafts } from './drafts';
 
 const filesLabel = (count: number) => `${count} ${count === 1 ? 'file' : 'files'}`;
 
 /** Keep this mounted across views so one batch retains its progress and outcome. */
-export function BulkTrash({ files, disabled, visible = true, onTrashed }: {
-  files: { id: string; name: string }[]; disabled: boolean; visible?: boolean; onTrashed: (ids: string[]) => Promise<void>;
+export function BulkTrash({ files, disabled, visible = true, contextKey = '', beforeTrash = () => true, onTrashed }: {
+  files: { id: string; name: string }[]; disabled: boolean; visible?: boolean; contextKey?: string; beforeTrash?: (ids: string[]) => boolean; onTrashed: (ids: string[]) => Promise<void>;
 }) {
-  const [confirmation, setConfirmation] = useState<{ files: { id: string; name: string }[]; site: string | null } | null>(null);
+  const [confirmation, setConfirmation] = useState<{ files: { id: string; name: string }[]; site: string | null; context: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState({ attempted: 0, total: 0 });
   const [message, setMessage] = useState<string | null>(null);
@@ -19,8 +18,12 @@ export function BulkTrash({ files, disabled, visible = true, onTrashed }: {
   const cancelled = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; cancelled.current = true; }; }, []);
   useNavigationGuard(busy);
+  const site = currentSite();
+  useEffect(() => { if (!running.current) setConfirmation(null); }, [site, visible, contextKey]);
   const trash = async () => {
-    if (running.current || disabled || !confirmation || !confirmDiscardDrafts()) return;
+    if (running.current || disabled || !confirmation) return;
+    if (confirmation.site !== currentSite() || confirmation.context !== contextKey || !visible) { setConfirmation(null); return; }
+    if (!beforeTrash(confirmation.files.map(file => file.id))) return;
     running.current = true; cancelled.current = false; setBusy(true); setMessage(null);
     const { site, files: selected } = confirmation;
     setConfirmation(null);
@@ -71,8 +74,8 @@ export function BulkTrash({ files, disabled, visible = true, onTrashed }: {
         <Button variant="outline" size="sm" disabled={disabled} onClick={() => void trash()}>Confirm move to Trash</Button>{' '}
         <Button variant="outline" size="sm" onClick={() => setConfirmation(null)}>Cancel</Button>
       </div> : visible && files.length ? <Button variant="outline" size="sm" disabled={disabled} onClick={() => {
-        if (!running.current && !disabled) { setMessage(null); setConfirmation({ files: files.map(file => ({ ...file })), site: currentSite() }); }
+        if (!running.current && !disabled) { setMessage(null); setConfirmation({ files: files.map(file => ({ ...file })), site: currentSite(), context: contextKey }); }
       }}>Move {files.length} selected {files.length === 1 ? 'file' : 'files'} to Trash</Button> : null}
-    {message ? <p role="status" className="text-sm">{message}</p> : null}
+    {message ? <div className="flex flex-wrap items-center gap-2"><p role="status" className="text-sm">{message}</p><Button variant="ghost" size="sm" onClick={() => setMessage(null)}>Dismiss Trash result</Button></div> : null}
   </section>;
 }

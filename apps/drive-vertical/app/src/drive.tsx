@@ -790,7 +790,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         </Button>
       </div>
 
-      <BulkTrash visible={view === 'drive' || view === 'search'} files={(view === 'search' ? visibleHits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
+      <BulkTrash contextKey={`${view}:${folderId}:${term}`} beforeTrash={ids => !previewId.current || !ids.includes(previewId.current) || setPreviewing(null)} visible={view === 'drive' || view === 'search'} files={(view === 'search' ? visibleHits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
         setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
         await refreshRef.current();
       }} />
