@@ -29,7 +29,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       <Button disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : 'Enable'}</Button>
       <Button variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${pluginManifest(row).name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
     </section>)}
-    <details><summary>Import a plugin</summary><p className="text-sm">Paste canopy.json and its JavaScript entry source. Imported code runs in a sandbox with access only to the opened file and the declared network hosts.</p>
+    <details><summary>Import a plugin</summary><p className="text-sm">Paste canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => setManifest(event.target.value)} /></label>
       <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => setSource(event.target.value)} /></label>
       {canManage ? <label><input type="checkbox" checked={forSpace} onChange={event => setForSpace(event.target.checked)} />Apply to this space</label> : null}
