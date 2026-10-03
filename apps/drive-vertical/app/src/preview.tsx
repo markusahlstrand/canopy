@@ -30,6 +30,7 @@ import {
 import { TextEditor } from './text-editor';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
+import { VersionComparison } from './version-comparison';
 import { latestOnly } from './reads';
 import { viewerRegistry, registerImageViewer } from './image-viewer';
 
@@ -99,6 +100,7 @@ export function PreviewPanel({
   onChanged?: () => void;
   navigation?: { previous: string | null; next: string | null; moreAvailable?: boolean; onOpen: (id: string) => void };
 }) {
+  const [comparing, setComparing] = useState<string | null>(null);
   const [historyNext, setHistoryNext] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [canWrite, setCanWrite] = useState(false);
@@ -153,6 +155,7 @@ export function PreviewPanel({
   useEffect(() => {
     const ticket = meta.take();
     setEditing(false);
+    setComparing(null);
     setTab('file');
     setFile(null);
     setCanWrite(false);
@@ -424,12 +427,17 @@ export function PreviewPanel({
                       <Button size="sm" variant="ghost" disabled={restoring || loadingMore} onClick={() => setConfirmRestore(v.id)}>Restore</Button>
                     )
                   ) : null}
+                  {v.source === 'blob' && v.blob_ref && v.id !== version?.id && version?.source === 'blob' &&
+                    shapeOf(v.mime) === 'text' && shapeOf(version.mime) === 'text' ? <Button size="sm" variant="ghost"
+                      aria-label={`Compare version from ${new Date(v.created_at).toLocaleString()}`} onClick={() => setComparing(v.id)}>Compare text</Button> : null}
                   {v.source === 'external' ? (
                     <span className="text-xs text-muted-foreground">in a connected source</span>
                   ) : null}
                 </li>
               ))}
             </ul>
+            {comparing && version ? <VersionComparison key={`${fileId}:${comparing}:${version.id}`} fileId={fileId}
+              selectedId={comparing} currentId={version.id} onClose={() => setComparing(null)} /> : null}
             {historyNext ? <Button variant="outline" size="sm" disabled={loadingMore || restoring} onClick={() => void loadMore()}>{loadingMore ? 'Loading older versions…' : 'Load older versions'}</Button> : null}
             </div>
           )
