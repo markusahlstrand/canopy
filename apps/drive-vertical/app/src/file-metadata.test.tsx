@@ -18,7 +18,7 @@ it('shows safe readable metadata and valid timestamps without internal storage k
   expect(info.querySelector('time')).toBeNull();
 });
 it('uses existing preview metadata and keeps the editable Details panel available', async () => {
-  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/details')
+  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? {plugins: []} : url.endsWith('/details')
     ? { fileId: file.id, description: 'Description', labels: [], revision: 0, canWrite: false }
     : { file, version, canWrite: false })));
   vi.stubGlobal('fetch', fetcher);
@@ -27,5 +27,5 @@ it('uses existing preview metadata and keeps the editable Details panel availabl
   fireEvent.click(screen.getByRole('button', { name: 'Details' }));
   await screen.findByText('Description');
   expect(screen.getByRole('region', { name: 'File information' }).textContent).toContain('1.0 kB');
-  expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/files/file', '/api/files/file/details']);
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/plugins', '/api/files/file', '/api/files/file/details']);
 });
