@@ -1,7 +1,7 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { TextPreview } from './text-preview';
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const props = { wrap: true, onWrapChange: () => {} };
 const find = (query: string) => fireEvent.change(screen.getByRole('searchbox', { name: 'Find in file' }), { target: { value: query } });
 it('finds literal case-insensitive matches, wraps navigation, and preserves the original text', () => {
@@ -31,4 +31,28 @@ it('caps highlight nodes in repetitive files and resets navigation when text cha
   fireEvent.click(screen.getByRole('button', { name: 'Next match' }));
   view.rerender(<TextPreview {...props} text="a" />);
   expect(screen.getByRole('status').textContent).toBe('1 of 1 matches');
+});
+
+it('keeps controls sticky and reserves their measured height when scrolling a match', () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ height: 120 } as DOMRect);
+  const scrolled: HTMLElement[] = [];
+  const original = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = function () { scrolled.push(this); };
+  try {
+    const view = render(<TextPreview {...props} text={'old new\n'.repeat(20)} />);
+    find('old'); fireEvent.click(screen.getByRole('button', { name: 'Next match' }));
+    scrolled.length = 0; find('new');
+    expect(screen.getByRole('status').textContent).toBe('1 of 20 matches');
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]).toBe(view.container.querySelector('mark'));
+    expect(scrolled[0]!.style.scrollMarginTop).toBe('128px');
+    expect(screen.getByRole('searchbox').parentElement?.parentElement?.className).toContain('sticky top-0');
+  } finally { HTMLElement.prototype.scrollIntoView = original; }
+});
+it('resets the active match immediately when text is replaced by another multi-match text', () => {
+  const view = render(<TextPreview {...props} text="a a a" />); find('a');
+  fireEvent.click(screen.getByRole('button', { name: 'Previous match' }));
+  view.rerender(<TextPreview {...props} text="a a a a" />);
+  expect(screen.getByRole('status').textContent).toBe('1 of 4 matches');
+  expect(view.container.querySelector('mark')!.getAttribute('aria-current')).toBe('true');
 });
