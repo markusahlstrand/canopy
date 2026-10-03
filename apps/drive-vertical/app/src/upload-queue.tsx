@@ -69,6 +69,10 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
   useNavigationGuard(active);
   const panel = rows.length ? <section aria-label="Uploads" className="max-h-48 shrink-0 overflow-auto border-b border-border px-4 py-2 text-sm">
     <p role="status">{rows.filter(row => row.state === 'done').length} of {rows.length} uploaded{rows.some(row => row.state === 'cancelled') ? ` · ${rows.filter(row => row.state === 'cancelled').length} cancelled` : ''}</p>
+    {rows.some(row => row.state === 'failed' && row.file) ? <Button size="sm" variant="outline" onClick={() => {
+      queue.current = queue.current.map(row => row.state === 'failed' && row.file ? { ...row, state: 'queued', error: undefined } : row);
+      publish(); void pump();
+    }}>Retry failed uploads</Button> : null}
     {rows.some(row => row.state === 'queued') ? <Button size="sm" variant="outline" onClick={() => cancel()}>Cancel queued uploads</Button> : null}
     {rows.some(row => row.state === 'done' || row.state === 'cancelled') ? <Button size="sm" variant="ghost" onClick={() => {
       queue.current = queue.current.filter(row => row.state !== 'done' && row.state !== 'cancelled'); publish();

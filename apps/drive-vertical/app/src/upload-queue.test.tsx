@@ -128,3 +128,39 @@ it('passes cancellation through the actual upload fetch', async () => {
   controller.abort();
   await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
 });
+
+it('retries only failed rows as a batch using each original space and folder', async () => {
+  const upload = vi.spyOn(api, 'uploadFile').mockRejectedValueOnce(new Error('Failed A')).mockRejectedValueOnce(new Error('Failed B')).mockResolvedValue({} as api.DriveFile);
+  let enqueue!: ReturnType<typeof useUploadQueue>['enqueue'];
+  function Harness() { const queue = useUploadQueue(async () => {}); enqueue = queue.enqueue; return queue.panel; }
+  render(<Harness />);
+  api.selectSite('space-a');
+  act(() => enqueue('folder-a', 'A', [new File(['a'], 'a.txt')]));
+  await screen.findByText('Failed A');
+  api.selectSite('space-b');
+  act(() => enqueue('folder-b', 'B', [new File(['b'], 'b.txt'), new File(['ok'], 'ok.txt')]));
+  await screen.findByText('1 of 3 uploaded');
+  api.selectSite('space-c');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry failed uploads' }));
+  await screen.findByText('3 of 3 uploaded');
+  expect(upload.mock.calls.map(([folder, file, site]) => [folder, file.name, site])).toEqual([
+    ['folder-a', 'a.txt', 'space-a'], ['folder-b', 'b.txt', 'space-b'], ['folder-b', 'ok.txt', 'space-b'],
+    ['folder-a', 'a.txt', 'space-a'], ['folder-b', 'b.txt', 'space-b']
+  ]);
+  expect(screen.queryByRole('button', { name: 'Retry failed uploads' })).toBeNull();
+});
+it('adds retries to an active pump without starting a concurrent transfer', async () => {
+  let finish!: () => void;
+  const upload = vi.spyOn(api, 'uploadFile').mockRejectedValueOnce(new Error('Failed first'))
+    .mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({} as api.DriveFile); })).mockResolvedValue({} as api.DriveFile);
+  let enqueue!: ReturnType<typeof useUploadQueue>['enqueue'];
+  function Harness() { const queue = useUploadQueue(async () => {}); enqueue = queue.enqueue; return queue.panel; }
+  render(<Harness />);
+  act(() => enqueue('folder', 'Folder', [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')]));
+  await screen.findByText('Failed first');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry failed uploads' }));
+  expect(upload).toHaveBeenCalledTimes(2);
+  await act(async () => finish());
+  await screen.findByText('2 of 2 uploaded');
+  expect(upload.mock.calls.map(([, file]) => file.name)).toEqual(['a.txt', 'b.txt', 'a.txt']);
+});
