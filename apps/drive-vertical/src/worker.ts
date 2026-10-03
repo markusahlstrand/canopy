@@ -1,3 +1,4 @@
+import { spaceSettingsSchema, defaultSpaceSettings, type SpaceSettings } from './space-settings.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
@@ -91,6 +92,16 @@ export const ScopeDO = defineScopeDO(MODULES, {});
 /** The tenant's identity directory: subject → principal, and the owner seat. */
 /** The tenant-local owner handoff for spaces created by a signed-in user. */
 export class IdentityDO extends PlatformIdentityDO {
+  async readSpaceSettings(scope: string): Promise<SpaceSettings | null> {
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_space_settings (scope_id TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    const row = this.ctx.storage.sql.exec<{value: string}>('SELECT value FROM canopy_space_settings WHERE scope_id = ?', scope).toArray()[0];
+    return row ? spaceSettingsSchema.parse(JSON.parse(row.value)) : null;
+  }
+  async writeSpaceSettings(scope: string, value: SpaceSettings): Promise<void> {
+    const settings = spaceSettingsSchema.parse(value);
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_space_settings (scope_id TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    this.ctx.storage.sql.exec('INSERT INTO canopy_space_settings (scope_id, value) VALUES (?, ?) ON CONFLICT(scope_id) DO UPDATE SET value=excluded.value', scope, JSON.stringify(settings));
+  }
   async rememberSpaceCreator(owner: string, subject: string): Promise<void> {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_space_creators (owner TEXT PRIMARY KEY, subject TEXT NOT NULL)');
     this.ctx.storage.sql.exec('INSERT OR IGNORE INTO canopy_space_creators (owner, subject) VALUES (?, ?)', owner, subject);
@@ -285,6 +296,8 @@ type SiteRegistry = {
   forgetSite(scopeId: string): Promise<void>;
   listSites(): Promise<{ scopeId: string; slug: string; name: string }[]>;
   resolveSiteScope(slug: string): Promise<string | null>;
+  readSpaceSettings(scope: string): Promise<SpaceSettings | null>;
+  writeSpaceSettings(scope: string, value: SpaceSettings): Promise<void>;
   rememberSpaceCreator(owner: string, subject: string): Promise<void>;
   spaceCreator(owner: string): Promise<string | null>;
 };
@@ -425,7 +438,12 @@ mountPlatformSurface<Env>(app, {
     // `multi-scope-manyfold.md`). It is what lets the app list and switch spaces
     // without reaching the control plane — which a sandbox-clean vertical cannot do.
     // Idempotent, and re-run by every reconcile, so a lost record repairs itself.
-    if (b.slug && b.name) await identityDo(env, node).recordSite(b.scopeId, b.slug, b.name);
+    let settings = await directory.readSpaceSettings(b.scopeId);
+    if (!settings) {
+      settings = await directory.readSpaceSettings(`creator:${b.owner}`);
+      if (settings) await directory.writeSpaceSettings(b.scopeId, settings);
+    }
+    if (b.slug && b.name) await directory.recordSite(b.scopeId, b.slug, settings?.name ?? b.name);
     await sweeper(env).noteScope(b.tenantId, b.scopeId);
     // The places repair (substrat#1670): the WHOLE set of logins bound in this space,
     // sent to the identity pool it signs in at, so a login's "Your places" list on the
@@ -633,15 +651,33 @@ app.delete('/api/people/:principal', async (c) => {
  * Slug and name only. The scope id is the address, and a caller that does not need it
  * should not be handed it; `x-site` takes the slug.
  */
+app.get('/api/space-settings', async (c) => {
+  await requirePeopleAdmin(c);
+  const node = await nodeFor(c.req.raw, c.env), directory = identityDo(c.env, node);
+  const site = (await directory.listSites()).find(site => site.scopeId === node.scopeId);
+  return c.json(await directory.readSpaceSettings(node.scopeId) ?? defaultSpaceSettings(site?.name ?? 'Space'));
+});
+app.patch('/api/space-settings', async (c) => {
+  await requirePeopleAdmin(c);
+  const settings = spaceSettingsSchema.safeParse(await c.req.json());
+  if (!settings.success) throw new HTTPException(400, {message:'Enter a space name and choose a supported icon and color.'});
+  const node = await nodeFor(c.req.raw, c.env), directory = identityDo(c.env, node);
+  const site = (await directory.listSites()).find(site => site.scopeId === node.scopeId);
+  if (!site) throw new HTTPException(404, {message:'Space not found.'});
+  await directory.writeSpaceSettings(node.scopeId, settings.data);
+  await directory.recordSite(node.scopeId, site.slug, settings.data.name);
+  return c.json(settings.data);
+});
 app.post('/api/sites', async (c) => {
   const node = await nodeFor(c.req.raw, c.env);
   const principal = await requirePeopleAdmin(c);
   const subject = await (await providerFor(c.env, baseNode(c.req.raw, c.env))).resolve(c.req.raw.headers);
   if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
-  const input = z.object({ name: z.string().trim().min(1).max(100), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/) }).safeParse(await c.req.json());
+  const input = z.object({ name: z.string().trim().min(1).max(100), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/), settings: spaceSettingsSchema.optional() }).safeParse(await c.req.json());
   if (!input.success) throw new HTTPException(400, { message: 'Enter a name and a valid space address.' });
   const owner = principalId.parse(ulid());
   await identityDo(c.env, node).rememberSpaceCreator(owner, subject.sub);
+  if (input.data.settings) await identityDo(c.env, node).writeSpaceSettings(`creator:${owner}`, {...input.data.settings, name: input.data.name});
   const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
   return c.json(await scope.invoke('drive/request-space', { ...input.data, owner }), 202);
 });
@@ -690,7 +726,8 @@ app.get('/api/sites', async (c) => {
       if (!principal) return null;
       try {
         await host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(site.scopeId));
-        return site;
+        const settings = await directory.readSpaceSettings(site.scopeId);
+        return {...site, name: settings?.name ?? site.name, icon: settings?.icon, color: settings?.color};
       } catch {
         return null;
       }
@@ -712,7 +749,7 @@ app.get('/api/sites', async (c) => {
   return c.json(
     mine
       .filter((site) => site !== null)
-      .map((site) => ({ slug: site.slug, name: site.name, current: site.scopeId === here })),
+      .map((site) => ({ slug: site.slug, name: site.name, icon: site.icon, color: site.color, current: site.scopeId === here })),
   );
 });
 
