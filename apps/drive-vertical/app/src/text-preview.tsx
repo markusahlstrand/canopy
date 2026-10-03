@@ -16,7 +16,7 @@ function findMatches(text: string, query: string) {
 }
 
 /** Display plain text with local find controls; finding never fetches or edits bytes. */
-export function TextPreview({ text, wrap, onWrapChange }: { text: string; wrap: boolean; onWrapChange: (wrap: boolean) => void }) {
+export function TextPreview({ text, wrap, onWrapChange, truncated = false }: { text: string; wrap: boolean; onWrapChange: (wrap: boolean) => void; truncated?: boolean }) {
   const [query, setQuery] = useState('');
   const searchQuery = useDeferredValue(query);
   const pending = searchQuery !== query;
@@ -57,7 +57,7 @@ export function TextPreview({ text, wrap, onWrapChange }: { text: string; wrap: 
   }, [text, matches, index, toolbarHeight]);
   return <div className="min-w-0 space-y-2">
     <div ref={toolbar} className="sticky top-0 z-10 space-y-2 bg-background pb-2">
-      <Button size="sm" variant="outline" aria-pressed={wrap} onClick={() => onWrapChange(!wrap)}>Wrap lines</Button>{' '}<CopyPreviewText text={text} />
+      <Button size="sm" variant="outline" aria-pressed={wrap} onClick={() => onWrapChange(!wrap)}>Wrap lines</Button>{' '}<CopyPreviewText text={text} truncated={truncated} />
       <div className="flex flex-wrap items-center gap-1">
         <Input type="search" aria-label="Find in file" placeholder="Find in file" maxLength={200} className="h-8 min-w-0 flex-1" value={query}
           onChange={event => changeQuery(event.target.value)} onKeyDown={event => {
