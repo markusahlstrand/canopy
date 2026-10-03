@@ -30,6 +30,7 @@ import {
 import { TextEditor } from './text-editor';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
+import { FileMetadata } from './file-metadata';
 import { latestOnly } from './reads';
 import { viewerRegistry, registerImageViewer } from './image-viewer';
 
@@ -347,7 +348,7 @@ export function PreviewPanel({
       </nav>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <FileDetailsPanel key={fileId} fileId={fileId} /> : tab === 'file' ? (
+        {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : shape === 'image' || shape === 'viewer' ? (
