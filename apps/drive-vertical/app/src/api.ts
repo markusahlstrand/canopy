@@ -144,6 +144,14 @@ export interface FileVersion {
  */
 export const TEXT_PREVIEW_LIMIT = 200_000;
 
+/**
+ * The most text a save may carry, in UTF-16 code units (`string.length`). It mirrors
+ * `MAX_EDIT_CHARS` in `src/text-content.ts`, which refuses `text.length` above it, so
+ * the editor must count the same unit: UTF-8 bytes would refuse non-Latin text the
+ * server accepts.
+ */
+export const TEXT_EDIT_LIMIT = 200_000;
+
 export async function fileBodyAsText(fileId: string, versionId?: string): Promise<{ text: string; truncated: boolean }> {
   const res = await fetch(versionId ? versionContentUrl(fileId, versionId) : contentUrl(fileId), { credentials: 'same-origin' });
   if (!res.ok) throw new ApiError(res.status, res.statusText);

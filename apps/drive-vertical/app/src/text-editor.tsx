@@ -1,7 +1,7 @@
 import { confirmDiscardDrafts, useUnsavedDraft } from './drafts';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@canopy/ui';
-import { ApiError, saveText, TEXT_PREVIEW_LIMIT } from './api';
+import { ApiError, saveText, TEXT_EDIT_LIMIT } from './api';
 import { latestOnly } from './reads';
 
 export function TextEditor({ fileId, versionId, text, wrap = true, onSaved, onCancel, onReload }: {
@@ -16,8 +16,7 @@ export function TextEditor({ fileId, versionId, text, wrap = true, onSaved, onCa
   const [saved, setSaved] = useState(false);
   useUnsavedDraft(!saved && draft !== text);
   const guard = useRef(latestOnly()).current;
-  const byteCount = new TextEncoder().encode(draft).byteLength;
-  const tooLarge = byteCount > TEXT_PREVIEW_LIMIT;
+  const tooLarge = draft.length > TEXT_EDIT_LIMIT;
   const canSave = !busy && !conflict && (saved || (draft !== text && !tooLarge));
   useEffect(() => () => guard.invalidate(), [guard]);
   const submit = async (reload = false) => {
@@ -57,9 +56,9 @@ export function TextEditor({ fileId, versionId, text, wrap = true, onSaved, onCa
   }}>
     <label className="block text-sm">File text
       <textarea aria-label="File text" wrap={wrap ? 'soft' : 'off'} className={`mt-2 min-h-80 w-full rounded border border-border bg-background p-2 font-mono text-xs ${wrap ? 'whitespace-pre-wrap' : 'whitespace-pre overflow-x-auto'}`}
-        maxLength={TEXT_PREVIEW_LIMIT} value={draft} disabled={busy || saved} onChange={event => setDraft(event.target.value)} />
+        maxLength={TEXT_EDIT_LIMIT} value={draft} readOnly={busy} disabled={saved} onChange={event => setDraft(event.target.value)} />
     </label>
-    <p className="text-xs text-muted-foreground">Ctrl/⌘S to save · Esc to cancel · {byteCount.toLocaleString()} / {TEXT_PREVIEW_LIMIT.toLocaleString()} bytes</p>
+    <p className="text-xs text-muted-foreground">Ctrl/⌘S to save · Esc to cancel · {draft.length.toLocaleString()} / {TEXT_EDIT_LIMIT.toLocaleString()} characters</p>
     {tooLarge ? <p role="status" className="text-sm">This text exceeds the save limit. Shorten it before saving.</p> : null}
     {error ? <p role="alert" className="text-sm">{error}</p> : null}
     <div className="flex flex-wrap gap-2">
