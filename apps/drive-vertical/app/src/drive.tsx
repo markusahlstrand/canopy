@@ -212,7 +212,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     let active = true;
     (initialFolderId ? getFolder(initialFolderId) : folderByPath(initialPath)).then(folder => {
       if (!active) return;
-      if (folder) { setFolderId(folder.id); setCrumbs([{ id: folder.id, name: folder.path }]); }
+      if (folder) { setFolderId(folder.id); setCrumbs(folder.id === ROOT_FOLDER_ID ? [] : [{ id: folder.id, name: folder.path }]); }
       else setLinkMessage('This folder is unavailable or you do not have access.');
     }).catch((error: unknown) => {
       if (active) setLinkMessage(error instanceof ApiError && [401, 403, 404].includes(error.status)

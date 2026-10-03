@@ -996,7 +996,10 @@ describe('the rail is how you change space', () => {
     // by the time the new page reads it. The reload itself shows up as jsdom's
     // "Not implemented: navigation" line — there is no way to stub `location.reload`,
     // and the selection is what a wrong answer would get wrong.
+    window.history.replaceState(null, '', '/?folder=foreign-folder&path=Shared');
     fireEvent.click(screen.getByText('Family'));
+    expect(window.location.search).not.toContain('folder=');
+    expect(window.location.search).not.toContain('path=');
     expect(currentSite()).toBe('family');
 
     // The space you are already in is not a navigation: nothing is written, and nothing
@@ -1012,7 +1015,7 @@ describe('a selection that has gone stale does not lock the install', () => {
     // the SELECTED space, so it answers 401 — and the signed-out shell has no rail, so
     // there is no control on screen that can clear the selection that caused it.
     selectSite('family');
-    window.history.replaceState(null, '', '/?site=family');
+    window.history.replaceState(null, '', '/?site=family&folder=foreign-folder&path=Shared');
 
     render(<App />);
     await flush();
@@ -1024,6 +1027,9 @@ describe('a selection that has gone stale does not lock the install', () => {
     expect(currentSite()).toBeNull();
     // …and the URL cannot put it back on the next reload.
     expect(window.location.search).not.toContain('site=');
+    expect(window.location.search).not.toContain('folder=');
+    expect(window.location.search).not.toContain('path=');
+    expect(pending.some(p => p.url.includes('foreign-folder'))).toBe(false);
 
     // The drive renders, which is the whole point: the rail is on screen and lists the
     // spaces this login really is in.

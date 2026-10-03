@@ -1,4 +1,4 @@
-import { currentSite, LOGIN_URL } from './api';
+import { currentSite, LOGIN_URL, ROOT_FOLDER_ID } from './api';
 
 /** Navigation only: this URL grants no access and contains no invitation credentials. */
 export function folderLink(path: string, site = currentSite()): string {
@@ -12,7 +12,7 @@ export function folderLink(path: string, site = currentSite()): string {
 export function folderIdLink(folderId: string, site = currentSite()): string {
   const url = new URL('/', window.location.origin);
   if (site) url.searchParams.set('site', site);
-  url.searchParams.set('folder', folderId);
+  if (folderId !== ROOT_FOLDER_ID) url.searchParams.set('folder', folderId);
   return url.toString();
 }
 export function linkedFolderId(): string {

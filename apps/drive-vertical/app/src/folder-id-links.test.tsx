@@ -1,8 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DriveScreen } from './drive';
 import { folderIdLink, linkedFolderId, folderLoginUrl } from './folder-links';
 import { selectSite } from './api';
+import { CopyFolderLink } from './copy-folder-link';
 vi.mock('./live-updates', () => ({ watchDriveChanges: () => () => {} }));
 afterEach(() => { cleanup(); selectSite(null); history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
 const shell = { onError: () => {}, auth: { user: {} }, onSignIn: () => {}, onSignOut: () => {} };
@@ -37,4 +38,29 @@ it('preserves only the folder navigation destination through login and rejects a
   expect(new URL(folderLoginUrl(), location.origin).searchParams.get('returnTo')).toBe('/?site=family&folder=stable');
   selectSite('other'); expect(linkedFolderId()).toBe('');
   expect(new URL(folderLoginUrl(), location.origin).searchParams.has('returnTo')).toBe(false);
+});
+
+it('copies and opens the space root without a blank crumb or folder parameter', async () => {
+  selectSite('family');
+  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/access') ? { canManage: false } : [])));
+  vi.stubGlobal('fetch', fetcher);
+  const writeText = vi.fn(async (_text: string) => {}); vi.stubGlobal('navigator', { clipboard: { writeText } });
+  const copy = render(<CopyFolderLink folderId="root" />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Copy folder link' }).hasAttribute('disabled')).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
+  const link = new URL(writeText.mock.calls[0]![0]); expect(link.search).toBe('?site=family');
+  copy.unmount(); history.replaceState(null, '', link.pathname + link.search);
+  render(<DriveScreen {...shell} />);
+  await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/root/files')).toBe(true));
+  expect(screen.queryByRole('button', { name: 'Back to parent folder' })).toBeNull();
+  expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/root/metadata')).toBe(false);
+});
+it('also treats an explicit legacy root-ID link as the root with no blank crumb', async () => {
+  selectSite('family'); history.replaceState(null, '', '/?site=family&folder=root');
+  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/folders/root/metadata'
+    ? { id: 'root', name: '', path: '', canManage: false } : url.endsWith('/access') ? { canManage: false } : [])));
+  vi.stubGlobal('fetch', fetcher); render(<DriveScreen {...shell} />);
+  await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/root/files')).toBe(true));
+  expect(screen.queryByRole('button', { name: 'Back to parent folder' })).toBeNull();
+  expect(location.search).toBe('?site=family');
 });
