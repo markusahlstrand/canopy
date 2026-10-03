@@ -189,10 +189,10 @@ describe('search result explanations', () => {
       { ...file('01A', 'report.txt'), via: 'content', snippet: '<script>budget forecast</script>' },
       { ...file('01B', 'plans.txt'), via: 'metadata', snippet: null }
     ] });
-    expect(screen.getByText('<script>budget forecast</script>')).toBeTruthy();
+    expect(screen.getByText((_, node) => node?.tagName === 'P' && node.textContent === '<script>budget forecast</script>')).toBeTruthy();
     expect(screen.getByText('Matched in description or labels')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Switch to grid' }));
-    expect(screen.getByText('<script>budget forecast</script>')).toBeTruthy();
+    expect(screen.getByText((_, node) => node?.tagName === 'P' && node.textContent === '<script>budget forecast</script>')).toBeTruthy();
     expect(screen.getByText('Matched in description or labels')).toBeTruthy();
     expect(document.querySelector('script')).toBeNull();
   });
@@ -216,8 +216,8 @@ describe('a stale search answer never reaches the screen', () => {
     await answer('term=lease', { hits: [file('01B', 'lease.pdf')] });
     await answer('term=lea', { hits: [file('01A', 'leaflet.pdf')] });
 
-    expect(screen.getByText('lease.pdf')).toBeTruthy();
-    expect(screen.queryByText('leaflet.pdf')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Actions for lease.pdf' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Actions for leaflet.pdf' })).toBeNull();
   });
 
   it('drops an answer that lands inside the debounce window', async () => {
@@ -235,12 +235,12 @@ describe('a stale search answer never reaches the screen', () => {
     fireEvent.change(box, { target: { value: 'lease' } });
     await answer('term=lea', { hits: [file('01A', 'leaflet.pdf')] });
 
-    expect(screen.queryByText('leaflet.pdf')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Actions for leaflet.pdf' })).toBeNull();
 
     // And the real answer still arrives afterwards.
     await flush();
     await answer('term=lease', { hits: [file('01B', 'lease.pdf')] });
-    expect(screen.getByText('lease.pdf')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Actions for lease.pdf' })).toBeTruthy();
   });
 
   it('asks nothing at all below the minimum term length', async () => {

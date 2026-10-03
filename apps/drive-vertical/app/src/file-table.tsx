@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import type { FileItem } from './items';
+import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from './file-icon';
 import { Checkbox } from "@canopy/ui";
 import {
@@ -38,6 +39,7 @@ export interface SortState {
 
 interface FileTableProps {
   files: FileItem[];
+  searchQuery?: string;
   selection: Set<string>;
   onSelectionChange: (s: Set<string>) => void;
   onOpen: (f: FileItem) => void;
@@ -186,6 +188,7 @@ function RowActions({ file, onAction, readOnly, trashed }: { file: FileItem; onA
 }
 
 export function FileTable({
+  searchQuery,
   files,
   selection,
   onSelectionChange,
@@ -329,8 +332,8 @@ export function FileTable({
                 <RowActions file={f} onAction={onAction} readOnly={readOnly} trashed={trashed} />
               </div>
             </div>
-            <div className="truncate text-[13.5px] font-medium">{f.name}</div>
-            {f.description ? <p className="line-clamp-2 [overflow-wrap:anywhere] text-xs text-muted-foreground">{f.description}</p> : null}
+            <div className="truncate text-[13.5px] font-medium">{searchQuery ? <SearchHighlight text={f.name} query={searchQuery} mode="prefix" /> : f.name}</div>
+            {f.description ? <p className="line-clamp-2 [overflow-wrap:anywhere] text-xs text-muted-foreground">{searchQuery && f.snippet ? <SearchHighlight text={f.snippet} query={searchQuery} mode="substring" /> : f.description}</p> : null}
             <div className="flex items-center justify-between">
               <span className="font-mono text-[11.5px] text-muted-foreground">{f.modified}</span>
             </div>
@@ -410,8 +413,8 @@ export function FileTable({
                     <td className="min-w-0 px-3">
                       <div className="flex min-w-0 items-center gap-3">
                         <FileIcon kind={f.kind} />
-                        <div className="min-w-0"><span className="block max-w-[calc(100vw-9rem)] truncate font-medium md:max-w-none">{f.name}</span>
-                          {f.description ? <p className="line-clamp-2 [overflow-wrap:anywhere] text-xs text-muted-foreground">{f.description}</p> : null}
+                        <div className="min-w-0"><span className="block max-w-[calc(100vw-9rem)] truncate font-medium md:max-w-none">{searchQuery ? <SearchHighlight text={f.name} query={searchQuery} mode="prefix" /> : f.name}</span>
+                          {f.description ? <p className="line-clamp-2 [overflow-wrap:anywhere] text-xs text-muted-foreground">{searchQuery && f.snippet ? <SearchHighlight text={f.snippet} query={searchQuery} mode="substring" /> : f.description}</p> : null}
                         </div>
                       </div>
                     </td>
