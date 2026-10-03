@@ -2,7 +2,8 @@ export const normalizeComparisonText = (text: string) => text.replace(/\r\n?/g, 
 export interface DiffLine { kind: 'same' | 'removed' | 'added'; text: string; oldLine: number | null; newLine: number | null }
 /** Bound alignment work independently of input length; large changes become an explicit block. */
 export function lineDiff(before: string, after: string) {
-  const a = normalizeComparisonText(before).split('\n'), b = normalizeComparisonText(after).split('\n');
+  const oldText = normalizeComparisonText(before), newText = normalizeComparisonText(after);
+  const a = oldText ? oldText.split('\n') : [], b = newText ? newText.split('\n') : [];
   let prefix = 0, suffix = 0;
   while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix++;
   while (suffix < a.length - prefix && suffix < b.length - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++;
