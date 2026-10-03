@@ -25,6 +25,7 @@ import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
 import { folderPath, linkedFolderId } from './folder-links';
+import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { ViewersDialog } from './viewers-dialog';
@@ -47,6 +48,7 @@ import {
   createFolder,
   folderByPath,
   getFolder,
+  getFile,
   listFolderPage,
   listFoldersPage,
   appendRows,
@@ -158,9 +160,10 @@ export interface DriveScreenProps {
 }
 
 export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
+  const initialFileId = useRef(linkedFileId()).current;
   const initialPath = useRef(folderPath()).current;
   const initialFolderId = useRef(linkedFolderId()).current;
-  const [linkPending, setLinkPending] = useState(!!initialFolderId || !!initialPath);
+  const [linkPending, setLinkPending] = useState(!!initialFileId || !!initialFolderId || !!initialPath);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
@@ -208,20 +211,30 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const url = new URL(window.location.href);
     url.searchParams.delete('path');
     url.searchParams.delete('folder');
+    url.searchParams.delete('file');
     window.history.replaceState(null, '', url);
-    if (!initialFolderId && !initialPath) return;
+    if (!initialFileId && !initialFolderId && !initialPath) return;
     let active = true;
-    (initialFolderId ? getFolder(initialFolderId) : folderByPath(initialPath)).then(folder => {
-      if (!active) return;
-      if (folder) { setFolderId(folder.id); setCrumbs(folder.id === ROOT_FOLDER_ID ? [] : [{ id: folder.id, name: folder.path }]); }
-      else setLinkMessage('This folder is unavailable or you do not have access.');
-    }).catch((error: unknown) => {
+    // A file link opens the permission-checked preview without requiring ancestor access.
+    const resolve = async () => {
+      if (initialFileId) {
+        const { file } = await getFile(initialFileId);
+        if (active) changePreview(file.id);
+      } else {
+        const folder = await (initialFolderId ? getFolder(initialFolderId) : folderByPath(initialPath));
+        if (!active) return;
+        if (folder) { setFolderId(folder.id); setCrumbs(folder.id === ROOT_FOLDER_ID ? [] : [{ id: folder.id, name: folder.path }]); }
+        else setLinkMessage('This folder is unavailable or you do not have access.');
+      }
+    };
+    void resolve().catch((error: unknown) => {
+      const subject = initialFileId ? 'file' : 'folder';
       if (active) setLinkMessage(error instanceof ApiError && [401, 403, 404].includes(error.status)
-        ? 'This folder is unavailable or you do not have access.'
-        : 'Could not open the folder link. Reload to retry.');
+        ? `This ${subject} is unavailable or you do not have access.`
+        : `Could not open the ${subject} link. Reload to retry.`);
     }).finally(() => { if (active) setLinkPending(false); });
     return () => { active = false; };
-  }, [initialFolderId, initialPath]);
+  }, [initialFileId, initialFolderId, initialPath]);
 
   useEffect(() => { setLinkMessage(null); }, [folderId, view]);
 

@@ -34,6 +34,7 @@ import { FileDetailsPanel } from './file-details';
 import { VersionComparison } from './version-comparison';
 import { latestOnly } from './reads';
 import { viewerRegistry, registerImageViewer } from './image-viewer';
+import { FileLinkAction } from './copy-file-link';
 
 registerImageViewer();
 
@@ -349,6 +350,8 @@ export function PreviewPanel({
           </button>
         ))}
       </nav>
+
+      {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (

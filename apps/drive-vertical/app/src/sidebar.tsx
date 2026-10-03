@@ -290,6 +290,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                     const before = url.search;
                     url.searchParams.delete('path');
                     url.searchParams.delete('folder');
+                    url.searchParams.delete('file');
                     if (selectSite(s.slug)) url.searchParams.delete('site');
                     else url.searchParams.set('site', s.slug);
                     if (url.search !== before) window.history.replaceState(null, '', url);
