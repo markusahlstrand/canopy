@@ -12,7 +12,7 @@ it('guards table, palette, and close boundaries, but lets a saved editor close w
     if (init?.method === 'PUT') { saved = true; return new Response('{}'); }
     if (url.includes('/content')) return new Response(saved ? 'saved' : 'old');
     if (url === '/api/files/a' || url === '/api/files/b') return new Response(JSON.stringify({ file: { id: url.slice(-1), name: url.slice(-1).toUpperCase() }, version: { id: saved ? 'v2' : 'v1', mime: 'text/plain', source: 'blob' }, canWrite: true }));
-    return new Response(JSON.stringify(url === '/api/sites' ? { sites: [] } : url.endsWith('/access') ? { canManage: false } : []));
+    return new Response(JSON.stringify(url.endsWith('/access') ? { canManage: false } : []));
   });
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   render(<DriveScreen onError={() => {}} auth={{ user: {} }} onSignIn={() => {}} onSignOut={() => {}} />);

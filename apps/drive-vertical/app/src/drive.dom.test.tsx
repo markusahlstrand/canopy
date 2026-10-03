@@ -613,6 +613,48 @@ describe('dragging a file onto a folder moves it', () => {
   });
 });
 
+describe('external file drops', () => {
+  it.each(['offline', 'search', 'shared'])('refuses uploads from the %s view', async mode => {
+    await renderDrive();
+    if (mode === 'offline') {
+      vi.spyOn(indexedMirror, 'folder').mockResolvedValue({ folders: [], files: [] });
+      fireEvent.click(screen.getByLabelText('Refresh'));
+      await flush();
+      const request = pending.find(p => p.url.includes('/folders/root/files'))!;
+      await act(async () => request.reject(new TypeError('network unavailable')));
+    } else if (mode === 'search') {
+      fireEvent.change(screen.getByLabelText('Search this space'), { target: { value: 'budget' } });
+      await flush();
+      await answer('term=budget', { hits: [] });
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
+      await flush();
+      await answer('/folders/shared-with-me', { folders: [] });
+    }
+    fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer: { types: ['Files'], files: [new File(['a'], 'blocked.txt')], items: [] } });
+    expect(pending.filter(p => p.method === 'POST')).toHaveLength(0);
+  });
+
+  it('uploads to the displayed folder and refuses drops while viewing Trash', async () => {
+    await renderDrive([{ id: 'papers', name: 'Papers', path: 'Papers', parent_id: 'root' }]);
+    fireEvent.doubleClick(screen.getByText('Papers'));
+    await flush();
+    await answer('/folders/papers/folders', []);
+    await answer('/folders/papers/files', []);
+    const dataTransfer = { types: ['Files'], files: [new File(['a'], 'drop.txt')], items: [] };
+    fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer });
+    expect(pending.filter(p => p.method === 'POST').map(p => p.url)).toEqual(['/api/folders/papers/content?name=drop.txt']);
+    await answer('/folders/papers/content', file('upload', 'drop.txt'));
+    await answer('/folders/papers/folders', []);
+    await answer('/folders/papers/files', [file('upload', 'drop.txt')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await flush();
+    await answer('/api/trash', []);
+    fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer });
+    expect(pending.filter(p => p.method === 'POST')).toHaveLength(0);
+  });
+});
+
 describe('move destination picker', () => {
   async function pick(items: unknown[] = [file('01A', 'lease.pdf')], selectAll = false) {
     await renderDrive([], items);

@@ -26,6 +26,7 @@ import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
 import { ShareDialog } from './share-dialog';
 import { MoveDialog } from './move-dialog';
+import { FileDropZone } from './file-drop-zone';
 import { useUploadQueue } from './upload-queue';
 import { CommandPalette } from './command-palette';
 import type { Me } from './api';
@@ -682,7 +683,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       {/* The one scrolling region: the rail and the topbar stay put. */}
       <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-3 sm:p-4">
-      <div className="min-w-0 flex-1">
+      <FileDropZone disabled={offline || linkPending || view !== 'drive'}
+        destination={crumbs.at(-1)?.name ?? siteList.sites?.find(site => site.current)?.name ?? 'this space'}
+        onError={onError}
+        onFiles={chosen => uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen)}>
       {offline ? (
         <p role="status" className="mb-3 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
           Offline — showing saved file and folder names. File content and changes are unavailable.
@@ -797,7 +801,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           {loadingPage ? 'Loading folders…' : 'Load more folders'}
         </Button>
       ) : null}
-      </div>
+      </FileDropZone>
 
       {previewing ? (
         <div className="fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0">
