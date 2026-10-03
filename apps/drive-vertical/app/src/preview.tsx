@@ -30,9 +30,9 @@ import {
 import { TextEditor } from './text-editor';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
-import { FileLinkAction } from './copy-file-link';
 import { latestOnly } from './reads';
 import { viewerRegistry, registerImageViewer } from './image-viewer';
+import { FileLinkAction } from './copy-file-link';
 
 registerImageViewer();
 
