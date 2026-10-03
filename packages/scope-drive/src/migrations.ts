@@ -233,4 +233,10 @@ export const driveMigrations: SqlMigration[] = [
     manifest_json TEXT NOT NULL, source TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)), updated_at TEXT NOT NULL,
     UNIQUE(principal, plugin_id)
   );`},
+  {version:'0010',sql:`ALTER TABLE drive_plugin_installs ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'inline';
+ALTER TABLE drive_plugin_installs ADD COLUMN source_ref TEXT NOT NULL DEFAULT 'Client-supplied JavaScript';
+ALTER TABLE drive_plugin_installs ADD COLUMN resolved TEXT NOT NULL DEFAULT '';
+ALTER TABLE drive_plugin_installs ADD COLUMN source_sha256 TEXT NOT NULL DEFAULT '';
+ALTER TABLE drive_plugin_installs ADD COLUMN granted_capabilities TEXT NOT NULL DEFAULT '[]';
+UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(manifest_json) THEN COALESCE(json_extract(manifest_json, '$.capabilities'), '[]') ELSE '[]' END;`},
 ];

@@ -18,6 +18,7 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
         const result = (await spaceRequests()).requests.find(value => value.id === request.id);
         if (!alive || !result) return;
         setRequest(result); setError(null);
+        if (result.status !== 'pending') slug.current = '';
         if (result.status === 'done') onCreated(result.slug);
       } catch (error) { if (alive) setError(error instanceof Error ? error.message || 'Could not complete the request.' : String(error)); }
     };
@@ -36,7 +37,7 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
   return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}><DialogContent>
     <DialogHeader><DialogTitle>Create a space</DialogTitle><DialogDescription>A shared drive with its own files and members. You will own the new space.</DialogDescription></DialogHeader>
     <form onSubmit={event => { event.preventDefault(); void create(); }} className="space-y-3">
-      <label className="block">Space name<Input autoFocus maxLength={100} value={name} disabled={busy || request?.status === 'pending'} onChange={event => setName(event.target.value)} /></label>
+      <label className="block">Space name<Input autoFocus maxLength={100} value={name} disabled={busy || request?.status === 'pending'} onChange={event => { setName(event.target.value); slug.current = ''; if (request?.status !== 'pending') setRequest(null); }} /></label>
       <SpaceStyleFields icon={icon} color={color} disabled={busy || request?.status === 'pending'} onIcon={icon => setIcon(icon as SpaceSettings['icon'])} onColor={color => setColor(color as SpaceSettings['color'])} />
       <p className="text-sm text-muted-foreground">Files use this install's Canopy storage. Invite members after the space opens.</p>
       {error ? <p role="alert">{error} Your creation request can still complete; check its status before starting another.</p> : null}
