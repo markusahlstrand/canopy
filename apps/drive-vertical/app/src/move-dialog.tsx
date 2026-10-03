@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@canopy/ui';
-import { listFoldersPage, appendRows, moveFile, moveFolder, ROOT_FOLDER_ID, type DriveFolder } from './api';
+import { currentSite, listFoldersPage, appendRows, moveFile, moveFolder, ROOT_FOLDER_ID, type DriveFolder } from './api';
 import { latestOnly } from './reads';
+import { useNavigationGuard } from './navigation-guards';
 import type { FileItem } from './items';
 
 /** Same-space destinations; the server checks source and destination permissions. */
@@ -9,8 +10,12 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   items: FileItem[];
   sourceFolderId: string | null;
   onClose: () => void;
-  onMoved: () => Promise<void>;
+  onMoved: (ids: string[]) => Promise<void>;
 }) {
+  const [site] = useState(currentSite);
+  const mounted = useRef(true);
+  const running = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const reads = useRef(latestOnly()).current;
   const [next, setNext] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -20,6 +25,7 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(items);
+  useNavigationGuard(busy);
   const destination = trail[trail.length - 1]!;
 
   useEffect(() => {
@@ -29,7 +35,7 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
     setLoading(true);
     setFolders([]);
     setError(null);
-    listFoldersPage(destination.id).then((answer) => {
+    listFoldersPage(destination.id, null, site).then((answer) => {
       if (reads.current(ticket)) { setFolders(answer.entries); setNext(answer.next); }
     }).catch((e: unknown) => {
       if (reads.current(ticket)) setError(e instanceof Error ? e.message : String(e));
@@ -45,7 +51,7 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
     setLoadingMore(true);
     setError(null);
     try {
-      const page = await listFoldersPage(destination.id, next);
+      const page = await listFoldersPage(destination.id, next, site);
       if (reads.current(ticket)) { setFolders(rows => appendRows(rows, page.entries)); setNext(page.next); }
     } catch (e: unknown) {
       if (reads.current(ticket)) setError(e instanceof Error ? e.message : String(e));
@@ -59,24 +65,29 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   ));
 
   const submit = async () => {
-    setBusy(true);
-    setError(null);
+    if (running.current || loading || !remaining.length || destination.id === sourceFolderId) return;
+    running.current = true; setBusy(true); setError(null);
     let left = remaining;
-    try {
-      // Each operation is atomic. Keep successful items out of a partial-failure retry.
-      for (const item of remaining) {
-        if (item.isFolder) await moveFolder(item.id, destination.id);
-        else await moveFile(item.id, destination.id);
-        left = left.filter((candidate) => candidate.id !== item.id);
-        setRemaining(left);
-      }
-      onClose();
-    } catch (e: unknown) {
-      setError(`${remaining.length - left.length} moved; ${left.length} remaining. ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      await onMoved();
-      setBusy(false);
+    const moved: string[] = [];
+    let failure: string | null = null;
+    for (const item of remaining) {
+      if (!mounted.current) break;
+      try {
+        if (item.isFolder) await moveFolder(item.id, destination.id, site);
+        else await moveFile(item.id, destination.id, site);
+        moved.push(item.id); left = left.filter(candidate => candidate.id !== item.id);
+        if (mounted.current) setRemaining(left);
+      } catch (error) { failure = error instanceof Error ? error.message : String(error); break; }
     }
+    if (mounted.current) {
+      try { await onMoved(moved); } catch { failure = (failure ? failure + ' ' : '') + 'The listing could not refresh. Refresh to check the results.'; }
+      if (mounted.current) {
+        if (!failure && !left.length) onClose();
+        else setError(`${items.length - left.length} moved; ${left.length} remaining. ${failure ?? 'Stopped.'}`);
+        setBusy(false);
+      }
+    }
+    running.current = false;
   };
 
   return (
@@ -86,6 +97,8 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
           <DialogTitle>Move {items.length === 1 ? items[0]!.name : `${items.length} items`}</DialogTitle>
           <DialogDescription>Choose a folder in this space. Access follows the destination; existing names are refused.</DialogDescription>
         </DialogHeader>
+        <ul aria-label="Files remaining to move" className="max-h-32 overflow-auto text-sm">{remaining.map(item => <li key={item.id}>{item.name}</li>)}</ul>
+        {busy ? <p role="status">Moved {items.length - remaining.length} of {items.length}…</p> : null}
         <nav aria-label="Destination path" className="flex flex-wrap gap-2">
           {trail.map((crumb, index) => (
             <Button key={crumb.id} variant="ghost" size="sm" disabled={busy}
@@ -106,7 +119,7 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
         {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
         <div className="flex justify-end gap-2">
           <Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button disabled={busy || loading || destination.id === sourceFolderId}
+          <Button disabled={busy || loading || !remaining.length || destination.id === sourceFolderId}
             onClick={() => void submit()}>{busy ? 'Moving…' : 'Move here'}</Button>
         </div>
       </DialogContent>

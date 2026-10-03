@@ -566,7 +566,7 @@ export const updateFileDetails = (fileId: string, description: string, labels: s
 export interface ListingPage<T> { entries: T[]; next: string | null }
 
 /** Follow the server's page link, retaining filters and rejecting another route/origin. */
-async function readPage<T>(route: string, next: string | null, label = 'listing'): Promise<ListingPage<T>> {
+async function readPage<T>(route: string, next: string | null, label = 'listing', selectedSite = site): Promise<ListingPage<T>> {
   const path = `${API}${route}`;
   const origin = window.location.origin;
   const continuation = (link: string) => {
@@ -575,7 +575,7 @@ async function readPage<T>(route: string, next: string | null, label = 'listing'
     return url;
   };
   const url = next ? continuation(next) : new URL(path, origin);
-  const res = await request(`${url.pathname.slice(API.length)}${url.search}`);
+  const res = await request(`${url.pathname.slice(API.length)}${url.search}`, undefined, selectedSite);
   const entries = await res.json() as T[];
   const match = res.headers.get('Link')?.match(/<([^>]+)>;\s*rel="next"/);
   const following = match ? continuation(match[1]!).toString() : null;
@@ -612,8 +612,8 @@ export const listFolderPage = (folderId: string, next: string | null = null) =>
 
 export const listTrashPage = (next: string | null = null) => readPage<DriveFile>('/trash', next);
 
-export const listFoldersPage = (folderId: string, next: string | null = null) =>
-  readPage<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/folders`, next);
+export const listFoldersPage = (folderId: string, next: string | null = null, selectedSite = site) =>
+  readPage<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/folders`, next, 'listing', selectedSite);
 
 export const listSharedFolders = () => call<{ folders: DriveFolder[] }>('/folders/shared-with-me');
 
@@ -643,17 +643,17 @@ export const renameFolder = (folderId: string, name: string) =>
  * Move a file or a folder. Access follows: a grant above the destination reaches it
  * afterwards, and one above where it left does not (#75).
  */
-export const moveFile = (fileId: string, folderId: string) =>
+export const moveFile = (fileId: string, folderId: string, selectedSite = site) =>
   call<DriveFile>(`/files/${encodeURIComponent(fileId)}/move`, {
     method: 'POST',
     body: JSON.stringify({ folderId }),
-  });
+  }, selectedSite);
 
-export const moveFolder = (folderId: string, parentId: string) =>
+export const moveFolder = (folderId: string, parentId: string, selectedSite = site) =>
   call<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/move`, {
     method: 'POST',
     body: JSON.stringify({ parentId }),
-  });
+  }, selectedSite);
 
 /** Recoverable: the bytes stay, and `restoreFile` puts it back under the same name. */
 export const trashFile = (fileId: string, selectedSite = site) =>

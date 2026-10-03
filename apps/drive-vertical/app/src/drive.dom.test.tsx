@@ -266,7 +266,7 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     await flush();
     await answer('/folders/01F/folders', []);
     await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
-    expect(screen.getByText('lease.pdf')).toBeTruthy();
+    expect(screen.getByText('lease.pdf', { selector: 'td span' })).toBeTruthy();
 
     // A write starts in Papers. "New folder" rather than the row menu because the row's
     // menu wants real pointer events, and the race under test is about WHICH refresh an
@@ -678,9 +678,9 @@ describe('move destination picker', () => {
     expect(pending.find((p) => p.url.endsWith('/files/01A/move'))?.body)
       .toBe(JSON.stringify({ folderId: '01D' }));
     await answer('/files/01A/move', { ...file('01A', 'lease.pdf'), folder_id: '01D' });
-    expect(screen.queryByRole('dialog')).toBeNull();
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', []);
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.queryByText('lease.pdf')).toBeNull();
   });
 
@@ -697,7 +697,7 @@ describe('move destination picker', () => {
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', [file('01A', 'lease.pdf')]);
     expect(within(dialog).getByRole('alert').textContent).toContain('1 remaining');
-    expect(screen.getByText('lease.pdf')).toBeTruthy();
+    expect(screen.getByText('lease.pdf', { selector: 'td span' })).toBeTruthy();
   });
 
   it('moves a selection and retries only the items that failed', async () => {
