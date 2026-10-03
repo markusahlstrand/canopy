@@ -749,7 +749,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       {view === 'search' ? (
         <FileTable
-          files={sorted(hits, sort).map((hit) => ({ ...fileItem(hit), description: hit.snippet || (hit.via === 'content' ? 'Matched inside the document' : hit.via === 'metadata' ? 'Matched in description or labels' : 'Matched in the name') }))}
+          searchQuery={term.trim()}
+          files={sorted(hits, sort).map((hit) => ({ ...fileItem(hit), snippet: hit.snippet ?? undefined, description: hit.snippet || (hit.via === 'content' ? 'Matched inside the document' : hit.via === 'metadata' ? 'Matched in description or labels' : 'Matched in the name') }))}
           selection={selection}
           onSelectionChange={setSelection}
           onOpen={(item) => setPreviewing(item.id)}

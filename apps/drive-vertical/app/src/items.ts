@@ -31,6 +31,8 @@ export interface FileItem {
   name: string;
   /** Optional explanation of a search match, kept as plain text. */
   description?: string;
+  /** Actual extracted snippet, distinct from a fallback match explanation. */
+  snippet?: string;
   kind: FileKind;
   /** Rendered as-is, so the caller decides between "today" and a date. */
   modified: string;
