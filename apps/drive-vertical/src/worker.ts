@@ -74,7 +74,7 @@ import { placesFetch } from './places-fetch.js';
 import { mountFileContent, type FileContentRecord } from './file-content.js';
 import { mountTextContent, editableTextMime, type TextContentRecord } from './text-content.js';
 import { removeMember } from './remove-member.js';
-import { MEMBER_ROLE_KEY, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
+import { INVITABLE_ROLE_KEYS, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 import { driveManifest, DRIVE_PERM } from '@canopy/scope-drive';
 
 const EXTRACTOR_REVISION = 'pdf-text-v2';
@@ -473,8 +473,7 @@ app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
  * would be re-deciding authorization out here from a role name — the hand-rolled check
  * beside the enforced one, which is the failure this platform exists to remove.
  *
- * One invitable role. See `MEMBER_ROLE_KEY` for why that is a safety property and not a
- * simplification.
+ * The server offers bounded viewer/editor/owner roles and retains legacy member invites.
  */
 /**
  * The gate on every people route, and it answers WHO is asking.
@@ -505,7 +504,7 @@ mountInviteRoutes<Env, Node>(app, {
     hostFor(env).canAssign(node.tenantId, node.scopeId, principal, roleKey),
   assignScopeRoleBounded: (env, node, caller, assignee, roleKey) =>
     hostFor(env).assignScopeRoleBounded(node.tenantId, node.scopeId, caller, assignee, roleKey),
-  roles: [MEMBER_ROLE_KEY],
+  roles: INVITABLE_ROLE_KEYS,
   directory: (env, node) => identityDo(env, node),
   // Scope-local, no control plane: the bounded grant lands where the checker reads.
   revokeScopeRole: (env, scopeId, principal, roleKey) =>

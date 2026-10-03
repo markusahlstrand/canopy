@@ -61,6 +61,8 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
    * than against what the client believed when it was written.
    */
   const [roles, setRoles] = useState<string[]>([]);
+  const [selectedRole, setSelectedRole] = useState('viewer');
+  const inviteRole = roles.includes(selectedRole) ? selectedRole : roles[0];
   const [email, setEmail] = useState('');
   const [minted, setMinted] = useState<Minted | null>(null);
   const [busy, setBusy] = useState(false);
@@ -185,7 +187,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
   }, [open, load]);
 
   const invite = async () => {
-    const roleKey = roles[0];
+    const roleKey = inviteRole;
     // No role means the list has not arrived (or the server offers none): there is nothing
     // honest to send, and the button is disabled for the same reason.
     if (!roleKey) return;
@@ -238,7 +240,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
         <DialogHeader>
           <DialogTitle>People</DialogTitle>
           <DialogDescription>
-            Invite someone into this space. They get a link, and become a member when they
+            Invite someone into this space. Choose whether they can read, edit or manage it. They get a link, and become a member when they
             open it and sign in.
           </DialogDescription>
         </DialogHeader>
@@ -256,7 +258,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
           inviting an address that is already here, which the portal's `exclude` did too.
         */}
         <form
-          className="flex items-center gap-2"
+          className="flex flex-wrap items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             if (!busy) void invite();
@@ -276,6 +278,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
               setError(`${person.name ?? person.email ?? person.principal} is already in this space.`);
             }}
           />
+          <label className="text-xs">Role<select aria-label="Invitation role" disabled={busy || roles.length === 0} value={inviteRole ?? ''} onChange={event => setSelectedRole(event.target.value)}>{roles.filter(role => role !== 'member' || !roles.includes('viewer')).map(role => <option key={role} value={role}>{role === 'viewer' || role === 'member' ? 'Viewer — read files' : role === 'editor' ? 'Editor — read and edit files' : role === 'owner' ? 'Owner — manage this space' : role}</option>)}</select></label>
           <Button type="submit" disabled={busy || roles.length === 0} className="shrink-0 gap-1.5">
             <Icon name="plus" size={16} />
             Invite

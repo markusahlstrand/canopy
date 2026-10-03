@@ -221,3 +221,20 @@ describe('the roster remembers what to call people', () => {
     await expect((await as(stranger)).invoke('drive/list-people', {})).rejects.toThrow();
   });
 });
+
+describe('portal-compatible scope roles', () => {
+  it('lets an owner confer editor access but prevents an editor escalating to owner', async () => {
+    const editor = principalId.parse(ulid()), viewer = principalId.parse(ulid());
+    expect((await host.canAssign(tenant, scope, ada, 'editor')).covered).toBe(true);
+    await host.assignScopeRoleBounded(tenant, scope, ada, editor, 'editor');
+    await host.assignScopeRoleBounded(tenant, scope, ada, viewer, 'viewer');
+    const editable = await host.getScope(editor, tenant, scope);
+    const readable = await host.getScope(viewer, tenant, scope);
+    expect((await editable.invoke<Access>('drive/people-access')).canManage).toBe(false);
+    await editable.invoke('drive/create-folder', {parentId:ROOT_FOLDER_ID,name:'Editor-created folder'});
+    await expect(readable.invoke('drive/create-folder', {parentId:ROOT_FOLDER_ID,name:'Viewer cannot create'})).rejects.toThrow();
+    expect((await host.canAssign(tenant, scope, editor, 'owner')).covered).toBe(false);
+    expect((await host.assignScopeRoleBounded(tenant, scope, editor, viewer, 'owner')).covered).toBe(false);
+    expect((await readable.invoke<Access>('drive/people-access')).canManage).toBe(false);
+  });
+});

@@ -9,7 +9,7 @@
  * - **A space member reads the space.** That is what membership already means in
  *   canopy — a family space is shared by being a space, not by granting every
  *   folder in it — so `drive:read` is the role, held scope-wide.
- * - **Writing is granted on a folder**, never scope-wide, and reaches everything
+ * - **Writing may be granted on a folder**, or scope-wide to an editor, and reaches everything
  *   beneath it through the declared parent edge. `folder_grants` + the `pathRole`
  *   ancestor walk become one grant and one declared edge.
  * - **The owner of a space holds both**, on the root folder, which is the whole of
@@ -26,21 +26,8 @@ export const MODULES = [driveModule];
 /** Entitlements are default-deny: one SKU key per module this vertical runs. */
 export const ENTITLEMENT_KEYS = ['drive'];
 
-/**
- * The role table, identical in every tenant.
- *
- * Two roles, because a space has two kinds of people in it and they differ in what
- * they may do to the WHOLE space:
- *
- * - **`owner`** holds all three keys scope-wide. That is not a weakening: the owner of
- *   a space may write anywhere in their own space, which is the same thing said in the
- *   kernel's vocabulary. It is also the only way the installer can use what they just
- *   installed — `/internal/provision` assigns a scope-level ROLE and nothing else, so a
- *   permission that exists only as an entity grant is a permission a fresh install's
- *   owner does not have.
- * - **`member`** reads. Writing for a member is granted per folder, which keeps one
- *   member from editing another's folders — the distinction canopy's viewer/editor
- *   ladder already draws, and the reason `drive:write` is not in this role.
+/** Scope-wide roles matching the portal's viewer/editor/owner invite choices.
+ * Existing member bindings remain read-only; folder grants still narrow legacy access.
  */
 export const ROLES: RoleDefinition[] = [
   {
@@ -48,27 +35,18 @@ export const ROLES: RoleDefinition[] = [
     permissions: [DRIVE_PERM.read, DRIVE_PERM.write, DRIVE_PERM.manage],
     source: 'vertical',
   },
+  { key: 'viewer', permissions: [DRIVE_PERM.read], source: 'vertical' },
+  { key: 'editor', permissions: [DRIVE_PERM.read, DRIVE_PERM.write], source: 'vertical' },
   { key: 'member', permissions: [DRIVE_PERM.read], source: 'vertical' },
 ];
 
 /** The role the installing owner holds — what `/internal/provision` assigns. */
 export const OWNER_ROLE_KEY = 'owner';
 
-/**
- * The role a teammate is invited at, and the only one.
- *
- * Inviting at `owner` would need the kernel's assignment bound checked against the
- * REQUESTED role (`ctx.canAssign`: a principal may confer a role only if they already
- * hold every permission it carries). The platform's invite mount calls the vertical's
- * admin gate before it parses the body, so the gate never sees which role was asked for
- * and the bound cannot be applied per role — only this static list can. One role it is
- * until the mount can apply the bound: substrat-run/substrat#1931.
- *
- * Safe as it stands rather than by luck: every caller the gate admits holds
- * `drive:manage` across the space, and so holds the `drive:read` that `member` carries.
- * The bound is satisfied by construction for this one key.
- */
+/** Legacy member invitations remain supported for folder-sharing clients. */
 export const MEMBER_ROLE_KEY = 'member';
+/** Every invitation and claim is checked by the platform's bounded role assignment. */
+export const INVITABLE_ROLE_KEYS = ['viewer', 'editor', 'owner', MEMBER_ROLE_KEY];
 
 /**
  * The entity-narrowed grant SHAPES — which keys are reachable outside the role table.
