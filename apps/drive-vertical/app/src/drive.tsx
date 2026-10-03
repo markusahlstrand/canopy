@@ -233,6 +233,16 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [savedView] = useState(readViewPreferences);
   const [layout, setLayout] = useState<'list' | 'grid'>(savedView.layout);
   const [sort, setSort] = useState<SortState>(savedView.sort);
+  // Only files already loaded in the active listing participate. Match its sort
+  // order, and use the same draft boundary as table and palette navigation.
+  const previewFiles = offline ? [] : view === 'drive' ? sorted(files, sort) : view === 'search' ? sorted(hits, sort) : [];
+  const previewIndex = previewFiles.findIndex(file => file.id === previewing);
+  const previewNavigation = previewIndex < 0 ? undefined : {
+    previous: previewFiles[previewIndex - 1]?.id ?? null,
+    next: previewFiles[previewIndex + 1]?.id ?? null,
+    moreAvailable: view === 'drive' && filesNext !== null,
+    onOpen: (id: string) => { setPreviewing(id); },
+  };
   const reads = useRef(latestOnly());
   /**
    * The CURRENT refresh, not the one an action closed over.
@@ -832,6 +842,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         <div className="fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0">
           <PreviewPanel
             fileId={previewing}
+            navigation={previewNavigation}
             onChanged={() => void refresh()}
             onClose={() => setPreviewing(null)}
             onError={onError}
