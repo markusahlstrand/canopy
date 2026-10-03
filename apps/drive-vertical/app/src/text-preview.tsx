@@ -1,3 +1,4 @@
+import { TextStatistics } from './text-statistics';
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button, Input } from '@canopy/ui';
 import { CopyPreviewText } from './copy-preview-text';
@@ -69,6 +70,7 @@ export function TextPreview({ text, wrap, onWrapChange, truncated = false }: { t
         <Button size="sm" variant="ghost" disabled={pending || !matches.length} aria-label="Next match" onClick={() => advance(1)}>↓</Button>
       </div>
       {query ? <p role="status" className="text-xs text-muted-foreground">{pending ? 'Updating matches…' : matches.length ? `${index + 1} of ${matches.length}${limited ? '+' : ''} matches` : 'No matches'}{!pending && limited ? ' · Showing the first 1,000 matches' : ''}</p> : null}
+      <TextStatistics text={text} truncated={truncated} />
     </div>
     <pre aria-busy={pending} className={wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere] text-xs' : 'overflow-x-auto whitespace-pre text-xs'}>{fragments}</pre>
   </div>;
