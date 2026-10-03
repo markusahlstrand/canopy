@@ -54,3 +54,15 @@ it('preserves the visible centre across zoom steps and actual size, and resets o
   expect(viewport.scrollLeft).toBe(0); expect(viewport.scrollTop).toBe(0);
   viewport.scrollLeft = 99; viewer.file = null; expect(viewport.scrollLeft).toBe(0);
 });
+
+it('scopes keyboard zoom to the loaded viewport and preserves browser shortcuts', () => {
+  const { image, controls } = setup(); const viewport = controls.getByRole('region', { name: 'Image viewport' });
+  expect(viewport.tabIndex).toBe(0); fireEvent.keyDown(viewport, { key: '+' }); expect(image.style.width).toBe('auto');
+  fireEvent.load(image); fireEvent.keyDown(viewport, { key: '+' }); expect(image.style.width).toBe('500px');
+  fireEvent.keyDown(viewport, { key: '0' }); expect(image.style.width).toBe('800px');
+  const browser = new KeyboardEvent('keydown', { key: '+', ctrlKey: true, cancelable: true }); viewport.dispatchEvent(browser);
+  expect(browser.defaultPrevented).toBe(false); expect(image.style.width).toBe('800px');
+  fireEvent.keyDown(viewport, { key: '-', isComposing: true }); expect(image.style.width).toBe('800px');
+  fireEvent.keyDown(controls.getByRole('button', { name: 'Actual size' }), { key: '+' }); expect(image.style.width).toBe('800px');
+  fireEvent.keyDown(viewport, { key: 'f' }); expect(image.style.width).toBe('auto'); expect(controls.getByRole('status').textContent).toBe('Fit');
+});

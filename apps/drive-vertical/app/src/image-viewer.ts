@@ -30,6 +30,7 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
       button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 4px 8px; }
       button:disabled { opacity: .4; }
       .viewport { display: flex; flex: 1; min-height: 0; overflow: auto; width: 100%; }
+      .viewport:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
       img { display: block; flex: none; border-radius: 10px; }
     `;
     const toolbar = document.createElement('div');
@@ -44,13 +45,31 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
     button('Fit image', () => { this.#zoom = null; this.#apply(); this.#resetScroll(); });
     this.#status = document.createElement('span'); this.#status.setAttribute('role', 'status'); toolbar.append(this.#status);
     this.#viewport = document.createElement('div'); this.#viewport.className = 'viewport';
+    this.#viewport.tabIndex = 0;
+    this.#viewport.setAttribute('role', 'region');
+    this.#viewport.setAttribute('aria-label', 'Image viewport');
+    this.#viewport.setAttribute('aria-keyshortcuts', '= - 0 F');
+    this.#viewport.setAttribute('aria-describedby', 'zoom-shortcuts');
+    const hint = document.createElement('span'); hint.id = 'zoom-shortcuts';
+    hint.textContent = 'Focus the image: +/− zoom, 0 actual size, F fit. Arrow keys scroll.';
+    hint.style.font = '12px system-ui';
+    this.#viewport.addEventListener('pointerdown', () => this.#viewport.focus({ preventScroll: true }));
+    this.#viewport.addEventListener('keydown', event => {
+      if (event.target !== this.#viewport || !this.#loaded || !this.#file || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+      if (event.key === '+' || event.key === '=') this.#changeZoom(1.25);
+      else if (event.key === '-') this.#changeZoom(1 / 1.25);
+      else if (event.key === '0') this.#setZoom(1);
+      else if (event.key.toLowerCase() === 'f') { this.#zoom = null; this.#apply(); this.#resetScroll(); }
+      else return;
+      event.preventDefault(); event.stopPropagation();
+    });
     this.#image = document.createElement('img');
     this.#image.addEventListener('load', () => {
       this.#loaded = true; this.#apply();
       this.dispatchEvent(new CustomEvent('viewer-loaded', { detail: { width: this.#image.naturalWidth, height: this.#image.naturalHeight } }));
     });
     this.#image.addEventListener('error', () => this.dispatchEvent(new CustomEvent('viewer-error')));
-    this.#viewport.append(this.#image); shadow.append(style, toolbar, this.#viewport); this.#apply();
+    this.#viewport.append(this.#image); shadow.append(style, toolbar, hint, this.#viewport); this.#apply();
   }
   #minimumZoom() {
     const width = this.#viewport.clientWidth / this.#image.naturalWidth;
