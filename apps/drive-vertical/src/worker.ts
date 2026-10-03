@@ -1,3 +1,5 @@
+import { mountMemberRemoval } from './member-removal-route.js';
+import { claimSafeInvite, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
 import { mountSpaceSettings } from './space-settings-routes.js';
 import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
@@ -76,7 +78,6 @@ import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
 import { mountFileContent, type FileContentRecord } from './file-content.js';
 import { mountTextContent, editableTextMime, type TextContentRecord } from './text-content.js';
-import { removeMember } from './remove-member.js';
 import { INVITABLE_ROLE_KEYS, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 import { driveManifest, DRIVE_PERM } from '@canopy/scope-drive';
 
@@ -94,6 +95,15 @@ export const ScopeDO = defineScopeDO(MODULES, {});
 /** The tenant's identity directory: subject → principal, and the owner seat. */
 /** The tenant-local owner handoff for spaces created by a signed-in user. */
 export class IdentityDO extends PlatformIdentityDO {
+  override async unbindPrincipal(scope: string, principal: string): Promise<string[]> {
+    return this.ctx.storage.transactionSync(()=>unbindProtectedPrincipal(this.ctx.storage.sql,scope,principal));
+  }
+  async existingBinding(scope: string, subject: string): Promise<string | null> {
+    return this.ctx.storage.sql.exec<{principal:string}>('SELECT principal FROM identity WHERE scope_id = ? AND sub = ?',scope,subject).toArray()[0]?.principal ?? null;
+  }
+  override async claimInvite(scope: string, subject: string, hash: string): Promise<string | null> {
+    return this.ctx.storage.transactionSync(()=>claimSafeInvite(this.ctx.storage.sql,scope,subject,hash));
+  }
   async readSpaceSettings(scope: string): Promise<SpaceSettings | null> {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_space_settings (scope_id TEXT PRIMARY KEY, value TEXT NOT NULL)');
     const row = this.ctx.storage.sql.exec<{value: string}>('SELECT value FROM canopy_space_settings WHERE scope_id = ?', scope).toArray()[0];
@@ -323,6 +333,7 @@ type SiteRegistry = {
   readSpaceSettings(scope: string): Promise<SpaceSettings | null>;
   deleteSpaceSettings(scope: string): Promise<void>;
   writeSpaceSettings(scope: string, value: SpaceSettings): Promise<void>;
+  existingBinding(scope: string, subject: string): Promise<string | null>;
   deferSite(scope: string, slug: string, name: string): Promise<void>;
   bindCreatingOwner(scope: string, owner: string, subject: string): Promise<void>;
   reserveSpace(slug: string, subject: string, owner: string): Promise<{owner:string;error?:'cap'|'rate'|'conflict'}>;
@@ -540,7 +551,7 @@ app.on(['GET', 'POST'], '/api/auth/*', async (c) =>
  * would be re-deciding authorization out here from a role name — the hand-rolled check
  * beside the enforced one, which is the failure this platform exists to remove.
  *
- * The server offers bounded viewer/editor/owner roles and retains legacy member invites.
+ * The server offers bounded viewer/editor roles and retains legacy member invites.
  */
 /**
  * The gate on every people route, and it answers WHO is asking.
@@ -564,6 +575,13 @@ async function requirePeopleAdmin(c: Context<{ Bindings: Env }>): Promise<Princi
   return principal;
 }
 
+mountInviteGuards(app, async c => {
+ const principal=await requirePeopleAdmin(c),node=await nodeFor(c.req.raw,c.env);
+ return projectedInviteRoles(INVITABLE_ROLE_KEYS,role=>hostFor(c.env).canAssign(node.tenantId,node.scopeId,principal,role));
+},async c => {
+ const node=await nodeFor(c.req.raw,c.env),subject=await(await providerFor(c.env,baseNode(c.req.raw,c.env))).resolve(c.req.raw.headers);
+ return !!subject && !!await identityDo(c.env,node).existingBinding(node.scopeId,subject.sub);
+});
 mountInviteRoutes<Env, Node>(app, {
   nodeFor,
   requireAdmin: async (c) => ({ principal: await requirePeopleAdmin(c) }),
@@ -616,18 +634,8 @@ mountInviteRoutes<Env, Node>(app, {
  * the whole reason the projection exists — so removal revokes what the drive recorded, and the
  * unbind is what makes the rest unreachable rather than absent.
  */
-app.delete('/api/people/:principal', async (c) => {
+mountMemberRemoval(app, async (c,target) => {
   const asking = await requirePeopleAdmin(c);
-  const target = c.req.param('principal');
-
-  // Not yourself. Nothing else guarantees an administrator remains — every other owner could
-  // be removed by one who then removes themselves, leaving a space nobody can administer, and
-  // the platform's claim link is a poor answer to "I locked myself out of my own drive".
-  if (target === asking) {
-    throw new HTTPException(400, {
-      message: 'you cannot remove yourself from a space you administer',
-    });
-  }
 
   const node = await nodeFor(c.req.raw, c.env);
   const host = hostFor(c.env);
@@ -638,7 +646,9 @@ app.delete('/api/people/:principal', async (c) => {
   // The order lives in `remove-member.ts`, where it is tested — including what each failure
   // leaves behind, which is the half that cannot be checked by reading. This route's job is to
   // supply the three steps against the real bindings.
-  const outcome = await removeMember({
+  const owner=await directory.getOwnerOfRecord(node.scopeId);
+  const targetManages=(await (await host.getScope(removed,node.tenantId,node.scopeId)).invoke<{canManage:boolean}>('drive/people-access')).canManage;
+  return {asking,owner,targetManages,steps:{
     unbind: async () => {
       const instance = await instanceFor(c.env, baseNode(c.req.raw, c.env));
       // Substrat #1951 adds this principal-wide operation. The installed release's
@@ -668,9 +678,7 @@ app.delete('/api/people/:principal', async (c) => {
       }
       return ROLES.length;
     },
-  });
-
-  return c.json({ principal: target, ...outcome });
+  }};
 });
 
 /**

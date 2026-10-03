@@ -45,8 +45,8 @@ export const OWNER_ROLE_KEY = 'owner';
 
 /** Legacy member invitations remain supported for folder-sharing clients. */
 export const MEMBER_ROLE_KEY = 'member';
-/** Every invitation and claim is checked by the platform's bounded role assignment. */
-export const INVITABLE_ROLE_KEYS = ['viewer', 'editor', 'owner', MEMBER_ROLE_KEY];
+/** Assignment is bounded when an invite is minted. Owner links stay disabled until the platform supports expiring, contact-bound claims. */
+export const INVITABLE_ROLE_KEYS = ['viewer', 'editor', MEMBER_ROLE_KEY];
 
 /**
  * The entity-narrowed grant SHAPES — which keys are reachable outside the role table.
