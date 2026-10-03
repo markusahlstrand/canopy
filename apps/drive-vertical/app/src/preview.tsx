@@ -1,3 +1,4 @@
+import { TextPreview } from './text-preview';
 import { confirmDiscardDrafts } from './drafts';
 /**
  * File preview (S12a slice 3, #78) — lifted from the portal's `file-preview.tsx` and
@@ -354,7 +355,7 @@ export function PreviewPanel({
               editing ? <TextEditor key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} text={body.text}
                 onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} /> : <>
                 {canWrite && !body.truncated && version.source === 'blob' ? <Button size="sm" variant="outline" className="mb-3" onClick={() => setEditing(true)}>Edit text</Button> : null}
-                <pre className="whitespace-pre-wrap break-words text-xs">{body.text}</pre>
+                <TextPreview key={`${fileId}:${version.id}`} text={body.text} />
                 {body.truncated ? (
                   <p className="mt-2 text-xs text-muted-foreground">
                     Cut off here — download the file to read the rest.
