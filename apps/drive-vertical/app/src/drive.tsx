@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
+import { readViewPreferences, saveViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
 import { indexedMirror, syncMirror } from './scope-mirror';
@@ -225,8 +226,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   /** The topbar's Upload button and the palette's action both reach the one file input. */
   const uploadRef = useRef<HTMLInputElement>(null);
   const [selection, setSelection] = useState<Set<string>>(new Set());
-  const [layout, setLayout] = useState<'list' | 'grid'>('list');
-  const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' });
+  const [savedView] = useState(readViewPreferences);
+  const [layout, setLayout] = useState<'list' | 'grid'>(savedView.layout);
+  const [sort, setSort] = useState<SortState>(savedView.sort);
   const reads = useRef(latestOnly());
   /**
    * The CURRENT refresh, not the one an action closed over.
@@ -501,8 +503,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   };
 
   /** Clicking a column header: same key toggles direction, a new key starts ascending. */
-  const onSort = (key: SortKey) =>
-    setSort((s) => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
+  const onSort = (key: SortKey) => {
+    const next: SortState = { key, dir: sort.key === key && sort.dir === 'asc' ? 'desc' : 'asc' };
+    setSort(next);
+    saveViewPreferences({ layout, sort: next });
+  };
 
   /**
    * The table emits action names; this is where they become operations.
@@ -726,7 +731,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         <Button
           variant="outline"
           size="sm"
-          onClick={() => setLayout((l) => (l === 'list' ? 'grid' : 'list'))}
+          onClick={() => {
+            const next = layout === 'list' ? 'grid' : 'list';
+            setLayout(next);
+            saveViewPreferences({ layout: next, sort });
+          }}
           aria-label={layout === 'list' ? 'Switch to grid' : 'Switch to list'}
         >
           <Icon name={layout === 'list' ? 'grid' : 'list'} className="size-4" />

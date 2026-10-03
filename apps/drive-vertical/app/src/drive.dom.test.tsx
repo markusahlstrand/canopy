@@ -110,6 +110,7 @@ const file = (id: string, name: string) => ({
 });
 
 beforeEach(() => {
+  localStorage.removeItem('canopy.drive.view');
   queueFetch();
   /**
    * A FULLY manual clock — no `shouldAdvanceTime`.
@@ -805,6 +806,25 @@ describe('the shell the portal had, on the vertical', () => {
     expect(screen.getByRole('banner').textContent).toContain('My Drive');
     expect(screen.queryByText(/Log in/)).toBeNull();
   });
+});
+
+it('does not write defaults over a newer preference record on mount', async () => {
+  const newer = JSON.stringify({ version: 2, layout: 'grid', newOption: true });
+  localStorage.setItem('canopy.drive.view', newer);
+  await renderDrive();
+  expect(localStorage.getItem('canopy.drive.view')).toBe(newer);
+  fireEvent.click(screen.getByRole('button', { name: 'Switch to grid' }));
+  expect(localStorage.getItem('canopy.drive.view')).toBe(newer);
+});
+
+it('restores saved layout and ordering, and persists a layout change', async () => {
+  localStorage.setItem('canopy.drive.view', JSON.stringify({ version: 1, layout: 'grid', sort: { key: 'name', dir: 'desc' } }));
+  await renderDrive([], [file('a', 'alpha.txt'), file('z', 'zeta.txt')]);
+  expect(screen.getByRole('button', { name: 'Switch to list' })).toBeTruthy();
+  const names = screen.getAllByText(/^(alpha|zeta)\.txt$/);
+  expect(names.map(node => node.textContent)).toEqual(['zeta.txt', 'alpha.txt']);
+  fireEvent.click(screen.getByRole('button', { name: 'Switch to list' }));
+  expect(JSON.parse(localStorage.getItem('canopy.drive.view')!).layout).toBe('list');
 });
 
 describe('the mobile drive shell and empty views', () => {
