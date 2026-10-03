@@ -680,7 +680,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         open={cmdOpen}
         onOpenChange={setCmdOpen}
         files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
-        onNavigate={(id) => navigate(id === 'trash' ? 'trash' : 'drive')}
+        onNavigate={(id) => navigate(id === 'trash' ? 'trash' : id === 'shared' ? 'shared' : 'drive')}
         onOpenFile={(item) => {
           // The palette lists folders too, and a folder is entered rather than previewed —
           // the panel would open on an id `get-file` cannot resolve.

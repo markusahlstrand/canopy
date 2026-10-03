@@ -1772,3 +1772,17 @@ describe('Trash pages', () => {
     expect(screen.getByText('first.txt')).toBeTruthy();
   });
 });
+
+it('navigates from the palette to the shared-folder listing', async () => {
+  render(<DriveScreen auth={{ user: {} }} onError={() => {}} onSignIn={() => {}} onSignOut={() => {}} />);
+  await flush();
+  await answer('/api/folders/root/folders', []);
+  await answer('/api/folders/root/files', []);
+  fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Shared with me' } });
+  fireEvent.click(screen.getByRole('option', { name: 'Shared with me' }));
+  await flush();
+  expect(pending.some(request => request.url === '/api/folders/shared-with-me')).toBe(true);
+  await answer('/api/folders/shared-with-me', { folders: [{ id: 'shared-folder', name: 'Reports', path: 'Team/Reports', parent_id: 'team' }] });
+  expect(screen.getByText('Reports')).toBeTruthy();
+});
