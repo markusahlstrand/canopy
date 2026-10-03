@@ -80,8 +80,8 @@ export function watchImageViewerPreference(): () => void {
     try { if (event.storageArea !== localStorage) return; }
     catch { return; }
     if (event.key !== null && event.key !== IMAGE_VIEWER_PREFERENCE) return;
-    if (event.newValue !== null && event.newValue !== 'enabled' && event.newValue !== 'disabled') return;
-    applyImageViewerEnabled(event.newValue !== 'disabled');
+    // Events are queued: another tab (or this tab) may have written a newer value.
+    registerImageViewer();
   };
   window.addEventListener('storage', onStorage);
   registerImageViewer();
