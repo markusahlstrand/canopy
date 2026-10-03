@@ -100,7 +100,7 @@ export function PreviewPanel({
   onChanged?: () => void;
   navigation?: { previous: string | null; next: string | null; moreAvailable?: boolean; onOpen: (id: string) => void };
 }) {
-  const [comparing, setComparing] = useState<string | null>(null);
+  const [comparing, setComparing] = useState<{ selectedId: string; currentId: string } | null>(null);
   const [historyNext, setHistoryNext] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [canWrite, setCanWrite] = useState(false);
@@ -429,15 +429,15 @@ export function PreviewPanel({
                   ) : null}
                   {v.source === 'blob' && v.blob_ref && v.id !== version?.id && version?.source === 'blob' &&
                     shapeOf(v.mime) === 'text' && shapeOf(version.mime) === 'text' ? <Button size="sm" variant="ghost"
-                      aria-label={`Compare version from ${new Date(v.created_at).toLocaleString()}`} onClick={() => setComparing(v.id)}>Compare text</Button> : null}
+                      aria-label={`Compare version from ${new Date(v.created_at).toLocaleString()}`} onClick={() => setComparing({ selectedId: v.id, currentId: version.id })}>Compare text</Button> : null}
                   {v.source === 'external' ? (
                     <span className="text-xs text-muted-foreground">in a connected source</span>
                   ) : null}
                 </li>
               ))}
             </ul>
-            {comparing && version ? <VersionComparison key={`${fileId}:${comparing}:${version.id}`} fileId={fileId}
-              selectedId={comparing} currentId={version.id} onClose={() => setComparing(null)} /> : null}
+            {comparing ? <VersionComparison key={`${fileId}:${comparing.selectedId}:${comparing.currentId}`} fileId={fileId}
+              selectedId={comparing.selectedId} currentId={comparing.currentId} onClose={() => setComparing(null)} /> : null}
             {historyNext ? <Button variant="outline" size="sm" disabled={loadingMore || restoring} onClick={() => void loadMore()}>{loadingMore ? 'Loading older versions…' : 'Load older versions'}</Button> : null}
             </div>
           )

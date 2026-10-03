@@ -40,3 +40,21 @@ it('offers comparison to readers only for historical managed text versions', asy
   expect(within(comparison).getByText('current text')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Close comparison' })); expect(screen.queryByLabelText('Version comparison')).toBeNull();
 });
+it('keeps the current-at-open version pinned after restoring a different head', async () => {
+  const old = { keep: 0, id: 'old', file_id: 'file', source: 'blob', blob_ref: 'blob', mime: 'text/plain', size: 8, created_at: '2026-01-01T00:00:00Z' };
+  let restored = false;
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'POST') restored = true;
+    if (url.includes('/content')) return new Response(url.includes('/old/') ? 'old text' : 'current text');
+    return new Response(JSON.stringify(url.endsWith('/versions') ? [old] : { file: { id: 'file', name: 'notes.txt' }, version: { ...old, id: restored ? 'restored' : 'current' }, canWrite: true }));
+  });
+  vi.stubGlobal('fetch', fetcher);
+  render(<PreviewPanel fileId="file" onError={() => {}} onClose={() => {}} />); await screen.findByText('current text');
+  fireEvent.click(screen.getByRole('button', { name: 'Versions' })); fireEvent.click(await screen.findByRole('button', { name: /^Compare version/ }));
+  const comparison = await screen.findByLabelText('Version comparison'); await within(comparison).findByText('old text');
+  fireEvent.click(screen.getByRole('button', { name: 'Restore' })); fireEvent.click(screen.getByRole('button', { name: 'Confirm restore' }));
+  await act(async () => {});
+  expect(restored).toBe(true); expect(screen.getByLabelText('Version comparison')).toBe(comparison); expect(within(comparison).getByText('current text')).toBeTruthy();
+  expect(fetcher.mock.calls.some(([url]) => url === '/api/files/file/versions/restored/content')).toBe(false);
+  expect(fetcher.mock.calls.filter(([url]) => url === '/api/files/file/versions/current/content')).toHaveLength(2);
+});
