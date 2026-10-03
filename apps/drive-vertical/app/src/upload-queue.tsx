@@ -19,7 +19,15 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
   const changed = useRef(onChanged);
   changed.current = onChanged;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; inFlight.current?.controller.abort(); }; }, []);
-  const publish = () => { if (mounted.current) setRows([...queue.current]); };
+  const publish = () => {
+    if (!mounted.current) return;
+    // A completed/cancelled batch must not leave an invisible pause behind.
+    if (!queue.current.some(row => row.state === 'queued' || row.state === 'uploading')) {
+      pausedRef.current = false;
+      setPaused(false);
+    }
+    setRows([...queue.current]);
+  };
   const update = (id: number, patch: Partial<Upload>) => {
     queue.current = queue.current.map(row => row.id === id ? { ...row, ...patch } : row);
     publish();
@@ -70,12 +78,12 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
   const active = rows.some(row => row.state === 'queued' || row.state === 'uploading');
   useNavigationGuard(active);
   const panel = rows.length ? <section aria-label="Uploads" className="max-h-48 shrink-0 overflow-auto border-b border-border px-4 py-2 text-sm">
-    {active || paused ? <Button size="sm" variant="outline" onClick={() => {
+    {rows.some(row => row.state === 'queued') || paused ? <Button size="sm" variant="outline" onClick={() => {
       pausedRef.current = !pausedRef.current;
       setPaused(pausedRef.current);
       if (!pausedRef.current) void pump();
     }}>{paused ? 'Resume uploads' : 'Pause uploads'}</Button> : null}
-    {paused ? <p className="text-xs text-muted-foreground">Uploads paused. The current transfer finishes; waiting files resume when you choose.</p> : null}
+    {paused ? <p className="text-xs text-muted-foreground">Uploads paused. The current transfer finishes; waiting and retried files start when you choose Resume uploads.</p> : null}
     <p role="status">{rows.filter(row => row.state === 'done').length} of {rows.length} uploaded{rows.some(row => row.state === 'cancelled') ? ` · ${rows.filter(row => row.state === 'cancelled').length} cancelled` : ''}</p>
     {rows.some(row => row.state === 'failed' && row.file) ? <Button size="sm" variant="outline" onClick={() => {
       queue.current = queue.current.map(row => row.state === 'failed' && row.file ? { ...row, state: 'queued', error: undefined } : row);
