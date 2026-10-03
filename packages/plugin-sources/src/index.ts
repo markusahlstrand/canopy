@@ -33,7 +33,12 @@ function ghBase(repo: string, ref: string, path: string) {
 
 async function resolveGithub(ref: Extract<PluginSourceRef, { type: "github" }>): Promise<ResolvedPlugin> {
   const gitRef = ref.ref || "main";
-  const { raw } = ghBase(ref.repo, gitRef, ref.path ?? "");
+  // Validate all source identifiers before requesting a ref resolution.
+  ghBase(ref.repo, gitRef, ref.path ?? "");
+  const commit = /^[a-f0-9]{40}$/i.test(gitRef) ? gitRef.toLowerCase() :
+    (await fetchJson<{ sha: string }>(`https://api.github.com/repos/${ref.repo}/commits/${encodeURIComponent(gitRef)}`)).sha;
+  if (typeof commit !== "string" || !/^[a-f0-9]{40}$/i.test(commit)) throw new Error("GitHub ref did not resolve to a commit SHA");
+  const { raw } = ghBase(ref.repo, commit.toLowerCase(), ref.path ?? "");
   const manifest = await fetchJson<PluginManifest>(raw("canopy.json"));
   const entry: PluginEntry = { url: raw(manifest.entry ?? "index.js") };
   return { manifest, entry, version: manifest.version, source: ref };
