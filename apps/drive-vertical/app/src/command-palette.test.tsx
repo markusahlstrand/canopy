@@ -67,7 +67,9 @@ it('offers Shared with me as a keyboard-selectable navigation destination', () =
   render(<CommandPalette {...props} onNavigate={onNavigate} onOpenChange={onOpenChange} />);
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Shared with me' } });
   const shared = screen.getByRole('option', { name: 'Shared with me' });
-  fireEvent.click(shared);
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowDown' });
+  expect(shared.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
   expect(onNavigate).toHaveBeenCalledWith('shared');
   expect(onOpenChange).toHaveBeenCalledWith(false);
 });
