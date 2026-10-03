@@ -37,8 +37,8 @@ import {
   TooltipTrigger,
   cn,
 } from '@canopy/ui';
-import { confirmNavigation } from './navigation-guards';
-import { listSites, selectSite, type Site } from './api';
+import { openSpace } from './space-navigation';
+import { listSites, type Site } from './api';
 
 /** The views this screen has. The portal's Home, Starred and Settings are not among them. */
 const NAV = [
@@ -93,6 +93,7 @@ interface SidebarProps {
   onRetry: () => void;
   /** The mobile sheet always uses the expanded rail. */
   mobile?: boolean;
+  onSpaces?: () => void;
 }
 
 /** One space read shared by the desktop rail and the mobile sheet. */
@@ -165,7 +166,7 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false, onSpaces }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const narrow = mobile ? false : collapsed;
 
@@ -285,16 +286,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                     //    reload lands back where the parameter says. Arriving through a
                     //    `?site=` link would pin you to that space: every selection would
                     //    persist correctly and none of them would take effect.
-                    if (!confirmNavigation()) return;
-                    const url = new URL(window.location.href);
-                    const before = url.search;
-                    url.searchParams.delete('path');
-                    url.searchParams.delete('folder');
-                    url.searchParams.delete('file');
-                    if (selectSite(s.slug)) url.searchParams.delete('site');
-                    else url.searchParams.set('site', s.slug);
-                    if (url.search !== before) window.history.replaceState(null, '', url);
-                    window.location.reload();
+                    openSpace(s.slug);
                   }}
                   className={cn(
                     'flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] transition-colors',
@@ -314,6 +306,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
         )}
         </div>
 
+        {onSpaces ? <Button variant="ghost" onClick={onSpaces} aria-label="Manage spaces">{narrow ? <Icon name="users" /> : 'Manage spaces'}</Button> : null}
         {narrow && (
           <button
             onClick={toggle}

@@ -30,6 +30,7 @@ import { folderPath, linkedFolderId } from './folder-links';
 import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
+import { SpacesDialog } from './spaces-dialog';
 import { ViewersDialog } from './viewers-dialog';
 import { PeopleDialog } from './people-dialog';
 import { CurrentFolderShare } from './current-folder-share';
@@ -202,6 +203,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   }, []);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [spacesOpen, setSpacesOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [viewersOpen, setViewersOpen] = useState(false);
   /** The folder whose sharing is open. Null is closed — one dialog, one folder at a time. */
@@ -713,6 +715,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           offline={offline}
           sites={siteList.sites}
           failed={siteList.failed}
+          onSpaces={() => setSpacesOpen(true)}
           onRetry={siteList.retry}
         />
       </div>
@@ -729,6 +732,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             offline={offline}
             sites={siteList.sites}
             failed={siteList.failed}
+            onSpaces={() => { setMobileNavOpen(false); setSpacesOpen(true); }}
             onRetry={siteList.retry}
           />
         </SheetContent>
@@ -946,6 +950,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
 
+      <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} canManage={canManagePeople} onMembers={() => setPeopleOpen(true)} />
       <ViewersDialog open={viewersOpen} onOpenChange={setViewersOpen} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
