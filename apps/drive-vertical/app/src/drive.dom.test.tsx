@@ -1772,3 +1772,19 @@ describe('Trash pages', () => {
     expect(screen.getByText('first.txt')).toBeTruthy();
   });
 });
+
+it('restores the selected loaded Trash rows as one batch', async () => {
+  render(<DriveScreen {...shell} onError={() => {}} />);
+  await flush();
+  fireEvent.click(screen.getAllByRole('button', { name: /^Trash/ })[0]!);
+  await flush();
+  await answer('/api/trash', [{ ...file('01A', 'lease.pdf'), state: 'trashed' }, { ...file('01B', 'notes.txt'), state: 'trashed' }]);
+  fireEvent.click(screen.getByText('lease.pdf'));
+  fireEvent.click(screen.getByText('notes.txt'), { ctrlKey: true });
+  fireEvent.click(screen.getByRole('button', { name: 'Restore 2 selected files' }));
+  await answer('/files/01A/restore', file('01A', 'lease.pdf'));
+  await answer('/files/01B/restore', file('01B', 'notes.txt'));
+  await answer('/api/trash', []);
+  expect(screen.getByText('Restored 2 files.')).toBeTruthy();
+  expect(screen.queryByText('lease.pdf')).toBeNull();
+});
