@@ -1,3 +1,4 @@
+import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
@@ -91,6 +92,25 @@ export const ScopeDO = defineScopeDO(MODULES, {});
 /** The tenant's identity directory: subject → principal, and the owner seat. */
 /** The tenant-local owner handoff for spaces created by a signed-in user. */
 export class IdentityDO extends PlatformIdentityDO {
+  async deferSite(scope: string, slug: string, name: string): Promise<void> {
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_pending_sites (scope_id TEXT PRIMARY KEY, slug TEXT NOT NULL, name TEXT NOT NULL)');
+    this.ctx.storage.sql.exec('INSERT OR REPLACE INTO canopy_pending_sites VALUES (?, ?, ?)', scope, slug, name);
+  }
+  override async resolvePrincipal(scope: string, subject: string): Promise<string | null> {
+    const principal = await super.resolvePrincipal(scope, subject);
+    if (principal) {
+      this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_pending_sites (scope_id TEXT PRIMARY KEY, slug TEXT NOT NULL, name TEXT NOT NULL)');
+      const site = this.ctx.storage.sql.exec<{slug:string;name:string}>('SELECT slug, name FROM canopy_pending_sites WHERE scope_id = ?', scope).toArray()[0];
+      if (site) { await this.recordSite(scope, site.slug, site.name); this.ctx.storage.sql.exec('DELETE FROM canopy_pending_sites WHERE scope_id = ?', scope); }
+    }
+    return principal;
+  }
+  async bindCreatingOwner(scope: string, owner: string, subject: string): Promise<void> {
+    this.ctx.storage.transactionSync(() => bindSpaceCreator(this.ctx.storage.sql, scope, owner, subject));
+  }
+  async reserveSpace(slug: string, subject: string, owner: string): Promise<{owner:string;error?:'cap'|'rate'|'conflict'}> {
+    return this.ctx.storage.transactionSync(() => reserveSpaceCreation(this.ctx.storage.sql, slug, subject, owner, Date.now()));
+  }
   async rememberSpaceCreator(owner: string, subject: string): Promise<void> {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_space_creators (owner TEXT PRIMARY KEY, subject TEXT NOT NULL)');
     this.ctx.storage.sql.exec('INSERT OR IGNORE INTO canopy_space_creators (owner, subject) VALUES (?, ?)', owner, subject);
@@ -285,6 +305,9 @@ type SiteRegistry = {
   forgetSite(scopeId: string): Promise<void>;
   listSites(): Promise<{ scopeId: string; slug: string; name: string }[]>;
   resolveSiteScope(slug: string): Promise<string | null>;
+  deferSite(scope: string, slug: string, name: string): Promise<void>;
+  bindCreatingOwner(scope: string, owner: string, subject: string): Promise<void>;
+  reserveSpace(slug: string, subject: string, owner: string): Promise<{owner:string;error?:'cap'|'rate'|'conflict'}>;
   rememberSpaceCreator(owner: string, subject: string): Promise<void>;
   spaceCreator(owner: string): Promise<string | null>;
 };
@@ -372,6 +395,13 @@ async function principalFor(env: Env, req: Request): Promise<PrincipalId | null>
 }
 
 const app = new Hono<{ Bindings: Env }>();
+app.use('/api/*', async (c, next) => {
+  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|invites|accept-invite|claim-owner)$/.test(c.req.path);
+  if (jsonMutation && c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HTTPException(415, {message:'Use application/json for this request.'});
+  const origin = c.req.header('origin');
+  if (jsonMutation && origin && origin !== new URL(c.req.url).origin) throw new HTTPException(403, {message:'Cross-origin mutations are not allowed.'});
+  await next();
+});
 
 /**
  * The platform's side of the contract: provision, configure, reconcile, export,
@@ -417,15 +447,17 @@ mountPlatformSurface<Env>(app, {
       });
     }
     const directory = identityDo(env, node);
-    await directory.setPendingOwner(b.scopeId, b.owner);
     const creator = await directory.spaceCreator(b.owner);
-    // Claim before advertising this scope in the shared tenant registry.
-    if (creator && await directory.resolvePrincipal(b.scopeId, creator) !== b.owner) throw new Error('Could not bind the creating login to the new space owner.');
+    if (creator) await directory.bindCreatingOwner(b.scopeId, b.owner, creator);
+    else await directory.setPendingOwner(b.scopeId, b.owner);
     // This space, in the vertical's OWN per-tenant registry (M2 of
     // `multi-scope-manyfold.md`). It is what lets the app list and switch spaces
     // without reaching the control plane — which a sandbox-clean vertical cannot do.
     // Idempotent, and re-run by every reconcile, so a lost record repairs itself.
-    if (b.slug && b.name) await identityDo(env, node).recordSite(b.scopeId, b.slug, b.name);
+    if (b.slug && b.name) {
+      if ((await directory.ownerSeat(b.scopeId)).state === 'claimed') await directory.recordSite(b.scopeId, b.slug, b.name);
+      else await directory.deferSite(b.scopeId, b.slug, b.name);
+    }
     await sweeper(env).noteScope(b.tenantId, b.scopeId);
     // The places repair (substrat#1670): the WHOLE set of logins bound in this space,
     // sent to the identity pool it signs in at, so a login's "Your places" list on the
@@ -640,7 +672,9 @@ app.post('/api/sites', async (c) => {
   if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
   const input = z.object({ name: z.string().trim().min(1).max(100), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/) }).safeParse(await c.req.json());
   if (!input.success) throw new HTTPException(400, { message: 'Enter a name and a valid space address.' });
-  const owner = principalId.parse(ulid());
+  const reservation = await identityDo(c.env, node).reserveSpace(input.data.slug, subject.sub, ulid());
+  if (reservation.error) throw new HTTPException(reservation.error === 'rate' ? 429 : 409, {message: reservation.error === 'rate' ? 'You can create up to 10 spaces per hour.' : reservation.error === 'cap' ? 'This tenant has reached its 100-space limit.' : 'This space address is already reserved.'});
+  const owner = principalId.parse(reservation.owner);
   await identityDo(c.env, node).rememberSpaceCreator(owner, subject.sub);
   const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
   return c.json(await scope.invoke('drive/request-space', { ...input.data, owner }), 202);
