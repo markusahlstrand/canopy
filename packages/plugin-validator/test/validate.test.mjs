@@ -93,3 +93,46 @@ test('generated target shares endpoint constraints while portable validation sta
   assert.equal((await validatePlugin(dir, { generated: true })).valid, true);
   assert.equal(spawnSync(process.execPath, [cli, '--generated', dir], { encoding: 'utf8' }).status, 0);
 });
+
+test('JSON output is a single versioned report for valid and invalid manifests', async t => {
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  for (const [value, status] of [[manifest, 0], [{ ...manifest, version: 'bad' }, 1]]) {
+    const dir = await fixture(t, value);
+    const result = spawnSync(process.execPath, [cli, '--json', dir], { encoding: 'utf8' });
+    assert.equal(result.status, status);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout.trim().split('\n').length, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.formatVersion, 1);
+    assert.equal(report.valid, status === 0);
+    assert.equal(report.profile, 'portable');
+    assert.equal(report.manifestOnly, false);
+    if (status === 0) {
+      assert.deepEqual(report.plugin, { id: manifest.id, version: manifest.version });
+      assert.deepEqual(report.errors, []);
+    } else assert.match(report.errors.join(' '), /version/);
+  }
+});
+test('JSON output preserves generated and manifest-only validation modes', async t => {
+  const dir = await fixture(t, { ...manifest, entry: 'missing.js', contributes: { detailView: { id: 'app', title: 'App' } } });
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const result = spawnSync(process.execPath, [cli, dir, '--json', '--generated', '--manifest-only'], { encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.profile, 'generated');
+  assert.equal(report.manifestOnly, true);
+});
+test('JSON output includes parse, missing-path and usage errors with their exit codes', async t => {
+  const dir = await fixture(t);
+  await writeFile(join(dir, 'canopy.json'), '{ bad');
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  for (const [args, status] of [[[dir], 1], [[join(dir, 'not-found')], 1], [[], 2], [['--unknown', dir], 2]]) {
+    const result = spawnSync(process.execPath, [cli, '--json', ...args], { encoding: 'utf8' });
+    assert.equal(result.status, status);
+    assert.equal(result.stderr, '');
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.valid, false);
+    assert.ok(report.errors.length > 0);
+    if (status === 1) assert.ok(report.errors[0].includes(dir));
+  }
+});

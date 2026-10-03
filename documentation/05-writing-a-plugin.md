@@ -26,3 +26,17 @@ rules: only `item:read`, `item:write` and `net:fetch`, at least one viewer or a
 `detailView`, and a kebab-case id of 2–49 characters. The CLI and endpoint share
 this validation function. Default validation covers the broader portable manifest
 schema; endpoint acceptance also depends on the submitted source and authorization.
+
+For CI or an authoring tool, add `--json` to print one JSON object to stdout:
+
+```sh
+pnpm --silent plugin:validate --json examples/plugins/image-viewer
+```
+
+The report has `formatVersion: 1`, `valid`, an `errors` array, the validation
+`profile` (`portable` or `generated`), and `manifestOnly`. Successful reports also
+include `plugin: { id, version }`. Errors, including unreadable files and invalid
+arguments, use the same JSON format without stderr diagnostics. Exit codes remain
+0 for valid input, 1 for validation or file errors, and 2 for incorrect arguments.
+Use `--silent` with pnpm, or invoke `node packages/plugin-validator/src/cli.mjs`
+directly, so the package runner's banner does not precede the JSON report.
