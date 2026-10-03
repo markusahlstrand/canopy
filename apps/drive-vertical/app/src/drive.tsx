@@ -235,11 +235,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [sort, setSort] = useState<SortState>(savedView.sort);
   // Only files already loaded in the active listing participate. Match its sort
   // order, and use the same draft boundary as table and palette navigation.
-  const previewFiles = view === 'drive' ? sorted(files, sort) : view === 'search' ? sorted(hits, sort) : [];
+  const previewFiles = offline ? [] : view === 'drive' ? sorted(files, sort) : view === 'search' ? sorted(hits, sort) : [];
   const previewIndex = previewFiles.findIndex(file => file.id === previewing);
   const previewNavigation = previewIndex < 0 ? undefined : {
     previous: previewFiles[previewIndex - 1]?.id ?? null,
     next: previewFiles[previewIndex + 1]?.id ?? null,
+    moreAvailable: view === 'drive' && filesNext !== null,
     onOpen: (id: string) => { setPreviewing(id); },
   };
   const reads = useRef(latestOnly());

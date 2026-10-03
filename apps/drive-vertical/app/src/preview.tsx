@@ -97,7 +97,7 @@ export function PreviewPanel({
   onClose: () => void;
   onError: (message: string | null) => void;
   onChanged?: () => void;
-  navigation?: { previous: string | null; next: string | null; onOpen: (id: string) => void };
+  navigation?: { previous: string | null; next: string | null; moreAvailable?: boolean; onOpen: (id: string) => void };
 }) {
   const [historyNext, setHistoryNext] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -311,6 +311,7 @@ export function PreviewPanel({
           <Button variant="ghost" size="sm" disabled={!navigation.previous} aria-label="Previous file"
             onClick={() => { if (navigation.previous) navigation.onOpen(navigation.previous); }}><Icon name="chevron-left" className="size-4" /></Button>
           <Button variant="ghost" size="sm" disabled={!navigation.next} aria-label="Next file"
+            title={!navigation.next && navigation.moreAvailable ? 'Load more files to continue' : undefined}
             onClick={() => { if (navigation.next) navigation.onOpen(navigation.next); }}><Icon name="chevron-right" className="size-4" /></Button>
         </div> : null}
         {version?.source === 'blob' ? (
@@ -326,6 +327,9 @@ export function PreviewPanel({
         </Button>
       </header>
 
+      {navigation?.moreAvailable && !navigation.next ? <p className="border-b border-border px-3 py-2 text-xs text-muted-foreground" role="status">
+        More files are available. Load more files in the listing to continue.
+      </p> : null}
       <nav className="flex gap-1 border-b border-border px-2 py-1.5" aria-label="Preview sections">
         {(['file', 'versions', 'text', 'details', 'comments'] as const).map((t) => (
           <button
