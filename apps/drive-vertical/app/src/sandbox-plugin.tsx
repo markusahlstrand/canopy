@@ -33,7 +33,7 @@ export function SandboxPlugin({ plugin, file, onSave }: { plugin: PluginInstall;
     const timer = window.setTimeout(() => { if (!ready) setError('Plugin did not start. Choose the built-in preview or retry.'); }, 15000);
     const receive = async (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || !event.data?.canopyPlugin) return;
-      if (event.data.type === 'dirty' && onSave) setDirty(true);
+      if (event.data.type === 'dirty' && onSave && manifest.capabilities.some(cap => cap.kind === 'item:write')) setDirty(true);
       if (event.data.type === 'error') setError(String(event.data.data).slice(0, 500));
       if (event.data.type === 'action' && event.data.data?.action === 'save' && !saving && manifest.capabilities.some(cap => cap.kind === 'item:write')) {
         if (!onSave) { frame.current?.contentWindow?.postMessage({type: 'canopy:save-result', ok: false, error: 'This file is read-only.'}, '*'); return; }
