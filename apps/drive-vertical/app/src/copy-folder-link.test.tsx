@@ -16,8 +16,9 @@ it('copies a credential-free navigation link from the share dialog without grant
   await screen.findByText('Folder link copied.');
   const link = new URL(writeText.mock.calls[0]![0]);
   expect(link.searchParams.get('site')).toBe('family');
-  expect(link.searchParams.get('path')).toBe('Team/Reports & notes');
-  expect([...link.searchParams.keys()]).toEqual(['site', 'path']);
+  expect(link.searchParams.get('folder')).toBe('reports');
+  expect(link.searchParams.has('path')).toBe(false);
+  expect([...link.searchParams.keys()]).toEqual(['site', 'folder']);
   expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
 });
 it('reports unavailable clipboard access', async () => {
@@ -53,8 +54,8 @@ it('copies the hostname-resolved space synchronously in the click gesture', asyn
   expect(writeText).toHaveBeenCalledOnce();
   const url = new URL(writeText.mock.calls[0]![0]);
   expect(url.searchParams.get('site')).toBe('hostname-space');
-  expect(url.searchParams.get('path')).toBe('Reports');
-  expect(screen.getByText(/ancestor names/)).toBeTruthy();
+  expect(url.searchParams.get('folder')).toBe('reports');
+  expect(screen.getByText(/stable folder ID/)).toBeTruthy();
   await screen.findByText('Folder link copied.');
 });
 it('separates lookup failures from clipboard failures and retries preparation', async () => {
@@ -69,6 +70,6 @@ it('separates lookup failures from clipboard failures and retries preparation', 
   fireEvent.click(screen.getByRole('button', { name: 'Retry folder lookup' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Copy folder link' }).hasAttribute('disabled')).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
-  expect(new URL(writeText.mock.calls[0]![0]).searchParams.get('path')).toBe('Renamed reports');
+  expect(new URL(writeText.mock.calls[0]![0]).searchParams.get('folder')).toBe('reports');
   await screen.findByText('Folder link copied.');
 });

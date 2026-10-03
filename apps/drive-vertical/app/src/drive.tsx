@@ -23,7 +23,8 @@ import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
-import { folderLink, folderPath } from './folder-links';
+import { folderPath, linkedFolderId } from './folder-links';
+import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { ViewersDialog } from './viewers-dialog';
 import { PeopleDialog } from './people-dialog';
@@ -157,7 +158,8 @@ export interface DriveScreenProps {
 
 export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
   const initialPath = useRef(folderPath()).current;
-  const [linkPending, setLinkPending] = useState(!!initialPath);
+  const initialFolderId = useRef(linkedFolderId()).current;
+  const [linkPending, setLinkPending] = useState(!!initialFolderId || !!initialPath);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
@@ -204,18 +206,21 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.delete('path');
+    url.searchParams.delete('folder');
     window.history.replaceState(null, '', url);
-    if (!initialPath) return;
+    if (!initialFolderId && !initialPath) return;
     let active = true;
-    folderByPath(initialPath).then(folder => {
+    (initialFolderId ? getFolder(initialFolderId) : folderByPath(initialPath)).then(folder => {
       if (!active) return;
       if (folder) { setFolderId(folder.id); setCrumbs([{ id: folder.id, name: folder.path }]); }
       else setLinkMessage('This folder is unavailable or you do not have access.');
-    }).catch(() => {
-      if (active) setLinkMessage('Could not open the folder link. Reload to retry.');
+    }).catch((error: unknown) => {
+      if (active) setLinkMessage(error instanceof ApiError && [401, 403, 404].includes(error.status)
+        ? 'This folder is unavailable or you do not have access.'
+        : 'Could not open the folder link. Reload to retry.');
     }).finally(() => { if (active) setLinkPending(false); });
     return () => { active = false; };
-  }, [initialPath]);
+  }, [initialFolderId, initialPath]);
 
   useEffect(() => { setLinkMessage(null); }, [folderId, view]);
 
@@ -660,11 +665,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
       {view === 'drive' && !offline && !linkPending ? <div className="flex flex-wrap gap-2 px-4 py-2">
         <CurrentFolderShare folderId={folderId} onShare={setSharing} />
-        <Button variant="ghost" size="sm" onClick={() => {
-          void getFolder(folderId).then(folder => navigator.clipboard.writeText(folderLink(folder.path)))
-            .then(() => setLinkMessage('Folder link copied. This link does not grant access.'))
-            .catch(() => setLinkMessage('Could not copy the link. Allow clipboard access and try again.'));
-        }}>Copy folder link</Button>
+        {siteList.sites?.find(site => site.current)?.slug || currentSite() ? <CopyFolderLink key={folderId} folderId={folderId}
+          site={siteList.sites?.find(site => site.current)?.slug ?? currentSite() ?? undefined} compact /> : null}
       </div> : null}
 
       <input
