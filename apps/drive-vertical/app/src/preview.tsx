@@ -1,3 +1,4 @@
+import { FileMetadata } from './file-metadata';
 import { TextPreview } from './text-preview';
 import { confirmDiscardDrafts } from './drafts';
 /**
@@ -30,7 +31,6 @@ import {
 import { TextEditor } from './text-editor';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
-import { FileMetadata } from './file-metadata';
 import { latestOnly } from './reads';
 import { viewerRegistry, registerImageViewer } from './image-viewer';
 
