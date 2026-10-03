@@ -22,7 +22,10 @@ export interface ResolvedPlugin {
   entry: PluginEntry;
   /** Concrete resolved version (manifest version, npm version, or commit sha). */
   version: string;
+  /** Requested update channel. Do not re-resolve this on ordinary loads. */
   source: PluginSourceRef;
+  /** Persist alongside source; use this immutable ref for cold starts/reinstalls. */
+  resolvedSource?: PluginSourceRef;
 }
 
 /** Adapter that turns a source ref into a runnable plugin and reports updates. */
