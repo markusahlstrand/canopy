@@ -517,6 +517,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const navigate = useCallback((id: NavId) => {
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     linkNavigation.current++;
+    setLinkPending(false);
+    if (skipLinkedListing.current) setFolderRecovery(value => value + 1);
     skipLinkedListing.current = false;
     setLinkListingUnavailable(false);
     const alreadyHere = !linkListingUnavailable && (id !== 'drive'
@@ -551,6 +553,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     // may land here.
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     linkNavigation.current++;
+    setLinkPending(false);
+    if (skipLinkedListing.current) setFolderRecovery(value => value + 1);
     skipLinkedListing.current = false;
     setLinkListingUnavailable(false);
     reads.current.invalidate();
@@ -568,6 +572,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const upTo = (index: number) => {
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     linkNavigation.current++;
+    setLinkPending(false);
+    if (skipLinkedListing.current) setFolderRecovery(value => value + 1);
     skipLinkedListing.current = false;
     setLinkListingUnavailable(false);
     reads.current.invalidate();
@@ -653,7 +659,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * where the screen now is.
    */
   const startWrite = (begin: () => void) => {
-    if (offline || linkPending) return;
+    if (offline || linkPending || linkListingUnavailable) return;
     if (view !== 'drive') navigate('drive');
     begin();
   };
@@ -662,7 +668,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const chosen = Array.from(input.files ?? []);
     input.value = '';
     if (chosen.length === 0) return;
-    if (!offline) uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
+    if (!offline && !linkPending && !linkListingUnavailable) uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
   };
 
   const empty = linkListingUnavailable && view === 'drive' ? (
@@ -745,7 +751,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       />
 
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
-      {view === 'drive' && !offline && !linkPending ? <div className="flex flex-wrap gap-2 px-4 py-2">
+      {view === 'drive' && !offline && !linkPending && !linkListingUnavailable ? <div className="flex flex-wrap gap-2 px-4 py-2">
         <CurrentFolderShare folderId={folderId} onShare={setSharing} />
         {siteList.sites?.find(site => site.current)?.slug || currentSite() ? <CopyFolderLink key={folderId} folderId={folderId}
           site={siteList.sites?.find(site => site.current)?.slug ?? currentSite() ?? undefined} compact /> : null}
@@ -778,7 +784,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       {/* The one scrolling region: the rail and the topbar stay put. */}
       <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-3 sm:p-4">
-      <FileDropZone disabled={offline || linkPending || view !== 'drive'}
+      <FileDropZone disabled={offline || linkPending || linkListingUnavailable || view !== 'drive'}
         destination={crumbs.at(-1)?.name ?? siteList.sites?.find(site => site.current)?.name ?? 'this space'}
         onError={onError}
         onFiles={chosen => uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen)}>
@@ -817,6 +823,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
               // Emptying the box returns to where you were, rather than leaving an
               // empty result list that looks like "nothing here".
               linkNavigation.current++;
+              setLinkPending(false);
               setView(next.trim() ? 'search' : 'drive');
             }}
           />

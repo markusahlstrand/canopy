@@ -125,8 +125,9 @@ it.each([200, 503])('ignores late folder context after navigation (%s)', async s
   vi.stubGlobal('fetch', fetcher); render(<DriveScreen {...shell} />);
   await screen.findByText('Renamed.zip'); await waitFor(() => expect(finish).toBeDefined());
   fireEvent.click(screen.getByRole('button', { name: /^Trash$/ }));
-  await act(async () => finish(new Response(JSON.stringify({ id: 'private-folder', path: 'Shared folder' }), { status })));
   await screen.findByText('Trash is empty');
+  await act(async () => finish(new Response(JSON.stringify({ id: 'private-folder', path: 'Shared folder' }), { status })));
+  expect(screen.getByText('Trash is empty')).toBeTruthy();
   expect(screen.queryByText('Folder context unavailable')).toBeNull();
   expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/private-folder/files')).toBe(false);
 });
@@ -138,4 +139,25 @@ it('opens a root file with an empty breadcrumb and a root listing', async () => 
     : url === '/api/folders/root/metadata' ? { id: 'root', path: '' } : []))));
   render(<DriveScreen {...shell} />);
   await screen.findByText('Renamed.zip'); await screen.findByText('Your drive is empty');
+});
+
+it('blocks folder creation, file picker and file drops while folder context is unavailable', async () => {
+  history.replaceState(null, '', '/?file=stable');
+  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/files/stable' ? metadata : []), { status: url === '/api/folders/private-folder/metadata' ? 503 : 200 }));
+  vi.stubGlobal('fetch', fetcher); const view = render(<DriveScreen {...shell} />);
+  await screen.findByText('Folder context unavailable');
+  const picker = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+  const click = vi.spyOn(picker, 'click');
+  for (const button of screen.getAllByRole('button', { name: /Upload/ })) fireEvent.click(button);
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'New' }), { button: 0, ctrlKey: false });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'New folder' }));
+  expect(click).not.toHaveBeenCalled(); expect(screen.queryByLabelText('New folder')).toBeNull();
+  const file = new File(['x'], 'upload.txt');
+  fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer: { types: ['Files'], files: [file], items: [] } });
+  fireEvent.change(picker, { target: { files: [file] } });
+  await act(async () => {});
+  expect(fetcher.mock.calls.some(([url]) => url.includes('/folders/root/'))).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Go to My Drive' }));
+  await screen.findByText('Your drive is empty');
+  fireEvent.click(screen.getAllByRole('button', { name: /Upload/ })[0]!); expect(click).toHaveBeenCalledOnce();
 });
