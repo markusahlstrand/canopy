@@ -1,4 +1,5 @@
 import { FileMetadata } from './file-metadata';
+import { CsvTable } from './csv-table';
 import { TextPreview } from './text-preview';
 import { confirmDiscardDrafts } from './drafts';
 /**
@@ -38,7 +39,7 @@ import { FileLinkAction } from './copy-file-link';
 
 registerImageViewer();
 
-type Tab = 'file' | 'versions' | 'text' | 'details' | 'comments';
+type Tab = 'table' | 'file' | 'versions' | 'text' | 'details' | 'comments';
 
 /** How a file's current version wants to be shown. */
 type Shape = 'image' | 'viewer' | 'pdf' | 'text' | 'audio' | 'video' | 'none';
@@ -336,7 +337,7 @@ export function PreviewPanel({
         More files are available. Load more files in the listing to continue.
       </p> : null}
       <nav className="flex gap-1 border-b border-border px-2 py-1.5" aria-label="Preview sections">
-        {(['file', 'versions', 'text', 'details', 'comments'] as const).map((t) => (
+        {(['file', 'versions', 'text', 'details', 'comments', ...(version?.mime.split(';')[0]?.trim().toLowerCase() === 'text/csv' && body && !body.truncated ? ['table' as const] : [])] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -346,7 +347,7 @@ export function PreviewPanel({
               tab === t ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60',
             )}
           >
-            {t === 'file' ? 'Preview' : t === 'versions' ? 'Versions' : t === 'details' ? 'Details' : t === 'comments' ? 'Comments' : 'Text'}
+            {t === 'file' ? 'Preview' : t === 'versions' ? 'Versions' : t === 'details' ? 'Details' : t === 'comments' ? 'Comments' : t === 'table' ? 'Table' : 'Text'}
           </button>
         ))}
       </nav>
@@ -354,7 +355,7 @@ export function PreviewPanel({
       {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
+        {tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} /> : <Empty>Table preview needs the complete text.</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : shape === 'image' || shape === 'viewer' ? (
