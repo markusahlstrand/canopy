@@ -28,8 +28,11 @@ it('finishes the active request, holds pending files, and resumes their captured
   expect(upload.mock.calls.map(([folder, file, site]) => [folder, file.name, site])).toEqual([
     ['folder-a', 'a.txt', 'space-a'], ['folder-a', 'b.txt', 'space-a'], ['folder-b', 'c.txt', 'space-b'],
   ]);
-  const completed = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(completed);
-  expect(completed.defaultPrevented).toBe(false);
+  // The final row renders before the pump finishes its refresh and releases the guard.
+  await waitFor(() => {
+    const completed = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(completed);
+    expect(completed.defaultPrevented).toBe(false);
+  });
 });
 it('resumes during the active request without creating a second pump', async () => {
   let finish!: () => void;
