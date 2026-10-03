@@ -169,6 +169,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const skipLinkedListing = useRef(false);
   const linkNavigation = useRef(0);
+  const [folderRecovery, setFolderRecovery] = useState(0);
   const unavailableFolder = useRef<string | null>(null);
   const [linkListingUnavailable, setLinkListingUnavailable] = useState(false);
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
@@ -247,7 +248,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     };
     void resolve().catch((error: unknown) => {
       const subject = initialFileId ? 'file' : 'folder';
-      if (active) setLinkMessage(error instanceof ApiError && [401, 403, 404].includes(error.status)
+      if (active && generation === linkNavigation.current) setLinkMessage(error instanceof ApiError && [401, 403, 404].includes(error.status)
         ? `This ${subject} is unavailable or you do not have access.`
         : `Could not open the ${subject} link. Reload to retry.`);
     }).finally(() => { if (active) setLinkPending(false); });
@@ -309,6 +310,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         skipLinkedListing.current = false;
         setLinkListingUnavailable(false);
         setLinkMessage(null);
+        setFolderRecovery(value => value + 1);
         setFolderId(folder.id);
         setCrumbs(folder.id === ROOT_FOLDER_ID ? [] : [{ id: folder.id, name: folder.path }]);
         // The state update schedules the listing refresh for the recovered folder.
@@ -385,7 +387,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, term, onError, auth.principal, linkPending, linkListingUnavailable]);
+  }, [folderId, view, term, onError, auth.principal, linkPending]);
 
   const moreTrash = async () => {
     if (!trashNext || busy || loadingPage || offline) return;
@@ -502,7 +504,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     if (skipLinkedListing.current && view === 'drive') { setBusy(false); return; }
     const t = setTimeout(() => void refresh(), view === 'search' ? 200 : 0);
     return () => clearTimeout(t);
-  }, [refresh, view, linkPending]);
+  }, [refresh, view, linkPending, folderRecovery]);
 
   /**
    * Switching view, from the rail or from the palette.
