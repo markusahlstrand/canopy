@@ -198,11 +198,11 @@ export class ApiError extends Error {
   }
 }
 
-export function siteHeaders(extra?: HeadersInit): HeadersInit {
-  return { ...(site ? { 'x-site': site } : {}), ...extra };
+export function siteHeaders(extra?: HeadersInit, selectedSite = site): HeadersInit {
+  return { ...(selectedSite ? { 'x-site': selectedSite } : {}), ...extra };
 }
 
-async function request(path: string, init?: RequestInit): Promise<Response> {
+async function request(path: string, init?: RequestInit, selectedSite = site): Promise<Response> {
   const res = await fetch(`${API}${path}`, {
     ...init,
     // The session is a cookie the worker set on /api/auth/callback; without this
@@ -210,6 +210,7 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
     credentials: 'same-origin',
     headers: siteHeaders(
       init?.body ? { 'content-type': 'application/json', ...init?.headers } : init?.headers,
+      selectedSite,
     ),
   });
   if (!res.ok) {
@@ -225,8 +226,8 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await request(path, init);
+async function call<T>(path: string, init?: RequestInit, selectedSite = site): Promise<T> {
+  const res = await request(path, init, selectedSite);
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
 
@@ -658,8 +659,8 @@ export const moveFolder = (folderId: string, parentId: string) =>
 export const trashFile = (fileId: string) =>
   call<DriveFile>(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
 
-export const restoreFile = (fileId: string) =>
-  call<DriveFile>(`/files/${encodeURIComponent(fileId)}/restore`, { method: 'POST' });
+export const restoreFile = (fileId: string, selectedSite = site) =>
+  call<DriveFile>(`/files/${encodeURIComponent(fileId)}/restore`, { method: 'POST' }, selectedSite);
 
 /**
  * Find files by name or by what is inside them.
