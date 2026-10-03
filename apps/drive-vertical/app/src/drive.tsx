@@ -24,6 +24,7 @@ import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
+import { SelectionSummary } from './selection-summary';
 import { folderPath, linkedFolderId } from './folder-links';
 import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
@@ -733,6 +734,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           Offline — showing saved file and folder names. File content and changes are unavailable.
         </p>
       ) : null}
+      <SelectionSummary selection={selection} items={view === 'search' ? hits.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file))]} onClear={() => setSelection(new Set())} />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative">
           <Icon
