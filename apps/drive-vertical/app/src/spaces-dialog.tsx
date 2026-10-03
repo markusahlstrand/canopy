@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@canopy/ui';
 import type { Site } from './api';
 import { openSpace } from './space-navigation';
-export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canManage, onMembers, onCreate, onSettings }: {
+export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canManage, offline = false, onMembers, onCreate, onSettings }: {
   open: boolean; onOpenChange: (open: boolean) => void; sites: Site[] | null; failed: boolean; onRetry: () => void;
-  canManage: boolean; onMembers: () => void; onCreate?: () => void; onSettings?: () => void;
+  offline?: boolean; canManage: boolean; onMembers: () => void; onCreate?: () => void; onSettings?: () => void;
 }) {
   const [query, setQuery] = useState('');
   const shown = sites?.filter(site => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
@@ -17,7 +17,7 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
       : shown?.length === 0 ? <p>No spaces match this search.</p> : <ul className="space-y-2">{shown?.map(site => <li key={site.slug} className="rounded border p-3">
         <h3 className="font-medium"><Icon name={site.icon ?? 'folder'} style={{color:site.color}} className="inline-block" /> {site.name} {site.current ? <span className="text-xs text-muted-foreground">Current space</span> : null}</h3>
         <p className="text-xs text-muted-foreground">{site.slug}</p>
-        <div className="mt-2 flex gap-2"><Button size="sm" variant="outline" disabled={site.current} onClick={() => openSpace(site.slug)}>Open {site.name}</Button>
+        <div className="mt-2 flex gap-2"><Button size="sm" variant="outline" disabled={site.current || offline} onClick={() => openSpace(site.slug)}>Open {site.name}</Button>
         {site.current && canManage && onSettings ? <Button size="sm" variant="outline" onClick={() => {onOpenChange(false);onSettings();}}>Space settings</Button> : null}
         {site.current && canManage ? <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onMembers(); }}>Manage members</Button> : null}</div>
       </li>)}</ul>}

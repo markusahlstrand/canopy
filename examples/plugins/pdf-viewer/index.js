@@ -7,7 +7,7 @@
 //
 // Contract: export default `render(ctx)` with ctx.{container, file, emit}.
 
-const CDN = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4";
+const CDN = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38";
 
 export default async function render(ctx) {
   const { container, file } = ctx;

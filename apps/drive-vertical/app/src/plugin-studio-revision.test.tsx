@@ -7,11 +7,11 @@ afterEach(()=>{cleanup();publishPlugins([]);vi.unstubAllGlobals();vi.restoreAllM
 it('submits the revision loaded into Studio even if the install list refreshes',async()=>{
  const manifest={id:'my-viewer',name:'My viewer',version:'1',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',match:['text/*']}]}};
  const row:PluginInstall={id:'install',plugin_id:manifest.id,principal:'user',manifest_json:JSON.stringify(manifest),source:'export default function(){}',enabled:1,updated_at:'loaded-revision'};
- const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/people/access') ? {canManage:false} : init?.method==='PUT' ? row : {plugins:[row]})));
+ const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/people/access') ? {canManage:false} : url.includes('/source') || init?.method==='PUT' ? row : {plugins:[row]})));
  vi.stubGlobal('fetch',fetcher);vi.spyOn(window,'confirm').mockReturnValue(true);render(<PluginManagement open onOpenChange={()=>{}}/>);
- fireEvent.click(await screen.findByRole('button',{name:'Edit source'}));
+ fireEvent.click(await screen.findByRole('button',{name:'Edit source'}));await screen.findByDisplayValue(row.source!);
  await act(async()=>publishPlugins([{...row,updated_at:'new-revision'}]));
- fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
+ fireEvent.click(screen.getByRole('checkbox',{name:/Approve the capabilities/}));fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
  await waitFor(()=>expect(fetcher.mock.calls.some(([,init])=>init?.method==='PUT')).toBe(true));
  expect(JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string).expectedRevision).toBe('loaded-revision');
 });

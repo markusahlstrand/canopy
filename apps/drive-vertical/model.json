@@ -380,6 +380,21 @@
           },
           "updated_at": {
             "type": "string"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "resolved": {
+            "type": "string"
+          },
+          "source_sha256": {
+            "type": "string"
+          },
+          "granted_capabilities": {
+            "type": "string"
           }
         },
         "required": [
@@ -389,7 +404,12 @@
           "manifest_json",
           "source",
           "enabled",
-          "updated_at"
+          "updated_at",
+          "source_kind",
+          "source_ref",
+          "resolved",
+          "source_sha256",
+          "granted_capabilities"
         ],
         "additionalProperties": false
       },

@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { ViewersDialog } from './viewers-dialog';
+import { PluginManagement } from './plugin-management';
 import { IMAGE_VIEWER_PREFERENCE, setImageViewerEnabled, viewerRegistry, watchImageViewerPreference } from './image-viewer';
 let stop: (() => void) | undefined;
 afterEach(() => { stop?.(); stop = undefined; cleanup(); vi.restoreAllMocks(); setImageViewerEnabled(true); localStorage.removeItem(IMAGE_VIEWER_PREFERENCE); });
@@ -16,7 +16,7 @@ const dispatch = (value: string | null, key: string | null = IMAGE_VIEWER_PREFER
 it('updates the open management dialog from another tab without echoing writes', () => {
   setImageViewerEnabled(true);
   stop = watchImageViewerPreference();
-  render(<ViewersDialog open onOpenChange={() => {}} />);
+  render(<PluginManagement open onOpenChange={() => {}} />);
   const write = vi.spyOn(Storage.prototype, 'setItem');
   dispatch('disabled');
   expect(screen.getByText('Disabled')).toBeTruthy();

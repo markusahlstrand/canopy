@@ -53,3 +53,5 @@ describe('conditional text content route', () => {
     expect(editableTextMime('image/svg+xml')).toBe(false);
   });
 });
+
+it.each([['notes.ts','video/mp2t'],['main.rs','application/octet-stream'],['script.js','application/javascript']])('saves source files with misleading upload MIME: %s',async(name,mime)=>{const s=setup({...record,file:{...record.file,name},version:{...record.version!,mime}});expect((await s.save()).status).toBe(201);});
