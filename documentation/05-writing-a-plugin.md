@@ -21,7 +21,8 @@ Pass `--manifest-only` for a plugin whose code ships with the host, like
 `examples/plugins/model-editor`; it checks the manifest and skips the entry.
 The package's tests validate every plugin under `examples/plugins`.
 
-The legacy `POST /api/plugins/custom` endpoint (Plugin Studio, in `apps/api`)
-applies extra rules this command does not: only the `item:read`, `item:write` and
-`net:fetch` capabilities, at least one viewer or a `detailView`, and a kebab-case id of 2–49
-characters. Passing here does not mean that endpoint will accept the manifest.
+Pass `--generated` to also apply the legacy `POST /api/plugins/custom` manifest
+rules: only `item:read`, `item:write` and `net:fetch`, at least one viewer or a
+`detailView`, and a kebab-case id of 2–49 characters. The CLI and endpoint share
+this validation function. Default validation covers the broader portable manifest
+schema; endpoint acceptance also depends on the submitted source and authorization.

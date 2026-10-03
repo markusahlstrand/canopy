@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { validateGeneratedManifest } from '../src/generated-manifest.mjs';
 import { validatePlugin } from '../src/index.mjs';
 const manifest = { id: 'test-viewer', name: 'Test', version: '1.0.0', capabilities: [{ kind: 'item:read' }] };
 async function fixture(t, value = manifest) {
@@ -61,7 +62,7 @@ test('every bundled example validates', async () => {
   assert.ok(examples.length > 0);
   for (const name of examples) {
     const dir = new URL(`${name}/`, root).pathname;
-    const codeless = !readdirSync(dir).some(file => /\.(m?js|html)$/.test(file));
+    const codeless = name === 'model-editor';
     const result = await validatePlugin(dir, { manifestOnly: codeless });
     assert.deepEqual(result.errors, [], name);
   }
@@ -77,4 +78,18 @@ test('CLI accepts --manifest-only and rejects extra arguments', async t => {
   const dir = await fixture(t, { ...manifest, entry: 'missing.js' });
   assert.equal(spawnSync(process.execPath, [cli, '--manifest-only', dir], { encoding: 'utf8' }).status, 0);
   assert.equal(spawnSync(process.execPath, [cli, dir, dir], { encoding: 'utf8' }).status, 2);
+});
+
+test('generated target shares endpoint constraints while portable validation stays broader', async t => {
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const app = { ...manifest, contributes: { detailView: { id: 'test-app', title: 'Test' } } };
+  for (const value of [manifest, { ...app, id: 'x' }, { ...app, capabilities: [{ kind: 'kv' }] }, { ...app, contributes: { detailView: { id: 'test-app', title: ' ' } } }]) {
+    const dir = await fixture(t, value);
+    assert.equal((await validatePlugin(dir)).valid, true);
+    assert.deepEqual((await validatePlugin(dir, { generated: true })).errors, [validateGeneratedManifest(value)]);
+    assert.equal(spawnSync(process.execPath, [cli, '--generated', dir], { encoding: 'utf8' }).status, 1);
+  }
+  const dir = await fixture(t, app);
+  assert.equal((await validatePlugin(dir, { generated: true })).valid, true);
+  assert.equal(spawnSync(process.execPath, [cli, '--generated', dir], { encoding: 'utf8' }).status, 0);
 });

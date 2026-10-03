@@ -1,3 +1,4 @@
+import { validateGeneratedManifest } from './generated-manifest.mjs';
 import Ajv from 'ajv';
 import { readFile, stat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
@@ -64,7 +65,7 @@ function entryProblem(entry) {
  * Inspect files and declarations only; plugin code is never imported or executed.
  * `manifestOnly` skips the entry check for plugins whose code ships with the host.
  */
-export async function validatePlugin(input, { manifestOnly = false } = {}) {
+export async function validatePlugin(input, { manifestOnly = false, generated = false } = {}) {
   const target = resolve(input);
   const manifestPath = (await stat(target)).isDirectory() ? resolve(target, 'canopy.json') : target;
   let manifest;
@@ -74,6 +75,10 @@ export async function validatePlugin(input, { manifestOnly = false } = {}) {
     return { valid: false, errors: [`${manifestPath}: ${error.message}`] };
   }
   if (!validate(manifest)) return { valid: false, errors: collapseKindUnions(validate.errors, manifest).map(describe) };
+  if (generated) {
+    const error = validateGeneratedManifest(manifest);
+    if (error) return { valid: false, errors: [error] };
+  }
   if (manifestOnly) return { valid: true, errors: [], manifest };
   const entry = manifest.entry ?? 'index.js';
   const problem = entryProblem(entry);
