@@ -510,6 +510,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     // may land here.
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     reads.current.invalidate();
+    setSelection(new Set());
     if (view === 'shared') {
       setView('drive');
       setCrumbs([{ id: folder.id, name: folder.path }]);
@@ -523,6 +524,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const upTo = (index: number) => {
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
     reads.current.invalidate();
+    setSelection(new Set());
     // -1 is the root: the crumb trail holds everything below it.
     setCrumbs((c) => c.slice(0, index + 1));
     setFolderId(index < 0 ? ROOT_FOLDER_ID : crumbs[index]!.id);
@@ -734,7 +736,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           Offline — showing saved file and folder names. File content and changes are unavailable.
         </p>
       ) : null}
-      <SelectionSummary selection={selection} items={view === 'search' ? hits.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file))]} onClear={() => setSelection(new Set())} />
+      <SelectionSummary selection={selection} items={view === 'search' ? previewFiles.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file))]} onClear={() => setSelection(new Set())} />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative">
           <Icon
@@ -753,6 +755,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
               // previous term is in flight and still holds the ticket until then.
               reads.current.invalidate();
               setTerm(next);
+              setSelection(new Set());
               // The previous term's hits are wrong the moment the box changes, so they
               // go now rather than lingering until the next answer lands. With `busy`
               // set, the list says "Loading…" instead of "No matches" for a search
