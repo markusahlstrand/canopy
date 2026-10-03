@@ -24,6 +24,7 @@ import { kindOf, type FileItem } from "./items";
  */
 const NAV = [
   { id: "drive", icon: "my-drive", label: "My Drive", shortcut: "G D" },
+  { id: "shared", icon: "users", label: "Shared with me", shortcut: "" },
   { id: "trash", icon: "trash", label: "Trash", shortcut: "G T" },
 ];
 

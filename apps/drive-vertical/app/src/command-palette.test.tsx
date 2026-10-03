@@ -60,3 +60,16 @@ it('shows no-results only after the active query settles', async () => {
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'another' } });
   expect(screen.queryByText('No results found.')).toBeNull();
 });
+
+it('offers Shared with me as a keyboard-selectable navigation destination', () => {
+  const onNavigate = vi.fn();
+  const onOpenChange = vi.fn();
+  render(<CommandPalette {...props} onNavigate={onNavigate} onOpenChange={onOpenChange} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Shared with me' } });
+  const shared = screen.getByRole('option', { name: 'Shared with me' });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowDown' });
+  expect(shared.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect(onNavigate).toHaveBeenCalledWith('shared');
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+});
