@@ -63,17 +63,34 @@ function installImageViewer(): void {
   }
 }
 
-/** Register the reviewed built-in renderer unless disabled in this browser. */
+function applyImageViewerEnabled(enabled: boolean): void {
+  if (enabled) installImageViewer();
+  else { removeImageViewer?.(); removeImageViewer = null; }
+}
+
+/** Register the reviewed built-in renderer using the browser's current preference. */
 export function registerImageViewer(): void {
-  try { if (localStorage.getItem(IMAGE_VIEWER_PREFERENCE) === 'disabled') return; }
-  catch { /* Defaults work even when browser storage is blocked. */ }
-  installImageViewer();
+  try { applyImageViewerEnabled(localStorage.getItem(IMAGE_VIEWER_PREFERENCE) !== 'disabled'); }
+  catch { installImageViewer(); }
+}
+
+/** Follow changes made by other same-origin tabs without writing storage back. */
+export function watchImageViewerPreference(): () => void {
+  const onStorage = (event: StorageEvent) => {
+    try { if (event.storageArea !== localStorage) return; }
+    catch { return; }
+    if (event.key !== null && event.key !== IMAGE_VIEWER_PREFERENCE) return;
+    // Events are queued: another tab (or this tab) may have written a newer value.
+    registerImageViewer();
+  };
+  window.addEventListener('storage', onStorage);
+  registerImageViewer();
+  return () => window.removeEventListener('storage', onStorage);
 }
 
 /** A local preview preference, never a permission grant or downloaded-code install. */
 export function setImageViewerEnabled(enabled: boolean): void {
   try { localStorage.setItem(IMAGE_VIEWER_PREFERENCE, enabled ? 'enabled' : 'disabled'); }
   catch { /* The current session can still toggle its bundled viewer. */ }
-  if (enabled) installImageViewer();
-  else { removeImageViewer?.(); removeImageViewer = null; }
+  applyImageViewerEnabled(enabled);
 }
