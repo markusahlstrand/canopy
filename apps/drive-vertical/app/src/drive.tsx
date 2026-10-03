@@ -635,7 +635,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     term.trim().length < SEARCH_MIN
       ? <EmptyList icon="search" title="Search this space" description={`Enter at least ${SEARCH_MIN} characters to find files.`} />
       : matchFilter !== 'all' && visibleHits.length === 0
-        ? <EmptyList icon="search" title="No matches of this type" description="Try another match type. Results are classified by their strongest match and limited to 50 files." actions={[{ label: 'Show all returned matches', onClick: () => changeMatchFilter('all') }]} />
+        ? <EmptyList icon="search" title="No matches of this type" description="Try another match type. The selected field is searched directly, returning up to 50 files." actions={[{ label: 'Show all returned matches', onClick: () => changeMatchFilter('all') }]} />
         : <EmptyList icon="search" title={`No matches for “${term.trim()}”`} description="Try another name or phrase from a file." />
   ) : offline ? (
     <EmptyList icon="folder" title="No saved files here" description="This folder has no file names saved for offline browsing." />

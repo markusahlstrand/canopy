@@ -1278,9 +1278,9 @@ const operations = {
     const reach = Math.min(limit * 3, 100);
 
     const [byName, byText, byDetails] = await Promise.all([
-      ctx.search('file', input.term, { limit: reach }),
-      ctx.search('file_text', input.term, { limit: reach }),
-      ctx.search('file_details', input.term, { limit: reach }),
+      !input.via || input.via === 'name' ? ctx.search('file', input.term, { limit: reach }) : [],
+      !input.via || input.via === 'content' ? ctx.search('file_text', input.term, { limit: reach }) : [],
+      !input.via || input.via === 'metadata' ? ctx.search('file_details', input.term, { limit: reach }) : [],
     ]);
 
     // A file_text hit is an id in ITS table; what the caller wants is the file.
@@ -1292,6 +1292,8 @@ const operations = {
       if (row && !textFileIds.has(row.file_id)) textFileIds.set(row.file_id, hit.rank);
     }
 
+    // Explicit filters search the requested index directly: a name match does not
+    // exclude a file that also matches its contents or metadata.
     // bm25: lower is better. A name match and a body match are the same question,
     // so they merge into one list — and a file matching BOTH is reported once, as
     // a name hit, because that is the stronger thing to say about it.
