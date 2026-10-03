@@ -1,5 +1,6 @@
 import type { PluginEntry, PluginManifest, PluginSourceRef, ResolvedPlugin } from "@canopy/core";
-import { unzipSync, strFromU8 } from "fflate";
+import { strFromU8 } from "fflate";
+import { unpackZip } from "./unpack-zip";
 
 // Source paths are literal module identifiers. Do not normalize aliases that
 // could select code outside the manifest's directory or collide with imports.
@@ -75,14 +76,44 @@ async function resolveNpm(ref: Extract<PluginSourceRef, { type: "npm" }>): Promi
 
 // ── zip: unpacked archive (manifest + inline code) ────────────────────────────
 
-export function resolveZipBytes(bytes: Uint8Array, source: PluginSourceRef): ResolvedPlugin {
+export interface ZipLimits {
+  maxArchiveBytes: number;
+  maxEntries: number;
+  maxEntryBytes: number;
+  maxTotalBytes: number;
+}
+/** Admission/allocation ceilings; callers may tighten these per import. */
+export const DEFAULT_ZIP_LIMITS: Readonly<ZipLimits> = Object.freeze({
+  maxArchiveBytes: 8 * 1024 * 1024, maxEntries: 256,
+  maxEntryBytes: 4 * 1024 * 1024, maxTotalBytes: 16 * 1024 * 1024,
+});
+
+function effectiveZipLimits(options: Partial<ZipLimits> = {}): ZipLimits {
+  const limits = { ...DEFAULT_ZIP_LIMITS };
+  for (const key of Object.keys(DEFAULT_ZIP_LIMITS) as (keyof ZipLimits)[]) {
+    const value = options[key] ?? DEFAULT_ZIP_LIMITS[key];
+    if (!Number.isSafeInteger(value) || value <= 0 || value > DEFAULT_ZIP_LIMITS[key]) throw new Error(`invalid ZIP limit: ${key}`);
+    limits[key] = value;
+  }
+  return limits;
+}
+
+export function resolveZipBytes(bytes: Uint8Array, source: PluginSourceRef, options: Partial<ZipLimits> = {}): ResolvedPlugin {
+  const limits = effectiveZipLimits(options);
+  if (bytes.byteLength > limits.maxArchiveBytes) throw new Error("zip exceeds archive byte limit");
+  let totalBytes = 0;
   const seen = new Set<string>();
-  const files = unzipSync(bytes, { filter: file => {
+  const files = unpackZip(bytes, file => {
     if (seen.has(file.name)) throw new Error(`zip has duplicate entry: ${file.name}`);
     seen.add(file.name);
+    if (seen.size > limits.maxEntries) throw new Error("zip exceeds entry count limit");
+    // Bound declared output allocations and compressed processing before inflation.
+    if (!Number.isSafeInteger(file.originalSize) || file.originalSize < 0 ||
+        file.originalSize > limits.maxEntryBytes || file.size > limits.maxEntryBytes) throw new Error("zip exceeds entry byte limit");
+    totalBytes += Math.max(file.originalSize, file.size);
+    if (totalBytes > limits.maxTotalBytes) throw new Error("zip exceeds total byte limit");
     if (!plainPath(file.name.endsWith("/") ? file.name.slice(0, -1) : file.name)) throw new Error(`zip has an invalid path: ${file.name}`);
-    return true;
-  } });
+  });
   const keys = Object.keys(files);
   const manifests = keys.filter(key => key === "canopy.json" || key.endsWith("/canopy.json"));
   if (!manifests.length) throw new Error("zip has no canopy.json");
@@ -111,8 +142,10 @@ export function resolveZipBytes(bytes: Uint8Array, source: PluginSourceRef): Res
 // ── unified API ───────────────────────────────────────────────────────────────
 
 export interface ResolveOptions {
-  /** Required for zip refs: returns the raw archive bytes for a storage key. */
-  readZip?: (key: string) => Promise<Uint8Array>;
+  /** Required for zip refs. Enforce maxBytes while reading (size check or capped stream),
+   * before buffering the whole object. Upload routes must enforce the same ceiling. */
+  readZip?: (key: string, options: { maxBytes: number }) => Promise<Uint8Array>;
+  zipLimits?: Partial<ZipLimits>;
 }
 
 export async function resolvePlugin(ref: PluginSourceRef, opts: ResolveOptions = {}): Promise<ResolvedPlugin> {
@@ -123,7 +156,8 @@ export async function resolvePlugin(ref: PluginSourceRef, opts: ResolveOptions =
       return resolveNpm(ref);
     case "zip": {
       if (!opts.readZip) throw new Error("zip source requires a readZip provider");
-      return resolveZipBytes(await opts.readZip(ref.key), ref);
+      const limits = effectiveZipLimits(opts.zipLimits);
+      return resolveZipBytes(await opts.readZip(ref.key, { maxBytes: limits.maxArchiveBytes }), ref, limits);
     }
   }
 }
