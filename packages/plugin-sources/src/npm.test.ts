@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkUpdate, resolvePlugin } from './index';
 
 afterEach(() => vi.unstubAllGlobals());
-function registry(tags: Record<string, string>, versions = { '1.0.0': {}, '2.0.0': {} }) {
+function registry(tags: Record<string, string>, versions: Record<string, unknown> = { '1.0.0': {}, '2.0.0': {} }) {
   const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(
     url.startsWith('https://registry.npmjs.org/') ? { 'dist-tags': tags, versions } :
       { canopy: { id: 'example', name: 'Example', version: 'ignored' } },
@@ -35,4 +35,23 @@ describe('npm plugin version resolution', () => {
     expect(await checkUpdate({ type: 'npm', name: 'example', version: '1.0.0' }, '1.0.0'))
       .toEqual({ current: '1.0.0', latest: '2.0.0' });
   });
+});
+
+it.each(['left-pad?x=', 'left-pad#fragment', '@a/b/../../c', '../plugin', 'a/b', '@scope/../plugin', 'Uppercase', 'a'.repeat(215)])(
+  'rejects malformed package names before install or update requests: %s', async name => {
+    const fetcher = registry({ latest: '2.0.0' });
+    await expect(resolvePlugin({ type: 'npm', name, version: '1.0.0' })).rejects.toThrow('Invalid npm package name');
+    await expect(checkUpdate({ type: 'npm', name }, '1.0.0')).rejects.toThrow('Invalid npm package name');
+    expect(fetcher).not.toHaveBeenCalled();
+  },
+);
+it('checks a dist-tag against its own channel instead of stable latest', async () => {
+  registry({ latest: '2.0.0', next: '3.0.0-rc.2' }, { '1.0.0': {}, '2.0.0': {}, '3.0.0-rc.2': {} });
+  expect(await checkUpdate({ type: 'npm', name: 'example', version: 'next' }, '3.0.0-rc.1'))
+    .toEqual({ current: '3.0.0-rc.1', latest: '3.0.0-rc.2' });
+  expect(await checkUpdate({ type: 'npm', name: 'example', version: 'next' }, '3.0.0-rc.2')).toBeNull();
+});
+it('refuses a disappeared tag instead of replacing its channel with latest', async () => {
+  registry({ latest: '2.0.0' });
+  await expect(checkUpdate({ type: 'npm', name: 'example', version: 'next' }, '3.0.0-rc.1')).rejects.toThrow('unavailable');
 });
