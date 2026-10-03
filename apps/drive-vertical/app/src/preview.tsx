@@ -33,6 +33,7 @@ import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
 import { VersionComparison } from './version-comparison';
 import { latestOnly } from './reads';
+import { JsonPreview } from './json-format';
 import { viewerRegistry, registerImageViewer } from './image-viewer';
 import { FileLinkAction } from './copy-file-link';
 
@@ -53,7 +54,7 @@ export function shapeOf(mime: string | undefined, name = ''): Shape {
   if (mime?.startsWith('audio/')) return 'audio';
   if (mime?.startsWith('video/')) return 'video';
   if (mime === 'application/pdf') return 'pdf';
-  if (mime?.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') return 'text';
+  if (mime?.startsWith('text/') || (mime === 'application/json' || mime?.endsWith('+json')) || mime === 'application/xml') return 'text';
   if (viewerRegistry.resolve({ mime: mime ?? '', name })) return 'viewer';
   if (mime?.startsWith('image/')) return 'image';
   return 'none';
@@ -375,7 +376,9 @@ export function PreviewPanel({
               editing ? <TextEditor key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} text={body.text} wrap={wrapText}
                 onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} /> : <>
                 {canWrite && !body.truncated && version.source === 'blob' ? <Button size="sm" variant="outline" className="mb-3" onClick={() => setEditing(true)}>Edit text</Button> : null}
-                <TextPreview key={`${fileId}:${version.id}`} text={body.text} wrap={wrapText} onWrapChange={setWrapText} />
+                {!body.truncated && (version.mime.split(';')[0]?.trim().toLowerCase() === 'application/json' || version.mime.split(';')[0]?.trim().toLowerCase().endsWith('+json'))
+                  ? <JsonPreview key={`${fileId}:${version.id}`} text={body.text} wrap={wrapText} onWrapChange={setWrapText} />
+                  : <TextPreview key={`${fileId}:${version.id}`} text={body.text} wrap={wrapText} onWrapChange={setWrapText} />}
                 {body.truncated ? (
                   <p className="mt-2 text-xs text-muted-foreground">
                     Cut off here — download the file to read the rest.
