@@ -1,8 +1,11 @@
+import { SpaceStyleFields } from './space-style-fields';
+import type { SpaceSettings } from '../../src/space-settings';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Input, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@canopy/ui';
 import { requestSpace, spaceRequests, type SpaceRequest } from './api';
 /** The platform owns provisioning; the dialog follows its durable result instead of claiming success on enqueue. */
 export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; onCreated: (slug: string) => void }) {
+  const [icon, setIcon] = useState<SpaceSettings['icon']>('folder'), [color, setColor] = useState<SpaceSettings['color']>('#3b82f6');
   const [name, setName] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
   const [request, setRequest] = useState<SpaceRequest | null>(null);
   const active = useRef(true), slug = useRef('');
@@ -27,7 +30,7 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
     setBusy(true); setError(null);
     // Keep the slug stable across an uncertain response so retry does not create two spaces.
     slug.current ||= `${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 45) || 'space'}-${crypto.randomUUID().slice(0, 8)}`;
-    try { const result = await requestSpace(name.trim(), slug.current); if (active.current) setRequest({ ...result, status: 'pending', error: null }); }
+    try { const result = await requestSpace(name.trim(), slug.current, {name:name.trim(),icon,color}); if (active.current) setRequest({ ...result, status: 'pending', error: null }); }
     catch (error) { if (active.current) setError(error instanceof Error ? error.message || 'Could not complete the request.' : String(error)); }
     finally { if (active.current) setBusy(false); }
   };
@@ -35,6 +38,7 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
     <DialogHeader><DialogTitle>Create a space</DialogTitle><DialogDescription>A shared drive with its own files and members. You will own the new space.</DialogDescription></DialogHeader>
     <form onSubmit={event => { event.preventDefault(); void create(); }} className="space-y-3">
       <label className="block">Space name<Input autoFocus maxLength={100} value={name} disabled={busy || request?.status === 'pending'} onChange={event => { setName(event.target.value); slug.current = ''; if (request?.status !== 'pending') setRequest(null); }} /></label>
+      <SpaceStyleFields icon={icon} color={color} disabled={busy || request?.status === 'pending'} onIcon={icon => setIcon(icon as SpaceSettings['icon'])} onColor={color => setColor(color as SpaceSettings['color'])} />
       <p className="text-sm text-muted-foreground">Files use this install's Canopy storage. Invite members after the space opens.</p>
       {error ? <p role="alert">{error} Your creation request can still complete; check its status before starting another.</p> : null}
       {request ? <p role={request.status === 'failed' ? 'alert' : 'status'}>{request.status === 'pending' ? 'Creating your space… You can close this dialog and return to check its progress.' : request.status === 'failed' ? `Could not create the space: ${request.error ?? 'The platform refused the request.'}` : 'Space created.'}</p> : null}

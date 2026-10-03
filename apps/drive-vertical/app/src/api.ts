@@ -112,6 +112,7 @@ export const changes = (after: string | null, limit = 100) =>
   call<DriveChanges>(`/changes?limit=${limit}${after ? `&after=${encodeURIComponent(after)}` : ''}`);
 
 export interface Site {
+  icon?: string; color?: string;
   slug: string;
   name: string;
   /**
@@ -759,5 +760,8 @@ export function saveText(fileId: string, expectedVersion: string, text: string):
 }
 
 export interface SpaceRequest { id: string; slug: string; name: string; status: 'pending' | 'done' | 'failed'; error: string | null }
-export const requestSpace = (name: string, slug: string) => call<{ id: string; slug: string; name: string }>('/sites', { method: 'POST', body: JSON.stringify({ name, slug }) });
+export const requestSpace = (name: string, slug: string, settings?: import('../../src/space-settings').SpaceSettings) => call<{ id: string; slug: string; name: string }>('/sites', { method: 'POST', body: JSON.stringify({ name, slug, settings }) });
 export const spaceRequests = () => call<{ requests: SpaceRequest[] }>('/site-requests');
+
+export const getSpaceSettings = () => call<import('../../src/space-settings').SpaceSettings>('/space-settings');
+export const updateSpaceSettings = (settings: import('../../src/space-settings').SpaceSettings) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', {method:'PATCH',body:JSON.stringify(settings)});
