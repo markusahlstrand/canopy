@@ -1824,3 +1824,21 @@ it('retains restore progress and reports the outcome after navigating away from 
   await answerWith('/files/01B/restore', 403, { detail: 'Denied' });
   expect(screen.getByText(/No permission to restore 1 file: notes.txt/)).toBeTruthy();
 });
+
+it('bulk trash moves selected files while retaining selected folders', async () => {
+  await renderDrive([{ id: '01F', parent_id: 'root', name: 'Folder', path: 'Folder' }], [file('01A', 'one.txt'), file('01B', 'two.txt')]);
+  fireEvent.click(screen.getByText('Folder'));
+  fireEvent.click(screen.getByText('one.txt'), { ctrlKey: true });
+  fireEvent.click(screen.getByText('two.txt'), { ctrlKey: true });
+  fireEvent.click(screen.getByRole('button', { name: 'Move 2 selected files to Trash' }));
+  expect(screen.getByRole('group', { name: 'Confirm move to Trash' }).textContent).toContain('one.txt');
+  expect(pending.some(p => p.method === 'DELETE')).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm move to Trash' }));
+  await answer('/files/01A', file('01A', 'one.txt'));
+  await answer('/files/01B', file('01B', 'two.txt'));
+  await answer('/folders/root/folders', [{ id: '01F', parent_id: 'root', name: 'Folder', path: 'Folder' }]);
+  await answer('/folders/root/files', []);
+  expect(screen.getByText('Moved to Trash: 2 files.')).toBeTruthy();
+  expect(within(screen.getByText('Folder').closest('tr')!).getByRole('checkbox').getAttribute('aria-checked')).toBe('true');
+  expect(pending.some(p => p.method === 'DELETE' && p.url.includes('folders'))).toBe(false);
+});
