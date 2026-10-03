@@ -37,3 +37,13 @@ describe('ZIP plugin resolution', () => {
     expect(() => resolveZipBytes(zip({ 'canopy.json': 'null' }), source)).toThrow('must be an object');
   });
 });
+
+// Python zipfile fixtures retain repeated central-directory entries, which
+// zipSync's object input cannot represent.
+it.each(['UEsDBBQAAAAAAFdcQ12r5CWhOwAAADsAAAALAAAAY2Fub3B5Lmpzb257ImlkIjoiZGVtbyIsIm5hbWUiOiJEZW1vIiwidmVyc2lvbiI6IjEiLCJjYXBhYmlsaXRpZXMiOltdfVBLAwQUAAAAAABXXENdukuwFQ0AAAANAAAACwAAAGNhbm9weS5qc29ueyJpZCI6ImV2aWwifVBLAwQUAAAAAABXXENdjyikHwQAAAAEAAAACAAAAGluZGV4Lmpzc2FmZVBLAQIUAxQAAAAAAFdcQ12r5CWhOwAAADsAAAALAAAAAAAAAAAAAACAAQAAAABjYW5vcHkuanNvblBLAQIUAxQAAAAAAFdcQ126S7AVDQAAAA0AAAALAAAAAAAAAAAAAACAAWQAAABjYW5vcHkuanNvblBLAQIUAxQAAAAAAFdcQ12PKKQfBAAAAAQAAAAIAAAAAAAAAAAAAACAAZoAAABpbmRleC5qc1BLBQYAAAAAAwADAKgAAADEAAAAAAA=', 'UEsDBBQAAAAAAFdcQ12r5CWhOwAAADsAAAALAAAAY2Fub3B5Lmpzb257ImlkIjoiZGVtbyIsIm5hbWUiOiJEZW1vIiwidmVyc2lvbiI6IjEiLCJjYXBhYmlsaXRpZXMiOltdfVBLAwQUAAAAAABXXENdjyikHwQAAAAEAAAACAAAAGluZGV4Lmpzc2FmZVBLAwQUAAAAAABXXENdUjH7jQQAAAAEAAAACAAAAGluZGV4LmpzZXZpbFBLAQIUAxQAAAAAAFdcQ12r5CWhOwAAADsAAAALAAAAAAAAAAAAAACAAQAAAABjYW5vcHkuanNvblBLAQIUAxQAAAAAAFdcQ12PKKQfBAAAAAQAAAAIAAAAAAAAAAAAAACAAWQAAABpbmRleC5qc1BLAQIUAxQAAAAAAFdcQ11SMfuNBAAAAAQAAAAIAAAAAAAAAAAAAACAAY4AAABpbmRleC5qc1BLBQYAAAAAAwADAKUAAAC4AAAAAAA='])('refuses duplicate literal manifest or module entries', encoded => {
+  const bytes = Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
+  expect(() => resolveZipBytes(bytes, source)).toThrow('duplicate entry');
+});
+it.each(['constructor', '__proto__', 'toString'])('reports a deliberate missing-entry error for inherited keys: %s', entry => {
+  expect(() => resolveZipBytes(zip({ 'canopy.json': manifest(entry) }), source)).toThrow(`zip missing entry "${entry}"`);
+});

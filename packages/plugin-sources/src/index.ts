@@ -1,6 +1,12 @@
 import type { PluginEntry, PluginManifest, PluginSourceRef, ResolvedPlugin } from "@canopy/core";
 import { unzipSync, strFromU8 } from "fflate";
 
+// Source paths are literal module identifiers. Do not normalize aliases that
+// could select code outside the manifest's directory or collide with imports.
+const plainPath = (path: string) => path.length > 0 && !path.includes("\\") &&
+  !path.includes("\0") && !path.split("/").some(segment => !segment || segment === "." || segment === "..") &&
+  !/^[a-zA-Z]:/.test(path);
+
 const encodePath = (p: string) => p.split("/").filter(Boolean).map(encodeURIComponent).join("/");
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -13,9 +19,14 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 function ghBase(repo: string, ref: string, path: string) {
   const [owner, name] = repo.split("/");
-  const dir = (path ?? "").replace(/^\/+|\/+$/g, "");
-  const raw = (file: string) =>
-    `https://raw.githubusercontent.com/${owner}/${name}/${ref}/${encodePath([dir, file].filter(Boolean).join("/"))}`;
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9_.-]+$/.test(repo) || !plainPath(repo)) throw new Error("invalid GitHub repository");
+  if (!plainPath(ref)) throw new Error("invalid GitHub ref");
+  if (path && !plainPath(path)) throw new Error("invalid GitHub plugin path");
+  const dir = path;
+  const raw = (file: string) => {
+    if (typeof file !== "string" || !plainPath(file)) throw new Error("GitHub entry must be a plain relative file path");
+    return `https://raw.githubusercontent.com/${owner}/${name}/${encodeURIComponent(ref)}/${encodePath([dir, file].filter(Boolean).join("/"))}`;
+  };
   return { raw };
 }
 
@@ -55,16 +66,14 @@ async function resolveNpm(ref: Extract<PluginSourceRef, { type: "npm" }>): Promi
 // ── zip: unpacked archive (manifest + inline code) ────────────────────────────
 
 export function resolveZipBytes(bytes: Uint8Array, source: PluginSourceRef): ResolvedPlugin {
-  const files = unzipSync(bytes);
+  const seen = new Set<string>();
+  const files = unzipSync(bytes, { filter: file => {
+    if (seen.has(file.name)) throw new Error(`zip has duplicate entry: ${file.name}`);
+    seen.add(file.name);
+    if (!plainPath(file.name.endsWith("/") ? file.name.slice(0, -1) : file.name)) throw new Error(`zip has an invalid path: ${file.name}`);
+    return true;
+  } });
   const keys = Object.keys(files);
-  // ZIP entries are literal module identifiers. Do not normalize aliases that
-  // could select code outside the manifest's directory or collide with imports.
-  const plainPath = (path: string) => path.length > 0 && !path.includes("\\") &&
-    !path.includes("\0") && !path.split("/").some(segment => !segment || segment === "." || segment === "..") &&
-    !/^[a-zA-Z]:/.test(path);
-  for (const key of keys) {
-    if (!plainPath(key.endsWith("/") ? key.slice(0, -1) : key)) throw new Error(`zip has an invalid path: ${key}`);
-  }
   const manifests = keys.filter(key => key === "canopy.json" || key.endsWith("/canopy.json"));
   if (!manifests.length) throw new Error("zip has no canopy.json");
   if (manifests.length !== 1) throw new Error("zip has multiple canopy.json manifests");
@@ -78,7 +87,7 @@ export function resolveZipBytes(bytes: Uint8Array, source: PluginSourceRef): Res
     throw new Error("zip entry must be a plain relative file path");
   }
   const entryKey = baseDir + entryPath;
-  const entryBytes = files[entryKey];
+  const entryBytes = Object.hasOwn(files, entryKey) ? files[entryKey] : undefined;
   if (!entryBytes) throw new Error(`zip missing entry "${manifest.entry ?? "index.js"}"`);
 
   const modules: Record<string, string> = {};
