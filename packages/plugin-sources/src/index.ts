@@ -34,10 +34,20 @@ interface NpmMeta {
   versions: Record<string, unknown>;
 }
 
-async function npmResolveVersion(name: string, version?: string): Promise<string> {
+async function npmResolveVersion(name: string, version?: string, checkingUpdate = false): Promise<string> {
+  // Names are URL path data, never query/fragment syntax or traversal segments.
+  if (name.length > 214 || !/^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/.test(name)) {
+    throw new Error(`Invalid npm package name: ${name}`);
+  }
   const meta = await fetchJson<NpmMeta>(`https://registry.npmjs.org/${name}`);
-  if (version && meta.versions[version]) return version;
-  return meta["dist-tags"][version ?? "latest"] ?? meta["dist-tags"].latest!;
+  // Exact pins can discover newer latest releases. Tag installs stay on their
+  // channel, so a prerelease install is not offered stable latest as a downgrade.
+  const requested = checkingUpdate && version !== undefined && Object.hasOwn(meta.versions, version)
+    ? "latest" : version ?? "latest";
+  if (Object.hasOwn(meta.versions, requested)) return requested;
+  const resolved = Object.hasOwn(meta["dist-tags"], requested) ? meta["dist-tags"][requested] : undefined;
+  if (typeof resolved === "string" && Object.hasOwn(meta.versions, resolved)) return resolved;
+  throw new Error(`${name}: npm version or tag "${requested}" is unavailable`);
 }
 
 async function resolveNpm(ref: Extract<PluginSourceRef, { type: "npm" }>): Promise<ResolvedPlugin> {
@@ -99,7 +109,7 @@ export async function checkUpdate(
   installedVersion: string,
 ): Promise<{ current: string; latest: string } | null> {
   let latest: string;
-  if (ref.type === "npm") latest = await npmResolveVersion(ref.name);
+  if (ref.type === "npm") latest = await npmResolveVersion(ref.name, ref.version, true);
   else if (ref.type === "github") latest = (await resolveGithub(ref)).version;
   else return null; // zip: immutable upload, no remote to check
   return latest === installedVersion ? null : { current: installedVersion, latest };
