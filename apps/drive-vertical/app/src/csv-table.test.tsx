@@ -32,3 +32,15 @@ it('reports clipped columns and hints at alternate delimiters', () => {
   view.rerender(<CsvTable text={'a;b;c\n1;2;3'} />);
   expect(screen.getByRole('status').textContent).toContain('different delimiter');
 });
+
+it('lets readers select semicolon/tab delimiters even after a comma parse error', () => {
+  const view = render(<CsvTable text={'a;"b,c";"two\nlines"\r\n1;2;3'} />);
+  expect(screen.getByRole('alert')).toBeTruthy();
+  fireEvent.change(screen.getByRole('combobox', { name: 'CSV separator' }), { target: { value: ';' } });
+  expect(screen.queryByRole('alert')).toBeNull(); expect(screen.getByRole('cell', { name: 'b,c' })).toBeTruthy();
+  expect(screen.getAllByRole('columnheader')).toHaveLength(3);
+  view.rerender(<CsvTable text={'a\tb\tc\n1\t2\t3'} />);
+  fireEvent.change(screen.getByRole('combobox', { name: 'CSV separator' }), { target: { value: '\t' } });
+  expect(screen.getByRole('cell', { name: '3' })).toBeTruthy();
+  expect(parseCsvPreview(Array(60).fill('x').join(';'), ';').rows[0]).toHaveLength(50);
+});
