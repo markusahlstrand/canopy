@@ -10,6 +10,8 @@ type Upload = { site: string | null; id: number; folderId: string; destination: 
 export function useUploadQueue(onChanged: () => Promise<void>) {
   const [rows, setRows] = useState<Upload[]>([]);
   const queue = useRef<Upload[]>([]);
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
   const sequence = useRef(0);
   const running = useRef(false);
   const inFlight = useRef<{ id: number; controller: AbortController } | null>(null);
@@ -28,7 +30,7 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
     let wrote = false;
     try {
       for (;;) {
-        if (!mounted.current) break;
+        if (!mounted.current || pausedRef.current) break;
         const row = queue.current.find(row => row.state === 'queued');
         if (!row?.file) break;
         update(row.id, { state: 'uploading', error: undefined });
@@ -68,6 +70,12 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
   const active = rows.some(row => row.state === 'queued' || row.state === 'uploading');
   useNavigationGuard(active);
   const panel = rows.length ? <section aria-label="Uploads" className="max-h-48 shrink-0 overflow-auto border-b border-border px-4 py-2 text-sm">
+    {active || paused ? <Button size="sm" variant="outline" onClick={() => {
+      pausedRef.current = !pausedRef.current;
+      setPaused(pausedRef.current);
+      if (!pausedRef.current) void pump();
+    }}>{paused ? 'Resume uploads' : 'Pause uploads'}</Button> : null}
+    {paused ? <p className="text-xs text-muted-foreground">Uploads paused. The current transfer finishes; waiting files resume when you choose.</p> : null}
     <p role="status">{rows.filter(row => row.state === 'done').length} of {rows.length} uploaded{rows.some(row => row.state === 'cancelled') ? ` · ${rows.filter(row => row.state === 'cancelled').length} cancelled` : ''}</p>
     {rows.some(row => row.state === 'failed' && row.file) ? <Button size="sm" variant="outline" onClick={() => {
       queue.current = queue.current.map(row => row.state === 'failed' && row.file ? { ...row, state: 'queued', error: undefined } : row);
