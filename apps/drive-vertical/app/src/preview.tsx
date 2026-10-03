@@ -29,6 +29,7 @@ import {
   type FileVersion,
 } from './api';
 import { TextEditor } from './text-editor';
+import { useTextWrapPreference } from './text-wrap-preference';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
 import { VersionComparison } from './version-comparison';
@@ -109,7 +110,7 @@ export function PreviewPanel({
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [wrapText, setWrapText] = useState(true);
+  const [wrapText, setWrapText] = useTextWrapPreference();
   const [tab, setTab] = useState<Tab>('file');
   const [file, setFile] = useState<DriveFile | null>(null);
   const [version, setVersion] = useState<FileVersion | null>(null);

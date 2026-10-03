@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { TextPreview } from './text-preview';
 import { PreviewPanel } from './preview';
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); localStorage.removeItem('canopy.drive.text-wrap'); vi.unstubAllGlobals(); });
 it('toggles layout without altering or parsing the displayed text', () => {
   const text = '<script>alert(1)</script>\n  indented line';
   function Harness() { const [wrap, setWrap] = useState(true); return <TextPreview text={text} wrap={wrap} onWrapChange={setWrap} />; }
