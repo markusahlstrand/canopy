@@ -55,7 +55,7 @@ export function SandboxPlugin({ plugin, file, onSave }: { plugin: PluginInstall;
           bytes = await response.arrayBuffer();
           if (bytes.byteLength > 20000000) throw Error('Plugin previews support files up to 20 MB.');
         }
-        if (!abort.signal.aborted) frame.current?.contentWindow?.postMessage({ type: 'render', source: plugin.source, file: file ? {name: file.name, mime: file.mime, bytes} : undefined }, '*', [bytes]);
+        if (!abort.signal.aborted) frame.current?.contentWindow?.postMessage({ type: 'render', source: plugin.source, file: file ? {name: file.name, mime: file.mime, bytes, writable: !!onSave && manifest.capabilities.some(cap => cap.kind === 'item:write')} : undefined }, '*', [bytes]);
       } catch (error) { if (!abort.signal.aborted) setError(error instanceof Error ? error.message : String(error)); }
     };
     window.addEventListener('message', receive);
