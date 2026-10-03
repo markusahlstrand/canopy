@@ -169,6 +169,7 @@ const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
       // A fallback changed the target space: neither path nor ID can follow it.
       url.searchParams.delete('path');
       url.searchParams.delete('folder');
+      url.searchParams.delete('file');
       window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
       return me;
     } catch (retry: unknown) {

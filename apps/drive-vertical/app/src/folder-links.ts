@@ -1,4 +1,5 @@
 import { currentSite, LOGIN_URL, ROOT_FOLDER_ID } from './api';
+import { fileLink, linkedFileId } from './file-links';
 
 /** Navigation only: this URL grants no access and contains no invitation credentials. */
 export function folderLink(path: string, site = currentSite()): string {
@@ -30,9 +31,10 @@ export function folderPath(): string {
 
 /** Login returns only navigation parameters, never invite/claim credentials. */
 export function folderLoginUrl(): string {
+  const fileId = linkedFileId();
   const id = linkedFolderId();
   const path = folderPath();
-  if (!id && !path) return LOGIN_URL;
-  const target = new URL(id ? folderIdLink(id) : folderLink(path));
+  if (!fileId && !id && !path) return LOGIN_URL;
+  const target = new URL(fileId ? fileLink(fileId) : id ? folderIdLink(id) : folderLink(path));
   return `${LOGIN_URL}?returnTo=${encodeURIComponent(target.pathname + target.search)}`;
 }

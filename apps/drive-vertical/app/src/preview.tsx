@@ -30,6 +30,7 @@ import {
 import { TextEditor } from './text-editor';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
+import { FileLinkAction } from './copy-file-link';
 import { latestOnly } from './reads';
 import { viewerRegistry, registerImageViewer } from './image-viewer';
 
@@ -345,6 +346,8 @@ export function PreviewPanel({
           </button>
         ))}
       </nav>
+
+      {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <FileDetailsPanel key={fileId} fileId={fileId} /> : tab === 'file' ? (
