@@ -39,6 +39,7 @@ describe('the derived route table', () => {
       'GET /api/people',
       'GET /api/people/access',
       'GET /api/plugins',
+      'GET /api/plugins/:id/source',
       'GET /api/search',
       'GET /api/trash',
       'PATCH /api/files/:fileId',

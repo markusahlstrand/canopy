@@ -38,7 +38,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     <h3 className="font-medium">Available plugins</h3>
     {'image viewer'.includes(query.toLowerCase()) ? <section aria-label="Image viewer" className="space-y-2 rounded border p-3">
       <h4 className="font-medium">Image viewer</h4><p className="text-sm">Preview images with zoom and keyboard controls.</p>
-      <p className="text-xs text-muted-foreground">Bundled with Canopy · Reads the file you open · No editing</p>
+      <p className="text-xs text-muted-foreground">Built in · Trusted Canopy component · No editing</p>
       <p role="status">{enabled ? 'Enabled' : 'Disabled'}</p>
       <Button size="sm" variant="outline" onClick={() => setImageViewerEnabled(!enabled)}>{enabled ? 'Disable image viewer' : 'Enable image viewer'}</Button>
     </section> : <p>No available plugins match this search.</p>}

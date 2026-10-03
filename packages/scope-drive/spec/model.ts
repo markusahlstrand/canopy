@@ -50,13 +50,13 @@ export const segment = z
 
 export const installedPluginManifest = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,48}$/), name: z.string().trim().min(1).max(100), version: z.string().min(1).max(50), description: z.string().max(1000).optional(),
-  capabilities: z.array(z.discriminatedUnion('kind', [z.object({kind: z.literal('item:read')}), z.object({kind: z.literal('item:write')}), z.object({kind: z.literal('net:fetch'), hosts: z.array(z.string().regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)).min(1).max(10)})])).max(10),
+  capabilities: z.array(z.discriminatedUnion('kind', [z.object({kind: z.literal('item:read')}), z.object({kind: z.literal('item:write')}), z.object({kind: z.literal('net:fetch'), hosts: z.array(z.string().regex(/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/).refine(host => !/\.(local|internal|localhost|lan|home|arpa)$/.test(host), 'Use a public DNS hostname')).min(1).max(10)})])).max(10),
   contributes: z.object({
     viewers: z.array(z.object({id: z.string().min(1).max(50), title: z.string().max(100).optional(), match: z.array(z.string().min(1).max(100)).min(1).max(20), fill: z.boolean().optional()})).max(10).optional(),
     detailView: z.object({id: z.string().min(1).max(50), title: z.string().min(1).max(100), nav: z.object({section: z.string().max(50)}).optional(), immersive: z.boolean().optional()}).optional(),
   }).refine(value => !!value.viewers?.length || !!value.detailView, 'A plugin needs a viewer or app contribution'),
 });
-export const storedPlugin = z.object({ id: z.string(), plugin_id: z.string(), principal: z.string(), manifest_json: z.string(), source: z.string(), enabled: z.number().int(), updated_at: z.string() });
+export const storedPlugin = z.object({ id: z.string(), plugin_id: z.string(), principal: z.string(), manifest_json: z.string(), source: z.string(), enabled: z.number().int(), updated_at: z.string(), source_kind: z.string(), source_ref: z.string(), resolved: z.string(), source_sha256: z.string(), granted_capabilities: z.string() });
 
 export const driveEntities = defineEntities({
   plugin_install: { table: 'drive_plugin_installs', fields: storedPlugin, key: ['principal', 'plugin_id'] },
@@ -1126,11 +1126,12 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     output: z.object({ requests: z.array(z.object({ id: z.string(), slug: z.string(), name: z.string(), status: z.enum(['pending', 'done', 'failed']), error: z.string().nullable() })) }),
   },
   'drive/list-plugins': {
-    summary: 'Installed plugins for this person and space', permission: 'drive:read', input: z.object({}), output: z.object({plugins: z.array(storedPlugin)}), http: {method: 'GET', path: '/plugins'},
+    summary: 'Installed plugins for this person and space', permission: 'drive:read', input: z.object({}), output: z.object({plugins: z.array(storedPlugin.omit({source: true}))}), http: {method: 'GET', path: '/plugins'},
   },
+  'drive/plugin-source': {summary:'Load one accessible plugin source revision',permission:'drive:read',input:z.object({id:z.string(),revision:z.string()}),output:storedPlugin,http:{method:'GET',path:'/plugins/{id}/source'}},
   'drive/save-plugin': {
     summary: 'Install or update a sandboxed plugin', permission: 'drive:read',
-    input: z.object({manifest: installedPluginManifest, source: z.string().min(1).max(256000), forSpace: z.boolean().optional(), expectedRevision: z.string().nullable()}), output: storedPlugin,
+    input: z.object({manifest: installedPluginManifest, source: z.string().min(1).max(256000), forSpace: z.boolean().optional(), acceptCapabilities: installedPluginManifest.shape.capabilities.optional(), provenance: z.object({kind:z.enum(['inline','github','npm','zip','bundled']),ref:z.string().max(500),resolved:z.string().max(200)}).optional(), expectedRevision: z.string().nullable()}), output: storedPlugin,
     emits: {type: 'drive.plugin-saved', entity: 'plugin_install', entityIdFrom: 'id', schemaVersion: 1, piiClass: 'none'}, http: {method: 'PUT', path: '/plugins'},
   },
   'drive/toggle-plugin': {
