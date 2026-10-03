@@ -894,7 +894,7 @@ const operations = {
     assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
     const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [input.folderId])[0];
     if (!folder) throw substratError('not_found', 'folder not found');
-    return folder;
+    return { ...folder, canManage: (await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId))).allowed };
   },
 
   'drive/folder-by-path': async (ctx, input) => {
@@ -1056,6 +1056,7 @@ const operations = {
   'drive/share-folder': async (ctx, input) => {
     // Sharing is an owner's act on this folder. Being able to write in it is not enough.
     assertAllowed(await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId)));
+    if (input.folderId === ROOT_FOLDER_ID) throw substratError('validation_failed', 'Share individual folders; use People for space-wide access.');
     // The folder has to exist, and a trashed one is not somewhere to hand out access to.
     const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [
       input.folderId,

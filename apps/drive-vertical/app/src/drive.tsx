@@ -25,6 +25,7 @@ import { Topbar } from './topbar';
 import { folderLink, folderPath } from './folder-links';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { PeopleDialog } from './people-dialog';
+import { CurrentFolderShare } from './current-folder-share';
 import { ShareDialog } from './share-dialog';
 import { MoveDialog } from './move-dialog';
 import { FileDropZone } from './file-drop-zone';
@@ -653,7 +654,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       />
 
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
-      {view === 'drive' && !offline && !linkPending ? <div className="px-4 py-2">
+      {view === 'drive' && !offline && !linkPending ? <div className="flex flex-wrap gap-2 px-4 py-2">
+        <CurrentFolderShare folderId={folderId} onShare={setSharing} />
         <Button variant="ghost" size="sm" onClick={() => {
           void getFolder(folderId).then(folder => navigator.clipboard.writeText(folderLink(folder.path)))
             .then(() => setLinkMessage('Folder link copied. This link does not grant access.'))

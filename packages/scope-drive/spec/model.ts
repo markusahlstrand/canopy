@@ -707,7 +707,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     summary: 'Read a folder by id, including its current server path',
     permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
     input: z.object({ folderId: z.string() }),
-    output: driveEntities.folder.fields,
+    output: driveEntities.folder.fields.extend({ canManage: z.boolean() }),
     http: { method: 'GET', path: '/folders/{folderId}/metadata' },
   },
 

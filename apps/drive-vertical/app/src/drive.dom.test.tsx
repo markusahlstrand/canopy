@@ -329,7 +329,7 @@ describe('live refreshes', () => {
     await answer('/folders/root/files', [file('01B', 'latest.txt')]);
     expect(screen.getByText('latest.txt')).toBeTruthy();
     expect(screen.queryByText('first.txt')).toBeNull();
-    expect(pending.filter((p) => p.url.includes('/folders/root/'))).toHaveLength(0);
+    expect(pending.filter((p) => /\/folders\/root\/(files|folders)(?:\?|$)/.test(p.url))).toHaveLength(0);
     expect((screen.getByLabelText('Refresh') as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -347,7 +347,7 @@ describe('live refreshes', () => {
     await answer('/folders/root/files', [file('01A', 'stale-root.txt')]);
     expect(screen.queryByText('stale-root.txt')).toBeNull();
     expect(screen.getByText('papers.txt')).toBeTruthy();
-    expect(pending.filter((p) => p.url.includes('/folders/root/'))).toHaveLength(0);
+    expect(pending.filter((p) => /\/folders\/root\/(files|folders)(?:\?|$)/.test(p.url))).toHaveLength(0);
     expect(pending.filter((p) => p.url.includes('/folders/01F/files'))).toHaveLength(1);
 
     await answer('/folders/01F/folders', []);
@@ -364,7 +364,7 @@ describe('live refreshes', () => {
     expect(live.stop).toHaveBeenCalledTimes(1);
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', []);
-    expect(pending.filter((p) => p.url.includes('/folders/root/'))).toHaveLength(0);
+    expect(pending.filter((p) => /\/folders\/root\/(files|folders)(?:\?|$)/.test(p.url))).toHaveLength(0);
   });
 });
 
@@ -1079,7 +1079,7 @@ describe('a write goes where the person is looking', () => {
 
     // The root, because that is where the screen went — not 01F, the folder the trash
     // was hiding.
-    const create = pending.find((p) => p.url.includes('/folders') && !p.url.includes('/trash'));
+    const create = pending.find((p) => p.method === 'POST' && p.url.includes('/folders') && !p.url.includes('/trash'));
     expect(create?.url).toContain('/folders/root/folders');
   });
 });
@@ -1335,6 +1335,20 @@ describe('the People surface is offered only to whoever may use it', () => {
       screen.getByRole('button', { name: /Withdraw the invitation for bjorn@example.com/ }),
     ).toBeTruthy();
   });
+});
+
+it('offers sharing for a nested current folder but never the space root', async () => {
+  await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }]);
+  expect(screen.queryByRole('button', { name: 'Share this folder' })).toBeNull();
+  expect(pending.some(p => p.url.includes('/folders/root/metadata'))).toBe(false);
+  fireEvent.doubleClick(screen.getByText('Papers'));
+  await flush();
+  await answer('/folders/01F/folders', []);
+  await answer('/folders/01F/files', []);
+  await answer('/folders/01F/metadata', { id: '01F', name: 'Papers', path: 'Papers', canManage: true });
+  fireEvent.click(screen.getByRole('button', { name: 'Share this folder' }));
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(pending.some(p => p.url.includes('/folders/01F/shares'))).toBe(true);
 });
 
 describe('sharing a folder', () => {

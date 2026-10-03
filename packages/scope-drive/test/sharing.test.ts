@@ -301,3 +301,25 @@ it('reads a folder path by stable id after an ancestor rename', async () => {
   expect(await owner.invoke('drive/get-folder', { folderId: child.id })).toMatchObject({ path: 'Renamed link parent/Child' });
   await expect(owner.invoke('drive/get-folder', { folderId: 'missing' })).rejects.toThrow();
 });
+
+
+it('reports folder management separately from read and write access', async () => {
+  const owner = await as(ada);
+  const folder = await owner.invoke<{ id: string }>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Toolbar permission' });
+  expect(await owner.invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: true });
+  expect(await (await as(bjorn)).invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: false });
+  await owner.invoke('drive/share-folder', { folderId: folder.id, principal: bjorn, permission: 'drive:write' });
+  expect(await (await as(bjorn)).invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: false });
+  await owner.invoke('drive/share-folder', { folderId: folder.id, principal: bjorn, permission: 'drive:manage' });
+  expect(await (await as(bjorn)).invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: true });
+});
+
+it('refuses root folder grants so whole-space access stays in People and roles', async () => {
+  const owner = await as(ada);
+  for (const permission of ['drive:write', 'drive:manage']) {
+    await expect(owner.invoke('drive/share-folder', { folderId: ROOT_FOLDER_ID, principal: bjorn, permission })).rejects.toThrow(/individual folders/);
+  }
+  const result = await owner.invoke<{ shares: Share[] }>('drive/list-folder-shares', { folderId: ROOT_FOLDER_ID });
+  expect(result.shares).toEqual([]);
+  expect(await canWriteIn(bjorn, ROOT_FOLDER_ID, 'no-root-grant')).toBe(false);
+});
