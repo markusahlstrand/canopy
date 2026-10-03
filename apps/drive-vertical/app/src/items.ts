@@ -29,6 +29,8 @@ export interface FileItem {
   /** A file's id, or the folder's — the table only ever hands it back. */
   id: string;
   name: string;
+  /** Optional explanation of a search match, kept as plain text. */
+  description?: string;
   kind: FileKind;
   /** Rendered as-is, so the caller decides between "today" and a date. */
   modified: string;

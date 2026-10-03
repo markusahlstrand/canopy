@@ -1,3 +1,4 @@
+import { SNIPPET_SCAN_LIMIT } from '../src/search-snippet.js';
 /**
  * Finding a file by what is INSIDE it (S9b, #56).
  *
@@ -369,4 +370,12 @@ it('returns bounded plain text context for a current authorized extraction', asy
   expect(hit.snippet).toContain('context marker');
   expect(hit.snippet!.length).toBeLessThanOrEqual(242);
   expect(hit.snippet).toContain('<script>plain</script>');
+});
+
+it('keeps a content hit beyond the snippet scan window without materializing its context', async () => {
+  const stub = await as(ada);
+  const file = await fileWithVersion(stub, ROOT_FOLDER_ID, 'large-extraction.pdf');
+  await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, status: 'indexed', text: 'x'.repeat(SNIPPET_SCAN_LIMIT + 100) + ' farawayneedle' });
+  const got = await stub.invoke<Hits>('drive/search', { term: 'farawayneedle' });
+  expect(got.hits.find(hit => hit.id === file.id)).toMatchObject({ via: 'content', snippet: null });
 });
