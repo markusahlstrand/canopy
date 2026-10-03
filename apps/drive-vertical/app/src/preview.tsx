@@ -1,3 +1,4 @@
+import { editableTextMime } from '../../src/editable-text';
 import { matchingPlugins, pluginManifest, refreshPlugins, useInstalledPlugins } from './installed-plugins';
 import { SandboxPlugin } from './sandbox-plugin';
 import { FileMetadata } from './file-metadata';
@@ -19,6 +20,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { Button, Icon, cn } from '@canopy/ui';
 import type { FileViewerElement } from '@canopy/plugin-sdk/web-component';
 import {
+  saveText,
   contentUrl,
   versionContentUrl,
   fileBodyAsText,
@@ -316,6 +318,12 @@ export function PreviewPanel({
     setEditing(false); onChanged?.();
   };
 
+  const savePluginText = useCallback(async (text: string) => {
+    if (!version || !canWrite || !editableTextMime(version.mime, file?.name)) throw new Error('This file cannot be edited as text.');
+    await saveText(fileId, version.id, text);
+    await reloadText();
+  }, [fileId, version?.id, canWrite]);
+
   return (
     <aside
       aria-label="Preview"
@@ -370,7 +378,7 @@ export function PreviewPanel({
         {tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : <Empty>Table preview needs the complete text.</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
-          ) : selectedPlugin && file && version.source === 'blob' ? <SandboxPlugin key={`${selectedPlugin.id}:${version.id}`} plugin={selectedPlugin} file={{id: fileId, versionId: version.id, name: file.name, mime: version.mime, size: version.size}} /> : shape === 'image' || shape === 'viewer' ? (
+          ) : selectedPlugin && file && version.source === 'blob' ? <SandboxPlugin key={`${selectedPlugin.id}:${version.id}`} plugin={selectedPlugin} onSave={canWrite && editableTextMime(version.mime, file.name) ? savePluginText : undefined} file={{id: fileId, versionId: version.id, name: file.name, mime: version.mime, size: version.size}} /> : shape === 'image' || shape === 'viewer' ? (
             <ImagePreview fileId={fileId} name={file?.name ?? ''} mime={version.mime} />
           ) : shape === 'audio' || shape === 'video' ? (
             version.source === 'blob' ? <MediaPreview key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} name={file?.name ?? ''} shape={shape} />

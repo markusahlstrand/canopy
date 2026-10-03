@@ -12,9 +12,9 @@
 //   ctx.file = { name, mime, bytes: ArrayBuffer, writable: boolean }
 //   save:  ctx.emit("save", { content })   → host replies { type:"canopy:save-result", ok, error? }
 
-const ESM = "https://esm.sh/@toast-ui/editor@3";
-const CSS = "https://cdn.jsdelivr.net/npm/@toast-ui/editor@3/dist/toastui-editor.css";
-const MERMAID_ESM = "https://esm.sh/mermaid@11";
+const ESM = "https://esm.sh/@toast-ui/editor@3.2.2";
+const CSS = "https://cdn.jsdelivr.net/npm/@toast-ui/editor@3.2.2/dist/toastui-editor.css";
+const MERMAID_ESM = "https://esm.sh/mermaid@11.12.0";
 
 function injectCss(href) {
   return new Promise((resolve) => {
