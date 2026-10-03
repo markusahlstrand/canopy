@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { formatJson, JsonPreview } from './json-format';
+import { shapeOf } from './preview';
 afterEach(cleanup);
 it('formats whitespace while retaining large numbers, duplicate keys and escaped strings', () => {
   const text = '{"n":9007199254740993,"n":1e+100,"x":"a\\\"b\\n","empty":[]}';
@@ -18,5 +19,10 @@ it('toggles read-only formatting and returns exactly to original text, with safe
   fireEvent.click(screen.getByRole('button', { name: 'Format JSON' })); expect(view.container.querySelector('pre')!.textContent).toBe(formatJson(text)); expect(view.container.querySelector('script')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Format JSON' })); expect(view.container.querySelector('pre')!.textContent).toBe(text);
   view.rerender(<JsonPreview text="invalid" wrap onWrapChange={() => {}} />); fireEvent.click(screen.getByRole('button', { name: 'Format JSON' }));
-  expect(screen.getByRole('alert')).toBeTruthy(); expect(view.container.querySelector('pre')!.textContent).toBe('invalid');
+  expect(screen.getByRole('alert')).toBeTruthy(); expect(screen.getByRole('button', { name: 'Format JSON' }).getAttribute('aria-pressed')).toBe('false'); expect(view.container.querySelector('pre')!.textContent).toBe('invalid');
+});
+
+it('classifies JSON with MIME parameters and mixed case as text', () => {
+  expect(shapeOf('Application/JSON; charset=utf-8')).toBe('text');
+  expect(shapeOf('Application/LD+JSON; charset=utf-8')).toBe('text');
 });

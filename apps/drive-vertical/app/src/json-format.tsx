@@ -29,7 +29,7 @@ export function formatJson(text: string): string {
 export function JsonPreview({ text, wrap, onWrapChange }: { text: string; wrap: boolean; onWrapChange: (wrap: boolean) => void }) {
   const [formatted, setFormatted] = useState(false);
   const result = useMemo(() => { if (!formatted) return null; try { return { text: formatJson(text) }; } catch { return { error: 'Could not format this JSON. It may be invalid or exceed preview limits.' }; } }, [text, formatted]);
-  return <div className="space-y-2"><Button size="sm" variant="outline" aria-pressed={formatted} onClick={() => setFormatted(value => !value)}>Format JSON</Button>
+  return <div className="space-y-2"><Button size="sm" variant="outline" aria-pressed={formatted && !result?.error} onClick={() => setFormatted(value => !value)}>Format JSON</Button>
     {result?.error ? <p role="alert">{result.error}</p> : formatted ? <p className="text-xs text-muted-foreground">Formatted for reading. Editing and downloads use the original text.</p> : null}
     <TextPreview key={formatted ? 'formatted' : 'original'} text={result?.text ?? text} wrap={wrap} onWrapChange={onWrapChange} />
   </div>;
