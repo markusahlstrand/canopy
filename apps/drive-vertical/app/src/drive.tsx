@@ -15,7 +15,7 @@ import { BulkRestore } from './bulk-restore';
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
-import { readViewPreferences, saveViewPreferences } from './view-preferences';
+import { readViewPreferences, saveViewPreferences, watchViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
 import { indexedMirror, syncMirror } from './scope-mirror';
@@ -233,6 +233,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [savedView] = useState(readViewPreferences);
   const [layout, setLayout] = useState<'list' | 'grid'>(savedView.layout);
   const [sort, setSort] = useState<SortState>(savedView.sort);
+  useEffect(() => watchViewPreferences(value => {
+    setLayout(value.layout);
+    setSort(value.sort);
+  }), []);
   const reads = useRef(latestOnly());
   /**
    * The CURRENT refresh, not the one an action closed over.

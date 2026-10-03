@@ -26,3 +26,29 @@ export function saveViewPreferences(value: ViewPreferences): void {
   }
   catch { /* Browsing still works with blocked or full storage. */ }
 }
+
+/** Follow other same-origin tabs without echoing their writes back to storage. */
+export function watchViewPreferences(onChange: (value: ViewPreferences) => void): () => void {
+  const sync = () => {
+    try {
+      let stored;
+      try { stored = JSON.parse(localStorage.getItem(VIEW_PREFERENCES_KEY) ?? 'null'); }
+      catch (error) {
+        if (!(error instanceof SyntaxError)) return; // Storage itself may be blocked.
+      }
+      // A newer client owns this record. Keep the current view until it is cleared
+      // or replaced with a supported version, just as save preserves that record.
+      if (stored?.version !== undefined && stored.version !== 1) return;
+      onChange(readViewPreferences());
+    } catch { /* Storage can be denied independently of normal browsing. */ }
+  };
+  const changed = (event: StorageEvent) => {
+    try { if (event.storageArea !== localStorage) return; } catch { return; }
+    if (event.key !== null && event.key !== VIEW_PREFERENCES_KEY) return;
+    // Queued events may describe an older write; read the value that exists now.
+    sync();
+  };
+  window.addEventListener('storage', changed);
+  sync();
+  return () => window.removeEventListener('storage', changed);
+}
