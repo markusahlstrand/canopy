@@ -757,3 +757,7 @@ export function saveText(fileId: string, expectedVersion: string, text: string):
     method: 'PUT', headers: { 'content-type': 'text/plain; charset=utf-8' }, body: text,
   });
 }
+
+export interface SpaceRequest { id: string; slug: string; name: string; status: 'pending' | 'done' | 'failed'; error: string | null }
+export const requestSpace = (name: string, slug: string) => call<{ id: string; slug: string; name: string }>('/sites', { method: 'POST', body: JSON.stringify({ name, slug }) });
+export const spaceRequests = () => call<{ requests: SpaceRequest[] }>('/site-requests');

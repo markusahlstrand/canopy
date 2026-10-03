@@ -30,6 +30,8 @@ import { folderPath, linkedFolderId } from './folder-links';
 import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
+import { CreateSpaceDialog } from './create-space-dialog';
+import { openSpace } from './space-navigation';
 import { SpacesDialog } from './spaces-dialog';
 import { ViewersDialog } from './viewers-dialog';
 import { PeopleDialog } from './people-dialog';
@@ -203,6 +205,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   }, []);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
   const [spacesOpen, setSpacesOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [viewersOpen, setViewersOpen] = useState(false);
@@ -950,7 +953,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
 
-      <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople && !offline} onMembers={() => setPeopleOpen(true)} />
+      <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
+      <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople && !offline} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
       <ViewersDialog open={viewersOpen} onOpenChange={setViewersOpen} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />

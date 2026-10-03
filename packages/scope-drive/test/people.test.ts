@@ -221,3 +221,21 @@ describe('the roster remembers what to call people', () => {
     await expect((await as(stranger)).invoke('drive/list-people', {})).rejects.toThrow();
   });
 });
+
+describe('creating shared spaces through platform intents', () => {
+  it('queues one durable request for repeated creation submissions and reads only the creator outcomes', async () => {
+    const owner = ulid(); const stub = await as(ada);
+    const first = await stub.invoke<{id: string}>('drive/request-space', { name: 'Family', slug: 'family', owner });
+    const again = await stub.invoke<{id: string}>('drive/request-space', { name: 'Family', slug: 'family', owner });
+    expect(again.id).toBe(first.id);
+    const requests = await stub.invoke<{requests: {id: string; status: string}[]}>('drive/space-requests', {});
+    expect(requests.requests).toHaveLength(1); expect(requests.requests[0]).toMatchObject({ id: first.id, status: 'pending' });
+  });
+  it('refuses space creation and provisioning outcomes to members and folder-only managers', async () => {
+    for (const who of [bjorn, cleo]) {
+      const stub = await as(who);
+      await expect(stub.invoke('drive/request-space', { name: 'No', slug: 'no', owner: ulid() })).rejects.toThrow();
+      await expect(stub.invoke('drive/space-requests', {})).rejects.toThrow();
+    }
+  });
+});
