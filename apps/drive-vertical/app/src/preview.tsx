@@ -91,11 +91,13 @@ export function PreviewPanel({
   onClose,
   onError,
   onChanged,
+  navigation,
 }: {
   fileId: string;
   onClose: () => void;
   onError: (message: string | null) => void;
   onChanged?: () => void;
+  navigation?: { previous: string | null; next: string | null; onOpen: (id: string) => void };
 }) {
   const [historyNext, setHistoryNext] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -305,6 +307,12 @@ export function PreviewPanel({
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Icon name="file-text" className="size-4 text-muted-foreground" />
         <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{file?.name ?? 'Loading…'}</h2>
+        {navigation ? <div className="flex gap-1" aria-label="File navigation">
+          <Button variant="ghost" size="sm" disabled={!navigation.previous} aria-label="Previous file"
+            onClick={() => { if (navigation.previous) navigation.onOpen(navigation.previous); }}><Icon name="chevron-left" className="size-4" /></Button>
+          <Button variant="ghost" size="sm" disabled={!navigation.next} aria-label="Next file"
+            onClick={() => { if (navigation.next) navigation.onOpen(navigation.next); }}><Icon name="chevron-right" className="size-4" /></Button>
+        </div> : null}
         {version?.source === 'blob' ? (
           <Button variant="outline" size="sm" asChild>
             <a href={contentUrl(fileId)} download={file?.name}>
