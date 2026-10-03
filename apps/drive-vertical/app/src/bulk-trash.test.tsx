@@ -120,3 +120,16 @@ it('retires confirmations on navigation and allows result dismissal', async () =
   fireEvent.click(screen.getByRole('button', { name: 'Confirm move to Trash' })); await screen.findByText('Moved to Trash: 1 file.');
   fireEvent.click(screen.getByRole('button', { name: 'Dismiss Trash result' })); expect(screen.queryByRole('status')).toBeNull();
 });
+
+it('keeps the confirmed snapshot when selection changes within the same context', async () => {
+  const trash = vi.spyOn(api, 'trashFile').mockResolvedValue({} as api.DriveFile);
+  const props = { disabled: false, contextKey: 'same-folder', onTrashed: async () => {} };
+  const view = render(<BulkTrash {...props} files={[{ id: 'a', name: 'Original file' }]} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Move 1 selected file to Trash' }));
+  view.rerender(<BulkTrash {...props} files={[{ id: 'b', name: 'New selection' }]} />);
+  expect(screen.getByRole('group').textContent).toContain('Original file');
+  expect(screen.getByRole('group').textContent).not.toContain('New selection');
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm move to Trash' }));
+  await screen.findByText('Moved to Trash: 1 file.');
+  expect(trash).toHaveBeenCalledExactlyOnceWith('a', null);
+});
