@@ -24,7 +24,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
-    "push": "pnpm --filter @canopy/drive-vertical push"
+    "push": "pnpm --filter @canopy/drive-vertical push",
+    "plugin:validate": "node packages/plugin-validator/src/cli.mjs"
   },
   "devDependencies": {
     "concurrently": "^10.0.5",
