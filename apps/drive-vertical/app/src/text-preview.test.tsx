@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { TextPreview } from './text-preview';
 import { PreviewPanel } from './preview';
-afterEach(() => { cleanup(); localStorage.removeItem('canopy.drive.text-wrap'); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.removeItem('canopy.drive.text-wrap'); vi.unstubAllGlobals(); });
 it('toggles layout without altering or parsing the displayed text', () => {
   const text = '<script>alert(1)</script>\n  indented line';
   function Harness() { const [wrap, setWrap] = useState(true); return <TextPreview text={text} wrap={wrap} onWrapChange={setWrap} />; }
@@ -57,4 +57,17 @@ it('retains the wrap choice through tabs, edit/cancel, saves and switching files
   expect((await screen.findByRole('button', { name: 'Wrap lines' })).getAttribute('aria-pressed')).toBe('false');
   view.rerender(<PreviewPanel {...props} fileId="b" />);
   expect((await screen.findByRole('button', { name: 'Wrap lines' })).getAttribute('aria-pressed')).toBe('false');
+});
+
+it('applies another tab’s wrap choice to an open editor without losing the draft or echoing storage', async () => {
+  vi.stubGlobal('fetch', async (url: string) => new Response(url.includes('/content') ? 'original' : JSON.stringify({ file: { id: 'a', name: 'notes.txt' }, version: { id: 'v1', source: 'blob', mime: 'text/plain' }, canWrite: true })));
+  render(<PreviewPanel fileId="a" onClose={() => {}} onError={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit text' }));
+  const editor = screen.getByRole('textbox', { name: 'File text' }) as HTMLTextAreaElement;
+  fireEvent.change(editor, { target: { value: 'unsaved draft' } });
+  localStorage.setItem('canopy.drive.text-wrap', JSON.stringify({ version: 1, wrap: false }));
+  const write = vi.spyOn(Storage.prototype, 'setItem');
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key: 'canopy.drive.text-wrap', storageArea: localStorage })));
+  expect(screen.getByRole('textbox', { name: 'File text' })).toBe(editor);
+  expect(editor.getAttribute('wrap')).toBe('off'); expect(editor.value).toBe('unsaved draft'); expect(write).not.toHaveBeenCalled();
 });
