@@ -36,8 +36,11 @@ interface NpmMeta {
 
 async function npmResolveVersion(name: string, version?: string): Promise<string> {
   const meta = await fetchJson<NpmMeta>(`https://registry.npmjs.org/${name}`);
-  if (version && meta.versions[version]) return version;
-  return meta["dist-tags"][version ?? "latest"] ?? meta["dist-tags"].latest!;
+  const requested = version ?? "latest";
+  if (Object.hasOwn(meta.versions, requested)) return requested;
+  const resolved = Object.hasOwn(meta["dist-tags"], requested) ? meta["dist-tags"][requested] : undefined;
+  if (typeof resolved === "string" && Object.hasOwn(meta.versions, resolved)) return resolved;
+  throw new Error(`${name}: npm version or tag "${requested}" is unavailable`);
 }
 
 async function resolveNpm(ref: Extract<PluginSourceRef, { type: "npm" }>): Promise<ResolvedPlugin> {
