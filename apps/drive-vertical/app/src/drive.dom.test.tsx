@@ -1786,4 +1786,3 @@ describe('Trash pages', () => {
     expect(screen.getByText('first.txt')).toBeTruthy();
   });
 });
-
