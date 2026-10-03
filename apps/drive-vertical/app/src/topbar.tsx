@@ -58,6 +58,7 @@ interface TopbarProps {
    * a menu item that answers 403 is worse than no menu item.
    */
   onOpenPeople?: () => void;
+  onOpenViewers?: () => void;
   /** Force a re-fetch of the current view (re-syncs the offline mirror + reloads). */
   onRefresh?: () => void;
   /** True while a background sync is in flight — spins the refresh icon. */
@@ -75,6 +76,7 @@ export function Topbar({
   onSignOut,
   offline,
   onOpenPeople,
+  onOpenViewers,
   onRefresh,
   syncing,
 }: TopbarProps) {
@@ -234,6 +236,7 @@ export function Topbar({
               <Icon name="users" size={15} /> People…
             </DropdownMenuItem>
           )}
+          {onOpenViewers ? <DropdownMenuItem onClick={onOpenViewers}>File viewers…</DropdownMenuItem> : null}
           <DropdownMenuItem onClick={onSignOut}>
             <Icon name="log-out" size={15} /> Sign out
           </DropdownMenuItem>

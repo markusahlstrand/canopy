@@ -1199,6 +1199,15 @@ describe('an invitation is redeemed by opening its link', () => {
   });
 });
 
+it('opens bundled viewer controls from the account menu', async () => {
+  await renderDrive();
+  accountMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'File viewers…' }));
+  await act(async () => {});
+  expect(screen.getByRole('dialog', { name: 'File viewers' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Disable image viewer' })).toBeTruthy();
+});
+
 describe('the People surface is offered only to whoever may use it', () => {
   it('shows nothing in the menu for a member', async () => {
     await renderDrive();

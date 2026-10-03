@@ -53,10 +53,27 @@ export class ImageViewer extends HTMLElement implements FileViewerElement {
   }
 }
 
-/** Register the built-in image renderer once during the vertical's bundle startup. */
-export function registerImageViewer(): void {
+export const IMAGE_VIEWER_PREFERENCE = 'canopy.viewer.image';
+let removeImageViewer: (() => void) | null = null;
+
+function installImageViewer(): void {
   if (!viewerRegistry.has('image-viewer')) {
-    viewerRegistry.install({ id: 'image-viewer', contributes: { viewers: [{ id: 'image', match: ['image/*'] }] } },
+    removeImageViewer = viewerRegistry.install({ id: 'image-viewer', contributes: { viewers: [{ id: 'image', match: ['image/*'] }] } },
       { image: { tagName: IMAGE_VIEWER_TAG, constructor: ImageViewer } });
   }
+}
+
+/** Register the reviewed built-in renderer unless disabled in this browser. */
+export function registerImageViewer(): void {
+  try { if (localStorage.getItem(IMAGE_VIEWER_PREFERENCE) === 'disabled') return; }
+  catch { /* Defaults work even when browser storage is blocked. */ }
+  installImageViewer();
+}
+
+/** A local preview preference, never a permission grant or downloaded-code install. */
+export function setImageViewerEnabled(enabled: boolean): void {
+  try { localStorage.setItem(IMAGE_VIEWER_PREFERENCE, enabled ? 'enabled' : 'disabled'); }
+  catch { /* The current session can still toggle its bundled viewer. */ }
+  if (enabled) installImageViewer();
+  else { removeImageViewer?.(); removeImageViewer = null; }
 }
