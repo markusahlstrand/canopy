@@ -756,8 +756,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
               // FIRST, before the debounce is even scheduled: the request for the
               // previous term is in flight and still holds the ticket until then.
               reads.current.invalidate();
-              setTerm(next);
               setMatchFilter('all');
+              setTerm(next);
               setSelection(new Set());
               // The previous term's hits are wrong the moment the box changes, so they
               // go now rather than lingering until the next answer lands. With `busy`
