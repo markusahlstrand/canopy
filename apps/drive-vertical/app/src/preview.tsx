@@ -1,5 +1,5 @@
 import { FileMetadata } from './file-metadata';
-import { CsvTable } from './csv-table';
+import { CsvTable, type CsvDelimiter } from './csv-table';
 import { TextPreview } from './text-preview';
 import { confirmDiscardDrafts } from './drafts';
 /**
@@ -114,6 +114,7 @@ export function PreviewPanel({
   const [editing, setEditing] = useState(false);
   const [wrapText, setWrapText] = useTextWrapPreference();
   const [tab, setTab] = useState<Tab>('file');
+  const [csvSelection, setCsvSelection] = useState<{ fileId: string; delimiter: CsvDelimiter } | null>(null);
   const [file, setFile] = useState<DriveFile | null>(null);
   const [version, setVersion] = useState<FileVersion | null>(null);
   const [versions, setVersions] = useState<FileVersion[] | null>(null);
@@ -339,7 +340,7 @@ export function PreviewPanel({
         More files are available. Load more files in the listing to continue.
       </p> : null}
       <nav className="flex gap-1 border-b border-border px-2 py-1.5" aria-label="Preview sections">
-        {(['file', 'versions', 'text', 'details', 'comments', ...(version?.mime.split(';')[0]?.trim().toLowerCase() === 'text/csv' && body && !body.truncated ? ['table' as const] : [])] as const).map((t) => (
+        {(['file', 'versions', 'text', 'details', 'comments', ...(['text/csv', 'text/tab-separated-values'].includes(version?.mime.split(';')[0]?.trim().toLowerCase() ?? '') && body && !body.truncated ? ['table' as const] : [])] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -357,7 +358,7 @@ export function PreviewPanel({
       {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} /> : <Empty>Table preview needs the complete text.</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
+        {tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : <Empty>Table preview needs the complete text.</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
           !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : shape === 'image' || shape === 'viewer' ? (

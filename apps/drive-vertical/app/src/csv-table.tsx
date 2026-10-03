@@ -1,8 +1,26 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 const ROW_LIMIT = 200, COLUMN_LIMIT = 50;
-/** Comma-delimited CSV, with escaped quotes and embedded newlines. No header assumption. */
-export function parseCsvPreview(text: string) {
+export type CsvDelimiter = ',' | ';' | '\t';
+/** Sniff only the first logical record, ignoring delimiters inside quoted fields. */
+export function detectCsvDelimiter(text: string): CsvDelimiter {
+  const counts = { ',': 0, ';': 0, '\t': 0 };
+  let quoted = false;
+  for (let i = 0; i < Math.min(text.length, 512 * 1024); i++) {
+    const char = text[i]!;
+    if (char === '"') {
+      if (quoted && text[i + 1] === '"') i++;
+      else quoted = !quoted;
+    } else if (!quoted) {
+      if (char === '\r' || char === '\n') break;
+      if (char === ',' || char === ';' || char === '\t') counts[char]++;
+    }
+  }
+  return ([',', ';', '\t'] as const).reduce((best, delimiter) => counts[delimiter] > counts[best] ? delimiter : best, ',');
+}
+/** Delimited CSV, with escaped quotes and embedded newlines. No header assumption. */
+export function parseCsvPreview(text: string, delimiter: CsvDelimiter = ',') {
+  if (![',', ';', '\t'].includes(delimiter)) throw new Error('Unsupported CSV delimiter.');
   if (text.length > 512 * 1024) throw new Error('CSV is too large for a table preview.');
   const rows: string[][] = []; let row: string[] = [], field = '', count = 0, columns = 0, rowColumns = 0;
   let state: 'start' | 'plain' | 'quoted' | 'closed' = 'start';
@@ -14,25 +32,33 @@ export function parseCsvPreview(text: string) {
       if (char === '"' && text[i + 1] === '"') { field += '"'; i++; }
       else if (char === '"') state = 'closed';
       else field += char;
-    } else if (char === ',') cell();
+    } else if (char === delimiter) cell();
     else if (char === '\n' || char === '\r') { record(); if (char === '\r' && text[i + 1] === '\n') i++; }
     else if (char === '"' && state === 'start') state = 'quoted';
     else {
-      if (state === 'closed' || char === '"') throw new Error('CSV contains invalid quoting. Use the text preview instead.');
+      if (state === 'closed' || char === '"') throw new Error('CSV contains invalid quoting. Try another separator above, or use the text preview.');
       field += char; state = 'plain';
     }
   }
-  if (state === 'quoted') throw new Error('CSV contains an unclosed quoted field. Use the text preview instead.');
+  if (state === 'quoted') throw new Error('CSV contains an unclosed quoted field. Try another separator above, or use the text preview.');
   if (field || rowColumns || state !== 'start') record();
-  return { rows, columns: Math.min(columns, COLUMN_LIMIT), totalColumns: columns, total: count, otherDelimiter: columns === 1 && /[;\t]/.test(rows[0]?.[0] ?? '') };
+  return { rows, columns: Math.min(columns, COLUMN_LIMIT), totalColumns: columns, total: count, otherDelimiter: delimiter === ',' && columns === 1 && /[;\t]/.test(rows[0]?.[0] ?? '') };
 }
-export function CsvTable({ text }: { text: string }) {
-  const result = useMemo(() => { try { return { data: parseCsvPreview(text) }; } catch (error) { return { error: (error as Error).message }; } }, [text]);
-  if (!result.data) return <p role="alert">{result.error}</p>;
-  const { rows, columns, totalColumns, total, otherDelimiter } = result.data;
+export function CsvTable({ text, delimiter: chosenDelimiter, onDelimiterChange }: { text: string; delimiter?: CsvDelimiter; onDelimiterChange?: (delimiter: CsvDelimiter) => void }) {
+  const [selection, setSelection] = useState<{ text: string; delimiter: CsvDelimiter } | null>(null);
+  const delimiter = chosenDelimiter ?? (selection?.text === text ? selection.delimiter : detectCsvDelimiter(text));
+  const setDelimiter = (value: CsvDelimiter) => { setSelection({ text, delimiter: value }); onDelimiterChange?.(value); };
+  const result = useMemo(() => { try { return { data: parseCsvPreview(text, delimiter) }; } catch (error) { return { error: (error as Error).message }; } }, [text, delimiter]);
   return <section aria-label="CSV table" className="space-y-2">
-    <p role="status" className="text-xs text-muted-foreground">{total > rows.length ? `Showing the first ${rows.length} of ${total} rows.` : `${total} rows.`} {totalColumns > columns && `Showing ${columns} of ${totalColumns} columns.`} {otherDelimiter && 'This file may use a different delimiter; this preview uses commas.'} All rows are data; column labels are generated.</p>
+    <label className="text-sm">Separator <select aria-label="CSV separator" value={delimiter} className="rounded border bg-background p-1" onChange={event => setDelimiter(event.target.value as CsvDelimiter)}><option value=",">Comma</option><option value=";">Semicolon</option><option value={'\t'}>Tab</option></select></label>
+    {result.data ? <CsvRows data={result.data} /> : <p role="alert">{result.error}</p>}
+  </section>;
+}
+function CsvRows({ data }: { data: ReturnType<typeof parseCsvPreview> }) {
+  const { rows, columns, totalColumns, total, otherDelimiter } = data;
+  return <>
+    <p role="status" className="text-xs text-muted-foreground">{total > rows.length ? `Showing the first ${rows.length} of ${total} rows.` : `${total} rows.`} {totalColumns > columns && `Showing ${columns} of ${totalColumns} columns.`} {otherDelimiter && 'This file may use a different delimiter; choose another separator above.'} All rows are data; column labels are generated.</p>
     <div className="overflow-auto"><table className="text-sm"><thead><tr>{Array.from({ length: columns }, (_, i) => <th key={i} className="border p-2">Column {i + 1}</th>)}</tr></thead>
       <tbody>{rows.map((row, i) => <tr key={i}>{Array.from({ length: columns }, (_, j) => <td key={j} className="max-w-xs whitespace-pre-wrap break-words border p-2">{row[j] ?? ''}</td>)}</tr>)}</tbody></table></div>
-  </section>;
+  </>;
 }
