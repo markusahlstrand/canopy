@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Button, Input, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@canopy/ui';
 import { setImageViewerEnabled, viewerRegistry } from './image-viewer';
-import { peopleAccess, savePlugin, togglePlugin, removePlugin } from './api';
+import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin } from './api';
 import { pluginCatalog } from './plugin-catalog';
 import { SandboxPlugin } from './sandbox-plugin';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
@@ -16,8 +16,11 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
   const plugins = useInstalledPlugins();
   const [manifest, setManifest] = useState('');
   const [source, setSource] = useState('');
+  const [approved, setApproved] = useState(false);
+
   useUnsavedDraft(open && (!!manifest || !!source));
   const [forSpace, setForSpace] = useState(false);
+  useEffect(() => {setApproved(false);}, [manifest,forSpace]);
   const [canManage, setCanManage] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,10 +35,10 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     {error ? <p role="alert">{error}</p> : null}
     <h3 className="font-medium">Your plugins</h3>
     {plugins.filter(row => `${pluginManifest(row).name} ${row.plugin_id}`.toLowerCase().includes(query.toLowerCase())).map(row => <section key={row.id} className="rounded border p-3">
-      <h4>{pluginManifest(row).name}</h4><p>{row.principal === 'space' ? 'Applied to this space' : 'Installed for you'} · {row.enabled ? 'Enabled' : 'Disabled'}</p>
+      <h4>{pluginManifest(row).name}</h4><p className="text-xs">Origin (client-claimed): {row.source_kind ?? 'inline'} · {row.source_ref ?? 'Client-supplied JavaScript'} {row.resolved ?? ''}</p>{row.source_sha256 ? <details><summary>Source fingerprint</summary><code className="break-all text-xs">{row.source_sha256}</code></details> : null}<p>{row.principal === 'space' ? 'Applied to this space' : 'Installed for you'} · {row.enabled ? 'Enabled' : 'Disabled'}</p>
       <p className="text-xs">Access: {pluginManifest(row).capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ') || 'None'}</p>
       <Button disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : 'Enable'}</Button>
-      <Button variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; setEditingInstall(row); setManifest(JSON.stringify(pluginManifest(row), null, 2)); setSource(row.source); setForSpace(row.principal === 'space'); setStudioOpen(true); }}>Edit source</Button>
+      <Button variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; void change(async () => {const loaded = await pluginSource(row.id,row.updated_at); setEditingInstall(loaded); setManifest(JSON.stringify(pluginManifest(loaded),null,2)); setSource(loaded.source);setForSpace(loaded.principal==='space');setStudioOpen(true);}); }}>Edit source</Button>
       {row.enabled && pluginManifest(row).contributes.detailView ? <Button onClick={() => setApp(row)}>Open app</Button> : null}
       <Button variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${pluginManifest(row).name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
     </section>)}
@@ -45,10 +48,11 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => setManifest(event.target.value)} /></label>
       <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => setSource(event.target.value)} /></label>
       {canManage ? <label><input type="checkbox" checked={forSpace} onChange={event => setForSpace(event.target.checked)} />Apply to this space</label> : null}
-      <Button disabled={busy || !manifest || !source} onClick={() => void change(async () => { const parsed = JSON.parse(manifest) as {id: string}; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; await savePlugin(parsed, source, revision, forSpace); setEditingInstall(null); setManifest(''); setSource(''); })}>Install plugin</Button>
+      <label className="block"><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Approve the capabilities in this manifest, including added access. Read access lets the plugin share the opened file outside Canopy.</label>
+      <Button disabled={busy || !manifest || !source || !approved} onClick={() => void change(async () => { const parsed = JSON.parse(manifest) as {id:string;capabilities:unknown}; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; await savePlugin(parsed, source, revision, forSpace, parsed.capabilities); setEditingInstall(null); setManifest(''); setSource(''); })}>Install plugin</Button>
     </details>
     <h3 className="font-medium">Available plugins</h3>
-    {pluginCatalog.filter(entry => `${entry.manifest.name} ${entry.manifest.description}`.toLowerCase().includes(query.toLowerCase())).map(entry => <section key={entry.manifest.id} className="rounded border p-3"><h4>{entry.manifest.name}</h4><p className="text-sm">{entry.manifest.description}</p><p className="text-xs">Access: {entry.manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ')}. Network access is limited to these declared library hosts; editors can fall back to plain text offline.</p><Button disabled={busy} onClick={() => { if (!confirmDiscardDrafts()) return; setEditingInstall(null); setManifest(JSON.stringify(entry.manifest, null, 2)); setSource(entry.source); setForSpace(false); setStudioOpen(true); }}>Review {entry.manifest.name}</Button></section>)}
+    {pluginCatalog.filter(entry => `${entry.manifest.name} ${entry.manifest.description}`.toLowerCase().includes(query.toLowerCase())).map(entry => <section key={entry.manifest.id} className="rounded border p-3"><h4>{entry.manifest.name}</h4><p className="text-sm">{entry.manifest.description}</p><p className="text-xs">Access: {entry.manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ')}. These library hosts serve executable code that receives the opened file. File-read plugins can send its contents elsewhere. Editors have a plain-text fallback offline.</p><Button disabled={busy} onClick={() => { if (!confirmDiscardDrafts()) return; setEditingInstall(null); setManifest(JSON.stringify(entry.manifest, null, 2)); setSource(entry.source); setForSpace(false); setStudioOpen(true); }}>Review {entry.manifest.name}</Button></section>)}
     {'image viewer'.includes(query.toLowerCase()) ? <section aria-label="Image viewer" className="space-y-2 rounded border p-3">
       <h4 className="font-medium">Image viewer</h4><p className="text-sm">Preview images with zoom and keyboard controls.</p>
       <p className="text-xs text-muted-foreground">Built in · Trusted Canopy component · No editing</p>
