@@ -52,7 +52,7 @@ export const installedPluginManifest = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,48}$/), name: z.string().trim().min(1).max(100), version: z.string().min(1).max(50), description: z.string().max(1000).optional(),
   capabilities: z.array(z.discriminatedUnion('kind', [z.object({kind: z.literal('item:read')}), z.object({kind: z.literal('item:write')}), z.object({kind: z.literal('net:fetch'), hosts: z.array(z.string().regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)).min(1).max(10)})])).max(10),
   contributes: z.object({
-    viewers: z.array(z.object({id: z.string().min(1).max(50), title: z.string().max(100).optional(), match: z.array(z.string().min(1).max(100)).min(1).max(20), fill: z.boolean().optional()})).max(10).optional(),
+    viewers: z.array(z.object({id: z.string().min(1).max(50), title: z.string().max(100).optional(), match: z.array(z.string().min(1).max(100)).min(1).max(100), fill: z.boolean().optional()})).max(10).optional(),
     detailView: z.object({id: z.string().min(1).max(50), title: z.string().min(1).max(100), nav: z.object({section: z.string().max(50)}).optional(), immersive: z.boolean().optional()}).optional(),
   }).refine(value => !!value.viewers?.length || !!value.detailView, 'A plugin needs a viewer or app contribution'),
 });
