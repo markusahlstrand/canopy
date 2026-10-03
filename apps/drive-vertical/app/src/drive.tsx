@@ -1,5 +1,6 @@
 import { BulkRestore } from './bulk-restore';
 import { BulkTrash } from './bulk-trash';
+import { SearchMatchFilter, filterMatches, type MatchFilter } from './search-match-filter';
 /**
  * The drive screen — the first of the portal's surfaces to run against the vertical
  * (S12, #64).
@@ -179,6 +180,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [view, setView] = useState<'drive' | 'trash' | 'search' | 'shared'>('drive');
   const [term, setTerm] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [matchFilter, setMatchFilter] = useState<MatchFilter>('all');
+  const visibleHits = filterMatches(hits, matchFilter);
   const [trash, setTrash] = useState<DriveFile[]>([]);
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [moving, setMoving] = useState<FileItem[] | null>(null);
@@ -254,7 +257,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [sort, setSort] = useState<SortState>(savedView.sort);
   // Only files already loaded in the active listing participate. Match its sort
   // order, and use the same draft boundary as table and palette navigation.
-  const previewFiles = offline ? [] : view === 'drive' ? sorted(files, sort) : view === 'search' ? sorted(hits, sort) : [];
+  const previewFiles = offline ? [] : view === 'drive' ? sorted(files, sort) : view === 'search' ? sorted(visibleHits, sort) : [];
   const previewIndex = previewFiles.findIndex(file => file.id === previewing);
   const previewNavigation = previewIndex < 0 ? undefined : {
     previous: previewFiles[previewIndex - 1]?.id ?? null,
@@ -584,7 +587,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       return;
     }
     if (action === 'Move') {
-      const visible = view === 'search' ? hits.map((hit) => fileItem(hit))
+      const visible = view === 'search' ? visibleHits.map((hit) => fileItem(hit))
         : [...folders.map(folderItem), ...files.map((file) => fileItem(file))];
       setMoving(selection.has(item.id) ? visible.filter((row) => selection.has(row.id)) : [item]);
     }
@@ -778,7 +781,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         </Button>
       </div>
 
-      <BulkTrash visible={view === 'drive' || view === 'search'} files={(view === 'search' ? hits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
+      <BulkTrash visible={view === 'drive' || view === 'search'} files={(view === 'search' ? visibleHits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
         setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
         await refreshRef.current();
       }} />
@@ -789,9 +792,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       }} />
 
       {view === 'search' ? (
+        <> {!busy && term.trim().length >= SEARCH_MIN ? <SearchMatchFilter hits={hits} value={matchFilter} onChange={value => { setMatchFilter(value); setSelection(new Set()); }} /> : null}
         <FileTable
           searchQuery={term.trim()}
-          files={sorted(hits, sort).map((hit) => ({ ...fileItem(hit), snippet: hit.snippet ?? undefined, description: hit.snippet || (hit.via === 'content' ? 'Matched inside the document' : hit.via === 'metadata' ? 'Matched in description or labels' : 'Matched in the name') }))}
+          files={sorted(visibleHits, sort).map((hit) => ({ ...fileItem(hit), snippet: hit.snippet ?? undefined, description: hit.snippet || (hit.via === 'content' ? 'Matched inside the document' : hit.via === 'metadata' ? 'Matched in description or labels' : 'Matched in the name') }))}
           selection={selection}
           onSelectionChange={setSelection}
           onOpen={(item) => setPreviewing(item.id)}
@@ -803,6 +807,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           loading={busy}
           empty={empty}
         />
+        </>
       ) : view === 'trash' ? (
         <FileTable
           files={sorted(trash, sort).map((file) => fileItem(file))}

@@ -1842,3 +1842,17 @@ it('bulk trash moves selected files while retaining selected folders', async () 
   expect(within(screen.getByText('Folder').closest('tr')!).getByRole('checkbox').getAttribute('aria-checked')).toBe('true');
   expect(pending.some(p => p.method === 'DELETE' && p.url.includes('folders'))).toBe(false);
 });
+
+it('filters search rows, clears hidden selections, and limits preview navigation to visible hits', async () => {
+  await renderDrive();
+  fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'report' } });
+  await flush();
+  await answer('/api/search', { hits: [{ ...file('01A', 'name.txt'), via: 'name' }, { ...file('01B', 'body.txt'), via: 'content' }, { ...file('01C', 'labels.txt'), via: 'metadata' }] });
+  fireEvent.click(screen.getByText('name.txt')); fireEvent.change(screen.getByRole('combobox', { name: 'Filter search matches' }), { target: { value: 'content' } });
+  expect(screen.queryByText('name.txt')).toBeNull(); expect(screen.queryByText('labels.txt')).toBeNull(); expect(screen.getByText('body.txt')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Move .*selected.*Trash/ })).toBeNull();
+  fireEvent.doubleClick(screen.getByText('body.txt'));
+  await answer('/api/files/01B', { file: file('01B', 'body.txt'), version: { id: 'v', mime: 'application/zip', source: 'blob' }, canWrite: false });
+  expect(screen.getByRole('button', { name: 'Previous file' }).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByRole('button', { name: 'Next file' }).hasAttribute('disabled')).toBe(true);
+});
