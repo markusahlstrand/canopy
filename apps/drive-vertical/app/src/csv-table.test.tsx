@@ -18,10 +18,10 @@ it('bounds rendered rows/columns and renders cells as plain text', () => {
   expect(parseCsvPreview('x\n'.repeat(300) + Array(60).fill('x').join(',')).totalColumns).toBe(60);
 });
 it('offers a CSV table alongside the existing text preview without another read', async () => {
-  const fetcher = vi.fn(async (url: string) => new Response(url.includes('/content') ? 'a,b\n1,2' : JSON.stringify({ file: { id: 'f', name: 'sheet.csv' }, version: { id: 'v', source: 'blob', mime: 'text/csv' }, canWrite: false })));
+  const fetcher = vi.fn(async (url: string) => new Response(url.endsWith('/plugins') ? JSON.stringify({plugins: []}) : url.includes('/content') ? 'a,b\n1,2' : JSON.stringify({ file: { id: 'f', name: 'sheet.csv' }, version: { id: 'v', source: 'blob', mime: 'text/csv' }, canWrite: false })));
   vi.stubGlobal('fetch', fetcher); render(<PreviewPanel fileId="f" onClose={() => {}} onError={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Table' }));
-  expect(screen.getByRole('cell', { name: '2' })).toBeTruthy(); expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('cell', { name: '2' })).toBeTruthy(); expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/plugins', '/api/files/f', '/api/files/f/versions/v/content']);
   fireEvent.click(screen.getByRole('button', { name: 'Preview' })); expect(screen.getByRole('searchbox')).toBeTruthy();
 });
 
