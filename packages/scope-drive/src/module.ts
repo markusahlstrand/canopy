@@ -1320,7 +1320,7 @@ const operations = {
       let snippet: string | null = null;
       if (via === 'content') {
         const text = ctx.sql.query<{ version_id: string; status: string; text: string }>(
-          'SELECT version_id, status, text FROM drive_file_text WHERE file_id = ?', [fileId],
+          'SELECT version_id, status, substr(text, 1, ?) AS text FROM drive_file_text WHERE file_id = ?', [SNIPPET_SCAN_LIMIT, fileId],
         )[0];
         if (text?.version_id !== file.current_version_id || text.status !== 'indexed') continue;
         snippet = searchSnippet(text.text, input.term);
