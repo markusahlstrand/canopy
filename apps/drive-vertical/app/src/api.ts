@@ -152,6 +152,10 @@ export const TEXT_PREVIEW_LIMIT = 200_000;
  */
 export const TEXT_EDIT_LIMIT = 200_000;
 
+export class TextEncodingError extends Error {
+  constructor() { super('This version is not UTF-8 text. Download it to view its contents.'); this.name = 'TextEncodingError'; }
+}
+
 export async function fileBodyAsText(fileId: string, versionId?: string): Promise<{ text: string; truncated: boolean }> {
   const res = await fetch(versionId ? versionContentUrl(fileId, versionId) : contentUrl(fileId), { credentials: 'same-origin' });
   if (!res.ok) throw new ApiError(res.status, res.statusText);
@@ -169,20 +173,23 @@ export async function fileBodyAsText(fileId: string, versionId?: string): Promis
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder('utf-8', { fatal: !!versionId });
+  const decode = (bytes?: Uint8Array, options?: TextDecodeOptions) => {
+    try { return decoder.decode(bytes, options); } catch { throw new TextEncodingError(); }
+  };
   let text = '';
   let truncated = false;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      text += decoder.decode(value, { stream: true });
+      text += decode(value, { stream: true });
       if (text.length >= TEXT_PREVIEW_LIMIT) {
         truncated = true;
         await reader.cancel();
         break;
       }
     }
-    if (!truncated) text += decoder.decode();
+    if (!truncated) text += decode();
   } catch (error) {
     await reader.cancel().catch(() => {});
     throw error;
