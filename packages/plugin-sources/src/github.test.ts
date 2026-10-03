@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { resolvePlugin } from './index';
+import { checkUpdate, resolvePlugin } from './index';
 afterEach(() => vi.unstubAllGlobals());
 const sha = 'a'.repeat(40);
 const source = { type: 'github' as const, repo: 'acme/plugin', ref: 'v1.2.3', path: 'plugins/foo' };
 function stub(entry = 'src/main.js') {
-  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith('https://api.github.com/') ? { sha } : { id: 'demo', version: '1.2.3', entry })));
+  const fetcher = vi.fn(async (url: string) => new Response(url.startsWith('https://api.github.com/') ? sha : JSON.stringify({ id: 'demo', version: '1.2.3', entry })));
   vi.stubGlobal('fetch', fetcher); return fetcher;
 }
 it('keeps a canonical entry in the pinned repository and plugin directory', async () => {
@@ -40,4 +40,18 @@ it.each([{}, { sha: '../main' }])('refuses an invalid commit response before fet
 it('does not fall back to a moving branch when GitHub refuses the ref lookup', async () => {
   const fetcher = vi.fn(async () => new Response('rate limited', { status: 429 })); vi.stubGlobal('fetch', fetcher);
   await expect(resolvePlugin(source)).rejects.toThrow('429'); expect(fetcher).toHaveBeenCalledOnce();
+});
+
+it('persists an immutable reload ref and detects code updates without a manifest fetch', async () => {
+  const fetcher = stub(); const installed = await resolvePlugin(source, { githubToken: 'test-token' });
+  expect(installed.version).toBe(sha); expect(installed.resolvedSource).toEqual({ ...source, ref: sha });
+  expect(fetcher.mock.calls[0]).toEqual([expect.anything(), { headers: expect.objectContaining({ Accept: 'application/vnd.github.sha', Authorization: 'Bearer test-token' }) }]);
+  expect(fetcher.mock.calls[1]).toEqual([expect.anything(), { headers: { 'User-Agent': 'canopy' } }]);
+  fetcher.mockClear(); await resolvePlugin(installed.resolvedSource!); expect(fetcher).toHaveBeenCalledOnce();
+  fetcher.mockClear(); expect(await checkUpdate(source, sha)).toBeNull(); expect(fetcher).toHaveBeenCalledOnce();
+  expect(await checkUpdate(source, 'b'.repeat(40))).toEqual({ current: 'b'.repeat(40), latest: sha });
+});
+it('reports primary rate limits with reset information', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1234' } })));
+  await expect(resolvePlugin(source)).rejects.toThrow('GitHub rate limit reached (403); retry after Unix time 1234');
 });

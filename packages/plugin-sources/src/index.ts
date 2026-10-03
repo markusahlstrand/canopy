@@ -31,17 +31,33 @@ function ghBase(repo: string, ref: string, path: string) {
   return { raw };
 }
 
-async function resolveGithub(ref: Extract<PluginSourceRef, { type: "github" }>): Promise<ResolvedPlugin> {
+async function githubCommit(ref: Extract<PluginSourceRef, { type: "github" }>, opts: ResolveOptions): Promise<string> {
   const gitRef = ref.ref || "main";
-  // Validate all source identifiers before requesting a ref resolution.
   ghBase(ref.repo, gitRef, ref.path ?? "");
-  const commit = /^[a-f0-9]{40}$/i.test(gitRef) ? gitRef.toLowerCase() :
-    (await fetchJson<{ sha: string }>(`https://api.github.com/repos/${ref.repo}/commits/${encodeURIComponent(gitRef)}`)).sha;
-  if (typeof commit !== "string" || !/^[a-f0-9]{40}$/i.test(commit)) throw new Error("GitHub ref did not resolve to a commit SHA");
-  const { raw } = ghBase(ref.repo, commit.toLowerCase(), ref.path ?? "");
+  if (/^[a-f0-9]{40}$/i.test(gitRef)) return gitRef.toLowerCase();
+  const url = `https://api.github.com/repos/${ref.repo}/commits/${encodeURIComponent(gitRef)}`;
+  const headers: Record<string, string> = { "User-Agent": "canopy", Accept: "application/vnd.github.sha" };
+  if (opts.githubToken) headers.Authorization = `Bearer ${opts.githubToken}`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    if (res.status === 429 || (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0")) {
+      const reset = res.headers.get("x-ratelimit-reset");
+      const delay = res.headers.get("retry-after");
+      throw new Error(`GitHub rate limit reached (${res.status}); retry ${delay ? `after ${delay} seconds` : reset ? `after Unix time ${reset}` : "later"}`);
+    }
+    throw new Error(`fetch ${url} → ${res.status}`);
+  }
+  const commit = (await res.text()).trim();
+  if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error("GitHub ref did not resolve to a commit SHA");
+  return commit.toLowerCase();
+}
+
+async function resolveGithub(ref: Extract<PluginSourceRef, { type: "github" }>, opts: ResolveOptions): Promise<ResolvedPlugin> {
+  const commit = await githubCommit(ref, opts);
+  const { raw } = ghBase(ref.repo, commit, ref.path ?? "");
   const manifest = await fetchJson<PluginManifest>(raw("canopy.json"));
   const entry: PluginEntry = { url: raw(manifest.entry ?? "index.js") };
-  return { manifest, entry, version: manifest.version, source: ref };
+  return { manifest, entry, version: commit, source: ref, resolvedSource: { ...ref, ref: commit } };
 }
 
 // ── npm: registry version + package.json `canopy` manifest + esm.sh entry ─────
@@ -147,6 +163,8 @@ export function resolveZipBytes(bytes: Uint8Array, source: PluginSourceRef, opti
 // ── unified API ───────────────────────────────────────────────────────────────
 
 export interface ResolveOptions {
+  /** Used only for GitHub API lookups, never forwarded to raw URLs. */
+  githubToken?: string;
   /** Required for zip refs. Enforce maxBytes while reading (size check or capped stream),
    * before buffering the whole object. Upload routes must enforce the same ceiling. */
   readZip?: (key: string, options: { maxBytes: number }) => Promise<Uint8Array>;
@@ -156,7 +174,7 @@ export interface ResolveOptions {
 export async function resolvePlugin(ref: PluginSourceRef, opts: ResolveOptions = {}): Promise<ResolvedPlugin> {
   switch (ref.type) {
     case "github":
-      return resolveGithub(ref);
+      return resolveGithub(ref, opts);
     case "npm":
       return resolveNpm(ref);
     case "zip": {
@@ -171,10 +189,11 @@ export async function resolvePlugin(ref: PluginSourceRef, opts: ResolveOptions =
 export async function checkUpdate(
   ref: PluginSourceRef,
   installedVersion: string,
+  opts: ResolveOptions = {},
 ): Promise<{ current: string; latest: string } | null> {
   let latest: string;
   if (ref.type === "npm") latest = await npmResolveVersion(ref.name, ref.version, true);
-  else if (ref.type === "github") latest = (await resolveGithub(ref)).version;
+  else if (ref.type === "github") latest = await githubCommit(ref, opts);
   else return null; // zip: immutable upload, no remote to check
   return latest === installedVersion ? null : { current: installedVersion, latest };
 }
