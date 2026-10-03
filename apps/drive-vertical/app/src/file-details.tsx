@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@canopy/ui';
 import { ApiError, fileDetails, updateFileDetails, type FileDetails } from './api';
 import { latestOnly } from './reads';
+import { watchDriveChanges } from './live-updates';
 
 /** Descriptive metadata; labels carry no access-control meaning. */
 export function FileDetailsPanel({ fileId }: { fileId: string }) {
@@ -12,7 +13,12 @@ export function FileDetailsPanel({ fileId }: { fileId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
-  useUnsavedDraft(!!details?.canWrite && (description !== details.description || labels !== details.labels.join('\n')));
+  const dirty = !!details?.canWrite && (description !== details.description || labels !== details.labels.join('\n'));
+  useUnsavedDraft(dirty);
+  const [changedElsewhere, setChangedElsewhere] = useState(false);
+  const state = useRef({ dirty, busy });
+  state.current = { dirty, busy };
+  const pending = useRef(false);
   const guard = useRef(latestOnly()).current;
 
   const accept = (got: FileDetails) => {
@@ -21,6 +27,7 @@ export function FileDetailsPanel({ fileId }: { fileId: string }) {
     setLabels(got.labels.join('\n'));
     setError(null);
     setConflict(false);
+    setChangedElsewhere(false);
   };
   const load = async () => {
     const ticket = guard.take();
@@ -34,14 +41,39 @@ export function FileDetailsPanel({ fileId }: { fileId: string }) {
       if (guard.current(ticket)) setBusy(false);
     }
   };
+  const refresh = async () => {
+    if (state.current.dirty) { setChangedElsewhere(true); return; }
+    if (state.current.busy) { pending.current = true; return; }
+    const ticket = guard.take();
+    try {
+      const got = await fileDetails(fileId);
+      if (!guard.current(ticket)) return;
+      // Editing may start while a background read is in flight.
+      if (state.current.dirty) setChangedElsewhere(true);
+      else accept(got);
+    } catch (e: unknown) {
+      if (guard.current(ticket)) setError(e instanceof Error ? e.message || 'Could not refresh details.' : String(e));
+    }
+  };
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  useEffect(() => {
+    if (!busy && pending.current) {
+      pending.current = false;
+      void refreshRef.current();
+    }
+  }, [busy]);
   useEffect(() => {
     setDetails(null);
     setDescription('');
     setLabels('');
     setError(null);
     setConflict(false);
+    setChangedElsewhere(false);
+    pending.current = false;
     void load();
-    return () => guard.invalidate();
+    const stop = watchDriveChanges(() => void refreshRef.current(), { entityType: 'file', entityId: fileId });
+    return () => { stop(); guard.invalidate(); };
     // The guard is stable. Each file gets its own read and retires every pending answer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId]);
@@ -87,8 +119,9 @@ export function FileDetailsPanel({ fileId }: { fileId: string }) {
           </label>
           <p id="file-labels-help" className="text-xs text-muted-foreground">One label per line, up to 20 labels. Labels do not change who has access.</p>
           <Button type="submit" disabled={busy || conflict}>{busy ? 'Saving…' : 'Save details'}</Button>
-          {conflict ? (
+          {conflict || changedElsewhere ? (
             <div className="space-y-1">
+              {changedElsewhere ? <p role="status">Details changed elsewhere. Your unsaved changes are preserved.</p> : null}
               <p className="text-xs">Reload replaces your unsaved changes with the latest details.</p>
               <Button type="button" variant="outline" disabled={busy} onClick={() => void load()}>Reload details</Button>
             </div>
