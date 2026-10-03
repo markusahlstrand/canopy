@@ -1105,6 +1105,15 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * Rule 3 permits a read-only spine projection while Substrat #1582 develops a
    * supported scope-wide helper. Every returned entity is checked separately.
    */
+  'drive/request-space': {
+    summary: 'Create a shared space', permission: 'drive:manage',
+    input: z.object({ name: z.string().trim().min(1).max(100), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/), owner: z.string().length(26) }),
+    output: z.object({ id: z.string(), slug: z.string(), name: z.string() }),
+  },
+  'drive/space-requests': {
+    summary: 'Your space creation requests', permission: 'drive:manage', input: z.object({}),
+    output: z.object({ requests: z.array(z.object({ id: z.string(), slug: z.string(), name: z.string(), status: z.enum(['pending', 'done', 'failed']), error: z.string().nullable() })) }),
+  },
   'drive/changes': {
     summary: 'Drive metadata changes after an event cursor',
     permission: 'drive:read',

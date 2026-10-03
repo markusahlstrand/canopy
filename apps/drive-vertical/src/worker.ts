@@ -47,11 +47,11 @@ import {
   type ScopeSweeperDo,
 } from '@substrat-run/adapter-cloudflare';
 import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
-import { readRoutedNode, RouterAssertionError, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
+import { ulid, readRoutedNode, RouterAssertionError, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
 import { mountLiveReads, mountPlatformSurface } from '@substrat-run/vertical-host';
 import {
   AuthConfigError,
-  IdentityDO,
+  IdentityDO as PlatformIdentityDO,
   instanceAuthFor,
   mintOwnerClaimLink,
   observePlace,
@@ -89,7 +89,17 @@ const BACKFILL_ACTOR = platformActorId.parse('01JZ00000000000000000SYS01');
 export const ScopeDO = defineScopeDO(MODULES, {});
 
 /** The tenant's identity directory: subject → principal, and the owner seat. */
-export { IdentityDO };
+/** The tenant-local owner handoff for spaces created by a signed-in user. */
+export class IdentityDO extends PlatformIdentityDO {
+  async rememberSpaceCreator(owner: string, subject: string): Promise<void> {
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_space_creators (owner TEXT PRIMARY KEY, subject TEXT NOT NULL)');
+    this.ctx.storage.sql.exec('INSERT OR IGNORE INTO canopy_space_creators (owner, subject) VALUES (?, ?)', owner, subject);
+  }
+  async spaceCreator(owner: string): Promise<string | null> {
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_space_creators (owner TEXT PRIMARY KEY, subject TEXT NOT NULL)');
+    return this.ctx.storage.sql.exec<{ subject: string }>('SELECT subject FROM canopy_space_creators WHERE owner = ?', owner).toArray()[0]?.subject ?? null;
+  }
+}
 
 /**
  * This deployment's own timer: a roster-keeping singleton whose alarm runs each
@@ -275,6 +285,8 @@ type SiteRegistry = {
   forgetSite(scopeId: string): Promise<void>;
   listSites(): Promise<{ scopeId: string; slug: string; name: string }[]>;
   resolveSiteScope(slug: string): Promise<string | null>;
+  rememberSpaceCreator(owner: string, subject: string): Promise<void>;
+  spaceCreator(owner: string): Promise<string | null>;
 };
 
 const identityDo = (env: Env, node: Node): IdentityStub & SiteRegistry =>
@@ -404,7 +416,11 @@ mountPlatformSurface<Env>(app, {
         payload: { tenant: b.tenantId, scope: b.scopeId },
       });
     }
-    await identityDo(env, node).setPendingOwner(b.scopeId, b.owner);
+    const directory = identityDo(env, node);
+    await directory.setPendingOwner(b.scopeId, b.owner);
+    const creator = await directory.spaceCreator(b.owner);
+    // Claim before advertising this scope in the shared tenant registry.
+    if (creator && await directory.resolvePrincipal(b.scopeId, creator) !== b.owner) throw new Error('Could not bind the creating login to the new space owner.');
     // This space, in the vertical's OWN per-tenant registry (M2 of
     // `multi-scope-manyfold.md`). It is what lets the app list and switch spaces
     // without reaching the control plane — which a sandbox-clean vertical cannot do.
@@ -617,6 +633,25 @@ app.delete('/api/people/:principal', async (c) => {
  * Slug and name only. The scope id is the address, and a caller that does not need it
  * should not be handed it; `x-site` takes the slug.
  */
+app.post('/api/sites', async (c) => {
+  const node = await nodeFor(c.req.raw, c.env);
+  const principal = await requirePeopleAdmin(c);
+  const subject = await (await providerFor(c.env, baseNode(c.req.raw, c.env))).resolve(c.req.raw.headers);
+  if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
+  const input = z.object({ name: z.string().trim().min(1).max(100), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/) }).safeParse(await c.req.json());
+  if (!input.success) throw new HTTPException(400, { message: 'Enter a name and a valid space address.' });
+  const owner = principalId.parse(ulid());
+  await identityDo(c.env, node).rememberSpaceCreator(owner, subject.sub);
+  const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+  return c.json(await scope.invoke('drive/request-space', { ...input.data, owner }), 202);
+});
+app.get('/api/site-requests', async (c) => {
+  const node = await nodeFor(c.req.raw, c.env);
+  const principal = await requirePeopleAdmin(c);
+  const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+  return c.json(await scope.invoke('drive/space-requests', {}));
+});
+
 app.get('/api/sites', async (c) => {
   const base = baseNode(c.req.raw, c.env);
 
