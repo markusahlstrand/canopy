@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ShareDialog } from './share-dialog';
 import { CopyFolderLink } from './copy-folder-link';
 import * as api from './api';
@@ -11,6 +11,7 @@ it('copies a credential-free navigation link from the share dialog without grant
   const writeText = vi.fn(async (_text: string) => {});
   vi.stubGlobal('navigator', { clipboard: { writeText } });
   render(<ShareDialog folder={{ id: 'reports', name: 'Reports' }} onClose={() => {}} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Copy folder link' }).hasAttribute('disabled')).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
   await screen.findByText('Folder link copied.');
   const link = new URL(writeText.mock.calls[0]![0]);
@@ -20,9 +21,11 @@ it('copies a credential-free navigation link from the share dialog without grant
   expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
 });
 it('reports unavailable clipboard access', async () => {
+  api.selectSite('family');
   vi.spyOn(api, 'getFolder').mockResolvedValue({ id: 'reports', path: 'Reports' } as Awaited<ReturnType<typeof api.getFolder>>);
   vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('Denied')) } });
   render(<CopyFolderLink folderId="reports" />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Copy folder link' }).hasAttribute('disabled')).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
   await screen.findByText(/Could not copy the link/);
   expect(screen.getByRole('button', { name: 'Copy folder link' }).hasAttribute('disabled')).toBe(false);
@@ -33,8 +36,39 @@ it('does not copy a late folder response after the dialog closes', async () => {
   const writeText = vi.fn();
   vi.stubGlobal('navigator', { clipboard: { writeText } });
   const view = render(<CopyFolderLink folderId="reports" />);
-  fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
   view.unmount();
   await act(async () => finish({ path: 'Reports' } as Awaited<ReturnType<typeof api.getFolder>>));
   expect(writeText).not.toHaveBeenCalled();
+});
+
+it('copies the hostname-resolved space synchronously in the click gesture', async () => {
+  api.selectSite(null);
+  vi.spyOn(api, 'getFolder').mockResolvedValue({ id: 'reports', path: 'Reports' } as Awaited<ReturnType<typeof api.getFolder>>);
+  vi.spyOn(api, 'listSites').mockResolvedValue([{ slug: 'hostname-space', name: 'Home', current: true }]);
+  const writeText = vi.fn(async (_text: string) => {});
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  render(<CopyFolderLink folderId="reports" />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Copy folder link' }).hasAttribute('disabled')).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
+  expect(writeText).toHaveBeenCalledOnce();
+  const url = new URL(writeText.mock.calls[0]![0]);
+  expect(url.searchParams.get('site')).toBe('hostname-space');
+  expect(url.searchParams.get('path')).toBe('Reports');
+  expect(screen.getByText(/ancestor names/)).toBeTruthy();
+  await screen.findByText('Folder link copied.');
+});
+it('separates lookup failures from clipboard failures and retries preparation', async () => {
+  api.selectSite('family');
+  vi.spyOn(api, 'getFolder').mockRejectedValueOnce(new Error('Not found')).mockResolvedValue({ id: 'reports', path: 'Renamed reports' } as Awaited<ReturnType<typeof api.getFolder>>);
+  const writeText = vi.fn(async (_text: string) => {});
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  render(<CopyFolderLink folderId="reports" />);
+  await screen.findByRole('alert');
+  expect(screen.getByRole('alert').textContent).toContain('Could not look up');
+  expect(writeText).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry folder lookup' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Copy folder link' }).hasAttribute('disabled')).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Copy folder link' }));
+  expect(new URL(writeText.mock.calls[0]![0]).searchParams.get('path')).toBe('Renamed reports');
+  await screen.findByText('Folder link copied.');
 });
