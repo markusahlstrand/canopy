@@ -8,5 +8,11 @@
   },
   "dependencies": {
     "ajv": "^8.17.1"
+  },
+  "exports": {
+    "./generated-manifest": {
+      "types": "./src/generated-manifest.d.mts",
+      "default": "./src/generated-manifest.mjs"
+    }
   }
 }

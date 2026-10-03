@@ -38,6 +38,9 @@ importers:
       '@canopy/docworker':
         specifier: workspace:*
         version: link:../../packages/docworker
+      '@canopy/plugin-validator':
+        specifier: workspace:*
+        version: link:../../packages/plugin-validator
       '@canopy/store':
         specifier: workspace:*
         version: link:../../packages/store

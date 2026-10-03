@@ -1,3 +1,4 @@
+import { validateGeneratedManifest } from "@canopy/plugin-validator/generated-manifest";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { getCookie, setCookie } from "hono/cookie";
@@ -10,7 +11,6 @@ import {
   type AiProvider,
   type Calendar,
   type CalendarEvent,
-  type Capability,
   type CacheStore,
   type ConnectorConfigField,
   type DocumentProcessor,
@@ -76,18 +76,7 @@ interface SpaceChannelNamespace {
 const AI_MAX_TOKENS = 32768;
 /** Max ESM source we'll persist for a generated plugin (a single sandboxed viewer module). */
 const MAX_PLUGIN_SOURCE = 256 * 1024;
-/** Capabilities a Studio-generated (sandboxed viewer) plugin may declare — nothing host-trusted. */
-const SANDBOX_VIEWER_CAPS = new Set(["item:read", "item:write", "net:fetch"]);
 
-/**
- * Structural check for a manifest submitted to `/api/plugins/custom`. The studio
- * builds two sandboxed kinds — a **file viewer** (`contributes.viewers`, opened by
- * matching files) or a standalone **app** (`contributes.detailView`, launched from
- * the sidebar) — so we accept either, but reject any capability the sandbox can't
- * safely back. Returns an error string, or null when the manifest is acceptable.
- * (The browser validates against the full JSON schema before submitting; this is
- * the server's defense-in-depth copy.)
- */
 /** Reject task status/priority values outside their enums before they reach the store. */
 function invalidTaskField(body: Partial<TaskInput>): string | null {
   if (body.status !== undefined && !["todo", "in_progress", "blocked", "done"].includes(body.status))
@@ -97,36 +86,6 @@ function invalidTaskField(body: Partial<TaskInput>): string | null {
   return null;
 }
 
-function validateCustomManifest(m: unknown): string | null {
-  if (!m || typeof m !== "object") return "manifest must be an object";
-  const man = m as { id?: unknown; name?: unknown; capabilities?: unknown; contributes?: unknown };
-  if (typeof man.id !== "string" || !/^[a-z0-9][a-z0-9-]{1,48}$/.test(man.id))
-    return "manifest.id must be kebab-case (2–49 chars)";
-  if (typeof man.name !== "string" || !man.name.trim()) return "manifest.name is required";
-  if (!Array.isArray(man.capabilities)) return "manifest.capabilities must be an array";
-  for (const cap of man.capabilities as Capability[]) {
-    if (!cap || typeof cap !== "object" || !SANDBOX_VIEWER_CAPS.has((cap as { kind?: string }).kind ?? ""))
-      return `capability "${(cap as { kind?: string })?.kind}" is not allowed for a generated plugin`;
-    if (cap.kind === "net:fetch" && (!Array.isArray(cap.hosts) || cap.hosts.length === 0))
-      return "net:fetch requires a non-empty hosts list";
-  }
-  const contributes = man.contributes as { viewers?: unknown; detailView?: unknown } | undefined;
-  const viewers = contributes?.viewers;
-  const detailView = contributes?.detailView;
-  const hasViewers = Array.isArray(viewers) && viewers.length > 0;
-  const hasApp = !!detailView && typeof detailView === "object";
-  if (!hasViewers && !hasApp)
-    return "manifest must contribute at least one viewer or a detailView (app)";
-  for (const v of (hasViewers ? (viewers as { match?: unknown }[]) : [])) {
-    if (!Array.isArray(v.match) || v.match.length === 0) return "each viewer needs a non-empty match list";
-  }
-  if (hasApp) {
-    const dv = detailView as { id?: unknown; title?: unknown };
-    if (typeof dv.id !== "string" || !dv.id.trim()) return "detailView needs an id";
-    if (typeof dv.title !== "string" || !dv.title.trim()) return "detailView needs a title";
-  }
-  return null;
-}
 
 /** Read up to `cap` bytes from a stream (so processors never load a huge file). */
 async function readCapped(stream: ReadableStream<Uint8Array>, cap: number): Promise<Uint8Array> {
@@ -1747,7 +1706,7 @@ export function createApp(deps: AppDeps) {
     const source = typeof body.source === "string" ? body.source : "";
     if (!source.trim()) return c.json({ error: "source required" }, 400);
     if (source.length > MAX_PLUGIN_SOURCE) return c.json({ error: "plugin source too large" }, 413);
-    const err = validateCustomManifest(body.manifest);
+    const err = validateGeneratedManifest(body.manifest);
     if (err) return c.json({ error: err }, 400);
     const manifest = body.manifest as { id: string };
     await drive!.service.addCustomPlugin(caller.sub, { id: manifest.id, manifest: JSON.stringify(manifest), source });
