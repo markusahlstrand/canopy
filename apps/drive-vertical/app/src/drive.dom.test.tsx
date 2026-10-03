@@ -596,6 +596,27 @@ describe('dragging a file onto a folder moves it', () => {
 });
 
 describe('external file drops', () => {
+  it.each(['offline', 'search', 'shared'])('refuses uploads from the %s view', async mode => {
+    await renderDrive();
+    if (mode === 'offline') {
+      vi.spyOn(indexedMirror, 'folder').mockResolvedValue({ folders: [], files: [] });
+      fireEvent.click(screen.getByLabelText('Refresh'));
+      await flush();
+      const request = pending.find(p => p.url.includes('/folders/root/files'))!;
+      await act(async () => request.reject(new TypeError('network unavailable')));
+    } else if (mode === 'search') {
+      fireEvent.change(screen.getByLabelText('Search this space'), { target: { value: 'budget' } });
+      await flush();
+      await answer('term=budget', { hits: [] });
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
+      await flush();
+      await answer('/folders/shared-with-me', { folders: [] });
+    }
+    fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer: { types: ['Files'], files: [new File(['a'], 'blocked.txt')], items: [] } });
+    expect(pending.filter(p => p.method === 'POST')).toHaveLength(0);
+  });
+
   it('uploads to the displayed folder and refuses drops while viewing Trash', async () => {
     await renderDrive([{ id: 'papers', name: 'Papers', path: 'Papers', parent_id: 'root' }]);
     fireEvent.doubleClick(screen.getByText('Papers'));

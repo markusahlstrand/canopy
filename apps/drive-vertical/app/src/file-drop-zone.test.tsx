@@ -37,3 +37,24 @@ it('rejects directory drops with an explicit explanation', () => {
   expect(onFiles).not.toHaveBeenCalled();
   expect(onError).toHaveBeenCalledWith(expect.stringContaining('Folder uploads are not supported'));
 });
+
+it('prevents external file navigation outside the zone and removes its global listeners', () => {
+  const onFiles = vi.fn();
+  const view = render(<FileDropZone disabled={false} destination="Root" onFiles={onFiles} onError={() => {}}>List</FileDropZone>);
+  const event = () => { const e = new Event('drop', { cancelable: true }); Object.defineProperty(e, 'dataTransfer', { value: transfer() }); return e; };
+  const outside = event(); window.dispatchEvent(outside);
+  expect(outside.defaultPrevented).toBe(true);
+  expect(onFiles).not.toHaveBeenCalled();
+  view.unmount();
+  const after = event(); window.dispatchEvent(after);
+  expect(after.defaultPrevented).toBe(false);
+});
+it.each(['text/plain', 'text/uri-list'])('leaves %s drags alone', type => {
+  const onFiles = vi.fn();
+  render(<FileDropZone disabled={false} destination="Root" onFiles={onFiles} onError={() => {}}>List</FileDropZone>);
+  const event = new Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'dataTransfer', { value: transfer([type]) });
+  fireEvent(screen.getByLabelText('File upload area'), event);
+  expect(event.defaultPrevented).toBe(false);
+  expect(onFiles).not.toHaveBeenCalled();
+});
