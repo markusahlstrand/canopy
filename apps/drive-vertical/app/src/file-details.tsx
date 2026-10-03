@@ -16,8 +16,8 @@ export function FileDetailsPanel({ fileId }: { fileId: string }) {
   const dirty = !!details?.canWrite && (description !== details.description || labels !== details.labels.join('\n'));
   useUnsavedDraft(dirty);
   const [changedElsewhere, setChangedElsewhere] = useState(false);
-  const state = useRef({ dirty, busy });
-  state.current = { dirty, busy };
+  const state = useRef({ details, description, labels, busy, conflict });
+  state.current = { details, description, labels, busy, conflict };
   const pending = useRef(false);
   const guard = useRef(latestOnly()).current;
 
@@ -42,18 +42,29 @@ export function FileDetailsPanel({ fileId }: { fileId: string }) {
     }
   };
   const refresh = async () => {
-    if (state.current.dirty) { setChangedElsewhere(true); return; }
     if (state.current.busy) { pending.current = true; return; }
     const ticket = guard.take();
     try {
       const got = await fileDetails(fileId);
       if (!guard.current(ticket)) return;
-      // Editing may start while a background read is in flight.
-      if (state.current.dirty) setChangedElsewhere(true);
-      else accept(got);
-    } catch (e: unknown) {
-      if (guard.current(ticket)) setError(e instanceof Error ? e.message || 'Could not refresh details.' : String(e));
-    }
+      // Read the current draft after the await: typing can begin during this read.
+      const current = state.current;
+      const baseline = current.details;
+      if (!baseline || got.revision === baseline.revision) return;
+      const remoteLabels = got.labels.join('\n');
+      const localDescription = current.description !== baseline.description;
+      const localLabels = current.labels !== baseline.labels.join('\n');
+      const overlapping = (localDescription && got.description !== baseline.description && got.description !== current.description) ||
+        (localLabels && remoteLabels !== baseline.labels.join('\n') && remoteLabels !== current.labels);
+      if (overlapping) { setChangedElsewhere(true); return; }
+      // Rebase untouched fields and the revision while keeping independent edits.
+      setDetails(got);
+      setDescription(localDescription ? current.description : got.description);
+      setLabels(localLabels ? current.labels : remoteLabels);
+      setChangedElsewhere(false);
+      setConflict(false);
+      if (current.conflict) setError(null);
+    } catch { /* Background nudges must not replace errors from a user action. */ }
   };
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
