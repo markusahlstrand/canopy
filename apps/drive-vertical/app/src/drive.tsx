@@ -954,7 +954,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* the column beside the rail */}
 
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
-      <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} canManage={canManagePeople} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
+      <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople && !offline} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
       <ViewersDialog open={viewersOpen} onOpenChange={setViewersOpen} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
