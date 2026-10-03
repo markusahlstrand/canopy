@@ -167,6 +167,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const initialFolderId = useRef(linkedFolderId()).current;
   const [linkPending, setLinkPending] = useState(!!initialFileId || !!initialFolderId || !!initialPath);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
+  const [linkListingUnavailable, setLinkListingUnavailable] = useState(false);
   const [folderId, setFolderId] = useState(ROOT_FOLDER_ID);
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
   const [trashNext, setTrashNext] = useState<string | null>(null);
@@ -223,7 +224,16 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const resolve = async () => {
       if (initialFileId) {
         const { file } = await getFile(initialFileId);
-        if (active) changePreview(file.id);
+        if (!active) return;
+        changePreview(file.id);
+        try {
+          const folder = await getFolder(file.folder_id);
+          if (!active) return;
+          setFolderId(folder.id);
+          setCrumbs(folder.id === ROOT_FOLDER_ID ? [] : [{ id: folder.id, name: folder.path }]);
+        } catch {
+          if (active) { setLinkListingUnavailable(true); setLinkMessage('The file is open, but its folder could not be loaded.'); }
+        }
       } else {
         const folder = await (initialFolderId ? getFolder(initialFolderId) : folderByPath(initialPath));
         if (!active) return;
@@ -285,6 +295,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   /** One refresh for both views, so an action never leaves half the screen stale. */
   const refresh = useCallback(async () => {
     if (linkPending) return;
+    if (linkListingUnavailable) { setBusy(false); return; }
     const ticket = reads.current.take();
     setBusy(true);
     setLoadingPage(false);
@@ -354,7 +365,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, term, onError, auth.principal, linkPending]);
+  }, [folderId, view, term, onError, auth.principal, linkPending, linkListingUnavailable]);
 
   const moreTrash = async () => {
     if (!trashNext || busy || loadingPage || offline) return;
@@ -468,6 +479,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     // A pause, not a keystroke: the index is per scope and cheap, but a request per
     // character still races its own answers and the last one to land wins.
     if (linkPending) return;
+    if (linkListingUnavailable) { setBusy(false); return; }
     const t = setTimeout(() => void refresh(), view === 'search' ? 200 : 0);
     return () => clearTimeout(t);
   }, [refresh, view, linkPending]);
@@ -482,9 +494,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    */
   const navigate = useCallback((id: NavId) => {
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
-    const alreadyHere = id !== 'drive'
+    setLinkListingUnavailable(false);
+    const alreadyHere = !linkListingUnavailable && (id !== 'drive'
       ? view === id
-      : view === 'drive' && folderId === ROOT_FOLDER_ID;
+      : view === 'drive' && folderId === ROOT_FOLDER_ID);
     if (alreadyHere) {
       void refreshRef.current();
       return;
@@ -507,7 +520,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       setFiles([]);
     }
     setView(id);
-  }, [folderId, view]);
+  }, [folderId, view, linkListingUnavailable]);
 
   const open = (folder: DriveFolder) => {
     // The listing on screen belongs to the folder being left; nothing in flight for it
@@ -622,7 +635,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     if (!offline) uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
   };
 
-  const empty = loadFailed ? (
+  const empty = linkListingUnavailable ? (
+    <EmptyList icon="folder" title="Folder context unavailable" description="The file preview remains available. Choose My Drive to browse folders you can access." actions={[{ label: 'Go to My Drive', onClick: () => navigate('drive') }]} />
+  ) : loadFailed ? (
     <EmptyList icon="alert-triangle" title="Couldn't load this view" description="Check the connection and try again."
       actions={[{ label: 'Try again', onClick: () => void refresh() }]} />
   ) : view === 'trash' ? (

@@ -12,7 +12,7 @@ const shell = { onError: () => {}, auth: { user: {} }, onSignIn: () => {}, onSig
 const metadata = { file: { id: 'stable', folder_id: 'private-folder', name: 'Renamed.zip', current_version_id: 'v' }, version: { id: 'v', source: 'blob', mime: 'application/zip', size: 1 }, canWrite: false };
 function mockFiles(status = 200) {
   const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/files/stable' ? metadata
-    : url.endsWith('/access') ? { canManage: false } : []), { status: url === '/api/files/stable' ? status : 200 }));
+    : url === '/api/folders/private-folder/metadata' ? { id: 'private-folder', name: 'Shared folder', path: 'Shared folder', canManage: false } : url.endsWith('/access') ? { canManage: false } : []), { status: url === '/api/files/stable' ? status : 200 }));
   vi.stubGlobal('fetch', fetcher); return fetcher;
 }
 it('uses only scoped opaque IDs and preserves the file destination through login', () => {
@@ -23,11 +23,13 @@ it('uses only scoped opaque IDs and preserves the file destination through login
   expect(new URL(folderLoginUrl(), location.origin).searchParams.get('returnTo')).toBe(link.pathname + link.search);
   selectSite('other'); expect(linkedFileId()).toBe(''); expect(folderLoginUrl()).not.toContain('returnTo');
 });
-it('opens a renamed file directly without resolving the legacy folder or private ancestors', async () => {
+it('opens a renamed file in its containing folder without resolving legacy links or private ancestors', async () => {
   selectSite('family'); history.replaceState(null, '', '/?site=family&file=stable&folder=old&path=Old/Name');
   const fetcher = mockFiles(); render(<DriveScreen {...shell} />);
   await screen.findByText('Renamed.zip');
-  expect(fetcher.mock.calls.some(([url]) => url.includes('/private-folder') || url.includes('/old/') || url.includes('by-path'))).toBe(false);
+  expect(fetcher.mock.calls.some(([url]) => url.includes('/old/') || url.includes('by-path'))).toBe(false);
+  await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/private-folder/files')).toBe(true));
+  expect(fetcher.mock.calls.some(([url]) => url.includes('/folders/root/'))).toBe(false);
   expect(location.search).toBe('?site=family');
 });
 it.each([401, 403, 404])('reports a generic unavailable file without exposing metadata (%s)', async status => {
@@ -79,10 +81,19 @@ it('drops a foreign file destination when authentication falls back to another s
   const fetcher = vi.fn(async (url: string) => {
     if (url.endsWith('/me')) return ++meReads === 1 ? new Response('Unauthorized', { status: 401 }) : new Response(JSON.stringify({ principal: 'ada' }));
     return new Response(JSON.stringify(url.endsWith('/sites') ? [{ slug: 'home', name: 'Home', current: true }]
-      : url.endsWith('/access') ? { canManage: false } : []));
+      : url === '/api/folders/private-folder/metadata' ? { id: 'private-folder', name: 'Shared folder', path: 'Shared folder', canManage: false } : url.endsWith('/access') ? { canManage: false } : []));
   });
   vi.stubGlobal('fetch', fetcher); render(<App />);
   await screen.findByRole('complementary');
   expect(location.search).not.toContain('file='); expect(location.search).not.toContain('site=');
   expect(fetcher.mock.calls.some(([url]) => url.includes('foreign-file'))).toBe(false);
+});
+
+it('does not list a forbidden root for a folder-only reader, and keeps the preview if folder context fails', async () => {
+  history.replaceState(null, '', '/?file=stable');
+  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/files/stable' ? metadata : { detail: 'Denied' }), { status: url === '/api/files/stable' ? 200 : 403 }));
+  vi.stubGlobal('fetch', fetcher); render(<DriveScreen {...shell} />);
+  await screen.findByText('Folder context unavailable'); await screen.findByText('Renamed.zip');
+  expect(fetcher.mock.calls.some(([url]) => url.includes('/folders/root/'))).toBe(false);
+  expect(screen.queryByText("Couldn't load this view")).toBeNull();
 });
