@@ -1,4 +1,5 @@
 import { BulkRestore } from './bulk-restore';
+import { BulkTrash } from './bulk-trash';
 /**
  * The drive screen — the first of the portal's surfaces to run against the vertical
  * (S12, #64).
@@ -763,6 +764,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           <Icon name={layout === 'list' ? 'grid' : 'list'} className="size-4" />
         </Button>
       </div>
+
+      <BulkTrash visible={view === 'drive' || view === 'search'} files={(view === 'search' ? hits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
+        setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
+        await refreshRef.current();
+      }} />
 
       <BulkRestore visible={view === 'trash'} files={trash.filter(file => selection.has(file.id))} disabled={offline || busy} onRestored={async ids => {
         setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));

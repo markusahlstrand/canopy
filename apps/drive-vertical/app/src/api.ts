@@ -656,8 +656,8 @@ export const moveFolder = (folderId: string, parentId: string) =>
   });
 
 /** Recoverable: the bytes stay, and `restoreFile` puts it back under the same name. */
-export const trashFile = (fileId: string) =>
-  call<DriveFile>(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
+export const trashFile = (fileId: string, selectedSite = site) =>
+  call<DriveFile>(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' }, selectedSite);
 
 export const restoreFile = (fileId: string, selectedSite = site) =>
   call<DriveFile>(`/files/${encodeURIComponent(fileId)}/restore`, { method: 'POST' }, selectedSite);
