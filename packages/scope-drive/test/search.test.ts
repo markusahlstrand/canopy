@@ -303,6 +303,23 @@ describe('a file is findable by what is inside it', () => {
     expect(page.entries.map((f) => f.name).sort()).toEqual(['Alpha', 'Beta']);
   });
 
+  it('does not list the unnamed root as its own child, even with a one-item page', async () => {
+    const stub = await as(ada);
+    const first = await stub.invoke<{ entries: FolderRow[]; nextCursor: string | null }>('drive/list-folders', {
+      folderId: ROOT_FOLDER_ID, limit: 1,
+    });
+    expect(first.entries).toHaveLength(1);
+    expect(first.entries[0]!.id).not.toBe(ROOT_FOLDER_ID);
+    expect(first.entries[0]!.name).not.toBe('');
+    expect(first.nextCursor).not.toBeNull();
+    const second = await stub.invoke<{ entries: FolderRow[] }>('drive/list-folders', {
+      folderId: ROOT_FOLDER_ID, limit: 1, cursor: first.nextCursor,
+    });
+    expect(second.entries).toHaveLength(1);
+    expect(second.entries[0]!.id).not.toBe(ROOT_FOLDER_ID);
+    expect(second.entries[0]!.id).not.toBe(first.entries[0]!.id);
+  });
+
   it('resolves a folder by its path', async () => {
     const stub = await as(ada);
     const found = await stub.invoke<FolderRow | null>('drive/folder-by-path', { path: 'Shared' });
