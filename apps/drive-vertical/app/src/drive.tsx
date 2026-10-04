@@ -741,6 +741,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           activePluginId={activePluginId}
           onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); }}
           onCreateSpace={canManagePeople && !offline ? () => setCreateSpaceOpen(true) : undefined}
+          canManageSpace={canManagePeople}
+          onSpaceSettings={() => setSpaceSettingsOpen(true)}
+          onSpaceMembers={() => setPeopleOpen(true)}
+          onSpacePlugins={() => setViewersOpen(true)}
           onRetry={siteList.retry}
         />
       </div>
@@ -762,6 +766,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             activePluginId={activePluginId}
             onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); setMobileNavOpen(false); }}
             onCreateSpace={canManagePeople && !offline ? () => { setMobileNavOpen(false); setCreateSpaceOpen(true); } : undefined}
+            canManageSpace={canManagePeople}
+            onSpaceSettings={() => { setMobileNavOpen(false); setSpaceSettingsOpen(true); }}
+            onSpaceMembers={() => { setMobileNavOpen(false); setPeopleOpen(true); }}
+            onSpacePlugins={() => { setMobileNavOpen(false); setViewersOpen(true); }}
             onRetry={siteList.retry}
           />
         </SheetContent>
