@@ -732,6 +732,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           pluginApps={pluginApps}
           activePluginId={activePluginId}
           onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); }}
+          onCreateSpace={canManagePeople && !offline ? () => setCreateSpaceOpen(true) : undefined}
           onRetry={siteList.retry}
         />
       </div>
@@ -752,6 +753,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             pluginApps={pluginApps}
             activePluginId={activePluginId}
             onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); setMobileNavOpen(false); }}
+            onCreateSpace={canManagePeople && !offline ? () => { setMobileNavOpen(false); setCreateSpaceOpen(true); } : undefined}
             onRetry={siteList.retry}
           />
         </SheetContent>
