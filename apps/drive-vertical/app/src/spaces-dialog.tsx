@@ -12,12 +12,12 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
     <DialogHeader className="px-5 pt-5"><DialogTitle>Spaces</DialogTitle><DialogDescription>Each space has its own files and members. Open one to browse its drive.</DialogDescription></DialogHeader>
     <div className="flex items-center gap-2 px-5 py-4">
       <Input aria-label="Find a space" placeholder="Find a space…" value={query} onChange={event => setQuery(event.target.value)} />
-      {canManage && onCreate ? <Button className="shrink-0" onClick={() => { onOpenChange(false); onCreate(); }}><Icon name="plus" size={16} /> Create space</Button> : null}
+      {canManage && onCreate ? <Button className="shrink-0" disabled={offline} onClick={() => { onOpenChange(false); onCreate(); }}><Icon name="plus" size={16} /> Create space</Button> : null}
     </div>
     <div className="min-h-0 overflow-y-auto px-5 pb-5">
       {failed ? <div role="alert" className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">Could not load your spaces. <Button variant="outline" size="sm" onClick={onRetry}>Retry spaces</Button></div>
         : sites === null ? <p role="status" className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Loading spaces…</p>
-        : sites.length === 0 ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">You have no spaces available. Ask a space owner for an invitation.</p>
+        : sites.length === 0 ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">{canManage ? 'You have no spaces available. Create a space to get started.' : 'You have no spaces available. Ask a space owner for an invitation.'}</p>
         : shown?.length === 0 ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No spaces match this search.</p>
         : <ul className="grid gap-3 sm:grid-cols-2">{shown?.map(site => <li key={site.slug} className="flex min-w-0 flex-col gap-3 rounded-lg border p-3.5">
           <div className="flex items-start gap-3">

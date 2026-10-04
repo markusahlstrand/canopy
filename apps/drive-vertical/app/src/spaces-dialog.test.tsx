@@ -21,3 +21,12 @@ it('disables switching and hides management while offline', () => {
  expect((screen.getByRole('button',{name:'Open Team'}) as HTMLButtonElement).disabled).toBe(true);
  expect(screen.queryByRole('button',{name:'Manage members'})).toBeNull();
 });
+it('disables space creation while offline and guides managers with no spaces', () => {
+ const create = vi.fn();
+ const view = render(<SpacesDialog {...props} offline onCreate={create} sites={[]} />);
+ expect((screen.getByRole('button', {name:'Create space'}) as HTMLButtonElement).disabled).toBe(true);
+ expect(screen.getByText(/Create a space to get started/)).toBeTruthy();
+ fireEvent.click(screen.getByRole('button', {name:'Create space'})); expect(create).not.toHaveBeenCalled();
+ view.rerender(<SpacesDialog {...props} onCreate={create} sites={[]} />);
+ fireEvent.click(screen.getByRole('button', {name:'Create space'})); expect(create).toHaveBeenCalledOnce();
+});
