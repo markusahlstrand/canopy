@@ -296,7 +296,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                   )}
                 >
                   <span className={cn('shrink-0', s.current && 'text-primary')}>
-                    <Icon name="users" size={17} />
+                    <Icon name={s.icon ?? "users"} size={17} style={{color:s.color}} />
                   </span>
                   <span className="flex-1 truncate text-left">{s.name}</span>
                 </button>

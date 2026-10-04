@@ -1,3 +1,4 @@
+import { SpaceSettingsDialog } from './space-settings-dialog';
 import { BulkRestore } from './bulk-restore';
 import { BulkTrash } from './bulk-trash';
 import { SearchMatchFilter, filterMatches, type MatchFilter } from './search-match-filter';
@@ -205,6 +206,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   }, []);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false);
   const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
   const [spacesOpen, setSpacesOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
@@ -953,8 +955,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
 
+      <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={siteList.retry} />
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
-      <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople && !offline} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
+      <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople && !offline} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
       <ViewersDialog open={viewersOpen} onOpenChange={setViewersOpen} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />

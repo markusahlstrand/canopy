@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CreateSpaceDialog } from './create-space-dialog';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
-it('waits for durable creation before opening the space and posts only name and generated slug', async () => {
+it('waits for durable creation before opening the space and posts name, generated slug and presentation settings', async () => {
   const created = vi.fn(); let done = false;
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/sites') { done = true; return new Response(JSON.stringify({ id: 'r', name: 'Family', slug: 'family-created' })); }
@@ -12,7 +12,7 @@ it('waits for durable creation before opening the space and posts only name and 
   fireEvent.change(screen.getByLabelText('Space name'), { target: { value: 'Family' } });
   fireEvent.click(screen.getByRole('button', { name: 'Create space' }));
   await waitFor(() => expect(created).toHaveBeenCalledExactlyOnceWith('family-created'));
-  const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string); expect(Object.keys(body)).toEqual(['name', 'slug']); expect(body.name).toBe('Family');
+  const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string); expect(Object.keys(body)).toEqual(['name', 'slug', 'settings']); expect(body.name).toBe('Family');
 });
 it('keeps the creation form available when the request fails', async () => {
   vi.stubGlobal('fetch', async () => new Response('Forbidden', { status: 403 }));
