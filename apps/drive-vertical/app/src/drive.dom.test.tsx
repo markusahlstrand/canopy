@@ -381,6 +381,20 @@ describe('live refreshes', () => {
 });
 
 describe('offline metadata from the scope event mirror', () => {
+  it('keeps offline space guidance accurate for a manager at the Drive caller boundary', async () => {
+    vi.spyOn(indexedMirror, 'folder').mockResolvedValue({ folders: [], files: [] });
+    await renderDrive([], [], []);
+    await answer('/people/access', { canManage: true });
+    fireEvent.click(screen.getByLabelText('Refresh'));
+    await flush();
+    const request = pending.find((p) => p.url.includes('/folders/root/files'));
+    expect(request).toBeTruthy();
+    await act(async () => request!.reject(new TypeError('network unavailable')));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage spaces' }));
+    expect(screen.getByText(/Reconnect to check spaces or create one/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Create space' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('shows saved folder rows after a network failure and keeps Refresh available', async () => {
     vi.spyOn(indexedMirror, 'folder').mockResolvedValue({
       folders: [{ id: '01F', parent_id: 'root', name: 'Saved folder', path: 'Saved folder' }],

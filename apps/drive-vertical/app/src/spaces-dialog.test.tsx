@@ -17,7 +17,16 @@ it('distinguishes failure, loading and having no spaces', () => {
 });
 
 it('disables switching and hides management while offline', () => {
- render(<SpacesDialog {...props} offline canManage={false} sites={[{slug:'family',name:'Family',current:true},{slug:'team',name:'Team',current:false}]} />);
+ render(<SpacesDialog {...props} offline sites={[{slug:'family',name:'Family',current:true},{slug:'team',name:'Team',current:false}]} />);
  expect((screen.getByRole('button',{name:'Open Team'}) as HTMLButtonElement).disabled).toBe(true);
  expect(screen.queryByRole('button',{name:'Manage members'})).toBeNull();
+});
+it('disables space creation while offline and guides managers with no spaces', () => {
+ const create = vi.fn();
+ const view = render(<SpacesDialog {...props} offline onCreate={create} sites={[]} />);
+ expect((screen.getByRole('button', {name:'Create space'}) as HTMLButtonElement).disabled).toBe(true);
+ expect(screen.getByText(/Reconnect to check spaces or create one/)).toBeTruthy();
+ fireEvent.click(screen.getByRole('button', {name:'Create space'})); expect(create).not.toHaveBeenCalled();
+ view.rerender(<SpacesDialog {...props} onCreate={create} sites={[]} />);
+ fireEvent.click(screen.getByRole('button', {name:'Create space'})); expect(create).toHaveBeenCalledOnce();
 });
