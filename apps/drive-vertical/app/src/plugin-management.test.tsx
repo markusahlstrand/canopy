@@ -25,6 +25,16 @@ it('restores bundled catalog review and source authoring', () => {
   expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default');
   expect(screen.getByRole('button', {name:'Install plugin'})).toBeTruthy();
 });
+it('finds viewers by file extension and MIME type', () => {
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  const search = screen.getByLabelText('Find a plugin');
+  fireEvent.change(search, { target: { value: '.md' } });
+  expect(screen.getByRole('button', { name: 'Review Markdown' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Review PDF Viewer' })).toBeNull();
+  fireEvent.change(search, { target: { value: 'application/pdf' } });
+  expect(screen.getByRole('button', { name: 'Review PDF Viewer' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Review Markdown' })).toBeNull();
+});
 
 it('shows an installed-plugin empty state only after loading succeeds', async () => {
   let finishLoading!: (response: Response) => void;
