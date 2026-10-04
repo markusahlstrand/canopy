@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PluginManagement } from './plugin-management';
 import { setImageViewerEnabled } from './image-viewer';
 afterEach(() => { cleanup(); setImageViewerEnabled(true); vi.unstubAllGlobals(); });
@@ -58,4 +58,15 @@ it('clears a Studio draft after confirming discard on close', () => {
   expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toBe('');
   expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toBe('');
   confirm.mockRestore();
+});
+it('records bundled provenance only while catalog manifest and source are unchanged', async () => {
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => new Response(JSON.stringify(url.endsWith('/people/access') ? {canManage:false} : url.endsWith('/plugins') && init?.method !== 'PUT' ? {plugins:[]} : {})));
+  vi.stubGlobal('fetch',fetcher);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.click(screen.getByRole('button',{name:'Review Markdown'}));
+  fireEvent.click(screen.getByRole('checkbox',{name:/Approve the capabilities/}));
+  fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
+  await waitFor(()=>expect(fetcher.mock.calls.filter(([,init])=>init?.method==='PUT')).toHaveLength(1));
+  const request = JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string);
+  expect(request.provenance).toEqual({kind:'bundled',ref:'@canopy/catalog/markdown-editor',resolved:request.manifest.version});
 });
