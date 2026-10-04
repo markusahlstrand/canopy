@@ -97,3 +97,36 @@ it('loads local manifest and JavaScript files into Studio for review', async () 
   expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default');
   expect((screen.getByRole('button',{name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(true);
 });
+it('shows file errors beside Studio and clears them when a valid file is selected', async () => {
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  const input = screen.getByLabelText('Choose plugin source file') as HTMLInputElement;
+  fireEvent.change(input,{target:{files:[new File(['x'.repeat(256_001)],'large.js')]}});
+  expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
+  const file = new File(['export default () => {}'],'small.js');
+  Object.defineProperty(file,'text',{value:async()=> 'export default () => {}'});
+  fireEvent.change(input,{target:{files:[file]}});
+  await waitFor(()=>expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default'));
+  expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
+  expect(input.value).toBe('');
+});
+it('keeps the latest local file when earlier reads finish later', async () => {
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  let finishA!: (value:string)=>void, finishB!: (value:string)=>void;
+  const a = new File(['a'],'a.js'), b = new File(['b'],'b.js');
+  Object.defineProperty(a,'text',{value:()=>new Promise<string>(resolve=>{finishA=resolve;})});
+  Object.defineProperty(b,'text',{value:()=>new Promise<string>(resolve=>{finishB=resolve;})});
+  const input = screen.getByLabelText('Choose plugin source file');
+  fireEvent.change(input,{target:{files:[a]}}); fireEvent.change(input,{target:{files:[b]}});
+  await act(async()=>finishB('source B'));
+  await act(async()=>finishA('source A'));
+  expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toBe('source B');
+});
+it('keeps a source draft when the user cancels file replacement', () => {
+  const confirm = vi.spyOn(window,'confirm').mockReturnValue(false);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.change(screen.getByLabelText('Plugin source'),{target:{value:'my edited source'}});
+  fireEvent.change(screen.getByLabelText('Choose plugin source file'),{target:{files:[new File(['replacement'],'other.js')]}});
+  expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toBe('my edited source');
+  expect(confirm).toHaveBeenCalled();
+  confirm.mockRestore();
+});
