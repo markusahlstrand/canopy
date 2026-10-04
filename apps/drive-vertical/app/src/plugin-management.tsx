@@ -63,7 +63,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       <div className="flex items-start justify-between"><span className="grid size-11 place-items-center rounded-md" style={{ backgroundColor: `${entry.color}24`, color: entry.color }}><Icon name={entry.icon} size={20} /></span>{plugins.some(row => row.plugin_id === entry.manifest.id) ? <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px]">Installed</span> : null}</div>
       <div><h4 className="font-medium">{entry.manifest.name}</h4><p className="text-xs text-muted-foreground">{entry.category}</p></div>
       <p className="flex-1 text-sm text-muted-foreground">{entry.manifest.description}</p>
-      <p className="text-xs text-muted-foreground">Access: {entry.manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ')}. File-read plugins can share opened files outside Canopy.</p>
+      <p className="text-xs text-muted-foreground">Access: {entry.manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ')}. File-read plugins can share opened files outside Canopy.{entry.manifest.capabilities.some(cap => cap.kind === 'net:fetch') ? ' Listed hosts serve code that runs with the opened file.' : ''}</p>
       <Button variant="outline" disabled={busy} onClick={() => { if (!confirmDiscardDrafts()) return; setEditingInstall(null); setManifest(JSON.stringify(entry.manifest, null, 2)); setSource(entry.source); setForSpace(false); setStudioOpen(true); }}>Review {entry.manifest.name}</Button>
     </section>)}</div>
     {showImageViewer ? <section aria-label="Image viewer" className="space-y-2 rounded border p-3">
