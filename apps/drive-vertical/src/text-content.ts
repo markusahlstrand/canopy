@@ -3,10 +3,8 @@ import { HTTPException } from 'hono/http-exception';
 
 export const MAX_EDIT_CHARS = 200_000;
 const MAX_EDIT_BYTES = MAX_EDIT_CHARS * 4;
-export function editableTextMime(mime: string): boolean {
-  const type = mime.split(';')[0]!.trim().toLowerCase();
-  return type.startsWith('text/') || type === 'application/json' || type === 'application/xml';
-}
+export { editableTextMime } from './editable-text.js';
+import { editableTextMime } from './editable-text.js';
 export interface TextContentRecord {
   file: { id: string; name: string };
   version: { id: string; source: string; mime: string } | null;
@@ -29,7 +27,7 @@ export function mountTextContent<E extends Env>(app: Hono<E>, resolve: (c: Conte
     if (!canWrite) throw new HTTPException(403, { message: 'this file is read-only' });
     if (!version) throw new HTTPException(404, { message: 'this file has no content yet' });
     if (version.source !== 'blob') throw new HTTPException(501, { message: 'connected content cannot be edited here' });
-    if (!editableTextMime(version.mime)) throw new HTTPException(415, { message: 'only text content can be edited here' });
+    if (!editableTextMime(version.mime, file.name)) throw new HTTPException(415, { message: 'only text content can be edited here' });
     const expected = c.req.query('expectedVersion');
     if (!expected || expected.length > 100) throw new HTTPException(400, { message: 'expectedVersion is required' });
     if (expected !== version.id) throw new HTTPException(409, { message: 'file changed — reload before saving' });
