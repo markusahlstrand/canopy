@@ -94,6 +94,7 @@ interface SidebarProps {
   /** The mobile sheet always uses the expanded rail. */
   mobile?: boolean;
   onSpaces?: () => void;
+  onCreateSpace?: () => void;
 }
 
 /** One space read shared by the desktop rail and the mobile sheet. */
@@ -166,7 +167,7 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false, onSpaces }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const narrow = mobile ? false : collapsed;
 
@@ -256,15 +257,23 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
             </p>
           </div>
         )}
-        {!narrow && sites && sites.length > 0 && (
+        {!narrow && (
           <div className="mt-4 px-3">
             <div className="mb-1 flex items-center justify-between px-2.5">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Spaces
               </span>
+              {onCreateSpace && <button
+                type="button"
+                aria-label="Create space"
+                title="Create space"
+                disabled={offline}
+                onClick={onCreateSpace}
+                className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+              ><Icon name="plus" size={16} /></button>}
             </div>
             <nav className="flex flex-col gap-0.5" aria-label="Spaces">
-              {sites.map((s) => (
+              {sites?.map((s) => (
                 <button
                   key={s.slug}
                   aria-current={s.current ? 'true' : undefined}
@@ -302,6 +311,8 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                 </button>
               ))}
             </nav>
+            {!failed && sites === null ? <p role="status" className="px-2.5 py-1 text-xs text-muted-foreground">Loading spaces…</p> : null}
+            {!failed && sites?.length === 0 ? <p className="px-2.5 py-1 text-xs text-muted-foreground">No spaces yet</p> : null}
           </div>
         )}
         </div>
