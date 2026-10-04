@@ -9,12 +9,10 @@ vi.mock('@canopy/plugin-sources',()=>({resolvePlugin:async()=>({
 afterEach(()=>vi.unstubAllGlobals());
 
 it('returns pinned GitHub provenance with bounded source',async()=>{
-  vi.stubGlobal('fetch',vi.fn(async()=>new Response('export default () => {}')));
-  const result=await importGithubPlugin({repo:'owner/repo',ref:'main'});
+  const result=await importGithubPlugin({repo:'owner/repo',ref:'main'},vi.fn(async()=>new Response('export default () => {}')));
   expect(result.source).toContain('export default');
   expect(result.provenance).toEqual({kind:'github',ref:'owner/repo@main',resolved:'0123456789012345678901234567890123456789'});
 });
 it('rejects an oversized GitHub entry before reading it',async()=>{
-  vi.stubGlobal('fetch',vi.fn(async()=>new Response('x',{headers:{'content-length':'256001'}})));
-  await expect(importGithubPlugin({repo:'owner/repo'})).rejects.toThrow('too large');
+  await expect(importGithubPlugin({repo:'owner/repo'},vi.fn(async()=>new Response('x',{headers:{'content-length':'256001'}})))).rejects.toThrow('too large');
 });

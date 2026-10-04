@@ -723,7 +723,7 @@ app.post('/api/plugin-import/github', async (c) => {
   if (!await principalFor(c.env, c.req.raw)) throw new HTTPException(401, { message: 'unauthorized' });
   const input = z.object({repo:z.string().min(3).max(200),ref:z.string().max(100).optional(),path:z.string().max(200).optional()}).safeParse(await c.req.json());
   if (!input.success) throw new HTTPException(400, { message: 'Enter a GitHub repository and optional ref or folder.' });
-  try { return c.json(await importGithubPlugin(input.data)); }
+  try { return c.json(await importGithubPlugin(input.data, fetch)); }
   catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
 });
 
