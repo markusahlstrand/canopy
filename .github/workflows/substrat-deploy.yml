@@ -11,6 +11,7 @@ name: Deploy to Substrat
 # Optional repository variables (Settings → Secrets and variables → Actions → Variables):
 #   SUBSTRAT_TEST_SCOPE_ID      a long-lived scope rebound to every merge (the test env)
 #   SUBSTRAT_PER_BUILD_PREVIEW  set to 1 to also mint a frozen per-build preview URL per push
+#   SUBSTRAT_PREVIEW_SOURCE_SCOPE_ID  the prod scope to fork when this vertical has several
 
 # The default GITHUB_TOKEN, narrowed to what these jobs actually use. A repository whose
 # default is read/write would otherwise hand every job below write access to issues, packages
@@ -269,9 +270,14 @@ jobs:
         env:
           SUBSTRAT_SERVICE_TOKEN: ${{ secrets.SUBSTRAT_SERVICE_TOKEN }}
           SUBSTRAT_CP_URL: https://console.substrat.net/api
+          SUBSTRAT_PREVIEW_SOURCE_SCOPE_ID: ${{ vars.SUBSTRAT_PREVIEW_SOURCE_SCOPE_ID }}
         run: |
           set -euo pipefail
-          npx "$SUBSTRAT_CLI" preview create apps/drive-vertical --slug drive-vertical --tag pr-${{ github.event.number }} | tee preview.out
+          SOURCE_SCOPE_ARGS=()
+          if [ -n "$SUBSTRAT_PREVIEW_SOURCE_SCOPE_ID" ]; then
+            SOURCE_SCOPE_ARGS=(--source-scope "$SUBSTRAT_PREVIEW_SOURCE_SCOPE_ID")
+          fi
+          npx "$SUBSTRAT_CLI" preview create apps/drive-vertical --slug drive-vertical --tag pr-${{ github.event.number }} "${SOURCE_SCOPE_ARGS[@]}" | tee preview.out
           # Take the URL from the CLI success line (the ✓ marker) only — the push it runs
           # first also prints an https:// *deploy endpoint* we must never mistake for a preview.
           grep -F '✓ preview' preview.out | grep -oE 'https://[a-zA-Z0-9.:/_-]+' | tail -1 > preview.url || true
