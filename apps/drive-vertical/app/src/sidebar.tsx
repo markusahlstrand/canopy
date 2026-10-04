@@ -38,7 +38,8 @@ import {
   cn,
 } from '@canopy/ui';
 import { openSpace } from './space-navigation';
-import { listSites, type Site } from './api';
+import { pluginManifest } from './installed-plugins';
+import { listSites, type PluginInstall, type Site } from './api';
 
 /** The views this screen has. The portal's Home, Starred and Settings are not among them. */
 const NAV = [
@@ -83,7 +84,7 @@ const writeCollapsed = (collapsed: boolean): void => {
 
 interface SidebarProps {
   /** Which view the screen is showing, so the matching row reads as active. */
-  active: NavId;
+  active: NavId | null;
   onNavigate: (id: NavId) => void;
   onNewFolder: () => void;
   onUpload: () => void;
@@ -94,6 +95,9 @@ interface SidebarProps {
   /** The mobile sheet always uses the expanded rail. */
   mobile?: boolean;
   onSpaces?: () => void;
+  pluginApps?: PluginInstall[];
+  activePluginId?: string | null;
+  onOpenPlugin?: (id: string) => void;
 }
 
 /** One space read shared by the desktop rail and the mobile sheet. */
@@ -136,6 +140,7 @@ function NavRow({
     <button
       onClick={onClick}
       disabled={disabled}
+      aria-current={active ? 'page' : undefined}
       className={cn(
         'flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] transition-colors',
         disabled && 'opacity-50',
@@ -166,7 +171,7 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false, onSpaces }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false, onSpaces, pluginApps = [], activePluginId = null, onOpenPlugin }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const narrow = mobile ? false : collapsed;
 
@@ -304,6 +309,13 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
             </nav>
           </div>
         )}
+        {pluginApps.length > 0 && onOpenPlugin ? <div className={cn('mt-4 px-3', narrow && 'px-2')}>
+          {!narrow ? <p className="mb-1 px-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Apps</p> : null}
+          <nav aria-label="Plugin apps" className="flex flex-col gap-0.5">
+            {pluginApps.map(row => <NavRow key={row.id} icon="plugin" label={pluginManifest(row).contributes.detailView?.title ?? pluginManifest(row).name}
+              active={activePluginId === row.id} collapsed={narrow} disabled={offline} onClick={() => onOpenPlugin(row.id)} />)}
+          </nav>
+        </div> : null}
         </div>
 
         {onSpaces ? <Button variant="ghost" onClick={onSpaces} aria-label="Manage spaces">{narrow ? <Icon name="users" /> : 'Manage spaces'}</Button> : null}

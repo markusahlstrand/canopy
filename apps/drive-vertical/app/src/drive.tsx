@@ -35,6 +35,8 @@ import { CreateSpaceDialog } from './create-space-dialog';
 import { openSpace } from './space-navigation';
 import { SpacesDialog } from './spaces-dialog';
 import { PluginManagement } from './plugin-management';
+import { SandboxPlugin } from './sandbox-plugin';
+import { effectivePlugins, pluginManifest, refreshPlugins, useInstalledPlugins } from './installed-plugins';
 import { PeopleDialog } from './people-dialog';
 import { CurrentFolderShare } from './current-folder-share';
 import { ShareDialog } from './share-dialog';
@@ -211,6 +213,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [spacesOpen, setSpacesOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [viewersOpen, setViewersOpen] = useState(false);
+  const [activePluginId, setActivePluginId] = useState<string | null>(null);
+  const installedPlugins = useInstalledPlugins();
+  const pluginApps = effectivePlugins(installedPlugins).filter(row => row.enabled === 1 && !!pluginManifest(row).contributes.detailView);
+  const activePlugin = pluginApps.find(row => row.id === activePluginId);
   /** The folder whose sharing is open. Null is closed — one dialog, one folder at a time. */
   const [sharing, setSharing] = useState<{ id: string; name: string } | null>(null);
   /**
@@ -222,6 +228,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    */
   const [canManagePeople, setCanManagePeople] = useState(false);
   const siteList = useSites();
+  useEffect(() => { void refreshPlugins().catch(() => {}); }, []);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -525,6 +532,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    */
   const navigate = useCallback((id: NavId) => {
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
+    setActivePluginId(null);
     linkNavigation.current++;
     setLinkPending(false);
     if (skipLinkedListing.current) setFolderRecovery(value => value + 1);
@@ -713,7 +721,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     <div className="flex min-h-0 flex-1">
       <div className="hidden md:block">
         <Sidebar
-          active={view === 'search' ? 'drive' : view}
+          active={activePluginId ? null : view === 'search' ? 'drive' : view}
           onNavigate={navigate}
           onNewFolder={() => startWrite(() => setCreating(true))}
           onUpload={() => startWrite(() => uploadRef.current?.click())}
@@ -721,6 +729,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           sites={siteList.sites}
           failed={siteList.failed}
           onSpaces={() => setSpacesOpen(true)}
+          pluginApps={pluginApps}
+          activePluginId={activePluginId}
+          onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); }}
           onRetry={siteList.retry}
         />
       </div>
@@ -730,7 +741,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           <SheetTitle className="sr-only">Drive navigation</SheetTitle>
           <Sidebar
             mobile
-            active={view === 'search' ? 'drive' : view}
+            active={activePluginId ? null : view === 'search' ? 'drive' : view}
             onNavigate={(id) => { navigate(id); setMobileNavOpen(false); }}
             onNewFolder={() => { setMobileNavOpen(false); startWrite(() => setCreating(true)); }}
             onUpload={() => { setMobileNavOpen(false); startWrite(() => uploadRef.current?.click()); }}
@@ -738,6 +749,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             sites={siteList.sites}
             failed={siteList.failed}
             onSpaces={() => { setMobileNavOpen(false); setSpacesOpen(true); }}
+            pluginApps={pluginApps}
+            activePluginId={activePluginId}
+            onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); setMobileNavOpen(false); }}
             onRetry={siteList.retry}
           />
         </SheetContent>
@@ -745,7 +759,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       <div className="flex min-w-0 flex-1 flex-col">
       <Topbar
-        breadcrumb={view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : ['My Drive', ...crumbs.map((c) => c.name)]}
+        breadcrumb={activePlugin ? [pluginManifest(activePlugin).name] : view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : ['My Drive', ...crumbs.map((c) => c.name)]}
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
         onCrumbClick={view === 'drive' ? (index) => upTo(index - 1) : undefined}
         onOpenMenu={() => setMobileNavOpen(true)}
@@ -762,7 +776,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       />
 
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
-      {view === 'drive' && !offline && !linkPending && !linkListingUnavailable ? <div className="flex flex-wrap gap-2 px-4 py-2">
+      {!activePluginId && view === 'drive' && !offline && !linkPending && !linkListingUnavailable ? <div className="flex flex-wrap gap-2 px-4 py-2">
         <CurrentFolderShare folderId={folderId} onShare={setSharing} />
         {siteList.sites?.find(site => site.current)?.slug || currentSite() ? <CopyFolderLink key={folderId} folderId={folderId}
           site={siteList.sites?.find(site => site.current)?.slug ?? currentSite() ?? undefined} compact /> : null}
@@ -784,6 +798,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
         onNavigate={(id) => navigate(id === 'trash' ? 'trash' : id === 'shared' ? 'shared' : 'drive')}
         onOpenFile={(item) => {
+          setActivePluginId(null);
           // The palette lists folders too, and a folder is entered rather than previewed —
           // the panel would open on an id `get-file` cannot resolve.
           const folder = folders.find((f) => f.id === item.id);
@@ -795,6 +810,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       {/* The one scrolling region: the rail and the topbar stay put. */}
       <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-3 sm:p-4">
+      {activePluginId ? <section className="flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border bg-card">
+        <div className="flex items-center gap-2 border-b px-4 py-3"><Icon name="plugin" size={18} /><h2 className="min-w-0 flex-1 truncate font-medium">{activePlugin ? pluginManifest(activePlugin).name : 'Plugin unavailable'}</h2><Button size="sm" variant="outline" onClick={() => setActivePluginId(null)}>Back to drive</Button></div>
+        {activePlugin ? <div className="min-h-0 flex-1"><SandboxPlugin plugin={activePlugin} /></div> : <p role="alert" className="p-4 text-sm text-muted-foreground">This plugin is no longer enabled in this space.</p>}
+      </section> : <>
       <FileDropZone disabled={offline || linkPending || linkListingUnavailable || view !== 'drive'}
         destination={crumbs.at(-1)?.name ?? siteList.sites?.find(site => site.current)?.name ?? 'this space'}
         onError={onError}
@@ -952,6 +971,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           />
         </div>
       ) : null}
+      </>}
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
 
