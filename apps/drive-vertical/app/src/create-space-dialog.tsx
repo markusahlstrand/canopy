@@ -8,8 +8,25 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
   const [icon, setIcon] = useState<SpaceSettings['icon']>('folder'), [color, setColor] = useState<SpaceSettings['color']>('#3b82f6');
   const [name, setName] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
   const [request, setRequest] = useState<SpaceRequest | null>(null);
+  const [checking, setChecking] = useState(true);
   const active = useRef(true), slug = useRef('');
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setChecking(true);
+    spaceRequests().then(({requests}) => {
+      if (!alive) return;
+      const pending = requests.find(value => value.status === 'pending');
+      if (pending) {
+        setRequest(current => current ?? pending);
+        setName(current => current || pending.name);
+      }
+    }).catch(error => {
+      if (alive) setError(error instanceof Error ? error.message || 'Could not check previous space requests.' : String(error));
+    }).finally(() => { if (alive) setChecking(false); });
+    return () => { alive = false; };
+  }, [open]);
   useEffect(() => {
     if (!open || !request || request.status !== 'pending') return;
     let alive = true;
@@ -26,7 +43,7 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
     return () => { alive = false; clearInterval(interval); };
   }, [open, request?.id, request?.status, onCreated]);
   const create = async () => {
-    if (busy || !name.trim() || request?.status === 'pending') return;
+    if (busy || checking || !name.trim() || request?.status === 'pending') return;
     setBusy(true); setError(null);
     // Keep the slug stable across an uncertain response so retry does not create two spaces.
     slug.current ||= `${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 45) || 'space'}-${crypto.randomUUID().slice(0, 8)}`;
@@ -59,12 +76,13 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
           <h3 className="text-sm font-medium">People and plugins</h3>
           <p className="text-xs text-muted-foreground">After the space opens, invite members and choose plugins for everyone in its space settings.</p>
         </section>
+        {checking ? <p role="status" className="text-sm text-muted-foreground">Checking previous space requests…</p> : null}
         {error ? <p role="alert" className="text-sm text-destructive">{error} Your creation request can still complete; check its status before starting another.</p> : null}
         {request ? <p role={request.status === 'failed' ? 'alert' : 'status'} className="rounded-lg bg-muted px-3 py-2 text-sm">{request.status === 'pending' ? 'Creating your space… You can close this dialog and return to check its progress.' : request.status === 'failed' ? `Could not create the space: ${request.error ?? 'The platform refused the request.'}` : 'Space created.'}</p> : null}
       </form>
       <DialogFooter className="border-t px-5 py-3">
         <Button type="button" variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>Close</Button>
-        <Button type="submit" form="create-space" disabled={busy || !name.trim() || request?.status === 'pending'}>{busy ? 'Requesting…' : request?.status === 'failed' ? 'Retry creation' : 'Create space'}</Button>
+        <Button type="submit" form="create-space" disabled={busy || checking || !name.trim() || request?.status === 'pending'}>{busy ? 'Requesting…' : request?.status === 'failed' ? 'Retry creation' : 'Create space'}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>;
