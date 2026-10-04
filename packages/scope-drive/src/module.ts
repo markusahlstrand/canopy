@@ -955,10 +955,19 @@ const operations = {
 
   'drive/list-folders': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
-    return ctx.page<FolderRow>('folder', {
+    const params = {
       ...input,
       filters: { parent_id: input.folderId },
-    }) as Page<FolderRow>;
+    };
+    const page = ctx.page<FolderRow>('folder', params) as Page<FolderRow>;
+    if (input.folderId !== ROOT_FOLDER_ID || !page.entries.some(folder => folder.id === ROOT_FOLDER_ID)) return page;
+    // The root row is its own parent to anchor the folder permission tree. It is
+    // not a visible child folder. Fetch one replacement so even a limit=1 page
+    // starts with a real folder and its cursor still advances correctly.
+    const entries = page.entries.filter(folder => folder.id !== ROOT_FOLDER_ID);
+    if (!page.nextCursor) return { ...page, entries };
+    const replacement = ctx.page<FolderRow>('folder', { ...params, cursor: page.nextCursor, limit: 1 }) as Page<FolderRow>;
+    return { ...page, entries: [...entries, ...replacement.entries], nextCursor: replacement.nextCursor };
   },
 
   'drive/get-folder': async (ctx, input) => {
