@@ -759,7 +759,7 @@ export function saveText(fileId: string, expectedVersion: string, text: string):
   });
 }
 
-export interface SpaceRequest { id: string; slug: string; name: string; status: 'pending' | 'done' | 'failed'; error: string | null }
+export interface SpaceRequest { id: string; slug: string; name: string; status: 'pending' | 'done' | 'failed'; error: string | null; requestedAt?: string }
 export const requestSpace = (name: string, slug: string, settings?: import('../../src/space-settings').SpaceSettings) => call<{ id: string; slug: string; name: string }>('/sites', { method: 'POST', body: JSON.stringify({ name, slug, settings }) });
 export const spaceRequests = () => call<{ requests: SpaceRequest[] }>('/site-requests');
 
