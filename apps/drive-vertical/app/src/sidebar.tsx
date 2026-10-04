@@ -22,7 +22,7 @@
  *
  * `New` stays, because both of its items are real operations.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   CanopyMark,
@@ -105,16 +105,23 @@ interface SidebarProps {
 export function useSites() {
   const [sites, setSites] = useState<Site[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const request = useRef(0);
   const retry = useCallback(() => {
+    const current = ++request.current;
     setFailed(false);
     listSites()
-      .then(setSites)
+      .then(result => { if (request.current === current) setSites(result); })
       .catch(() => {
+        if (request.current !== current) return;
         setSites([]);
         setFailed(true);
       });
   }, []);
-  useEffect(retry, [retry]);
+  useEffect(() => {
+    retry();
+    window.addEventListener('focus', retry);
+    return () => { request.current++; window.removeEventListener('focus', retry); };
+  }, [retry]);
   return { sites, failed, retry };
 }
 
