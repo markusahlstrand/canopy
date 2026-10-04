@@ -13,6 +13,10 @@ it('manages enabled state and explains file access and matching contributions', 
 });
 it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Editors' }));
+  expect(screen.getByRole('button', { name: 'Review Markdown' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Review PDF/i })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'All' }));
   fireEvent.click(screen.getByRole('button', {name:'Review Markdown'}));
   expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toContain('markdown-editor');
   expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default');
