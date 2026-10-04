@@ -2,6 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PluginManagement } from './plugin-management';
 import { setImageViewerEnabled } from './image-viewer';
+import { pluginCatalog } from './plugin-catalog';
+import { installedPluginManifest } from '@canopy/scope-drive/spec/model';
 afterEach(() => { cleanup(); setImageViewerEnabled(true); vi.unstubAllGlobals(); });
 it('manages enabled state and explains file access and matching contributions', () => {
   setImageViewerEnabled(true); render(<PluginManagement open onOpenChange={() => {}} />);
@@ -77,4 +79,9 @@ it('shows manifest errors before allowing a plugin install', () => {
   fireEvent.click(screen.getByRole('checkbox',{name:/Approve the capabilities/}));
   expect(screen.getByRole('alert').textContent).toContain('valid JSON');
   expect((screen.getByRole('button',{name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText('Plugin manifest'),{target:{value:JSON.stringify({id:'valid-id',version:'1',capabilities:[],contributes:{viewers:[{id:'text',match:['text/*']}]}})}});
+  expect(screen.getByRole('alert').textContent).toContain('name:');
+});
+it('keeps every bundled catalog manifest compatible with the install schema', () => {
+  for (const entry of pluginCatalog) expect(installedPluginManifest.safeParse(entry.manifest).success).toBe(true);
 });
