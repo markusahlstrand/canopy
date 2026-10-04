@@ -3,6 +3,7 @@ import { claimSafeInvite, unbindProtectedPrincipal, mountInviteGuards, projected
 import { mountSpaceSettings } from './space-settings-routes.js';
 import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
+import { importGithubPlugin } from './github-plugin-import.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
@@ -716,6 +717,14 @@ app.get('/api/site-requests', async (c) => {
   const principal = await requirePeopleAdmin(c);
   const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
   return c.json(await scope.invoke('drive/space-requests', {}));
+});
+
+app.post('/api/plugin-import/github', async (c) => {
+  if (!await principalFor(c.env, c.req.raw)) throw new HTTPException(401, { message: 'unauthorized' });
+  const input = z.object({repo:z.string().min(3).max(200),ref:z.string().max(100).optional(),path:z.string().max(200).optional()}).safeParse(await c.req.json());
+  if (!input.success) throw new HTTPException(400, { message: 'Enter a GitHub repository and optional ref or folder.' });
+  try { return c.json(await importGithubPlugin(input.data)); }
+  catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
 });
 
 app.get('/api/sites', async (c) => {
