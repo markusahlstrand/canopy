@@ -767,7 +767,8 @@ export const getSpaceSettings = () => call<import('../../src/space-settings').Sp
 export const updateSpaceSettings = (settings: import('../../src/space-settings').SpaceSettings) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', {method:'PATCH',body:JSON.stringify(settings)});
 export interface PluginInstall { id: string; plugin_id: string; principal: string; manifest_json: string; source?: string; source_kind?: string; source_ref?: string; resolved?: string; source_sha256?: string; granted_capabilities?: string; enabled: number; updated_at: string }
 export const listPlugins = () => call<{ plugins: PluginInstall[] }>('/plugins');
-export const savePlugin = (manifest: unknown, source: string, expectedRevision: string | null, forSpace = false, acceptCapabilities?: unknown) => call<PluginInstall>('/plugins', {method: 'PUT', body: JSON.stringify({manifest, source, expectedRevision, forSpace, acceptCapabilities})});
+export type PluginProvenance = { kind: 'inline' | 'github' | 'npm' | 'zip' | 'bundled'; ref: string; resolved: string };
+export const savePlugin = (manifest: unknown, source: string, expectedRevision: string | null, forSpace = false, acceptCapabilities?: unknown, provenance?: PluginProvenance) => call<PluginInstall>('/plugins', {method: 'PUT', body: JSON.stringify({manifest, source, expectedRevision, forSpace, acceptCapabilities, provenance})});
 export const togglePlugin = (id: string, enabled: boolean) => call<PluginInstall>(`/plugins/${encodeURIComponent(id)}`, {method: 'PATCH', body: JSON.stringify({enabled})});
 export const removePlugin = (id: string) => call<{id: string}>(`/plugins/${encodeURIComponent(id)}`, {method: 'DELETE'});
 
