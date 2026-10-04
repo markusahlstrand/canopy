@@ -120,12 +120,22 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       <div className="flex flex-wrap gap-3 text-sm">
         <label>Choose canopy.json <input type="file" accept=".json,application/json" aria-label="Choose plugin manifest file" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readLocalFile(file, 'manifest'); }} /></label>
         <label>Choose JavaScript <input type="file" accept=".js,.mjs,text/javascript" aria-label="Choose plugin source file" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readLocalFile(file, 'source'); }} /></label>
-        <label>Choose plugin ZIP <input type="file" accept=".zip,application/zip" aria-label="Choose plugin ZIP file" onChange={event => { const file = event.currentTarget.files?.[0]; if (!file) return; if (file.size > 8 * 1024 * 1024) { setError('Plugin ZIP is too large.'); return; } void file.arrayBuffer().then(buffer => {
-          const result = resolveZipBytes(new Uint8Array(buffer), {type:'zip',key:file.name});
-          if (!('code' in result.entry) || result.entry.modules && Object.keys(result.entry.modules).length) throw new Error('This ZIP contains multiple JavaScript modules; import a bundled entry file instead.');
-          const manifest = JSON.stringify(result.manifest,null,2), source = result.entry.code;
-          setManifest(manifest); setSource(source); setImported({manifest,source,provenance:{kind:'zip',ref:file.name,resolved:result.version}}); setApproved(false); setStudioOpen(true); setError(null);
-        }).catch(error => setError(error instanceof Error ? error.message : 'Could not read plugin ZIP.')); }} /></label>
+        <label>Choose plugin ZIP <input type="file" accept=".zip,application/zip" aria-label="Choose plugin ZIP file" onChange={event => {
+          const file = event.currentTarget.files?.[0]; event.currentTarget.value = '';
+          if (!file || ((manifest || source) && !confirmDiscardDrafts())) return;
+          const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
+          setStudioError(null);
+          if (file.size > 8 * 1024 * 1024) { setStudioError('Plugin ZIP is too large.'); return; }
+          void file.arrayBuffer().then(buffer => {
+            const result = resolveZipBytes(new Uint8Array(buffer), {type:'zip',key:file.name});
+            if (!('code' in result.entry) || result.entry.modules && Object.keys(result.entry.modules).length) throw new Error('This ZIP contains multiple JavaScript modules; import a bundled entry file instead.');
+            const nextManifest = JSON.stringify(result.manifest,null,2), nextSource = result.entry.code;
+            if (nextManifest.length > 256_000) throw new Error('Plugin manifest in this ZIP is too large.');
+            if (nextSource.length > 256_000) throw new Error('Plugin source in this ZIP is too large.');
+            if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
+            setManifest(nextManifest); setSource(nextSource); setImported({manifest:nextManifest,source:nextSource,provenance:{kind:'zip',ref:file.name,resolved:result.version}}); setEditingInstall(null); setApproved(false); setStudioOpen(true);
+          }).catch(error => { if (manifestRead.current === manifestToken && sourceRead.current === sourceToken) setStudioError(error instanceof Error ? error.message : 'Could not read plugin ZIP.'); });
+        }} /></label>
       </div>
       {studioError ? <p role="alert" className="text-sm text-destructive">{studioError}</p> : null}
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setManifest(event.target.value); }} /></label>
