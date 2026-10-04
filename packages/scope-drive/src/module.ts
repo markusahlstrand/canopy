@@ -185,7 +185,7 @@ const operations = {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
     return { requests: ctx.platformRequests({ kind: PROVISION_SIBLING_KIND, limit: 100 }).filter(request => request.requestedBy === ctx.principal).flatMap(request => {
       const payload = provisionSiblingPayload.safeParse(request.payload);
-      return payload.success ? [{ id: request.id, slug: payload.data.slug, name: payload.data.name, status: request.status, error: request.lastError }] : [];
+      return payload.success ? [{ id: request.id, slug: payload.data.slug, name: payload.data.name, status: request.status, error: request.lastError, requestedAt: request.requestedAt }] : [];
     }) };
   },
   'drive/list-plugins': async (ctx) => {
