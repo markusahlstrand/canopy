@@ -45,3 +45,17 @@ it('does not claim there are no installed plugins when loading fails', async () 
   expect((await screen.findByRole('alert')).textContent).toContain('Could not load installed plugins.');
   expect(screen.queryByText('No plugins installed yet.')).toBeNull();
 });
+
+it('clears a Studio draft after confirming discard on close', () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const onOpenChange = vi.fn();
+  render(<PluginManagement open onOpenChange={onOpenChange} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Build a plugin' }));
+  expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).not.toBe('');
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  expect(confirm).toHaveBeenCalled();
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+  expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toBe('');
+  expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toBe('');
+  confirm.mockRestore();
+});

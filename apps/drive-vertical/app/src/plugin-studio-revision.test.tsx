@@ -11,7 +11,14 @@ it('submits the revision loaded into Studio even if the install list refreshes',
  vi.stubGlobal('fetch',fetcher);vi.spyOn(window,'confirm').mockReturnValue(true);render(<PluginManagement open onOpenChange={()=>{}}/>);
  fireEvent.click(await screen.findByRole('button',{name:'Edit source'}));await screen.findByDisplayValue(row.source!);
  await act(async()=>publishPlugins([{...row,updated_at:'new-revision'}]));
- fireEvent.click(screen.getByRole('checkbox',{name:/Approve the capabilities/}));fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
+ const approval=screen.getByRole('checkbox',{name:/Approve the capabilities/}) as HTMLInputElement;
+ fireEvent.click(approval);
+ const widenedCapabilities=[...manifest.capabilities,{kind:'net:fetch',hosts:['example.com']}];
+ fireEvent.change(screen.getByLabelText('Plugin manifest'),{target:{value:JSON.stringify({...manifest,capabilities:widenedCapabilities})}});
+ expect(approval.checked).toBe(false);
+ fireEvent.click(approval);fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
  await waitFor(()=>expect(fetcher.mock.calls.some(([,init])=>init?.method==='PUT')).toBe(true));
- expect(JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string).expectedRevision).toBe('loaded-revision');
+ const request=JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string);
+ expect(request.expectedRevision).toBe('loaded-revision');
+ expect(request.acceptCapabilities).toEqual(widenedCapabilities);
 });

@@ -47,7 +47,20 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     `${entry.manifest.name} ${entry.manifest.description}`.toLowerCase().includes(query.toLowerCase()),
   );
   const showImageViewer = (category === 'All' || category === 'Viewers') && 'image viewer'.includes(query.toLowerCase());
-  return <Dialog open={open} onOpenChange={next => { if (!next && !confirmDiscardDrafts()) return; onOpenChange(next); }}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-[760px]">
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
+      if (!confirmDiscardDrafts()) return;
+      setEditingInstall(null);
+      setManifest('');
+      setSource('');
+      setApproved(false);
+      setForSpace(false);
+      setStudioOpen(false);
+      setApp(null);
+    }
+    onOpenChange(next);
+  };
+  return <Dialog open={open} onOpenChange={handleOpenChange}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-[760px]">
     <DialogHeader><DialogTitle>Plugins</DialogTitle><DialogDescription>Install file viewers for yourself or apply them to the current space. Review the access requested by each plugin before installing.</DialogDescription></DialogHeader>
     <Input aria-label="Find a plugin" placeholder="Find a plugin" value={query} onChange={event => setQuery(event.target.value)} />
     {error ? <p role="alert">{error}</p> : null}
