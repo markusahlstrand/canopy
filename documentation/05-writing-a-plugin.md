@@ -1,8 +1,8 @@
 # Writing a plugin
 
-Plugin authoring for the current Substrat drive vertical is undecided. The old portal and its sandboxed iframe host have been retired, so its viewer registration and Plugin Studio instructions no longer produce a working addition to the drive.
+The current drive vertical installs sandboxed file viewers and standalone app plugins at runtime. Open **Plugins → Plugin Studio** to paste a `canopy.json` manifest and a self-contained JavaScript entry, choose local files, or import a public GitHub repository or ZIP. The manifest's `contributes.viewers` match patterns register file previews; `contributes.detailView` puts an app in the drive rail. The four bundled catalog plugins are installable there too.
 
-Follow [#73: Web components and the hosted vertical](https://github.com/markusahlstrand/canopy/issues/73) for the replacement contract. The legacy examples remain in <code>examples/plugins</code> as source material, not a supported install path for the running vertical.
+The old portal's build-time registration files are retired. Runtime source runs in an opaque-origin iframe and must export a default `render(ctx)` function. Declare `item:read` for a viewer, `item:write` only for save-back, and public `net:fetch` hosts for CDN imports. Studio asks for capability approval before saving a personal or space install. See [Build a plugin with AI](09-build-a-plugin-with-ai.md) for a prompt handoff.
 
 ### Validate a plugin before importing it
 

@@ -4,6 +4,7 @@ import { setImageViewerEnabled, viewerRegistry } from './image-viewer';
 import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin, importGithubPlugin, importNpmPlugin } from './api';
 import { catalogMatchesSearch, pluginCatalog } from './plugin-catalog';
 import { SandboxPlugin } from './sandbox-plugin';
+import { PluginAiHandoff } from './plugin-ai-handoff';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 import type { PluginInstall } from './api';
 import { refreshPlugins, useInstalledPlugins, pluginManifest } from './installed-plugins';
@@ -129,6 +130,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     })}</div> : pluginsState === 'loaded' && !error && !busy ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query ? 'No installed plugins match this search.' : 'No plugins installed yet.'}</p> : null}
     {app ? <section><Button variant="outline" onClick={() => setApp(null)}>Close app</Button><SandboxPlugin key={app.id} plugin={app} /></section> : null}
     <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
+    <PluginAiHandoff />
     <details open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)}><summary>Plugin Studio · import or edit source</summary><p className="text-sm">Paste or choose canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
       <div className="flex flex-wrap gap-3 text-sm">
         <label>Choose canopy.json <input type="file" accept=".json,application/json" aria-label="Choose plugin manifest file" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readLocalFile(file, 'manifest'); }} /></label>
