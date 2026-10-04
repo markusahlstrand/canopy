@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@canopy/ui';
 import type { Site } from './api';
 import { openSpace } from './space-navigation';
@@ -7,7 +7,9 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
   offline?: boolean; canManage: boolean; onMembers: () => void; onCreate?: () => void; onSettings?: () => void;
 }) {
   const [query, setQuery] = useState('');
-  const shown = sites?.filter(site => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  useEffect(() => { if (open) setQuery(''); }, [open]);
+  const shown = sites?.filter(site => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+    .sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name));
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[580px]">
     <DialogHeader className="px-5 pt-5"><DialogTitle>Spaces</DialogTitle><DialogDescription>Each space has its own files and members. Open one to browse its drive.</DialogDescription></DialogHeader>
     <div className="flex items-center gap-2 px-5 py-4">

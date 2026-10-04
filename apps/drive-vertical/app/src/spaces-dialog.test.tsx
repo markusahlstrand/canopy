@@ -30,3 +30,14 @@ it('disables space creation while offline and guides managers with no spaces', (
  view.rerender(<SpacesDialog {...props} onCreate={create} sites={[]} />);
  fireEvent.click(screen.getByRole('button', {name:'Create space'})); expect(create).toHaveBeenCalledOnce();
 });
+it('puts the current space first and clears an old search when reopened', () => {
+ const sites = [{slug:'work',name:'Work',current:false},{slug:'home',name:'Home',current:true}];
+ const view = render(<SpacesDialog {...props} sites={sites} />);
+ expect(screen.getAllByRole('listitem')[0]?.textContent).toContain('Home');
+ fireEvent.change(screen.getByLabelText('Find a space'), {target:{value:'work'}});
+ expect(screen.queryByText('Home')).toBeNull();
+ view.rerender(<SpacesDialog {...props} open={false} sites={sites} />);
+ view.rerender(<SpacesDialog {...props} sites={sites} />);
+ expect(screen.getByText('Home')).toBeTruthy();
+ expect((screen.getByLabelText('Find a space') as HTMLInputElement).value).toBe('');
+});
