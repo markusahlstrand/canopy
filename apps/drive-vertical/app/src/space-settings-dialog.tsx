@@ -19,6 +19,10 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
           <section className="space-y-2"><label htmlFor="settings-space-name" className="text-xs font-medium text-muted-foreground">Space name</label>
             <Input id="settings-space-name" value={settings.name} maxLength={100} disabled={busy} onChange={event=>setSettings({...settings,name:event.target.value})}/>
             <SpaceStyleFields icon={settings.icon} color={settings.color} disabled={busy} onIcon={icon=>setSettings({...settings,icon:icon as SpaceSettings['icon']})} onColor={color=>setSettings({...settings,color:color as SpaceSettings['color']})}/>
+            <div aria-label="Space appearance preview" className="flex items-center gap-3 rounded-lg border p-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-lg" style={{color:settings.color,backgroundColor:`${settings.color}1f`}}><Icon name={settings.icon} size={20}/></span>
+              <div className="min-w-0"><p className="text-xs text-muted-foreground">Preview in spaces</p><p className="truncate text-sm font-medium">{settings.name.trim() || 'Untitled space'}</p></div>
+            </div>
           </section>
           <section className="space-y-2"><h3 className="text-xs font-medium text-muted-foreground">Storage</h3><div className="flex items-center gap-3 rounded-lg border px-3 py-2.5"><Icon name="cloud" size={18} className="text-muted-foreground"/><div><p className="text-sm font-medium">Canopy storage</p><p className="text-xs text-muted-foreground">Files stay in this install’s storage.</p></div></div></section>
         </form>}
