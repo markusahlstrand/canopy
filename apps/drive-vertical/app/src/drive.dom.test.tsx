@@ -18,6 +18,9 @@ import { DriveScreen } from './drive';
 import { currentSite, selectSite } from './api';
 import { indexedMirror } from './scope-mirror';
 import * as liveUpdates from './live-updates';
+import { publishPlugins } from './installed-plugins';
+import { useUnsavedDraft } from './drafts';
+import type { PluginInstall } from './api';
 
 /** One pending answer, and the handle a test resolves it with. */
 interface Pending {
@@ -130,6 +133,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  publishPlugins([]);
   vi.useRealTimers();
   vi.unstubAllGlobals();
   /**
@@ -169,6 +173,14 @@ function newMenu(): void {
 
 /** The rail, to address it apart from the topbar — both say "My Drive". */
 const rail = () => within(screen.getByRole('complementary'));
+
+const appInstall: PluginInstall = {
+  id: 'notes-install', plugin_id: 'notes', principal: 'space', enabled: 1, updated_at: 'now',
+  source: 'export default function() {}',
+  manifest_json: JSON.stringify({ id: 'notes', name: 'Notes', version: '1', capabilities: [], contributes: { detailView: { id: 'notes', title: 'Notes app' } } }),
+};
+
+function DraftMarker() { useUnsavedDraft(true); return null; }
 
 /**
  * Open the account menu in the topbar. Radix again: it answers the keyboard, not `click`.
@@ -1101,6 +1113,50 @@ describe('a write goes where the person is looking', () => {
     // was hiding.
     const create = pending.find((p) => p.method === 'POST' && p.url.includes('/folders') && !p.url.includes('/trash'));
     expect(create?.url).toContain('/folders/root/folders');
+  });
+});
+
+describe('plugin app exits', () => {
+  it('keeps the app open when a draft exit is declined', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<><DraftMarker /><DriveScreen {...shell} onError={() => {}} /></>);
+    await flush();
+    await answer('/api/sites', []);
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [file('01A', 'lease.pdf')]);
+    await act(async () => publishPlugins([appInstall]));
+    fireEvent.click(rail().getByRole('button', { name: 'Notes app' }));
+    expect(screen.getByRole('button', { name: 'Back to drive' })).toBeTruthy();
+
+    confirm.mockReturnValue(false);
+    fireEvent.click(rail().getByText('Trash'));
+    expect(screen.getByRole('button', { name: 'Back to drive' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to drive' }));
+    expect(screen.getByRole('button', { name: 'Back to drive' })).toBeTruthy();
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    fireEvent.click(screen.getByText('lease.pdf'));
+    expect(screen.getByRole('button', { name: 'Back to drive' })).toBeTruthy();
+    expect(pending.some(request => request.url.endsWith('/files/01A'))).toBe(false);
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to drive' }));
+    expect(screen.queryByRole('button', { name: 'Back to drive' })).toBeNull();
+  });
+
+  it('returns to the same drive folder before creating from an app', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }]);
+    fireEvent.doubleClick(screen.getByText('Papers'));
+    await flush();
+    await answer('/folders/01F/folders', []);
+    await answer('/folders/01F/files', []);
+    await act(async () => publishPlugins([appInstall]));
+    fireEvent.click(rail().getByRole('button', { name: 'Notes app' }));
+    newMenu();
+    fireEvent.click(screen.getByText('New folder'));
+    expect(screen.queryByRole('button', { name: 'Back to drive' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
+    fireEvent.click(screen.getByText('Create'));
+    expect(pending.find((p) => p.method === 'POST' && p.url.includes('/folders'))?.url).toContain('/folders/01F/folders');
   });
 });
 

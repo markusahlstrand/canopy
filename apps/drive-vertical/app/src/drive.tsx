@@ -214,6 +214,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [viewersOpen, setViewersOpen] = useState(false);
   const [activePluginId, setActivePluginId] = useState<string | null>(null);
+  const exitPluginApp = useCallback(() => {
+    if (activePluginId && !confirmDiscardDrafts()) return false;
+    setActivePluginId(null);
+    return true;
+  }, [activePluginId]);
   const installedPlugins = useInstalledPlugins();
   const pluginApps = effectivePlugins(installedPlugins).filter(row => row.enabled === 1 && !!pluginManifest(row).contributes.detailView);
   const activePlugin = pluginApps.find(row => row.id === activePluginId);
@@ -530,9 +535,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * happened to be in when you left for the trash. The palette used to only set the
    * view, so its My Drive left you looking at a subfolder labelled as the root.
    */
-  const navigate = useCallback((id: NavId) => {
-    if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
-    setActivePluginId(null);
+  const navigate = useCallback((id: NavId): boolean => {
+    if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return false;
+    if (!exitPluginApp()) return false;
     linkNavigation.current++;
     setLinkPending(false);
     if (skipLinkedListing.current) setFolderRecovery(value => value + 1);
@@ -543,7 +548,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       : view === 'drive' && folderId === ROOT_FOLDER_ID);
     if (alreadyHere) {
       void refreshRef.current();
-      return;
+      return true;
     }
     // Whatever is in flight belongs to the view being left.
     reads.current.invalidate();
@@ -554,7 +559,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     setBusy(true);
     if (id === 'trash') {
       setView('trash');
-      return;
+      return true;
     }
     setCrumbs([]);
     setFolderId(ROOT_FOLDER_ID);
@@ -563,7 +568,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       setFiles([]);
     }
     setView(id);
-  }, [folderId, view, linkListingUnavailable]);
+    return true;
+  }, [exitPluginApp, folderId, view, linkListingUnavailable, setPreviewing]);
 
   const open = (folder: DriveFolder) => {
     // The listing on screen belongs to the folder being left; nothing in flight for it
@@ -677,7 +683,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    */
   const startWrite = (begin: () => void) => {
     if (offline || linkPending || linkListingUnavailable) return;
-    if (view !== 'drive') navigate('drive');
+    if (view !== 'drive') {
+      if (!navigate('drive')) return;
+    } else if (!exitPluginApp()) return;
     begin();
   };
 
@@ -743,7 +751,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           <Sidebar
             mobile
             active={activePluginId ? null : view === 'search' ? 'drive' : view}
-            onNavigate={(id) => { navigate(id); setMobileNavOpen(false); }}
+            onNavigate={(id) => { if (navigate(id)) setMobileNavOpen(false); }}
             onNewFolder={() => { setMobileNavOpen(false); startWrite(() => setCreating(true)); }}
             onUpload={() => { setMobileNavOpen(false); startWrite(() => uploadRef.current?.click()); }}
             offline={offline}
@@ -800,12 +808,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
         onNavigate={(id) => navigate(id === 'trash' ? 'trash' : id === 'shared' ? 'shared' : 'drive')}
         onOpenFile={(item) => {
-          setActivePluginId(null);
           // The palette lists folders too, and a folder is entered rather than previewed —
           // the panel would open on an id `get-file` cannot resolve.
           const folder = folders.find((f) => f.id === item.id);
-          if (folder) open(folder);
-          else setPreviewing(item.id);
+          if (folder) {
+            if (exitPluginApp()) open(folder);
+          } else if (activePluginId) {
+            if (exitPluginApp()) changePreview(item.id);
+          } else setPreviewing(item.id);
         }}
         onUpload={() => startWrite(() => uploadRef.current?.click())}
       />
@@ -813,7 +823,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       {/* The one scrolling region: the rail and the topbar stay put. */}
       <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-3 sm:p-4">
       {activePluginId ? <section className="flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border bg-card">
-        <div className="flex items-center gap-2 border-b px-4 py-3"><Icon name="plugin" size={18} /><h2 className="min-w-0 flex-1 truncate font-medium">{activePlugin ? pluginManifest(activePlugin).name : 'Plugin unavailable'}</h2><Button size="sm" variant="outline" onClick={() => setActivePluginId(null)}>Back to drive</Button></div>
+        <div className="flex items-center gap-2 border-b px-4 py-3"><Icon name="plugin" size={18} /><h2 className="min-w-0 flex-1 truncate font-medium">{activePlugin ? pluginManifest(activePlugin).name : 'Plugin unavailable'}</h2><Button size="sm" variant="outline" onClick={() => exitPluginApp()}>Back to drive</Button></div>
         {activePlugin ? <div className="min-h-0 flex-1"><SandboxPlugin plugin={activePlugin} /></div> : <p role="alert" className="p-4 text-sm text-muted-foreground">This plugin is no longer enabled in this space.</p>}
       </section> : <>
       <FileDropZone disabled={offline || linkPending || linkListingUnavailable || view !== 'drive'}
