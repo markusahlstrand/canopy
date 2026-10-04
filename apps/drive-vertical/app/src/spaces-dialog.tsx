@@ -8,19 +8,28 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
 }) {
   const [query, setQuery] = useState('');
   const shown = sites?.filter(site => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[85vh] overflow-auto">
-    <DialogHeader><DialogTitle>Spaces</DialogTitle><DialogDescription>Each space has its own files and members. Open a space to browse its drive.</DialogDescription></DialogHeader>
-    {canManage && onCreate ? <Button onClick={() => { onOpenChange(false); onCreate(); }}>Create space</Button> : null}
-    <Input aria-label="Find a space" placeholder="Find a space" value={query} onChange={event => setQuery(event.target.value)} />
-    {failed ? <div role="alert">Could not load your spaces. <Button variant="outline" onClick={onRetry}>Retry spaces</Button></div>
-      : sites === null ? <p role="status">Loading spaces…</p> : sites.length === 0 ? <p>You have no spaces available. Ask a space owner for an invitation.</p>
-      : shown?.length === 0 ? <p>No spaces match this search.</p> : <ul className="space-y-2">{shown?.map(site => <li key={site.slug} className="rounded border p-3">
-        <h3 className="font-medium"><Icon name={site.icon ?? 'folder'} style={{color:site.color}} className="inline-block" /> {site.name} {site.current ? <span className="text-xs text-muted-foreground">Current space</span> : null}</h3>
-        <p className="text-xs text-muted-foreground">{site.slug}</p>
-        <div className="mt-2 flex gap-2"><Button size="sm" variant="outline" disabled={site.current || offline} onClick={() => openSpace(site.slug)}>Open {site.name}</Button>
-        {site.current && canManage && onSettings ? <Button size="sm" variant="outline" onClick={() => {onOpenChange(false);onSettings();}}>Space settings</Button> : null}
-        {site.current && canManage ? <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onMembers(); }}>Manage members</Button> : null}</div>
-      </li>)}</ul>}
-    <Button variant="ghost" onClick={onRetry}>Refresh spaces</Button>
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[580px]">
+    <DialogHeader className="px-5 pt-5"><DialogTitle>Spaces</DialogTitle><DialogDescription>Each space has its own files and members. Open one to browse its drive.</DialogDescription></DialogHeader>
+    <div className="flex items-center gap-2 px-5 py-4">
+      <Input aria-label="Find a space" placeholder="Find a space…" value={query} onChange={event => setQuery(event.target.value)} />
+      {canManage && onCreate ? <Button className="shrink-0" onClick={() => { onOpenChange(false); onCreate(); }}><Icon name="plus" size={16} /> Create space</Button> : null}
+    </div>
+    <div className="min-h-0 overflow-y-auto px-5 pb-5">
+      {failed ? <div role="alert" className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">Could not load your spaces. <Button variant="outline" size="sm" onClick={onRetry}>Retry spaces</Button></div>
+        : sites === null ? <p role="status" className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Loading spaces…</p>
+        : sites.length === 0 ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">You have no spaces available. Ask a space owner for an invitation.</p>
+        : shown?.length === 0 ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No spaces match this search.</p>
+        : <ul className="grid gap-3 sm:grid-cols-2">{shown?.map(site => <li key={site.slug} className="flex min-w-0 flex-col gap-3 rounded-lg border p-3.5">
+          <div className="flex items-start gap-3">
+            <span className="grid size-10 shrink-0 place-items-center rounded-lg" style={{ color: site.color, backgroundColor: site.color ? `${site.color}1f` : undefined }}><Icon name={site.icon ?? 'folder'} size={20} /></span>
+            <div className="min-w-0 flex-1"><h3 className="truncate text-sm font-medium">{site.name}</h3><p className="truncate text-xs text-muted-foreground">{site.slug}</p></div>
+            {site.current ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">Current space</span> : null}
+          </div>
+          <div className="mt-auto flex flex-wrap gap-1.5"><Button size="sm" variant={site.current ? 'secondary' : 'outline'} disabled={site.current || offline} onClick={() => openSpace(site.slug)}>Open {site.name}</Button>
+            {site.current && canManage && onSettings ? <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onSettings(); }}>Space settings</Button> : null}
+            {site.current && canManage ? <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onMembers(); }}>Manage members</Button> : null}</div>
+        </li>)}</ul>}
+    </div>
+    <div className="border-t px-5 py-3"><Button size="sm" variant="ghost" onClick={onRetry}>Refresh spaces</Button></div>
   </DialogContent></Dialog>;
 }
