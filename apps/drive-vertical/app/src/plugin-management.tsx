@@ -8,6 +8,8 @@ import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 import type { PluginInstall } from './api';
 import { refreshPlugins, useInstalledPlugins, pluginManifest } from './installed-plugins';
 import { installedPluginManifest } from '@canopy/scope-drive/spec/model';
+import { resolveZipBytes } from '@canopy/plugin-sources';
+import type { PluginProvenance } from './api';
 function validateManifest(text: string) {
   if (!text.trim()) return { manifest: null, error: null };
   try {
@@ -29,6 +31,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
   const [source, setSource] = useState('');
   const manifestRead = useRef(0), sourceRead = useRef(0);
   const [studioError, setStudioError] = useState<string | null>(null);
+  const [imported, setImported] = useState<{ manifest: string; source: string; provenance: PluginProvenance } | null>(null);
   const manifestCheck = validateManifest(manifest);
   const [approved, setApproved] = useState(false);
 
@@ -71,6 +74,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     try {
       const contents = await file.text();
       if (counter.current !== token) return;
+      setImported(null);
       if (target === 'manifest') setManifest(contents); else setSource(contents);
     } catch { if (counter.current === token) setStudioError(`Could not read plugin ${target} file.`); }
   };
@@ -81,6 +85,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       setManifest('');
       setSource('');
       manifestRead.current++; sourceRead.current++; setStudioError(null);
+      setImported(null);
       setApproved(false);
       setForSpace(false);
       setStudioOpen(false);
@@ -115,6 +120,12 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       <div className="flex flex-wrap gap-3 text-sm">
         <label>Choose canopy.json <input type="file" accept=".json,application/json" aria-label="Choose plugin manifest file" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readLocalFile(file, 'manifest'); }} /></label>
         <label>Choose JavaScript <input type="file" accept=".js,.mjs,text/javascript" aria-label="Choose plugin source file" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readLocalFile(file, 'source'); }} /></label>
+        <label>Choose plugin ZIP <input type="file" accept=".zip,application/zip" aria-label="Choose plugin ZIP file" onChange={event => { const file = event.currentTarget.files?.[0]; if (!file) return; if (file.size > 8 * 1024 * 1024) { setError('Plugin ZIP is too large.'); return; } void file.arrayBuffer().then(buffer => {
+          const result = resolveZipBytes(new Uint8Array(buffer), {type:'zip',key:file.name});
+          if (!('code' in result.entry) || result.entry.modules && Object.keys(result.entry.modules).length) throw new Error('This ZIP contains multiple JavaScript modules; import a bundled entry file instead.');
+          const manifest = JSON.stringify(result.manifest,null,2), source = result.entry.code;
+          setManifest(manifest); setSource(source); setImported({manifest,source,provenance:{kind:'zip',ref:file.name,resolved:result.version}}); setApproved(false); setStudioOpen(true); setError(null);
+        }).catch(error => setError(error instanceof Error ? error.message : 'Could not read plugin ZIP.')); }} /></label>
       </div>
       {studioError ? <p role="alert" className="text-sm text-destructive">{studioError}</p> : null}
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setManifest(event.target.value); }} /></label>
@@ -122,7 +133,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => { sourceRead.current++; setSource(event.target.value); }} /></label>
       {canManage ? <label><input type="checkbox" checked={forSpace} onChange={event => setForSpace(event.target.checked)} />Apply to this space</label> : null}
       <label className="block"><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Approve the capabilities in this manifest, including added access. Read access lets the plugin share the opened file outside Canopy.</label>
-      <Button disabled={busy || !manifestCheck.manifest || !source.trim() || !approved} onClick={() => void change(async () => { const parsed = manifestCheck.manifest!; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; const bundled = pluginCatalog.find(entry => { const candidate = installedPluginManifest.safeParse(entry.manifest); return candidate.success && JSON.stringify(candidate.data) === JSON.stringify(parsed) && entry.source === source; }); await savePlugin(parsed, source, revision, forSpace, parsed.capabilities, bundled ? {kind:'bundled',ref:`@canopy/catalog/${parsed.id}`,resolved:parsed.version} : undefined); setEditingInstall(null); setManifest(''); setSource(''); })}>Install plugin</Button>
+      <Button disabled={busy || !manifestCheck.manifest || !source.trim() || !approved} onClick={() => void change(async () => { const parsed = manifestCheck.manifest!; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; const bundled = pluginCatalog.find(entry => { const candidate = installedPluginManifest.safeParse(entry.manifest); return candidate.success && JSON.stringify(candidate.data) === JSON.stringify(parsed) && entry.source === source; }); const provenance = bundled ? {kind:'bundled' as const,ref:`@canopy/catalog/${parsed.id}`,resolved:parsed.version} : imported?.manifest === manifest && imported.source === source ? imported.provenance : undefined; await savePlugin(parsed, source, revision, forSpace, parsed.capabilities, provenance); setEditingInstall(null); setManifest(''); setSource(''); setImported(null); })}>Install plugin</Button>
     </details>
     <div><h3 className="font-medium">Available plugins</h3><p className="text-xs text-muted-foreground">Browse reviewed viewers and editors, then approve their access before installing.</p></div>
     <div className="flex flex-wrap gap-1.5" role="group" aria-label="Plugin categories">{(['All', 'Viewers', 'Editors'] as const).map(value => <button key={value} type="button" aria-pressed={category === value} onClick={() => setCategory(value)} className={cn('rounded-full px-3 py-1 text-xs font-medium transition-colors', category === value ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/70')}>{value}</button>)}</div>

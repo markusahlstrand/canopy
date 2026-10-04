@@ -133,6 +133,9 @@ importers:
       '@canopy/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@canopy/plugin-sources':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sources
       '@canopy/scope-drive':
         specifier: workspace:*
         version: link:../../packages/scope-drive
