@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { PluginManagement } from './plugin-management';
 import { setImageViewerEnabled } from './image-viewer';
@@ -13,8 +13,27 @@ it('manages enabled state and explains file access and matching contributions', 
 });
 it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
+  expect(screen.getAllByText(/Listed hosts serve code that runs with the opened file/)).toHaveLength(3);
+  fireEvent.click(screen.getByRole('button', { name: 'Editors' }));
+  expect(screen.getByRole('button', { name: 'Review Markdown' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Review PDF/i })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'All' }));
   fireEvent.click(screen.getByRole('button', {name:'Review Markdown'}));
   expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toContain('markdown-editor');
   expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default');
   expect(screen.getByRole('button', {name:'Install plugin'})).toBeTruthy();
+});
+
+it('clears a Studio draft after confirming discard on close', () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const onOpenChange = vi.fn();
+  render(<PluginManagement open onOpenChange={onOpenChange} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Build a plugin' }));
+  expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).not.toBe('');
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  expect(confirm).toHaveBeenCalled();
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+  expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toBe('');
+  expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toBe('');
+  confirm.mockRestore();
 });
