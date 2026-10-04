@@ -90,7 +90,7 @@ async function npmResolveVersion(name: string, version?: string, checkingUpdate 
   if (name.length > 214 || !/^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/.test(name)) {
     throw new Error(`Invalid npm package name: ${name}`);
   }
-  const meta = await fetchJson<NpmMeta>(`https://registry.npmjs.org/${name}`);
+  const meta = await fetchJson<NpmMeta>(`https://registry.npmjs.org/${name}`, 4 * 1024 * 1024);
   // Exact pins can discover newer latest releases. Tag installs stay on their
   // channel, so a prerelease install is not offered stable latest as a downgrade.
   const requested = checkingUpdate && version !== undefined && Object.hasOwn(meta.versions, version)
@@ -105,6 +105,7 @@ async function resolveNpm(ref: Extract<PluginSourceRef, { type: "npm" }>): Promi
   const version = await npmResolveVersion(ref.name, ref.version);
   const pkg = await fetchJson<{ canopy?: PluginManifest }>(
     `https://cdn.jsdelivr.net/npm/${ref.name}@${version}/package.json`,
+    128 * 1024,
   );
   if (!pkg.canopy) throw new Error(`${ref.name}@${version} has no "canopy" manifest in package.json`);
   const manifest: PluginManifest = { ...pkg.canopy, version };

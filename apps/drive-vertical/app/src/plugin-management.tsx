@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, cn } from '@canopy/ui';
 import { setImageViewerEnabled, viewerRegistry } from './image-viewer';
-import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin, importGithubPlugin } from './api';
+import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin, importGithubPlugin, importNpmPlugin } from './api';
 import { pluginCatalog } from './plugin-catalog';
 import { SandboxPlugin } from './sandbox-plugin';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
@@ -33,6 +33,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
   const [studioError, setStudioError] = useState<string | null>(null);
   const [imported, setImported] = useState<{ manifest: string; source: string; provenance: PluginProvenance } | null>(null);
   const [githubRepo, setGithubRepo] = useState(''), [githubRef, setGithubRef] = useState(''), [githubPath, setGithubPath] = useState('');
+  const [npmName, setNpmName] = useState(''), [npmVersion, setNpmVersion] = useState('');
   const manifestCheck = validateManifest(manifest);
   const [approved, setApproved] = useState(false);
 
@@ -156,6 +157,23 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
             setManifest(nextManifest); setSource(result.source); setImported({manifest:nextManifest,source:result.source,provenance:result.provenance}); setEditingInstall(null); setApproved(false); setStudioOpen(true);
           }).catch(error => { if (manifestRead.current === manifestToken && sourceRead.current === sourceToken) setStudioError(error instanceof Error ? error.message : String(error)); }).finally(()=>setBusy(false));
         }}>Review GitHub plugin</Button>
+      </div>
+      <div className="space-y-2 rounded-lg border p-3 text-sm">
+        <p className="font-medium">Import from npm</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Input aria-label="npm package" placeholder="@scope/package" value={npmName} onChange={event=>setNpmName(event.target.value)} />
+          <Input aria-label="npm version or tag" placeholder="Version or tag (latest)" value={npmVersion} onChange={event=>setNpmVersion(event.target.value)} />
+        </div>
+        <Button variant="outline" disabled={busy || !npmName.trim()} onClick={() => {
+          if ((manifest || source) && !confirmDiscardDrafts()) return;
+          const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
+          setBusy(true); setStudioError(null);
+          void importNpmPlugin(npmName.trim(), npmVersion.trim()).then(result => {
+            if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
+            const nextManifest = JSON.stringify(result.manifest, null, 2);
+            setManifest(nextManifest); setSource(result.source); setImported({manifest:nextManifest,source:result.source,provenance:result.provenance}); setEditingInstall(null); setApproved(false); setStudioOpen(true);
+          }).catch(error => { if (manifestRead.current === manifestToken && sourceRead.current === sourceToken) setStudioError(error instanceof Error ? error.message : String(error)); }).finally(() => setBusy(false));
+        }}>Review npm plugin</Button>
       </div>
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setManifest(event.target.value); }} /></label>
       {manifestCheck.error ? <p role="alert" className="text-sm text-destructive">{manifestCheck.error}</p> : null}
