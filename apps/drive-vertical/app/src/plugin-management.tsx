@@ -24,7 +24,18 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
   const [canManage, setCanManage] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { if (!open) return; let alive = true; refreshPlugins().catch(() => { if (alive) setError('Could not load installed plugins.'); }); peopleAccess().then(result => { if (alive) setCanManage(result.canManage); }).catch(() => {}); return () => { alive = false; }; }, [open]);
+  const [pluginsState, setPluginsState] = useState<'loading' | 'loaded' | 'failed'>('loading');
+  useEffect(() => {
+    if (!open) { setPluginsState('loading'); setError(null); return; }
+    let alive = true;
+    setPluginsState('loading');
+    setError(null);
+    refreshPlugins().then(() => { if (alive) setPluginsState('loaded'); }).catch(() => {
+      if (alive) { setPluginsState('failed'); setError('Could not load installed plugins.'); }
+    });
+    peopleAccess().then(result => { if (alive) setCanManage(result.canManage); }).catch(() => {});
+    return () => { alive = false; };
+  }, [open]);
   const change = async (action: () => Promise<unknown>) => { setBusy(true); setError(null); try { await action(); await refreshPlugins(); } catch (error) { setError(error instanceof Error ? error.message || 'Could not update this plugin.' : String(error)); } finally { setBusy(false); } };
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<'All' | 'Viewers' | 'Editors'>('All');
@@ -41,7 +52,8 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     <Input aria-label="Find a plugin" placeholder="Find a plugin" value={query} onChange={event => setQuery(event.target.value)} />
     {error ? <p role="alert">{error}</p> : null}
     <div><h3 className="font-medium">Your plugins</h3><p className="text-xs text-muted-foreground">Installed for you or applied to this space.</p></div>
-    {visiblePlugins.length ? <div className="grid gap-3 sm:grid-cols-2">{visiblePlugins.map(row => {
+    {pluginsState === 'loading' ? <p role="status" className="text-sm text-muted-foreground">Loading installed plugins…</p> : null}
+    {pluginsState === 'loaded' && visiblePlugins.length ? <div className="grid gap-3 sm:grid-cols-2">{visiblePlugins.map(row => {
       const manifest = pluginManifest(row);
       return <section key={row.id} className="flex min-w-0 flex-col gap-2.5 rounded-lg border p-3.5">
         <div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Icon name={manifest.contributes.detailView ? 'plugin' : 'file-text'} size={20} /></span><div className="min-w-0 flex-1"><h4 className="truncate font-medium">{manifest.name}</h4><p className="text-xs text-muted-foreground">{row.principal === 'space' ? 'Applied to this space' : 'Installed for you'}</p></div><span className="rounded-full bg-secondary px-2 py-0.5 text-[11px]">{row.enabled ? 'Enabled' : 'Disabled'}</span></div>
@@ -55,7 +67,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
           <Button size="sm" variant="ghost" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${manifest.name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
         </div>
       </section>;
-    })}</div> : <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query ? 'No installed plugins match this search.' : 'No plugins installed yet.'}</p>}
+    })}</div> : pluginsState === 'loaded' && !error && !busy ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query ? 'No installed plugins match this search.' : 'No plugins installed yet.'}</p> : null}
     {app ? <section><Button variant="outline" onClick={() => setApp(null)}>Close app</Button><SandboxPlugin key={app.id} plugin={app} /></section> : null}
     <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
     <details open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)}><summary>Plugin Studio · import or edit source</summary><p className="text-sm">Paste canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
