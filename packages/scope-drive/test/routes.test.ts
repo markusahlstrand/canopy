@@ -22,6 +22,7 @@ describe('the derived route table', () => {
       'DELETE /api/files/:fileId',
       'DELETE /api/files/:fileId/comments/:commentId',
       'DELETE /api/folders/:folderId/shares',
+      'DELETE /api/plugins/:id',
       'GET /api/changes',
       'GET /api/files/:fileId',
       'GET /api/files/:fileId/comments',
@@ -37,12 +38,15 @@ describe('the derived route table', () => {
       'GET /api/folders/shared-with-me',
       'GET /api/people',
       'GET /api/people/access',
+      'GET /api/plugins',
+      'GET /api/plugins/:id/source',
       'GET /api/search',
       'GET /api/trash',
       'PATCH /api/files/:fileId',
       'PATCH /api/files/:fileId/details',
       'PATCH /api/files/:fileId/versions/:versionId',
       'PATCH /api/folders/:folderId',
+      'PATCH /api/plugins/:id',
       'POST /api/files/:fileId/comments',
       'POST /api/files/:fileId/move',
       'POST /api/files/:fileId/restore',
@@ -52,6 +56,7 @@ describe('the derived route table', () => {
       'POST /api/folders/:folderId/move',
       'POST /api/folders/:folderId/shares',
       'POST /api/folders/:parentId/folders',
+      'PUT /api/plugins',
     ]);
   });
 

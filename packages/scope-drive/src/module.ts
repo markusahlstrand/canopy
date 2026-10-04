@@ -38,7 +38,7 @@ import {
   type OperationHandler,
 } from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
-import { driveOperations } from '../spec/model.js';
+import { driveOperations, installedPluginManifest } from '../spec/model.js';
 import { driveManifest } from './manifest.js';
 import { driveMigrations, ROOT_FOLDER_ID } from './migrations.js';
 
@@ -161,6 +161,17 @@ interface MirrorChangeEvent {
   entity_id: string;
 }
 
+interface PluginRow { id: string; plugin_id: string; principal: string; manifest_json: string; source: string; enabled: number; updated_at: string; source_kind: string; source_ref: string; resolved: string; source_sha256: string; granted_capabilities: string }
+async function pluginForMutation(ctx: OperationContext, id: string, mutate = true) {
+  assertAllowed(await ctx.check(DRIVE_PERM.read));
+  const row = ctx.sql.query<PluginRow>('SELECT * FROM drive_plugin_installs WHERE id = ?', [id])[0];
+  if (!row || (row.principal !== ctx.principal && row.principal !== 'space')) throw substratError('not_found', 'Plugin not found');
+  if (mutate && row.principal === 'space') assertAllowed(await ctx.check(DRIVE_PERM.manage));
+  return row;
+}
+const capabilityKeys = (caps: {kind:string;hosts?:string[]}[]) => [...new Set(caps.flatMap(cap => cap.kind === 'net:fetch' ? (cap.hosts ?? []).map(host => `net:fetch:${host}`) : [cap.kind]))].sort();
+const pluginWeb = globalThis as unknown as {crypto:{subtle:{digest(algorithm:string,bytes:Uint8Array):Promise<ArrayBuffer>}};TextEncoder:new()=>{encode(source:string):Uint8Array}};
+async function sourceDigest(source:string) {return [...new Uint8Array(await pluginWeb.crypto.subtle.digest('SHA-256',new pluginWeb.TextEncoder().encode(source)))].map(byte=>byte.toString(16).padStart(2,'0')).join('');}
 const operations = {
   'drive/request-space': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
@@ -176,6 +187,49 @@ const operations = {
       const payload = provisionSiblingPayload.safeParse(request.payload);
       return payload.success ? [{ id: request.id, slug: payload.data.slug, name: payload.data.name, status: request.status, error: request.lastError }] : [];
     }) };
+  },
+  'drive/list-plugins': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    const rows = ctx.sql.query<Omit<PluginRow,'source'>>('SELECT id, plugin_id, principal, manifest_json, enabled, updated_at, source_kind, source_ref, resolved, source_sha256, granted_capabilities FROM drive_plugin_installs WHERE principal IN (?, ?) ORDER BY plugin_id LIMIT 100', [ctx.principal, 'space']);
+    return {plugins: rows.filter(row => {try {return installedPluginManifest.safeParse(JSON.parse(row.manifest_json)).success;}catch{return false;}})};
+  },
+  'drive/plugin-source': async (ctx,input) => {
+    const row=await pluginForMutation(ctx,input.id,false);
+    if(row.updated_at!==input.revision)throw substratError('conflict','This plugin changed. Reload the plugin list.');
+    installedPluginManifest.parse(JSON.parse(row.manifest_json));
+    return {...row,source_sha256:row.source_sha256 || await sourceDigest(row.source)};
+  },
+  'drive/save-plugin': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    if (input.forSpace) assertAllowed(await ctx.check(DRIVE_PERM.manage));
+    const manifest = installedPluginManifest.parse(input.manifest), principal = input.forSpace ? 'space' : ctx.principal;
+    const previous = ctx.sql.query<PluginRow>('SELECT * FROM drive_plugin_installs WHERE principal = ? AND plugin_id = ?', [principal, manifest.id])[0];
+    if ((previous?.updated_at ?? null) !== input.expectedRevision) throw substratError('conflict', 'This plugin changed. Reload before replacing it.');
+    const nextCaps = capabilityKeys(manifest.capabilities);
+    const oldCaps = previous ? capabilityKeys(JSON.parse(previous.granted_capabilities) as {kind:string;hosts?:string[]}[]) : [];
+    if(previous && nextCaps.some(cap => !oldCaps.includes(cap)) && JSON.stringify(capabilityKeys(input.acceptCapabilities ?? [])) !== JSON.stringify(nextCaps)) throw substratError('conflict','Approve the complete new capability set before widening plugin access.');
+    const bytes=new pluginWeb.TextEncoder().encode(input.source).length;
+    const used=ctx.sql.query<{n:number}>('SELECT COALESCE(SUM(length(CAST(source AS BLOB))),0) AS n FROM drive_plugin_installs')[0]!.n;
+    if(bytes>256000 || used - (previous ? new pluginWeb.TextEncoder().encode(previous.source).length : 0) + bytes > 5000000) throw substratError('conflict','Plugin source storage is limited to 256 KB per install and 5 MB per space.');
+    const count = ctx.sql.query<{n: number}>('SELECT count(*) AS n FROM drive_plugin_installs WHERE principal = ?', [principal])[0]!.n;
+    if (!previous && count >= 40) throw substratError('conflict', 'Uninstall a plugin before installing another (40 per person or space).');
+    const row: PluginRow = {id: previous?.id ?? ulid(), plugin_id: manifest.id, principal, manifest_json: JSON.stringify(manifest), source: input.source, enabled: previous?.enabled ?? 1, updated_at: ulid(), source_kind: input.provenance?.kind ?? 'inline', source_ref: input.provenance?.ref ?? 'Client-supplied JavaScript', resolved: input.provenance?.resolved ?? '', source_sha256: await sourceDigest(input.source), granted_capabilities: JSON.stringify(manifest.capabilities)};
+    ctx.sql.exec('INSERT INTO drive_plugin_installs (id, plugin_id, principal, manifest_json, source, enabled, updated_at, source_kind, source_ref, resolved, source_sha256, granted_capabilities) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET manifest_json=excluded.manifest_json, source=excluded.source, updated_at=excluded.updated_at, source_kind=excluded.source_kind, source_ref=excluded.source_ref, resolved=excluded.resolved, source_sha256=excluded.source_sha256, granted_capabilities=excluded.granted_capabilities', [row.id, row.plugin_id, row.principal, row.manifest_json, row.source, row.enabled, row.updated_at, row.source_kind, row.source_ref, row.resolved, row.source_sha256, row.granted_capabilities]);
+    ctx.emit({type: 'drive.plugin-saved', schemaVersion: 1, entity: {entityType: 'plugin_install', entityId: row.id}, piiClass: 'none', payload: {pluginId: manifest.id}});
+    return row;
+  },
+  'drive/toggle-plugin': async (ctx, input) => {
+    const row = await pluginForMutation(ctx, input.id);
+    row.enabled = input.enabled ? 1 : 0; row.updated_at = ulid();
+    ctx.sql.exec('UPDATE drive_plugin_installs SET enabled = ?, updated_at = ? WHERE id = ?', [row.enabled, row.updated_at, row.id]);
+    ctx.emit({type: 'drive.plugin-saved', schemaVersion: 1, entity: {entityType: 'plugin_install', entityId: row.id}, piiClass: 'none', payload: {pluginId: row.plugin_id}});
+    return row;
+  },
+  'drive/remove-plugin': async (ctx, input) => {
+    const row = await pluginForMutation(ctx, input.id);
+    ctx.sql.exec('DELETE FROM drive_plugin_installs WHERE id = ?', [row.id]);
+    ctx.emit({type: 'drive.plugin-removed', schemaVersion: 1, entity: {entityType: 'plugin_install', entityId: row.id}, piiClass: 'none', payload: {pluginId: row.plugin_id}});
+    return {id: row.id};
   },
   'drive/changes': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
@@ -1244,6 +1298,7 @@ const operations = {
       await ctx.revoke(who, permissionKey.parse(grant.permission), folderRef(grant.folder_id));
     }
     ctx.sql.exec('DELETE FROM drive_folder_shares WHERE principal = ?', [input.principal]);
+    ctx.sql.exec('DELETE FROM drive_plugin_installs WHERE principal = ?', [input.principal]);
 
     const forgotten =
       ctx.sql.exec('DELETE FROM drive_people WHERE principal = ?', [input.principal]).changes > 0;
