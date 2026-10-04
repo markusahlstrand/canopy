@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, cn } from '@canopy/ui';
 import { setImageViewerEnabled, viewerRegistry } from './image-viewer';
-import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin } from './api';
+import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin, importGithubPlugin } from './api';
 import { pluginCatalog } from './plugin-catalog';
 import { SandboxPlugin } from './sandbox-plugin';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
@@ -32,6 +32,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
   const manifestRead = useRef(0), sourceRead = useRef(0);
   const [studioError, setStudioError] = useState<string | null>(null);
   const [imported, setImported] = useState<{ manifest: string; source: string; provenance: PluginProvenance } | null>(null);
+  const [githubRepo, setGithubRepo] = useState(''), [githubRef, setGithubRef] = useState(''), [githubPath, setGithubPath] = useState('');
   const manifestCheck = validateManifest(manifest);
   const [approved, setApproved] = useState(false);
 
@@ -138,6 +139,24 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
         }} /></label>
       </div>
       {studioError ? <p role="alert" className="text-sm text-destructive">{studioError}</p> : null}
+      <div className="space-y-2 rounded-lg border p-3 text-sm">
+        <p className="font-medium">Import from public GitHub</p>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <Input aria-label="GitHub repository" placeholder="owner/repository" value={githubRepo} onChange={event=>setGithubRepo(event.target.value)} />
+          <Input aria-label="GitHub ref" placeholder="Branch or commit SHA (main)" value={githubRef} onChange={event=>setGithubRef(event.target.value)} />
+          <Input aria-label="GitHub plugin folder" placeholder="Folder (optional)" value={githubPath} onChange={event=>setGithubPath(event.target.value)} />
+        </div>
+        <Button variant="outline" disabled={busy || !githubRepo.trim()} onClick={() => {
+          if ((manifest || source) && !confirmDiscardDrafts()) return;
+          const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
+          setBusy(true); setStudioError(null);
+          void importGithubPlugin(githubRepo.trim(),githubRef.trim(),githubPath.trim()).then(result => {
+            if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
+            const nextManifest=JSON.stringify(result.manifest,null,2);
+            setManifest(nextManifest); setSource(result.source); setImported({manifest:nextManifest,source:result.source,provenance:result.provenance}); setEditingInstall(null); setApproved(false); setStudioOpen(true);
+          }).catch(error => { if (manifestRead.current === manifestToken && sourceRead.current === sourceToken) setStudioError(error instanceof Error ? error.message : String(error)); }).finally(()=>setBusy(false));
+        }}>Review GitHub plugin</Button>
+      </div>
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setManifest(event.target.value); }} /></label>
       {manifestCheck.error ? <p role="alert" className="text-sm text-destructive">{manifestCheck.error}</p> : null}
       <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => { sourceRead.current++; setSource(event.target.value); }} /></label>

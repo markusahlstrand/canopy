@@ -10,10 +10,28 @@ const plainPath = (path: string) => path.length > 0 && !path.includes("\\") &&
 
 const encodePath = (p: string) => p.split("/").filter(Boolean).map(encodeURIComponent).join("/");
 
-async function fetchJson<T>(url: string): Promise<T> {
+async function fetchJson<T>(url: string, maxBytes?: number): Promise<T> {
   const res = await fetch(url, { headers: { "User-Agent": "canopy" } });
   if (!res.ok) throw new Error(`fetch ${url} → ${res.status}`);
-  return (await res.json()) as T;
+  if (maxBytes === undefined) return (await res.json()) as T;
+  if (Number(res.headers.get("content-length")) > maxBytes) throw new Error("plugin manifest exceeds size limit");
+  if (!res.body) throw new Error("plugin manifest has no body");
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) { await reader.cancel(); throw new Error("plugin manifest exceeds size limit"); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)) as T;
 }
 
 // ── GitHub: repo folder with a canopy.json + entry module (public repos) ──────
@@ -55,7 +73,7 @@ async function githubCommit(ref: Extract<PluginSourceRef, { type: "github" }>, o
 async function resolveGithub(ref: Extract<PluginSourceRef, { type: "github" }>, opts: ResolveOptions): Promise<ResolvedPlugin> {
   const commit = await githubCommit(ref, opts);
   const { raw } = ghBase(ref.repo, commit, ref.path ?? "");
-  const manifest = await fetchJson<PluginManifest>(raw("canopy.json"));
+  const manifest = await fetchJson<PluginManifest>(raw("canopy.json"), 64 * 1024);
   const entry: PluginEntry = { url: raw(manifest.entry ?? "index.js") };
   return { manifest, entry, version: commit, source: ref, resolvedSource: { ...ref, ref: commit } };
 }
