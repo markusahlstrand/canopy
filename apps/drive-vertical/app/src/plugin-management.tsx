@@ -7,6 +7,14 @@ import { SandboxPlugin } from './sandbox-plugin';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 import type { PluginInstall } from './api';
 import { refreshPlugins, useInstalledPlugins, pluginManifest } from './installed-plugins';
+import { installedPluginManifest } from '@canopy/scope-drive/spec/model';
+function validateManifest(text: string) {
+  if (!text.trim()) return { manifest: null, error: null };
+  try {
+    const result = installedPluginManifest.safeParse(JSON.parse(text));
+    return result.success ? { manifest: result.data, error: null } : { manifest: null, error: result.error.issues[0]?.message ?? 'Invalid plugin manifest.' };
+  } catch { return { manifest: null, error: 'Manifest must contain valid JSON.' }; }
+}
 /** Manage installed viewer contributions; available plugins are reviewed and bundled. */
 export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
@@ -16,6 +24,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
   const plugins = useInstalledPlugins();
   const [manifest, setManifest] = useState('');
   const [source, setSource] = useState('');
+  const manifestCheck = validateManifest(manifest);
   const [approved, setApproved] = useState(false);
 
   useUnsavedDraft(open && (!!manifest || !!source));
@@ -85,10 +94,11 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
     <details open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)}><summary>Plugin Studio · import or edit source</summary><p className="text-sm">Paste canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => setManifest(event.target.value)} /></label>
+      {manifestCheck.error ? <p role="alert" className="text-sm text-destructive">{manifestCheck.error}</p> : null}
       <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => setSource(event.target.value)} /></label>
       {canManage ? <label><input type="checkbox" checked={forSpace} onChange={event => setForSpace(event.target.checked)} />Apply to this space</label> : null}
       <label className="block"><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Approve the capabilities in this manifest, including added access. Read access lets the plugin share the opened file outside Canopy.</label>
-      <Button disabled={busy || !manifest || !source || !approved} onClick={() => void change(async () => { const parsed = JSON.parse(manifest) as {id:string;version:string;capabilities:unknown}; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; const bundled = pluginCatalog.find(entry => JSON.stringify(entry.manifest) === JSON.stringify(parsed) && entry.source === source); await savePlugin(parsed, source, revision, forSpace, parsed.capabilities, bundled ? {kind:'bundled',ref:`@canopy/catalog/${parsed.id}`,resolved:parsed.version} : undefined); setEditingInstall(null); setManifest(''); setSource(''); })}>Install plugin</Button>
+      <Button disabled={busy || !manifestCheck.manifest || !source.trim() || !approved} onClick={() => void change(async () => { const parsed = manifestCheck.manifest!; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; const bundled = pluginCatalog.find(entry => JSON.stringify(installedPluginManifest.parse(entry.manifest)) === JSON.stringify(parsed) && entry.source === source); await savePlugin(parsed, source, revision, forSpace, parsed.capabilities, bundled ? {kind:'bundled',ref:`@canopy/catalog/${parsed.id}`,resolved:parsed.version} : undefined); setEditingInstall(null); setManifest(''); setSource(''); })}>Install plugin</Button>
     </details>
     <div><h3 className="font-medium">Available plugins</h3><p className="text-xs text-muted-foreground">Browse reviewed viewers and editors, then approve their access before installing.</p></div>
     <div className="flex flex-wrap gap-1.5" role="group" aria-label="Plugin categories">{(['All', 'Viewers', 'Editors'] as const).map(value => <button key={value} type="button" aria-pressed={category === value} onClick={() => setCategory(value)} className={cn('rounded-full px-3 py-1 text-xs font-medium transition-colors', category === value ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/70')}>{value}</button>)}</div>

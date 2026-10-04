@@ -70,3 +70,11 @@ it('records bundled provenance only while catalog manifest and source are unchan
   const request = JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string);
   expect(request.provenance).toEqual({kind:'bundled',ref:'@canopy/catalog/markdown-editor',resolved:request.manifest.version});
 });
+it('shows manifest errors before allowing a plugin install', () => {
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.click(screen.getByRole('button',{name:'Build a plugin'}));
+  fireEvent.change(screen.getByLabelText('Plugin manifest'),{target:{value:'{bad json'}});
+  fireEvent.click(screen.getByRole('checkbox',{name:/Approve the capabilities/}));
+  expect(screen.getByRole('alert').textContent).toContain('valid JSON');
+  expect((screen.getByRole('button',{name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(true);
+});
