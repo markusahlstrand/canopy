@@ -52,7 +52,7 @@ import {
   type ScopeSweeperDo,
 } from '@substrat-run/adapter-cloudflare';
 import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
-import { ulid, readRoutedNode, RouterAssertionError, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
+import { ulid, kickFlags, readRoutedNode, RouterAssertionError, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
 import { mountLiveReads, mountPlatformSurface } from '@substrat-run/vertical-host';
 import {
   AuthConfigError,
@@ -708,7 +708,9 @@ app.post('/api/sites', async (c) => {
   const owner = principalId.parse(reservation.owner);
   await identityDo(c.env, node).rememberSpaceCreator(owner, subject.sub);
   if (input.data.settings) await identityDo(c.env, node).writeSpaceSettings(`creator:${owner}`, {...input.data.settings, name: input.data.name});
-  const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+  // The provision request is a platform intent; flagging the response kicks an immediate
+  // drain, so the space is created in seconds rather than at the next sweep.
+  const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId, kickFlags((name, value) => c.header(name, value)));
   return c.json(await scope.invoke('drive/request-space', { ...input.data, owner }), 202);
 });
 app.get('/api/site-requests', async (c) => {
