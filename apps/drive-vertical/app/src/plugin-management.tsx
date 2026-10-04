@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, cn } from '@canopy/ui';
 import { setImageViewerEnabled, viewerRegistry } from './image-viewer';
 import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin } from './api';
@@ -27,6 +27,8 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
   const plugins = useInstalledPlugins();
   const [manifest, setManifest] = useState('');
   const [source, setSource] = useState('');
+  const manifestRead = useRef(0), sourceRead = useRef(0);
+  const [studioError, setStudioError] = useState<string | null>(null);
   const manifestCheck = validateManifest(manifest);
   const [approved, setApproved] = useState(false);
 
@@ -59,12 +61,26 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     `${entry.manifest.name} ${entry.manifest.description}`.toLowerCase().includes(query.toLowerCase()),
   );
   const showImageViewer = (category === 'All' || category === 'Viewers') && 'image viewer'.includes(query.toLowerCase());
+  const readLocalFile = async (file: File | undefined, target: 'manifest' | 'source') => {
+    if (!file) return;
+    if ((target === 'manifest' ? manifest : source) && !confirmDiscardDrafts()) return;
+    const counter = target === 'manifest' ? manifestRead : sourceRead;
+    const token = ++counter.current;
+    setStudioError(null);
+    if (file.size > 256_000) { setStudioError(`Plugin ${target} file is too large.`); return; }
+    try {
+      const contents = await file.text();
+      if (counter.current !== token) return;
+      if (target === 'manifest') setManifest(contents); else setSource(contents);
+    } catch { if (counter.current === token) setStudioError(`Could not read plugin ${target} file.`); }
+  };
   const handleOpenChange = (next: boolean) => {
     if (!next) {
       if (!confirmDiscardDrafts()) return;
       setEditingInstall(null);
       setManifest('');
       setSource('');
+      manifestRead.current++; sourceRead.current++; setStudioError(null);
       setApproved(false);
       setForSpace(false);
       setStudioOpen(false);
@@ -87,18 +103,23 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
         <p className="text-xs text-muted-foreground">Access: {manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ') || 'None'}</p>
         <div className="mt-auto flex flex-wrap gap-1.5">
           <Button size="sm" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : 'Enable'}</Button>
-          <Button size="sm" variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; void change(async () => {const loaded = await pluginSource(row.id,row.updated_at); setEditingInstall(loaded); setManifest(JSON.stringify(pluginManifest(loaded),null,2)); setSource(loaded.source);setForSpace(loaded.principal==='space');setStudioOpen(true);}); }}>Edit source</Button>
+          <Button size="sm" variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; void change(async () => {const loaded = await pluginSource(row.id,row.updated_at); setEditingInstall(loaded); setManifest(JSON.stringify(pluginManifest(loaded),null,2)); setSource(loaded.source);setForSpace(loaded.principal==='space');setStudioOpen(true);}); }}>Edit source</Button>
           {row.enabled && manifest.contributes.detailView ? <Button size="sm" variant="outline" onClick={() => setApp(row)}>Open app</Button> : null}
           <Button size="sm" variant="ghost" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${manifest.name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
         </div>
       </section>;
     })}</div> : pluginsState === 'loaded' && !error && !busy ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query ? 'No installed plugins match this search.' : 'No plugins installed yet.'}</p> : null}
     {app ? <section><Button variant="outline" onClick={() => setApp(null)}>Close app</Button><SandboxPlugin key={app.id} plugin={app} /></section> : null}
-    <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
-    <details open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)}><summary>Plugin Studio · import or edit source</summary><p className="text-sm">Paste canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
-      <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => setManifest(event.target.value)} /></label>
+    <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
+    <details open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)}><summary>Plugin Studio · import or edit source</summary><p className="text-sm">Paste or choose canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
+      <div className="flex flex-wrap gap-3 text-sm">
+        <label>Choose canopy.json <input type="file" accept=".json,application/json" aria-label="Choose plugin manifest file" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readLocalFile(file, 'manifest'); }} /></label>
+        <label>Choose JavaScript <input type="file" accept=".js,.mjs,text/javascript" aria-label="Choose plugin source file" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readLocalFile(file, 'source'); }} /></label>
+      </div>
+      {studioError ? <p role="alert" className="text-sm text-destructive">{studioError}</p> : null}
+      <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setManifest(event.target.value); }} /></label>
       {manifestCheck.error ? <p role="alert" className="text-sm text-destructive">{manifestCheck.error}</p> : null}
-      <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => setSource(event.target.value)} /></label>
+      <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => { sourceRead.current++; setSource(event.target.value); }} /></label>
       {canManage ? <label><input type="checkbox" checked={forSpace} onChange={event => setForSpace(event.target.checked)} />Apply to this space</label> : null}
       <label className="block"><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Approve the capabilities in this manifest, including added access. Read access lets the plugin share the opened file outside Canopy.</label>
       <Button disabled={busy || !manifestCheck.manifest || !source.trim() || !approved} onClick={() => void change(async () => { const parsed = manifestCheck.manifest!; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; const bundled = pluginCatalog.find(entry => { const candidate = installedPluginManifest.safeParse(entry.manifest); return candidate.success && JSON.stringify(candidate.data) === JSON.stringify(parsed) && entry.source === source; }); await savePlugin(parsed, source, revision, forSpace, parsed.capabilities, bundled ? {kind:'bundled',ref:`@canopy/catalog/${parsed.id}`,resolved:parsed.version} : undefined); setEditingInstall(null); setManifest(''); setSource(''); })}>Install plugin</Button>
@@ -110,7 +131,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       <div><h4 className="font-medium">{entry.manifest.name}</h4><p className="text-xs text-muted-foreground">{entry.category}</p></div>
       <p className="flex-1 text-sm text-muted-foreground">{entry.manifest.description}</p>
       <p className="text-xs text-muted-foreground">Access: {entry.manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ')}. File-read plugins can share opened files outside Canopy.{entry.manifest.capabilities.some(cap => cap.kind === 'net:fetch') ? ' Listed hosts serve code that runs with the opened file.' : ''}</p>
-      <Button variant="outline" disabled={busy} onClick={() => { if (!confirmDiscardDrafts()) return; setEditingInstall(null); setManifest(JSON.stringify(entry.manifest, null, 2)); setSource(entry.source); setForSpace(false); setStudioOpen(true); }}>Review {entry.manifest.name}</Button>
+      <Button variant="outline" disabled={busy} onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; setEditingInstall(null); setManifest(JSON.stringify(entry.manifest, null, 2)); setSource(entry.source); setForSpace(false); setStudioOpen(true); }}>Review {entry.manifest.name}</Button>
     </section>)}</div>
     {showImageViewer ? <section aria-label="Image viewer" className="space-y-2 rounded border p-3">
       <h4 className="font-medium">Image viewer</h4><p className="text-sm">Preview images with zoom and keyboard controls.</p>

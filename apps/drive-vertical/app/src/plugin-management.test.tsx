@@ -85,3 +85,48 @@ it('shows manifest errors before allowing a plugin install', () => {
 it('keeps every bundled catalog manifest compatible with the install schema', () => {
   for (const entry of pluginCatalog) expect(installedPluginManifest.safeParse(entry.manifest).success).toBe(true);
 });
+it('loads local manifest and JavaScript files into Studio for review', async () => {
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  const manifest = new File(['{}'],'canopy.json',{type:'application/json'});
+  const source = new File(['export default () => {}'],'index.js',{type:'text/javascript'});
+  Object.defineProperty(manifest,'text',{value:async()=>'{"id":"local-plugin"}'});
+  Object.defineProperty(source,'text',{value:async()=> 'export default () => {}'});
+  fireEvent.change(screen.getByLabelText('Choose plugin manifest file'),{target:{files:[manifest]}});
+  fireEvent.change(screen.getByLabelText('Choose plugin source file'),{target:{files:[source]}});
+  await waitFor(()=>expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toContain('local-plugin'));
+  expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default');
+  expect((screen.getByRole('button',{name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(true);
+});
+it('shows file errors beside Studio and clears them when a valid file is selected', async () => {
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  const input = screen.getByLabelText('Choose plugin source file') as HTMLInputElement;
+  fireEvent.change(input,{target:{files:[new File(['x'.repeat(256_001)],'large.js')]}});
+  expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
+  const file = new File(['export default () => {}'],'small.js');
+  Object.defineProperty(file,'text',{value:async()=> 'export default () => {}'});
+  fireEvent.change(input,{target:{files:[file]}});
+  await waitFor(()=>expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default'));
+  expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
+  expect(input.value).toBe('');
+});
+it('keeps the latest local file when earlier reads finish later', async () => {
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  let finishA!: (value:string)=>void, finishB!: (value:string)=>void;
+  const a = new File(['a'],'a.js'), b = new File(['b'],'b.js');
+  Object.defineProperty(a,'text',{value:()=>new Promise<string>(resolve=>{finishA=resolve;})});
+  Object.defineProperty(b,'text',{value:()=>new Promise<string>(resolve=>{finishB=resolve;})});
+  const input = screen.getByLabelText('Choose plugin source file');
+  fireEvent.change(input,{target:{files:[a]}}); fireEvent.change(input,{target:{files:[b]}});
+  await act(async()=>finishB('source B'));
+  await act(async()=>finishA('source A'));
+  expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toBe('source B');
+});
+it('keeps a source draft when the user cancels file replacement', () => {
+  const confirm = vi.spyOn(window,'confirm').mockReturnValue(false);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.change(screen.getByLabelText('Plugin source'),{target:{value:'my edited source'}});
+  fireEvent.change(screen.getByLabelText('Choose plugin source file'),{target:{files:[new File(['replacement'],'other.js')]}});
+  expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toBe('my edited source');
+  expect(confirm).toHaveBeenCalled();
+  confirm.mockRestore();
+});
