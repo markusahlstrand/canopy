@@ -236,7 +236,7 @@ export function Topbar({
               <Icon name="users" size={15} /> People…
             </DropdownMenuItem>
           )}
-          {onOpenViewers ? <DropdownMenuItem onClick={onOpenViewers}>File viewers…</DropdownMenuItem> : null}
+          {onOpenViewers ? <DropdownMenuItem onClick={onOpenViewers}>Plugins…</DropdownMenuItem> : null}
           <DropdownMenuItem onClick={onSignOut}>
             <Icon name="log-out" size={15} /> Sign out
           </DropdownMenuItem>
