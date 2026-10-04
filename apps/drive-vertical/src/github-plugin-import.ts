@@ -3,8 +3,8 @@ import { resolvePlugin } from '@canopy/plugin-sources';
 const MAX_SOURCE_BYTES = 256_000;
 
 /** Resolve a public GitHub plugin to a pinned commit and a bounded, single entry file. */
-export async function importGithubPlugin(ref: { repo: string; ref?: string; path?: string }, fetchEntry: typeof fetch) {
-  const resolved = await resolvePlugin({ type: 'github', ...ref });
+export async function importGithubPlugin(ref: { repo: string; ref?: string; path?: string }, fetchEntry: typeof fetch, githubToken?: string) {
+  const resolved = await resolvePlugin({ type: 'github', ...ref }, { githubToken });
   if (!('url' in resolved.entry)) throw new Error('GitHub plugin has no JavaScript entry.');
   const response = await fetchEntry(resolved.entry.url);
   if (!response.ok) throw new Error(`Could not fetch plugin entry (${response.status}).`);

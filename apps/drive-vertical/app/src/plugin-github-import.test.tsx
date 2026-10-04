@@ -2,7 +2,7 @@ import {afterEach,expect,it,vi} from 'vitest';
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {PluginManagement} from './plugin-management';
 
-afterEach(()=>{cleanup();vi.unstubAllGlobals();});
+afterEach(()=>{cleanup();vi.unstubAllGlobals();vi.restoreAllMocks();});
 
 it('loads a GitHub plugin for review before install',async()=>{
   const manifest={id:'github-viewer',name:'GitHub viewer',version:'1',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',match:['text/*']}]}};
@@ -19,4 +19,16 @@ it('loads a GitHub plugin for review before install',async()=>{
   await waitFor(()=>expect(fetcher.mock.calls.some(([,init])=>init?.method==='PUT')).toBe(true));
   const body=JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string);
   expect(body.provenance).toEqual({kind:'github',ref:'owner/repo@main',resolved:'a'.repeat(40)});
+});
+it('keeps a Studio draft when GitHub import is canceled', () => {
+  const confirm=vi.spyOn(window,'confirm').mockReturnValue(false);
+  const fetcher=vi.fn(async (url:string)=>new Response(JSON.stringify(url.endsWith('/people/access')?{canManage:false}:{plugins:[]})));
+  vi.stubGlobal('fetch',fetcher);
+  render(<PluginManagement open onOpenChange={()=>{}}/>);
+  fireEvent.change(screen.getByLabelText('Plugin source'),{target:{value:'my draft'}});
+  fireEvent.change(screen.getByLabelText('GitHub repository'),{target:{value:'owner/repo'}});
+  fireEvent.click(screen.getByRole('button',{name:'Review GitHub plugin'}));
+  expect(confirm).toHaveBeenCalled();
+  expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toBe('my draft');
+  expect(fetcher.mock.calls.some(([url])=>url.endsWith('/plugin-import/github'))).toBe(false);
 });

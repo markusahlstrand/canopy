@@ -55,3 +55,9 @@ it('reports primary rate limits with reset information', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1234' } })));
   await expect(resolvePlugin(source)).rejects.toThrow('GitHub rate limit reached (403); retry after Unix time 1234');
 });
+it('rejects an oversized GitHub manifest before parsing it', async () => {
+  const fetcher = vi.fn(async (url: string) => new Response(url.startsWith('https://api.github.com/') ? sha : 'x'.repeat(64 * 1024 + 1)));
+  vi.stubGlobal('fetch', fetcher);
+  await expect(resolvePlugin(source)).rejects.toThrow('plugin manifest exceeds size limit');
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});

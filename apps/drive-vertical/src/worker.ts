@@ -184,6 +184,8 @@ export interface Env {
   ALLOW_DEV_NODE?: string;
   ROUTER_SECRET?: string;
   PLATFORM_SECRET?: string;
+  /** Optional token for GitHub commit lookups during public plugin imports. */
+  GITHUB_TOKEN?: string;
   /** The install's issuer. Absent ⇒ nothing authenticates, which is the honest default. */
   OIDC_ISSUER?: string;
   OIDC_CLIENT_ID?: string;
@@ -719,11 +721,20 @@ app.get('/api/site-requests', async (c) => {
   return c.json(await scope.invoke('drive/space-requests', {}));
 });
 
+const githubImportBudget = new Map<string, { count: number; resetAt: number }>();
 app.post('/api/plugin-import/github', async (c) => {
-  if (!await principalFor(c.env, c.req.raw)) throw new HTTPException(401, { message: 'unauthorized' });
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
   const input = z.object({repo:z.string().min(3).max(200),ref:z.string().max(100).optional(),path:z.string().max(200).optional()}).safeParse(await c.req.json());
   if (!input.success) throw new HTTPException(400, { message: 'Enter a GitHub repository and optional ref or folder.' });
-  try { return c.json(await importGithubPlugin(input.data, fetch)); }
+  // A per-isolate budget prevents accidental repeated imports from exhausting
+  // GitHub's shared IP quota. An optional token raises the upstream quota.
+  const now = Date.now(), previous = githubImportBudget.get(principal);
+  if (githubImportBudget.size > 1000) for (const [key, value] of githubImportBudget) if (value.resetAt <= now) githubImportBudget.delete(key);
+  const budget = previous && previous.resetAt > now ? previous : { count: 0, resetAt: now + 60 * 60_000 };
+  if (budget.count >= 20) throw new HTTPException(429, { message: 'Too many GitHub plugin imports. Try again later.' });
+  githubImportBudget.set(principal, { ...budget, count: budget.count + 1 });
+  try { return c.json(await importGithubPlugin(input.data, fetch, c.env.GITHUB_TOKEN)); }
   catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
 });
 

@@ -143,12 +143,19 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
         <p className="font-medium">Import from public GitHub</p>
         <div className="grid gap-2 sm:grid-cols-3">
           <Input aria-label="GitHub repository" placeholder="owner/repository" value={githubRepo} onChange={event=>setGithubRepo(event.target.value)} />
-          <Input aria-label="GitHub ref" placeholder="Branch or commit (main)" value={githubRef} onChange={event=>setGithubRef(event.target.value)} />
+          <Input aria-label="GitHub ref" placeholder="Branch or commit SHA (main)" value={githubRef} onChange={event=>setGithubRef(event.target.value)} />
           <Input aria-label="GitHub plugin folder" placeholder="Folder (optional)" value={githubPath} onChange={event=>setGithubPath(event.target.value)} />
         </div>
-        <Button variant="outline" disabled={busy || !githubRepo.trim()} onClick={() => { setBusy(true); setError(null); void importGithubPlugin(githubRepo.trim(),githubRef.trim(),githubPath.trim()).then(result => {
-          const manifest=JSON.stringify(result.manifest,null,2); setManifest(manifest); setSource(result.source); setImported({manifest,source:result.source,provenance:result.provenance}); setApproved(false); setStudioOpen(true);
-        }).catch(error => setError(error instanceof Error ? error.message : String(error))).finally(()=>setBusy(false)); }}>Review GitHub plugin</Button>
+        <Button variant="outline" disabled={busy || !githubRepo.trim()} onClick={() => {
+          if ((manifest || source) && !confirmDiscardDrafts()) return;
+          const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
+          setBusy(true); setStudioError(null);
+          void importGithubPlugin(githubRepo.trim(),githubRef.trim(),githubPath.trim()).then(result => {
+            if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
+            const nextManifest=JSON.stringify(result.manifest,null,2);
+            setManifest(nextManifest); setSource(result.source); setImported({manifest:nextManifest,source:result.source,provenance:result.provenance}); setEditingInstall(null); setApproved(false); setStudioOpen(true);
+          }).catch(error => { if (manifestRead.current === manifestToken && sourceRead.current === sourceToken) setStudioError(error instanceof Error ? error.message : String(error)); }).finally(()=>setBusy(false));
+        }}>Review GitHub plugin</Button>
       </div>
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setManifest(event.target.value); }} /></label>
       {manifestCheck.error ? <p role="alert" className="text-sm text-destructive">{manifestCheck.error}</p> : null}
