@@ -85,3 +85,15 @@ it('shows manifest errors before allowing a plugin install', () => {
 it('keeps every bundled catalog manifest compatible with the install schema', () => {
   for (const entry of pluginCatalog) expect(installedPluginManifest.safeParse(entry.manifest).success).toBe(true);
 });
+it('loads local manifest and JavaScript files into Studio for review', async () => {
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  const manifest = new File(['{}'],'canopy.json',{type:'application/json'});
+  const source = new File(['export default () => {}'],'index.js',{type:'text/javascript'});
+  Object.defineProperty(manifest,'text',{value:async()=>'{"id":"local-plugin"}'});
+  Object.defineProperty(source,'text',{value:async()=> 'export default () => {}'});
+  fireEvent.change(screen.getByLabelText('Choose plugin manifest file'),{target:{files:[manifest]}});
+  fireEvent.change(screen.getByLabelText('Choose plugin source file'),{target:{files:[source]}});
+  await waitFor(()=>expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toContain('local-plugin'));
+  expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default');
+  expect((screen.getByRole('button',{name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(true);
+});
