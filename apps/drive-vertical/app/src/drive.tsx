@@ -721,6 +721,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           sites={siteList.sites}
           failed={siteList.failed}
           onSpaces={() => setSpacesOpen(true)}
+          onCreateSpace={canManagePeople && !offline ? () => setCreateSpaceOpen(true) : undefined}
           onRetry={siteList.retry}
         />
       </div>
@@ -738,6 +739,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             sites={siteList.sites}
             failed={siteList.failed}
             onSpaces={() => { setMobileNavOpen(false); setSpacesOpen(true); }}
+            onCreateSpace={canManagePeople && !offline ? () => { setMobileNavOpen(false); setCreateSpaceOpen(true); } : undefined}
             onRetry={siteList.retry}
           />
         </SheetContent>
