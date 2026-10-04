@@ -22,11 +22,10 @@ function validateManifest(text: string) {
   } catch { return { manifest: null, error: 'Manifest must contain valid JSON.' }; }
 }
 /** Manage installed viewer contributions; available plugins are reviewed and bundled. */
-export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: boolean; onOpenChange: (open: boolean) => void; onOpenApp?: (id: string) => void }) {
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
   const [studioOpen, setStudioOpen] = useState(false);
   const [editingInstall, setEditingInstall] = useState<PluginInstall | null>(null);
-  const [app, setApp] = useState<PluginInstall | null>(null);
   const plugins = useInstalledPlugins();
   const [manifest, setManifest] = useState('');
   const [source, setSource] = useState('');
@@ -92,20 +91,20 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       if (target === 'manifest') setManifest(contents); else setSource(contents);
     } catch { if (counter.current === token) setStudioError(`Could not read plugin ${target} file.`); }
   };
+  const close = () => {
+    setEditingInstall(null);
+    setManifest('');
+    setSource('');
+    manifestRead.current++; sourceRead.current++; setStudioError(null);
+    setImported(null);
+    setApproved(false);
+    setForSpace(false);
+    setStudioOpen(false);
+    onOpenChange(false);
+  };
   const handleOpenChange = (next: boolean) => {
-    if (!next) {
-      if (!confirmDiscardDrafts()) return;
-      setEditingInstall(null);
-      setManifest('');
-      setSource('');
-      manifestRead.current++; sourceRead.current++; setStudioError(null);
-      setImported(null);
-      setApproved(false);
-      setForSpace(false);
-      setStudioOpen(false);
-      setApp(null);
-    }
-    onOpenChange(next);
+    if (next) onOpenChange(true);
+    else if (confirmDiscardDrafts()) close();
   };
   return <Dialog open={open} onOpenChange={handleOpenChange}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-[760px]">
     <DialogHeader><DialogTitle>Plugins</DialogTitle><DialogDescription>Install file viewers for yourself or apply them to the current space. Review the access requested by each plugin before installing.</DialogDescription></DialogHeader>
@@ -123,12 +122,11 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
         <div className="mt-auto flex flex-wrap gap-1.5">
           <Button size="sm" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : 'Enable'}</Button>
           <Button size="sm" variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; void change(async () => {const loaded = await pluginSource(row.id,row.updated_at); setEditingInstall(loaded); setManifest(JSON.stringify(pluginManifest(loaded),null,2)); setSource(loaded.source);setForSpace(loaded.principal==='space');setStudioOpen(true);}); }}>Edit source</Button>
-          {row.enabled && manifest.contributes.detailView ? <Button size="sm" variant="outline" onClick={() => setApp(row)}>Open app</Button> : null}
+          {row.enabled && manifest.contributes.detailView && onOpenApp ? <Button size="sm" variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; onOpenApp(row.id); close(); }}>Open app</Button> : null}
           <Button size="sm" variant="ghost" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${manifest.name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
         </div>
       </section>;
     })}</div> : pluginsState === 'loaded' && !error && !busy ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query ? 'No installed plugins match this search.' : 'No plugins installed yet.'}</p> : null}
-    {app ? <section><Button variant="outline" onClick={() => setApp(null)}>Close app</Button><SandboxPlugin key={app.id} plugin={app} /></section> : null}
     <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
     <PluginAiHandoff />
     <details open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)}><summary>Plugin Studio · import or edit source</summary><p className="text-sm">Paste or choose canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
