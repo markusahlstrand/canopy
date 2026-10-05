@@ -14,3 +14,16 @@ it('launches a plugin detail view from the space rail', () => {
   fireEvent.click(launcher);
   expect(onOpenPlugin).toHaveBeenCalledWith('install-1');
 });
+it('filters a long space roster by name or slug', () => {
+  const sites = [
+    {slug:'family',name:'Family',current:true},
+    {slug:'work',name:'Team',current:false},
+    ...['alpha','beta','gamma','delta'].map(slug => ({slug,name:slug,current:false})),
+  ];
+  render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()} sites={sites} failed={false} onRetry={vi.fn()} />);
+  fireEvent.change(screen.getByRole('textbox', {name:'Filter spaces'}), {target:{value:'work'}});
+  expect(screen.getByRole('button', {name:'Team'})).toBeTruthy();
+  expect(screen.queryByRole('button', {name:'Family'})).toBeNull();
+  fireEvent.change(screen.getByRole('textbox', {name:'Filter spaces'}), {target:{value:'absent'}});
+  expect(screen.getByText('No matching spaces')).toBeTruthy();
+});
