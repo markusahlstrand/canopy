@@ -23,6 +23,12 @@ it('lists active runtime viewers alongside bundled viewers', async () => {
   expect(screen.getAllByText('Handles: .md')).toHaveLength(2);
   expect(screen.queryByText('No optional viewers are enabled.')).toBeNull();
 });
+it('names the selected space before offering space-wide installs', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [] } : { canManage: true }))));
+  render(<PluginManagement open onOpenChange={() => {}} spaceName="Family" />);
+  expect(screen.getByText(/apply them to “Family”/)).toBeTruthy();
+  expect(await screen.findByRole('button', { name: 'Apply Markdown to Family' })).toBeTruthy();
+});
 it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
   expect(screen.getAllByText(/Listed hosts serve code that runs with the opened file/)).toHaveLength(3);
@@ -69,6 +75,22 @@ it('shows an installed-plugin empty state only after loading succeeds', async ()
 
   await act(async () => finishLoading(new Response(JSON.stringify({ plugins: [] }))));
   expect(screen.getByText('No plugins installed yet.')).toBeTruthy();
+});
+it('filters installed plugins by personal and space scope', async () => {
+  const manifest = (id: string) => JSON.stringify({ id, name: id, version: '1', capabilities: [], contributes: {} });
+  const plugins = [
+    { id: 'mine', plugin_id: 'personal-viewer', principal: 'user', enabled: 1, source: '', updated_at: '1', manifest_json: manifest('personal-viewer') },
+    { id: 'shared', plugin_id: 'space-viewer', principal: 'space', enabled: 1, source: '', updated_at: '1', manifest_json: manifest('space-viewer') },
+  ];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins } : { canManage: true }))));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('personal-viewer');
+  fireEvent.click(screen.getByRole('button', { name: 'Space installs' }));
+  expect(screen.getByText('space-viewer')).toBeTruthy();
+  expect(screen.queryByText('personal-viewer')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Personal installs' }));
+  expect(screen.getByText('personal-viewer')).toBeTruthy();
+  expect(screen.queryByText('space-viewer')).toBeNull();
 });
 
 it('does not claim there are no installed plugins when loading fails', async () => {

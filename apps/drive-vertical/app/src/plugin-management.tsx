@@ -22,7 +22,7 @@ function validateManifest(text: string) {
   } catch { return { manifest: null, error: 'Manifest must contain valid JSON.' }; }
 }
 /** Manage installed viewer contributions; available plugins are reviewed and bundled. */
-export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: boolean; onOpenChange: (open: boolean) => void; onOpenApp?: (id: string) => void }) {
+export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: { open: boolean; onOpenChange: (open: boolean) => void; onOpenApp?: (id: string) => void; spaceName?: string }) {
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
   const [studioOpen, setStudioOpen] = useState(false);
   const [editingInstall, setEditingInstall] = useState<PluginInstall | null>(null);
@@ -57,6 +57,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
   }, [open]);
   const change = async (action: () => Promise<unknown>) => { setBusy(true); setError(null); try { await action(); await refreshPlugins(); } catch (error) { setError(error instanceof Error ? error.message || 'Could not update this plugin.' : String(error)); } finally { setBusy(false); } };
   const [query, setQuery] = useState('');
+  const [installScope, setInstallScope] = useState<'all' | 'personal' | 'space'>('all');
   const [category, setCategory] = useState('All');
   const categories = ['All', ...new Set(pluginCatalog.map(entry => entry.category))];
   const enabled = viewerRegistry.has('image-viewer');
@@ -66,7 +67,8 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
     .flatMap(row => (pluginManifest(row).contributes.viewers ?? []).map(viewer => ({ row, viewer, name: pluginManifest(row).name })))
     .filter(({ row, viewer, name }) => `${row.plugin_id} ${name} ${viewer.title ?? ''} ${viewer.match.join(' ')}`.toLowerCase().includes(query.toLowerCase()));
   const visibleBuiltInViewers = installed.filter(plugin => `${plugin.pluginId} ${plugin.id}`.toLowerCase().includes(query.toLowerCase()));
-  const visiblePlugins = plugins.filter(row => installedPluginMatchesSearch(row, query));
+  const visiblePlugins = plugins.filter(row =>
+    (installScope === 'all' || (row.principal === 'space') === (installScope === 'space')) && installedPluginMatchesSearch(row, query));
   const launchableIds = new Set(effectivePlugins(plugins).filter(row => row.enabled === 1 && !!pluginManifest(row).contributes.detailView).map(row => row.id));
   const available = pluginCatalog.filter(entry =>
     (category === 'All' || entry.category === category) &&
@@ -113,15 +115,20 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
     else if (confirmDiscardDrafts()) close();
   };
   return <Dialog open={open} onOpenChange={handleOpenChange}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-[760px]">
-    <DialogHeader><DialogTitle>Plugins</DialogTitle><DialogDescription>Install file viewers for yourself or apply them to the current space. Review the access requested by each plugin before installing.</DialogDescription></DialogHeader>
+    <DialogHeader><DialogTitle>Plugins</DialogTitle><DialogDescription>Install file viewers for yourself or apply them to {spaceName ? `“${spaceName}”` : 'the current space'}. Review the access requested by each plugin before installing.</DialogDescription></DialogHeader>
     <Input aria-label="Find a plugin" placeholder="Find a plugin" value={query} onChange={event => setQuery(event.target.value)} />
     {error ? <p role="alert">{error}</p> : null}
     <div><h3 className="font-medium">Your plugins</h3><p className="text-xs text-muted-foreground">Installed for you or applied to this space.</p></div>
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Installed plugin scope">
+      {([['all', 'All installs'], ['personal', 'Personal installs'], ['space', 'Space installs']] as const).map(([value, label]) =>
+        <button key={value} type="button" aria-pressed={installScope === value} onClick={() => setInstallScope(value)}
+          className={cn('rounded-full px-3 py-1 text-xs font-medium transition-colors', installScope === value ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/70')}>{label}</button>)}
+    </div>
     {pluginsState === 'loading' ? <p role="status" className="text-sm text-muted-foreground">Loading installed plugins…</p> : null}
     {pluginsState === 'loaded' && visiblePlugins.length ? <div className="grid gap-3 sm:grid-cols-2">{visiblePlugins.map(row => {
       const manifest = pluginManifest(row);
       return <section key={row.id} className="flex min-w-0 flex-col gap-2.5 rounded-lg border p-3.5">
-        <div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Icon name={manifest.contributes.detailView ? 'plugin' : 'file-text'} size={20} /></span><div className="min-w-0 flex-1"><h4 className="truncate font-medium">{manifest.name}</h4><p className="text-xs text-muted-foreground">{row.principal === 'space' ? 'Applied to this space' : 'Installed for you'}</p></div><span className="rounded-full bg-secondary px-2 py-0.5 text-[11px]">{row.enabled ? 'Enabled' : 'Disabled'}</span></div>
+        <div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Icon name={manifest.contributes.detailView ? 'plugin' : 'file-text'} size={20} /></span><div className="min-w-0 flex-1"><h4 className="truncate font-medium">{manifest.name}</h4><p className="text-xs text-muted-foreground">{row.principal === 'space' ? `Applied to ${spaceName ?? 'this space'}` : 'Installed for you'}</p></div><span className="rounded-full bg-secondary px-2 py-0.5 text-[11px]">{manifest.invalid ? 'Needs repair' : row.enabled ? 'Enabled' : 'Disabled'}</span></div>
         <p className="text-xs text-muted-foreground">Source: {row.source_kind ?? 'inline'} · {row.source_ref ?? 'Client-supplied JavaScript'} {row.resolved ?? ''}</p>
         {row.source_sha256 ? <details className="text-xs"><summary>Source fingerprint</summary><code className="break-all">{row.source_sha256}</code></details> : null}
         <p className="text-xs text-muted-foreground">Access: {manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ') || 'None'}</p>
@@ -133,7 +140,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
           <Button size="sm" variant="ghost" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${manifest.name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
         </div>
       </section>;
-    })}</div> : pluginsState === 'loaded' && !error && !busy ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query ? 'No installed plugins match this search.' : 'No plugins installed yet.'}</p> : null}
+    })}</div> : pluginsState === 'loaded' && !error && !busy ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query || installScope !== 'all' ? 'No installed plugins match these filters.' : 'No plugins installed yet.'}</p> : null}
     <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
     <PluginAiHandoff />
     <details open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)}><summary>Plugin Studio · import or edit source</summary><p className="text-sm">Paste or choose canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
@@ -196,7 +203,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setManifest(event.target.value); }} /></label>
       {manifestCheck.error ? <p role="alert" className="text-sm text-destructive">{manifestCheck.error}</p> : null}
       <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => { sourceRead.current++; setSource(event.target.value); }} /></label>
-      {canManage ? <label><input type="checkbox" checked={forSpace} onChange={event => setForSpace(event.target.checked)} />Apply to this space</label> : null}
+      {canManage ? <label><input type="checkbox" checked={forSpace} onChange={event => setForSpace(event.target.checked)} />Apply to {spaceName ?? 'this space'}</label> : null}
       <label className="block"><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Approve the capabilities in this manifest, including added access. Read access lets the plugin share the opened file outside Canopy.</label>
       <Button disabled={busy || !manifestCheck.manifest || !source.trim() || !approved} onClick={() => void change(async () => { const parsed = manifestCheck.manifest!; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; const bundled = pluginCatalog.find(entry => { const candidate = installedPluginManifest.safeParse(entry.manifest); return candidate.success && JSON.stringify(candidate.data) === JSON.stringify(parsed) && entry.source === source; }); const provenance = bundled ? {kind:'bundled' as const,ref:`@canopy/catalog/${parsed.id}`,resolved:parsed.version} : imported?.manifest === manifest && imported.source === source ? imported.provenance : undefined; await savePlugin(parsed, source, revision, forSpace, parsed.capabilities, provenance); setEditingInstall(null); setManifest(''); setSource(''); setImported(null); })}>Install plugin</Button>
     </details>
@@ -208,7 +215,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
       <p className="flex-1 text-sm text-muted-foreground">{entry.manifest.description}</p>
       <p className="text-xs text-muted-foreground">Access: {entry.manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ')}. File-read plugins can share opened files outside Canopy.{entry.manifest.capabilities.some(cap => cap.kind === 'net:fetch') ? ' Listed hosts serve code that runs with the opened file.' : ''}</p>
       <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={busy} onClick={() => reviewCatalog(entry, false)}>Review {entry.manifest.name}</Button>
-        {canManage ? <Button variant="outline" disabled={busy} onClick={() => reviewCatalog(entry, true)}>Apply {entry.manifest.name} to space</Button> : null}</div>
+        {canManage ? <Button variant="outline" disabled={busy} onClick={() => reviewCatalog(entry, true)}>Apply {entry.manifest.name} to {spaceName ?? 'space'}</Button> : null}</div>
     </section>)}</div>
     {showImageViewer ? <section aria-label="Image viewer" className="space-y-2 rounded border p-3">
       <h4 className="font-medium">Image viewer</h4><p className="text-sm">Preview images with zoom and keyboard controls.</p>
