@@ -22,7 +22,7 @@
  *
  * `New` stays, because both of its items are real operations.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   CanopyMark,
@@ -105,16 +105,32 @@ interface SidebarProps {
 export function useSites() {
   const [sites, setSites] = useState<Site[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const request = useRef(0);
+  const loaded = useRef(false);
+  const inFlight = useRef(false);
+  const lastStarted = useRef(0);
   const retry = useCallback(() => {
+    const current = ++request.current;
+    inFlight.current = true;
+    lastStarted.current = Date.now();
     setFailed(false);
     listSites()
-      .then(setSites)
+      .then(result => { if (request.current === current) { loaded.current = true; setSites(result); } })
       .catch(() => {
-        setSites([]);
-        setFailed(true);
-      });
+        if (request.current !== current) return;
+        if (!loaded.current) { setSites([]); setFailed(true); }
+      })
+      .finally(() => { if (request.current === current) inFlight.current = false; });
   }, []);
-  useEffect(retry, [retry]);
+  useEffect(() => {
+    retry();
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || !navigator.onLine || inFlight.current || Date.now() - lastStarted.current < 30_000) return;
+      retry();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { request.current++; document.removeEventListener('visibilitychange', onVisible); };
+  }, [retry]);
   return { sites, failed, retry };
 }
 
