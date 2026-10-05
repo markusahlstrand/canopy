@@ -780,6 +780,29 @@ app.put('/api/plugins', async (c) => {
   return c.json(await scope.invoke('drive/save-plugin', {...body, provenance: provenance ?? undefined}));
 });
 
+/** Discover direct folder grants across the spaces this login can enter. */
+app.get('/api/shared-folders', async (c) => {
+  const base = baseNode(c.req.raw, c.env);
+  const subject = await (await providerFor(c.env, base)).resolve(c.req.raw.headers);
+  if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
+  const directory = identityDo(c.env, base);
+  const host = hostFor(c.env);
+  const groups = await Promise.all((await directory.listSites()).map(async site => {
+    const principal = await directory.resolvePrincipal(site.scopeId, subject.sub);
+    if (!principal) return [];
+    try {
+      const scope = await host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(site.scopeId));
+      const result = await scope.invoke<{ folders: Array<{ id: string; parent_id: string; name: string; path: string }> }>('drive/list-shared-folders', {});
+      const settings = await directory.readSpaceSettings(site.scopeId);
+      return result.folders.map(folder => ({ ...folder, siteSlug: site.slug, siteName: settings?.name ?? site.name }));
+    } catch {
+      // One inaccessible or deleted scope must not hide grants in the others.
+      return [];
+    }
+  }));
+  return c.json({ folders: groups.flat() });
+});
+
 app.get('/api/sites', async (c) => {
   const base = baseNode(c.req.raw, c.env);
 

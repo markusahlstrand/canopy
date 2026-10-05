@@ -17,3 +17,17 @@ export function openSpace(slug: string) {
   window.location.reload();
   return true;
 }
+
+/** Follow a shared-folder grant in another space without losing the folder on reload. */
+export function openSpaceFolder(slug: string, folderId: string) {
+  if (!confirmNavigation()) return false;
+  const url = new URL(window.location.href);
+  url.searchParams.delete('path');
+  url.searchParams.delete('file');
+  url.searchParams.set('folder', folderId);
+  if (selectSite(slug)) url.searchParams.delete('site');
+  else url.searchParams.set('site', slug);
+  window.history.replaceState(null, '', url);
+  window.location.reload();
+  return true;
+}

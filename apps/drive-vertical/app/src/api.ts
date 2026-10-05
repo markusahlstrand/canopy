@@ -631,7 +631,8 @@ export const listTrashPage = (next: string | null = null) => readPage<DriveFile>
 export const listFoldersPage = (folderId: string, next: string | null = null, selectedSite = site) =>
   readPage<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/folders`, next, 'listing', selectedSite);
 
-export const listSharedFolders = () => call<{ folders: DriveFolder[] }>('/folders/shared-with-me');
+export interface SharedFolder extends DriveFolder { siteSlug: string; siteName: string }
+export const listSharedFolders = () => call<{ folders: SharedFolder[] }>('/shared-folders');
 
 /**
  * A folder by its path, or null. `null` is also the answer for a folder the caller may

@@ -32,7 +32,7 @@ import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { CreateSpaceDialog } from './create-space-dialog';
-import { openSpace } from './space-navigation';
+import { openSpace, openSpaceFolder } from './space-navigation';
 import { SpacesDialog } from './spaces-dialog';
 import { PluginManagement } from './plugin-management';
 import { SandboxPlugin } from './sandbox-plugin';
@@ -71,6 +71,7 @@ import {
   trashFile,
   type DriveFile,
   type DriveFolder,
+  type SharedFolder,
   type SearchHit,
 } from './api';
 
@@ -132,7 +133,7 @@ function sizeLabel(bytes: number | null | undefined): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
-const folderItem = (folder: DriveFolder): FileItem => ({
+const folderItem = (folder: DriveFolder | SharedFolder): FileItem => ({
   id: folder.id,
   name: folder.name,
   kind: 'folder',
@@ -140,6 +141,7 @@ const folderItem = (folder: DriveFolder): FileItem => ({
   size: '—',
   isFolder: true,
   path: folder.path,
+  description: 'siteName' in folder ? `${folder.siteName} / ${folder.path}` : undefined,
 });
 
 const fileItem = (file: DriveFile, mime?: string | null): FileItem => ({
@@ -184,7 +186,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [filesNext, setFilesNext] = useState<string | null>(null);
   const [foldersNext, setFoldersNext] = useState<string | null>(null);
   const [loadingPage, setLoadingPage] = useState(false);
-  const [folders, setFolders] = useState<DriveFolder[]>([]);
+  const [folders, setFolders] = useState<(DriveFolder | SharedFolder)[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [busy, setBusy] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -571,7 +573,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     return true;
   }, [exitPluginApp, folderId, view, linkListingUnavailable, setPreviewing]);
 
-  const open = (folder: DriveFolder) => {
+  const open = (folder: DriveFolder | SharedFolder) => {
+    if ('siteSlug' in folder && folder.siteSlug !== siteList.sites?.find(site => site.current)?.slug) {
+      openSpaceFolder(folder.siteSlug, folder.id);
+      return;
+    }
     // The listing on screen belongs to the folder being left; nothing in flight for it
     // may land here.
     if (window.matchMedia?.('(max-width: 767px)').matches && !setPreviewing(null)) return;
