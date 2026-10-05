@@ -962,12 +962,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           view={layout}
           onAction={onAction}
           // Drag a file onto a folder: the move the platform's relink makes safe (#75).
-          onMove={offline ? undefined : (item, folder) => void act(() => item.isFolder
+          onMove={offline || view !== 'drive' ? undefined : (item, folder) => void act(() => item.isFolder
             ? moveFolder(item.id, folder.id) : moveFile(item.id, folder.id))}
           pluginMenuItems={() => []}
           previewOpen={previewing !== null}
           loading={busy}
-          readOnly={offline}
+          readOnly={offline || view === 'shared'}
           empty={empty}
         />
       )}
