@@ -2,8 +2,7 @@ import { selectSite } from './api';
 import { confirmNavigation } from './navigation-guards';
 /** A portable link to a space, without a file or folder from the sender's view. */
 export function spaceLink(slug: string): string {
-  const url = new URL(window.location.href);
-  for (const key of ['path', 'folder', 'file']) url.searchParams.delete(key);
+  const url = new URL('/', window.location.origin);
   url.searchParams.set('site', slug);
   return url.toString();
 }
