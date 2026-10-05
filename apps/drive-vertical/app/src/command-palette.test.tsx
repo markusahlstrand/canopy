@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { CommandPalette } from './command-palette';
+import type { PluginInstall } from './api';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const props = { open: true, onOpenChange: vi.fn(), files: [], onNavigate: vi.fn(), onOpenFile: vi.fn(), onUpload: vi.fn() };
@@ -72,4 +73,49 @@ it('offers Shared with me as a keyboard-selectable navigation destination', () =
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
   expect(onNavigate).toHaveBeenCalledWith('shared');
   expect(onOpenChange).toHaveBeenCalledWith(false);
+});
+it('switches to a space selected from the palette', () => {
+  const onOpenSpace = vi.fn();
+  render(<CommandPalette {...props} sites={[{slug:'team',name:'Team',current:false}]} onOpenSpace={onOpenSpace} />);
+  fireEvent.change(screen.getByRole('combobox'), {target:{value:'Team'}});
+  const option = screen.getByRole('option', {name:'Team'});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'ArrowDown'});
+  expect(option.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
+  expect(onOpenSpace).toHaveBeenCalledWith('team');
+});
+it('does not reload the current space from the palette', () => {
+  const onOpenSpace = vi.fn();
+  const onOpenChange = vi.fn();
+  render(<CommandPalette {...props} onOpenChange={onOpenChange} sites={[{slug:'team',name:'Team',current:true}]} onOpenSpace={onOpenSpace} />);
+  fireEvent.change(screen.getByRole('combobox'), {target:{value:'Team'}});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'ArrowDown'});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
+  expect(onOpenSpace).not.toHaveBeenCalled();
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+});
+it('hides space switching when no switch callback is available', () => {
+  render(<CommandPalette {...props} sites={[{slug:'team',name:'Team',current:false}]} />);
+  expect(screen.queryByRole('option', {name:'Team'})).toBeNull();
+});
+it('opens an installed app from the palette', () => {
+  const row: PluginInstall = {id:'install-1',plugin_id:'notes',principal:'space',enabled:1,updated_at:'now',manifest_json:JSON.stringify({id:'notes',name:'Notes',version:'1',capabilities:[],contributes:{detailView:{id:'notes',title:'Notes app'}}})};
+  const onOpenPlugin = vi.fn();
+  render(<CommandPalette {...props} pluginApps={[row]} onOpenPlugin={onOpenPlugin} />);
+  fireEvent.change(screen.getByRole('combobox'), {target:{value:'Notes app'}});
+  const option = screen.getByRole('option', {name:'Notes app'});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'ArrowDown'});
+  expect(option.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
+  expect(onOpenPlugin).toHaveBeenCalledWith('install-1');
+});
+it('opens the management dialogs from keyboard actions', () => {
+  const onManagePlugins = vi.fn();
+  render(<CommandPalette {...props} onManagePlugins={onManagePlugins} />);
+  fireEvent.change(screen.getByRole('combobox'), {target:{value:'Manage plugins'}});
+  const option = screen.getByRole('option', {name:'Manage plugins'});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'ArrowDown'});
+  expect(option.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
+  expect(onManagePlugins).toHaveBeenCalledOnce();
 });

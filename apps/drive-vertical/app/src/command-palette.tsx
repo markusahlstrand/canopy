@@ -12,7 +12,8 @@ import {
 import { Icon } from "@canopy/ui";
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from "./file-icon";
-import { SEARCH_MIN, search, type SearchHit } from "./api";
+import { SEARCH_MIN, search, type PluginInstall, type SearchHit, type Site } from "./api";
+import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
 
 /**
@@ -38,6 +39,12 @@ interface CommandPaletteProps {
   onOpenFile: (f: FileItem) => void;
   /** Upload, which the toolbar also offers; the palette is the keyboard path to it. */
   onUpload: () => void;
+  sites?: Site[];
+  onOpenSpace?: (slug: string) => void;
+  pluginApps?: PluginInstall[];
+  onOpenPlugin?: (id: string) => void;
+  onManageSpaces?: () => void;
+  onManagePlugins?: () => void;
 }
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
@@ -48,6 +55,12 @@ export function CommandPalette({
   onNavigate,
   onOpenFile,
   onUpload,
+  sites = [],
+  onOpenSpace,
+  pluginApps = [],
+  onOpenPlugin,
+  onManageSpaces,
+  onManagePlugins,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => () => {
     onOpenChange(false);
@@ -163,6 +176,30 @@ export function CommandPalette({
               ))}
         </CommandGroup>
 
+        {onOpenSpace && sites.length ? <>
+          <CommandSeparator />
+          <CommandGroup heading="Spaces">
+            {sites.map(site => <CommandItem key={site.slug} value={`space ${site.name} ${site.slug}`} onSelect={run(() => { if (!site.current) onOpenSpace(site.slug); })}>
+              <Icon name={site.icon ?? 'users'} size={16} style={{ color: site.color }} />
+              <span className="min-w-0 flex-1 truncate">{site.name}</span>
+              {site.current ? <span className="text-xs text-muted-foreground">Current</span> : null}
+            </CommandItem>)}
+          </CommandGroup>
+        </> : null}
+
+        {onOpenPlugin && pluginApps.length ? <>
+          <CommandSeparator />
+          <CommandGroup heading="Apps">
+            {pluginApps.map(row => {
+              const manifest = pluginManifest(row);
+              return <CommandItem key={row.id} value={`app ${manifest.name} ${manifest.contributes.detailView?.title ?? ''}`} onSelect={run(() => onOpenPlugin(row.id))}>
+                <Icon name="plugin" size={16} />
+                <span className="min-w-0 flex-1 truncate">{manifest.contributes.detailView?.title ?? manifest.name}</span>
+              </CommandItem>;
+            })}
+          </CommandGroup>
+        </> : null}
+
         <CommandSeparator />
         <CommandGroup heading="Navigate">
           {NAV.map((n) => (
@@ -176,10 +213,13 @@ export function CommandPalette({
 
 
         <CommandSeparator />
-        {/* One action, because one action has an operation behind it. The plugin store,
-            the theme toggle and settings were in this group and are not here: the store
-            is #73's to answer, and the other two have nothing to toggle or show. */}
         <CommandGroup heading="Actions">
+          {onManageSpaces ? <CommandItem value="manage spaces" onSelect={run(onManageSpaces)}>
+            <Icon name="users" size={16} /><span className="flex-1">Manage spaces</span>
+          </CommandItem> : null}
+          {onManagePlugins ? <CommandItem value="manage plugins" onSelect={run(onManagePlugins)}>
+            <Icon name="plugin" size={16} /><span className="flex-1">Manage plugins</span>
+          </CommandItem> : null}
           <CommandItem value="upload" onSelect={run(onUpload)}>
             <Icon name="upload" size={16} />
             <span className="flex-1">Upload</span>
