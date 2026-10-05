@@ -729,7 +729,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     <div className="flex min-h-0 flex-1">
       <div className="hidden md:block">
         <Sidebar
-          active={activePluginId ? null : view === 'search' ? 'drive' : view}
+          active={activePluginId ? null : view}
           onNavigate={navigate}
           onNewFolder={() => startWrite(() => setCreating(true))}
           onUpload={() => startWrite(() => uploadRef.current?.click())}
@@ -754,7 +754,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           <SheetTitle className="sr-only">Drive navigation</SheetTitle>
           <Sidebar
             mobile
-            active={activePluginId ? null : view === 'search' ? 'drive' : view}
+            active={activePluginId ? null : view}
             onNavigate={(id) => { if (navigate(id)) setMobileNavOpen(false); }}
             onNewFolder={() => { setMobileNavOpen(false); startWrite(() => setCreating(true)); }}
             onUpload={() => { setMobileNavOpen(false); startWrite(() => uploadRef.current?.click()); }}
@@ -814,7 +814,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         open={cmdOpen}
         onOpenChange={setCmdOpen}
         files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
-        onNavigate={(id) => navigate(id === 'trash' ? 'trash' : id === 'shared' ? 'shared' : 'drive')}
+        onNavigate={(id) => navigate(id === 'trash' ? 'trash' : id === 'shared' ? 'shared' : id === 'search' ? 'search' : 'drive')}
         onOpenFile={(item) => {
           // The palette lists folders too, and a folder is entered rather than previewed —
           // the panel would open on an id `get-file` cannot resolve.
