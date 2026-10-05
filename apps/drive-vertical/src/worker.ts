@@ -5,6 +5,7 @@ import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type S
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
 import { importGithubPlugin } from './github-plugin-import.js';
 import { importNpmPlugin } from './npm-plugin-import.js';
+import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
@@ -739,7 +740,14 @@ app.post('/api/plugin-import/github', async (c) => {
   const input = z.object({repo:z.string().min(3).max(200),ref:z.string().max(100).optional(),path:z.string().max(200).optional()}).safeParse(await c.req.json());
   if (!input.success) throw new HTTPException(400, { message: 'Enter a GitHub repository and optional ref or folder.' });
   reservePluginImport(principal);
-  try { return c.json(await importGithubPlugin(input.data, fetch, c.env.GITHUB_TOKEN)); }
+  try {
+    const result = await importGithubPlugin(input.data, fetch, c.env.GITHUB_TOKEN);
+    const node = await nodeFor(c.req.raw, c.env);
+    const token = c.env.ROUTER_SECRET ? await signPluginImport(c.env.ROUTER_SECRET, {
+      principal, scope: node.scopeId, manifest: result.manifest, source: result.source, ...result.provenance,
+    }) : undefined;
+    return c.json({...result, provenance: {...result.provenance, token}});
+  }
   catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
 });
 app.post('/api/plugin-import/npm', async (c) => {
@@ -748,8 +756,28 @@ app.post('/api/plugin-import/npm', async (c) => {
   const input = z.object({name:z.string().min(1).max(214),version:z.string().max(100).optional()}).safeParse(await c.req.json());
   if (!input.success) throw new HTTPException(400, { message: 'Enter an npm package and optional version or tag.' });
   reservePluginImport(principal);
-  try { return c.json(await importNpmPlugin(input.data, fetch)); }
+  try {
+    const result = await importNpmPlugin(input.data, fetch);
+    const node = await nodeFor(c.req.raw, c.env);
+    const token = c.env.ROUTER_SECRET ? await signPluginImport(c.env.ROUTER_SECRET, {
+      principal, scope: node.scopeId, manifest: result.manifest, source: result.source, ...result.provenance,
+    }) : undefined;
+    return c.json({...result, provenance: {...result.provenance, token}});
+  }
   catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
+});
+
+// The generic operation accepts a provenance field for other hosts. This HTTP
+// boundary supplies source labels only after checking a signed import claim.
+app.put('/api/plugins', async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, c.env);
+  const body = await c.req.json() as Record<string, unknown>;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HTTPException(400, { message: 'Invalid plugin install.' });
+  const provenance = await verifyPluginImport(c.env.ROUTER_SECRET, body.importToken, principal, node.scopeId, body.manifest, body.source);
+  const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+  return c.json(await scope.invoke('drive/save-plugin', {...body, provenance: provenance ?? undefined}));
 });
 
 app.get('/api/sites', async (c) => {

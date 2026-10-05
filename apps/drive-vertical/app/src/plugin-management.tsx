@@ -105,7 +105,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       const manifest = pluginManifest(row);
       return <section key={row.id} className="flex min-w-0 flex-col gap-2.5 rounded-lg border p-3.5">
         <div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Icon name={manifest.contributes.detailView ? 'plugin' : 'file-text'} size={20} /></span><div className="min-w-0 flex-1"><h4 className="truncate font-medium">{manifest.name}</h4><p className="text-xs text-muted-foreground">{row.principal === 'space' ? 'Applied to this space' : 'Installed for you'}</p></div><span className="rounded-full bg-secondary px-2 py-0.5 text-[11px]">{row.enabled ? 'Enabled' : 'Disabled'}</span></div>
-        <p className="text-xs text-muted-foreground">Origin (client-claimed): {row.source_kind ?? 'inline'} · {row.source_ref ?? 'Client-supplied JavaScript'} {row.resolved ?? ''}</p>
+        <p className="text-xs text-muted-foreground">Source: {row.source_kind ?? 'inline'} · {row.source_ref ?? 'Client-supplied JavaScript'} {row.resolved ?? ''}</p>
         {row.source_sha256 ? <details className="text-xs"><summary>Source fingerprint</summary><code className="break-all">{row.source_sha256}</code></details> : null}
         <p className="text-xs text-muted-foreground">Access: {manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ') || 'None'}</p>
         <div className="mt-auto flex flex-wrap gap-1.5">

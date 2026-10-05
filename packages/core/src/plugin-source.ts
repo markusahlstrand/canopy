@@ -22,6 +22,8 @@ export interface ResolvedPlugin {
   entry: PluginEntry;
   /** Concrete resolved version (manifest version, npm version, or commit sha). */
   version: string;
+  /** Registry integrity of the exact npm archive, when the source is npm. */
+  integrity?: string;
   /** Requested update channel. Do not re-resolve this on ordinary loads. */
   source: PluginSourceRef;
   /** Persist alongside source; use this immutable ref for cold starts/reinstalls. */

@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkUpdate, resolvePlugin } from './index';
+import { readNpmTarball } from './npm-tarball';
+
+vi.mock('./npm-tarball', () => ({ readNpmTarball: vi.fn(async () => ({
+  manifest: { id: 'example', name: 'Example', version: 'ignored' }, source: 'export default () => {}',
+})) }));
 
 afterEach(() => vi.unstubAllGlobals());
-function registry(tags: Record<string, string>, versions: Record<string, unknown> = { '1.0.0': {}, '2.0.0': {} }) {
-  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(
-    url.startsWith('https://registry.npmjs.org/') ? { 'dist-tags': tags, versions } :
-      { canopy: { id: 'example', name: 'Example', version: 'ignored' } },
+function registry(tags: Record<string, string>, versions: Record<string, unknown> = { '1.0.0': {dist:{tarball:'https://registry.npmjs.org/example/-/example-1.0.0.tgz',integrity:'sha512-test'}}, '2.0.0': {dist:{tarball:'https://registry.npmjs.org/example/-/example-2.0.0.tgz',integrity:'sha512-test'}} }) {
+  const fetcher = vi.fn(async (url: string, _options?: RequestInit) => new Response(JSON.stringify(
+    { 'dist-tags': tags, versions },
   ), { status: 200 }));
   vi.stubGlobal('fetch', fetcher);
   return fetcher;
@@ -17,8 +21,13 @@ describe('npm plugin version resolution', () => {
       const resolved = await resolvePlugin({ type: 'npm', name: '@example/plugin', version });
       expect(resolved.version).toBe(expected);
       expect(resolved.manifest.version).toBe(expected);
-      expect('url' in resolved.entry ? resolved.entry.url : undefined).toBe(`https://esm.sh/@example/plugin@${expected}`);
-      expect(fetcher.mock.calls[1]?.[0]).toBe(`https://cdn.jsdelivr.net/npm/@example/plugin@${expected}/package.json`);
+      expect('code' in resolved.entry ? resolved.entry.code : undefined).toContain('export default');
+      expect(resolved.integrity).toBe('sha512-test');
+      expect(readNpmTarball).toHaveBeenCalledWith(`https://registry.npmjs.org/example/-/example-${expected}.tgz`, 'sha512-test', expect.any(Function));
+      expect(fetcher.mock.calls[0]?.[0]).toBe('https://registry.npmjs.org/@example/plugin');
+      expect(fetcher).toHaveBeenCalledWith('https://registry.npmjs.org/@example/plugin', expect.objectContaining({
+        headers: expect.objectContaining({Accept: 'application/vnd.npm.install-v1+json'}),
+      }));
     },
   );
   it.each(['9.0.0', 'missing', '', 'toString'])('never substitutes latest for an unavailable pin: %s', async (version) => {
@@ -54,4 +63,9 @@ it('checks a dist-tag against its own channel instead of stable latest', async (
 it('refuses a disappeared tag instead of replacing its channel with latest', async () => {
   registry({ latest: '2.0.0' });
   await expect(checkUpdate({ type: 'npm', name: 'example', version: 'next' }, '3.0.0-rc.1')).rejects.toThrow('unavailable');
+});
+
+it('names oversized registry metadata in the error', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', {headers:{'content-length': String(4 * 1024 * 1024 + 1)}})));
+  await expect(resolvePlugin({type:'npm',name:'example'})).rejects.toThrow('npm registry metadata exceeds size limit');
 });
