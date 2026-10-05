@@ -43,6 +43,8 @@ interface CommandPaletteProps {
   onOpenSpace?: (slug: string) => void;
   pluginApps?: PluginInstall[];
   onOpenPlugin?: (id: string) => void;
+  onManageSpaces?: () => void;
+  onManagePlugins?: () => void;
 }
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
@@ -57,6 +59,8 @@ export function CommandPalette({
   onOpenSpace,
   pluginApps = [],
   onOpenPlugin,
+  onManageSpaces,
+  onManagePlugins,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => () => {
     onOpenChange(false);
@@ -209,10 +213,13 @@ export function CommandPalette({
 
 
         <CommandSeparator />
-        {/* One action, because one action has an operation behind it. The plugin store,
-            the theme toggle and settings were in this group and are not here: the store
-            is #73's to answer, and the other two have nothing to toggle or show. */}
         <CommandGroup heading="Actions">
+          {onManageSpaces ? <CommandItem value="manage spaces" onSelect={run(onManageSpaces)}>
+            <Icon name="users" size={16} /><span className="flex-1">Manage spaces</span>
+          </CommandItem> : null}
+          {onManagePlugins ? <CommandItem value="manage plugins" onSelect={run(onManagePlugins)}>
+            <Icon name="plugin" size={16} /><span className="flex-1">Manage plugins</span>
+          </CommandItem> : null}
           <CommandItem value="upload" onSelect={run(onUpload)}>
             <Icon name="upload" size={16} />
             <span className="flex-1">Upload</span>

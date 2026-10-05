@@ -95,3 +95,13 @@ it('opens an installed app from the palette', () => {
   fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
   expect(onOpenPlugin).toHaveBeenCalledWith('install-1');
 });
+it('opens the management dialogs from keyboard actions', () => {
+  const onManagePlugins = vi.fn();
+  render(<CommandPalette {...props} onManagePlugins={onManagePlugins} />);
+  fireEvent.change(screen.getByRole('combobox'), {target:{value:'Manage plugins'}});
+  const option = screen.getByRole('option', {name:'Manage plugins'});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'ArrowDown'});
+  expect(option.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
+  expect(onManagePlugins).toHaveBeenCalledOnce();
+});
