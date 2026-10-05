@@ -42,6 +42,7 @@ import { listSites, type PluginInstall, type Site } from './api';
 /** The views this screen has. The portal's Home, Starred and Settings are not among them. */
 const NAV = [
   { id: 'drive', icon: 'my-drive', label: 'My Drive' },
+  { id: 'search', icon: 'search', label: 'Search' },
   { id: 'shared', icon: 'users', label: 'Shared with me' },
   { id: 'trash', icon: 'trash', label: 'Trash' },
 ] as const;
@@ -51,6 +52,7 @@ export type NavId = (typeof NAV)[number]['id'];
 /** Every icon this rail names, so a test can prove none of them falls back to a puzzle piece. */
 export const SIDEBAR_ICONS = [
   'my-drive',
+  'search',
   'trash',
   'panel-left',
   'plus',
