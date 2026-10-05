@@ -73,3 +73,13 @@ it('offers Shared with me as a keyboard-selectable navigation destination', () =
   expect(onNavigate).toHaveBeenCalledWith('shared');
   expect(onOpenChange).toHaveBeenCalledWith(false);
 });
+it('switches to a space selected from the palette', () => {
+  const onOpenSpace = vi.fn();
+  render(<CommandPalette {...props} sites={[{slug:'team',name:'Team',current:false}]} onOpenSpace={onOpenSpace} />);
+  fireEvent.change(screen.getByRole('combobox'), {target:{value:'Team'}});
+  const option = screen.getByRole('option', {name:'Team'});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'ArrowDown'});
+  expect(option.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
+  expect(onOpenSpace).toHaveBeenCalledWith('team');
+});

@@ -12,7 +12,7 @@ import {
 import { Icon } from "@canopy/ui";
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from "./file-icon";
-import { SEARCH_MIN, search, type SearchHit } from "./api";
+import { SEARCH_MIN, search, type SearchHit, type Site } from "./api";
 import { kindOf, type FileItem } from "./items";
 
 /**
@@ -38,6 +38,8 @@ interface CommandPaletteProps {
   onOpenFile: (f: FileItem) => void;
   /** Upload, which the toolbar also offers; the palette is the keyboard path to it. */
   onUpload: () => void;
+  sites?: Site[];
+  onOpenSpace?: (slug: string) => void;
 }
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
@@ -48,6 +50,8 @@ export function CommandPalette({
   onNavigate,
   onOpenFile,
   onUpload,
+  sites = [],
+  onOpenSpace,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => () => {
     onOpenChange(false);
@@ -162,6 +166,17 @@ export function CommandPalette({
                 </CommandItem>
               ))}
         </CommandGroup>
+
+        {onOpenSpace && sites.length ? <>
+          <CommandSeparator />
+          <CommandGroup heading="Spaces">
+            {sites.map(site => <CommandItem key={site.slug} value={`space ${site.name} ${site.slug}`} onSelect={run(() => onOpenSpace(site.slug))}>
+              <Icon name={site.icon ?? 'users'} size={16} style={{ color: site.color }} />
+              <span className="min-w-0 flex-1 truncate">{site.name}</span>
+              {site.current ? <span className="text-xs text-muted-foreground">Current</span> : null}
+            </CommandItem>)}
+          </CommandGroup>
+        </> : null}
 
         <CommandSeparator />
         <CommandGroup heading="Navigate">
