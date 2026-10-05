@@ -13,6 +13,16 @@ it('manages enabled state and explains file access and matching contributions', 
   fireEvent.click(screen.getByRole('button', { name: 'Enable image viewer' })); expect(screen.getByText('Handles: image/*')).toBeTruthy();
   fireEvent.change(screen.getByLabelText('Find a plugin'), { target: { value: 'absent' } }); expect(screen.getByText('No available plugins match this search.')).toBeTruthy();
 });
+it('lists active runtime viewers alongside bundled viewers', async () => {
+  setImageViewerEnabled(false);
+  const plugins = [{ id: 'md-install', plugin_id: 'md-viewer', principal: 'space', enabled: 1, source: '', updated_at: '1',
+    manifest_json: JSON.stringify({ id: 'md-viewer', name: 'Markdown viewer', version: '1', capabilities: [{ kind: 'item:read' }], contributes: { viewers: [{ id: 'md', title: 'Markdown preview', match: ['.md'] }] } }) }];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins } : { canManage: false }))));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  expect(await screen.findByText('Markdown preview', { exact: false })).toBeTruthy();
+  expect(screen.getAllByText('Handles: .md')).toHaveLength(2);
+  expect(screen.queryByText('No optional viewers are enabled.')).toBeNull();
+});
 it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
   expect(screen.getAllByText(/Listed hosts serve code that runs with the opened file/)).toHaveLength(3);
