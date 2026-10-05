@@ -990,7 +990,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={siteList.retry} />
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
       <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
-      <PluginManagement open={viewersOpen} onOpenChange={setViewersOpen} />
+      <PluginManagement open={viewersOpen} onOpenChange={setViewersOpen} onOpenApp={id => { changePreview(null); setActivePluginId(id); }} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 
