@@ -9,7 +9,7 @@ it('loads an npm plugin into Studio and installs only after capability approval'
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => new Response(JSON.stringify(
     url.endsWith('/people/access') ? { canManage: false } :
     url.endsWith('/plugins') && init?.method !== 'PUT' ? { plugins: [] } :
-    url.endsWith('/plugin-import/npm') ? { manifest, source: 'export default () => {}', provenance: { kind: 'npm', ref: '@owner/plugin@next', resolved: '2.0.0' } } : {},
+    url.endsWith('/plugin-import/npm') ? { manifest, source: 'export default () => {}', provenance: { kind: 'npm', ref: '@owner/plugin@next', resolved: '2.0.0 sha512-test', token: 'server-signed-token' } } : {},
   )));
   vi.stubGlobal('fetch', fetcher);
   render(<PluginManagement open onOpenChange={() => {}} />);
@@ -22,5 +22,6 @@ it('loads an npm plugin into Studio and installs only after capability approval'
   fireEvent.click(screen.getByRole('button', { name: 'Install plugin' }));
   await waitFor(() => expect(fetcher.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(true));
   const body = JSON.parse(fetcher.mock.calls.find(([, init]) => init?.method === 'PUT')![1]!.body as string);
-  expect(body.provenance).toEqual({ kind: 'npm', ref: '@owner/plugin@next', resolved: '2.0.0' });
+  expect(body.importToken).toBe('server-signed-token');
+  expect(body.provenance).toBeUndefined();
 });
