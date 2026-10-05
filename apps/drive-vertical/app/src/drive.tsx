@@ -816,6 +816,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
         sites={siteList.sites ?? []}
         onOpenSpace={openSpace}
+        pluginApps={pluginApps}
+        onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); }}
         onNavigate={(id) => navigate(id === 'trash' ? 'trash' : id === 'shared' ? 'shared' : id === 'search' ? 'search' : 'drive')}
         onOpenFile={(item) => {
           // The palette lists folders too, and a folder is entered rather than previewed —

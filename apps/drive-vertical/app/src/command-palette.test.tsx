@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { CommandPalette } from './command-palette';
+import type { PluginInstall } from './api';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const props = { open: true, onOpenChange: vi.fn(), files: [], onNavigate: vi.fn(), onOpenFile: vi.fn(), onUpload: vi.fn() };
@@ -82,4 +83,15 @@ it('switches to a space selected from the palette', () => {
   expect(option.getAttribute('aria-selected')).toBe('true');
   fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
   expect(onOpenSpace).toHaveBeenCalledWith('team');
+});
+it('opens an installed app from the palette', () => {
+  const row: PluginInstall = {id:'install-1',plugin_id:'notes',principal:'space',enabled:1,updated_at:'now',manifest_json:JSON.stringify({id:'notes',name:'Notes',version:'1',capabilities:[],contributes:{detailView:{id:'notes',title:'Notes app'}}})};
+  const onOpenPlugin = vi.fn();
+  render(<CommandPalette {...props} pluginApps={[row]} onOpenPlugin={onOpenPlugin} />);
+  fireEvent.change(screen.getByRole('combobox'), {target:{value:'Notes app'}});
+  const option = screen.getByRole('option', {name:'Notes app'});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'ArrowDown'});
+  expect(option.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
+  expect(onOpenPlugin).toHaveBeenCalledWith('install-1');
 });

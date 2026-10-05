@@ -12,7 +12,8 @@ import {
 import { Icon } from "@canopy/ui";
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from "./file-icon";
-import { SEARCH_MIN, search, type SearchHit, type Site } from "./api";
+import { SEARCH_MIN, search, type PluginInstall, type SearchHit, type Site } from "./api";
+import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
 
 /**
@@ -40,6 +41,8 @@ interface CommandPaletteProps {
   onUpload: () => void;
   sites?: Site[];
   onOpenSpace?: (slug: string) => void;
+  pluginApps?: PluginInstall[];
+  onOpenPlugin?: (id: string) => void;
 }
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
@@ -52,6 +55,8 @@ export function CommandPalette({
   onUpload,
   sites = [],
   onOpenSpace,
+  pluginApps = [],
+  onOpenPlugin,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => () => {
     onOpenChange(false);
@@ -175,6 +180,19 @@ export function CommandPalette({
               <span className="min-w-0 flex-1 truncate">{site.name}</span>
               {site.current ? <span className="text-xs text-muted-foreground">Current</span> : null}
             </CommandItem>)}
+          </CommandGroup>
+        </> : null}
+
+        {onOpenPlugin && pluginApps.length ? <>
+          <CommandSeparator />
+          <CommandGroup heading="Apps">
+            {pluginApps.map(row => {
+              const manifest = pluginManifest(row);
+              return <CommandItem key={row.id} value={`app ${manifest.name} ${manifest.contributes.detailView?.title ?? ''}`} onSelect={run(() => onOpenPlugin(row.id))}>
+                <Icon name="plugin" size={16} />
+                <span className="min-w-0 flex-1 truncate">{manifest.contributes.detailView?.title ?? manifest.name}</span>
+              </CommandItem>;
+            })}
           </CommandGroup>
         </> : null}
 
