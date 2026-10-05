@@ -13,6 +13,12 @@ it('manages enabled state and explains file access and matching contributions', 
   fireEvent.click(screen.getByRole('button', { name: 'Enable image viewer' })); expect(screen.getByText('Handles: image/*')).toBeTruthy();
   fireEvent.change(screen.getByLabelText('Find a plugin'), { target: { value: 'absent' } }); expect(screen.getByText('No available plugins match this search.')).toBeTruthy();
 });
+it('names the selected space before offering space-wide installs', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [] } : { canManage: true }))));
+  render(<PluginManagement open onOpenChange={() => {}} spaceName="Family" />);
+  expect(screen.getByText(/apply them to “Family”/)).toBeTruthy();
+  expect(await screen.findByRole('button', { name: 'Apply Markdown to Family' })).toBeTruthy();
+});
 it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
   expect(screen.getAllByText(/Listed hosts serve code that runs with the opened file/)).toHaveLength(3);
