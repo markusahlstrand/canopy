@@ -33,15 +33,14 @@ it('disables space creation while offline and guides managers with no spaces', (
 it('copies a clean link to the selected space', async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-  window.history.replaceState(null, '', '/?site=old&folder=private&file=secret&path=deep');
+  window.history.replaceState(null, '', '/nested/view?site=old&folder=private&file=secret&path=deep&invite=token#frag');
   render(<SpacesDialog {...props} sites={[{ slug: 'team', name: 'Team', current: false }]} />);
   fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
   await screen.findByText('Copied link to team');
   const url = new URL(writeText.mock.calls[0]![0]);
-  expect(url.searchParams.get('site')).toBe('team');
-  expect(url.searchParams.has('folder')).toBe(false);
-  expect(url.searchParams.has('file')).toBe(false);
-  expect(url.searchParams.has('path')).toBe(false);
+  expect(url.pathname).toBe('/');
+  expect(url.search).toBe('?site=team');
+  expect(url.hash).toBe('');
 });
 it('puts the current space first and clears an old search when reopened', () => {
  const sites = [{slug:'work',name:'Work',current:false},{slug:'home',name:'Home',current:true}];
