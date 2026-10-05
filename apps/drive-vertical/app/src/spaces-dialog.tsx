@@ -1,12 +1,21 @@
 import { useEffect, useState } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@canopy/ui';
 import type { Site } from './api';
-import { openSpace } from './space-navigation';
+import { openSpace, spaceLink } from './space-navigation';
 export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canManage, offline = false, onMembers, onCreate, onSettings }: {
   open: boolean; onOpenChange: (open: boolean) => void; sites: Site[] | null; failed: boolean; onRetry: () => void;
   offline?: boolean; canManage: boolean; onMembers: () => void; onCreate?: () => void; onSettings?: () => void;
 }) {
   const [query, setQuery] = useState('');
+  const [copyMessage, setCopyMessage] = useState('');
+  const copyLink = async (slug: string) => {
+    try {
+      await navigator.clipboard.writeText(spaceLink(slug));
+      setCopyMessage(`Copied link to ${slug}`);
+    } catch {
+      setCopyMessage(`Could not copy link to ${slug}`);
+    }
+  };
   useEffect(() => { if (open) setQuery(''); }, [open]);
   const shown = sites?.filter(site => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
     .sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name));
@@ -16,6 +25,7 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
       <Input aria-label="Find a space" placeholder="Find a space…" value={query} onChange={event => setQuery(event.target.value)} />
       {canManage && onCreate ? <Button className="shrink-0" disabled={offline} onClick={() => { onOpenChange(false); onCreate(); }}><Icon name="plus" size={16} /> Create space</Button> : null}
     </div>
+    {copyMessage ? <p role="status" className="px-5 text-xs">{copyMessage}</p> : null}
     <div className="min-h-0 overflow-y-auto px-5 pb-5">
       {failed ? <div role="alert" className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">Could not load your spaces. <Button variant="outline" size="sm" onClick={onRetry}>Retry spaces</Button></div>
         : sites === null ? <p role="status" className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Loading spaces…</p>
@@ -28,6 +38,7 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
             {site.current ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">Current space</span> : null}
           </div>
           <div className="mt-auto flex flex-wrap gap-1.5"><Button size="sm" variant={site.current ? 'secondary' : 'outline'} disabled={site.current || offline} onClick={() => openSpace(site.slug)}>Open {site.name}</Button>
+            <Button size="sm" variant="ghost" onClick={() => void copyLink(site.slug)}>Copy link</Button>
             {site.current && canManage && !offline && onSettings ? <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onSettings(); }}>Space settings</Button> : null}
             {site.current && canManage && !offline ? <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onMembers(); }}>Manage members</Button> : null}</div>
         </li>)}</ul>}
