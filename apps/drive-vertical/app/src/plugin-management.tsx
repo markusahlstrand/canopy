@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, cn } from '@canopy/ui';
 import { setImageViewerEnabled, viewerRegistry } from './image-viewer';
 import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin, importGithubPlugin, importNpmPlugin } from './api';
-import { catalogSearchText, pluginCatalog } from './plugin-catalog';
+import { catalogMatchesSearch, pluginCatalog } from './plugin-catalog';
 import { SandboxPlugin } from './sandbox-plugin';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 import type { PluginInstall } from './api';
@@ -64,7 +64,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
   const visiblePlugins = plugins.filter(row => `${pluginManifest(row).name} ${row.plugin_id}`.toLowerCase().includes(query.toLowerCase()));
   const available = pluginCatalog.filter(entry =>
     (category === 'All' || entry.category === category) &&
-    catalogSearchText(entry).includes(query.trim().toLocaleLowerCase()),
+    catalogMatchesSearch(entry, query),
   );
   const showImageViewer = (category === 'All' || category === 'Viewers') && 'image viewer'.includes(query.toLowerCase());
   const reviewCatalog = (entry: (typeof pluginCatalog)[number], targetSpace: boolean) => {

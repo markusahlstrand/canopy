@@ -16,6 +16,7 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@canopy/core": "workspace:*",
     "@canopy/docworker": "workspace:*",
     "@canopy/plugin-sdk": "workspace:*",
     "@canopy/plugin-sources": "workspace:*",
