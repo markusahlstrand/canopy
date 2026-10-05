@@ -16,8 +16,9 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
       setCopyMessage(`Could not copy link to ${slug}`);
     }
   };
-  useEffect(() => { if (open) setQuery(''); }, [open]);
-  const shown = sites?.filter(site => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+  useEffect(() => { if (open) { setQuery(''); setCopyMessage(''); } }, [open]);
+  // The active space is context for the picker, even when the query matches another.
+  const shown = sites?.filter(site => site.current || `${site.name} ${site.slug}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
     .sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name));
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[580px]">
     <DialogHeader className="px-5 pt-5"><DialogTitle>Spaces</DialogTitle><DialogDescription>Each space has its own files and members. Open one to browse its drive.</DialogDescription></DialogHeader>
