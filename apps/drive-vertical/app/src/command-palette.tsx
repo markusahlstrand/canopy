@@ -179,7 +179,7 @@ export function CommandPalette({
         {onOpenSpace && sites.length ? <>
           <CommandSeparator />
           <CommandGroup heading="Spaces">
-            {sites.map(site => <CommandItem key={site.slug} value={`space ${site.name} ${site.slug}`} onSelect={run(() => onOpenSpace(site.slug))}>
+            {sites.map(site => <CommandItem key={site.slug} value={`space ${site.name} ${site.slug}`} onSelect={run(() => { if (!site.current) onOpenSpace(site.slug); })}>
               <Icon name={site.icon ?? 'users'} size={16} style={{ color: site.color }} />
               <span className="min-w-0 flex-1 truncate">{site.name}</span>
               {site.current ? <span className="text-xs text-muted-foreground">Current</span> : null}
