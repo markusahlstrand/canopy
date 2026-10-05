@@ -12,6 +12,20 @@ export function publishPlugins(plugins: PluginInstall[]) { rows = plugins; liste
 export async function refreshPlugins() { const ticket = ++latest; const result = await listPlugins(); if (!Array.isArray(result.plugins)) throw new Error("Invalid plugin response"); if (ticket === latest) publishPlugins(result.plugins); }
 export const useInstalledPlugins = () => useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => rows);
 export function pluginManifest(row: PluginInstall): PluginManifest { return JSON.parse(row.manifest_json) as PluginManifest; }
+/** Search the installed contribution, including the file types and app title users know it by. */
+export function installedPluginMatchesSearch(row: PluginInstall, query: string): boolean {
+  const term = query.trim().toLocaleLowerCase();
+  if (!term) return true;
+  const manifest = pluginManifest(row);
+  const searchable = [
+    manifest.name, row.plugin_id, manifest.description ?? '',
+    row.principal === 'space' ? 'space' : 'personal',
+    ...manifest.capabilities.map(capability => capability.kind),
+    ...manifest.contributes.viewers?.flatMap(viewer => [viewer.title ?? '', ...viewer.match]) ?? [],
+    manifest.contributes.detailView?.title ?? '',
+  ];
+  return searchable.some(value => value.toLocaleLowerCase().includes(term));
+}
 /** Personal installs override the same plugin applied to a space. */
 export function effectivePlugins(rows: PluginInstall[]): PluginInstall[] {
   const effective = new Map<string, PluginInstall>();
