@@ -1023,14 +1023,14 @@ describe('the rail is how you change space', () => {
     // "Not implemented: navigation" line — there is no way to stub `location.reload`,
     // and the selection is what a wrong answer would get wrong.
     window.history.replaceState(null, '', '/?folder=foreign-folder&path=Shared');
-    fireEvent.click(screen.getByText('Family'));
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Spaces' })).getByRole('button', { name: 'Family' }));
     expect(window.location.search).not.toContain('folder=');
     expect(window.location.search).not.toContain('path=');
     expect(currentSite()).toBe('family');
 
     // The space you are already in is not a navigation: nothing is written, and nothing
     // reloads. Clicking it used to mean a pointless round trip through a whole page load.
-    fireEvent.click(screen.getByText('Home'));
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Spaces' })).getByRole('button', { name: 'Home' }));
     expect(currentSite()).toBe('family');
   });
 });
