@@ -44,3 +44,8 @@ it('keeps a damaged install visible for repair without registering its contribut
   expect(matchingPlugins([plugin('shared', 'space'), damaged], 'text/markdown', 'readme.md').map(row => row.id)).toEqual(['shared']);
   expect(installedPluginMatchesSearch(damaged, 'markdown')).toBe(true);
 });
+it('preserves legacy installs whose manifest predates id and version fields', () => {
+  const legacy = { ...plugin('legacy', 'user'), manifest_json: JSON.stringify({ name: 'Legacy viewer', capabilities: [{ kind: 'item:read' }], contributes: { viewers: [{ id: 'md', match: ['.md'] }] } }) };
+  expect(pluginManifest(legacy).name).toBe('Legacy viewer');
+  expect(matchingPlugins([legacy], 'text/plain', 'readme.md')).toEqual([legacy]);
+});

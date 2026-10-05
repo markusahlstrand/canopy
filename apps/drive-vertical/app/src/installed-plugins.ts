@@ -19,12 +19,13 @@ export function pluginManifest(row: PluginInstall): PluginManifest {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       const manifest = value as Record<string, unknown>;
       const contributes = manifest.contributes as Record<string, unknown> | undefined;
-      if (typeof manifest.id === 'string' && typeof manifest.name === 'string' && typeof manifest.version === 'string'
+      if (typeof manifest.name === 'string'
         && (manifest.description === undefined || typeof manifest.description === 'string')
         && Array.isArray(manifest.capabilities) && manifest.capabilities.every(cap => cap && typeof cap.kind === 'string')
         && contributes && typeof contributes === 'object' && !Array.isArray(contributes)
         && (!contributes.viewers || Array.isArray(contributes.viewers) && contributes.viewers.every(viewer => viewer && (viewer.title === undefined || typeof viewer.title === 'string') && Array.isArray(viewer.match) && viewer.match.every((match: unknown) => typeof match === 'string')))
-        && (!contributes.detailView || typeof contributes.detailView === 'object' && typeof (contributes.detailView as Record<string, unknown>).title === 'string')) return manifest as unknown as PluginManifest;
+        && (!contributes.detailView || typeof contributes.detailView === 'object' && typeof (contributes.detailView as Record<string, unknown>).title === 'string'))
+        return { ...manifest, id: typeof manifest.id === 'string' ? manifest.id : row.plugin_id, version: typeof manifest.version === 'string' ? manifest.version : '' } as PluginManifest;
     }
   } catch { /* A damaged install still needs to be removable from the UI. */ }
   return { id: row.plugin_id, name: `Invalid manifest: ${row.plugin_id}`, version: '', capabilities: [], contributes: {}, invalid: true };
