@@ -127,6 +127,9 @@ importers:
 
   apps/drive-vertical:
     dependencies:
+      '@canopy/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@canopy/docworker':
         specifier: workspace:*
         version: link:../../packages/docworker
