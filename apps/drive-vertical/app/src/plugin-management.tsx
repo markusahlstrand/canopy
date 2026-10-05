@@ -66,6 +66,16 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     `${entry.manifest.name} ${entry.manifest.description}`.toLowerCase().includes(query.toLowerCase()),
   );
   const showImageViewer = (category === 'All' || category === 'Viewers') && 'image viewer'.includes(query.toLowerCase());
+  const reviewCatalog = (entry: (typeof pluginCatalog)[number], targetSpace: boolean) => {
+    if (!confirmDiscardDrafts()) return;
+    manifestRead.current++; sourceRead.current++;
+    setEditingInstall(null);
+    setImported(null);
+    setManifest(JSON.stringify(entry.manifest, null, 2));
+    setSource(entry.source);
+    setForSpace(targetSpace);
+    setStudioOpen(true);
+  };
   const readLocalFile = async (file: File | undefined, target: 'manifest' | 'source') => {
     if (!file) return;
     if ((target === 'manifest' ? manifest : source) && !confirmDiscardDrafts()) return;
@@ -185,11 +195,12 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
     <div><h3 className="font-medium">Available plugins</h3><p className="text-xs text-muted-foreground">Browse reviewed viewers and editors, then approve their access before installing.</p></div>
     <div className="flex flex-wrap gap-1.5" role="group" aria-label="Plugin categories">{(['All', 'Viewers', 'Editors'] as const).map(value => <button key={value} type="button" aria-pressed={category === value} onClick={() => setCategory(value)} className={cn('rounded-full px-3 py-1 text-xs font-medium transition-colors', category === value ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/70')}>{value}</button>)}</div>
     <div className="grid gap-3 sm:grid-cols-2">{available.map(entry => <section key={entry.manifest.id} className="flex min-w-0 flex-col gap-2.5 rounded-lg border p-3.5">
-      <div className="flex items-start justify-between"><span className="grid size-11 place-items-center rounded-md" style={{ backgroundColor: `${entry.color}24`, color: entry.color }}><Icon name={entry.icon} size={20} /></span>{plugins.some(row => row.plugin_id === entry.manifest.id) ? <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px]">Installed</span> : null}</div>
+      <div className="flex items-start justify-between"><span className="grid size-11 place-items-center rounded-md" style={{ backgroundColor: `${entry.color}24`, color: entry.color }}><Icon name={entry.icon} size={20} /></span><span className="flex flex-wrap justify-end gap-1">{plugins.some(row => row.plugin_id === entry.manifest.id && row.principal !== 'space') ? <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px]">For you</span> : null}{plugins.some(row => row.plugin_id === entry.manifest.id && row.principal === 'space') ? <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px]">For this space</span> : null}</span></div>
       <div><h4 className="font-medium">{entry.manifest.name}</h4><p className="text-xs text-muted-foreground">{entry.category}</p></div>
       <p className="flex-1 text-sm text-muted-foreground">{entry.manifest.description}</p>
       <p className="text-xs text-muted-foreground">Access: {entry.manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ')}. File-read plugins can share opened files outside Canopy.{entry.manifest.capabilities.some(cap => cap.kind === 'net:fetch') ? ' Listed hosts serve code that runs with the opened file.' : ''}</p>
-      <Button variant="outline" disabled={busy} onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; setEditingInstall(null); setManifest(JSON.stringify(entry.manifest, null, 2)); setSource(entry.source); setForSpace(false); setStudioOpen(true); }}>Review {entry.manifest.name}</Button>
+      <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={busy} onClick={() => reviewCatalog(entry, false)}>Review {entry.manifest.name}</Button>
+        {canManage ? <Button variant="outline" disabled={busy} onClick={() => reviewCatalog(entry, true)}>Apply {entry.manifest.name} to space</Button> : null}</div>
     </section>)}</div>
     {showImageViewer ? <section aria-label="Image viewer" className="space-y-2 rounded border p-3">
       <h4 className="font-medium">Image viewer</h4><p className="text-sm">Preview images with zoom and keyboard controls.</p>
