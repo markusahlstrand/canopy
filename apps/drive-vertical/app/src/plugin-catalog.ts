@@ -6,7 +6,7 @@ import manifest2 from '../../../../examples/plugins/code-editor/canopy.json?raw'
 import source2 from '../../../../examples/plugins/code-editor/index.js?raw';
 import manifest3 from '../../../../examples/plugins/pdf-viewer/canopy.json?raw';
 import source3 from '../../../../examples/plugins/pdf-viewer/index.js?raw';
-import { viewerMatches } from '@canopy/core';
+import { isFileTypeQuery, viewerMatchesSearch } from './plugin-search';
 interface CatalogManifest {id:string;name:string;description:string;capabilities:{kind:string;hosts?:string[]}[];contributes?:{viewers?:{match:string[]}[]}}
 function entry(manifest: string, source: string, category: 'Viewers' | 'Editors', icon: string, color: string, hosts: string[] = []) {
   const parsed = JSON.parse(manifest) as CatalogManifest;
@@ -29,9 +29,6 @@ export function catalogSearchText(entry: (typeof pluginCatalog)[number]): string
 export function catalogMatchesSearch(entry: (typeof pluginCatalog)[number], rawQuery: string): boolean {
   const query = rawQuery.trim().toLowerCase();
   if (!query) return true;
-  if (!query.startsWith('.') && !query.includes('/') && !query.includes('.')) return catalogSearchText(entry).includes(query);
-  const file = query.includes('/')
-    ? {mime: query.split(';')[0]!.trim()}
-    : {ext: query.startsWith('.') ? query.slice(1) : query.split('.').at(-1)};
-  return entry.manifest.contributes?.viewers?.some(viewer => viewerMatches(viewer.match, file)) ?? false;
+  if (!isFileTypeQuery(query)) return catalogSearchText(entry).includes(query);
+  return entry.manifest.contributes?.viewers?.some(viewer => viewerMatchesSearch(viewer.match, query)) ?? false;
 }
