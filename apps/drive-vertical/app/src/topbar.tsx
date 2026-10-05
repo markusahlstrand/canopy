@@ -44,6 +44,8 @@ function crumbModel(breadcrumb: string[]): CrumbItem[] {
 
 interface TopbarProps {
   breadcrumb: string[];
+  spaceName?: string;
+  onOpenSpaces?: () => void;
   onCrumbClick?: (index: number) => void;
   onOpenMenu: () => void;
   onOpenCmd: () => void;
@@ -67,6 +69,8 @@ interface TopbarProps {
 
 export function Topbar({
   breadcrumb,
+  spaceName,
+  onOpenSpaces,
   onCrumbClick,
   onOpenMenu,
   onOpenCmd,
@@ -101,6 +105,11 @@ export function Topbar({
       >
         <Icon name="panel-left" size={18} />
       </button>
+      {spaceName && onOpenSpaces ? <button type="button" onClick={onOpenSpaces} aria-label={`Spaces, current: ${spaceName}`} className="flex min-w-0 max-w-24 shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-accent sm:max-w-40">
+        <Icon name="users" size={14} className="shrink-0 text-primary" />
+        <span className="truncate">{spaceName}</span>
+        <Icon name="chevron-down" size={12} className="shrink-0 text-muted-foreground" />
+      </button> : null}
       {/* One current folder and a back action fit where a full breadcrumb does not. */}
       <div className="flex min-w-0 flex-1 items-center gap-1 text-sm md:hidden">
         {onCrumbClick && breadcrumb.length > 1 && (

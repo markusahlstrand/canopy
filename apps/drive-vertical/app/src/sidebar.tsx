@@ -29,6 +29,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   Icon,
+  Input,
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -194,7 +195,12 @@ function NavRow({
 
 export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [spaceQuery, setSpaceQuery] = useState('');
   const narrow = mobile ? false : collapsed;
+  const spaceTerm = spaceQuery.trim().toLocaleLowerCase();
+  const matchesSpace = (site: { name: string; slug: string }) => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(spaceTerm);
+  // The current space stays visible: its row carries the only way into space settings.
+  const shownSites = sites?.filter(site => site.current || matchesSpace(site));
 
   const toggle = () =>
     setCollapsed((was) => {
@@ -297,8 +303,9 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                 className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
               ><Icon name="plus" size={16} /></button>}
             </div>
+            {sites && (sites.length > 5 || spaceQuery) ? <Input aria-label="Filter spaces" placeholder="Filter spaces" value={spaceQuery} onChange={event => setSpaceQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape' && spaceQuery) { event.stopPropagation(); setSpaceQuery(''); } }} className="mb-2 h-8 text-base md:text-xs" /> : null}
             <nav className="flex flex-col gap-0.5" aria-label="Spaces">
-              {sites?.map((s) => (
+              {shownSites?.map((s) => (
                 <div key={s.slug} className="flex items-center gap-0.5">
                 <button
                   aria-current={s.current ? 'true' : undefined}
@@ -347,6 +354,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
             </nav>
             {!failed && sites === null ? <p role="status" className="px-2.5 py-1 text-xs text-muted-foreground">Loading spaces…</p> : null}
             {!failed && sites?.length === 0 ? <p className="px-2.5 py-1 text-xs text-muted-foreground">No spaces yet</p> : null}
+            {spaceTerm && sites?.length && !sites.some(site => !site.current && matchesSpace(site)) ? <p role="status" className="px-2.5 py-1 text-xs text-muted-foreground">No matching spaces</p> : null}
           </div>
         )}
         {pluginApps.length > 0 && onOpenPlugin ? <div className={cn('mt-4 px-3', narrow && 'px-2')}>

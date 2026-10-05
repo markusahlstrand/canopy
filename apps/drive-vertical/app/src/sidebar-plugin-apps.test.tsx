@@ -14,3 +14,31 @@ it('launches a plugin detail view from the space rail', () => {
   fireEvent.click(launcher);
   expect(onOpenPlugin).toHaveBeenCalledWith('install-1');
 });
+it('filters a long space roster by name or slug, keeping the current space', () => {
+  const sites = [
+    {slug:'family',name:'Family',current:true},
+    {slug:'work',name:'Team',current:false},
+    ...['alpha','beta','gamma','delta'].map(slug => ({slug,name:slug,current:false})),
+  ];
+  render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()} sites={sites} failed={false} onRetry={vi.fn()} />);
+  fireEvent.change(screen.getByRole('textbox', {name:'Filter spaces'}), {target:{value:'work'}});
+  expect(screen.getByRole('button', {name:'Team'})).toBeTruthy();
+  expect(screen.getByRole('button', {name:'Family'})).toBeTruthy();
+  expect(screen.queryByRole('button', {name:'alpha'})).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
+  fireEvent.change(screen.getByRole('textbox', {name:'Filter spaces'}), {target:{value:'absent'}});
+  expect(screen.getByRole('status').textContent).toBe('No matching spaces');
+  expect(screen.getByRole('button', {name:'Family'})).toBeTruthy();
+});
+it('clears the space filter on Escape before letting it bubble', () => {
+  const sites = ['alpha','beta','gamma','delta','epsilon','zeta'].map((slug, i) => ({slug,name:slug,current:i === 0}));
+  const onKeyDown = vi.fn();
+  render(<div onKeyDown={onKeyDown}><Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()} sites={sites} failed={false} onRetry={vi.fn()} /></div>);
+  const input = screen.getByRole('textbox', {name:'Filter spaces'}) as HTMLInputElement;
+  fireEvent.change(input, {target:{value:'zeta'}});
+  fireEvent.keyDown(input, {key:'Escape'});
+  expect(input.value).toBe('');
+  expect(onKeyDown).not.toHaveBeenCalled();
+  fireEvent.keyDown(input, {key:'Escape'});
+  expect(onKeyDown).toHaveBeenCalledOnce();
+});

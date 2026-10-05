@@ -778,6 +778,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <div className="flex min-w-0 flex-1 flex-col">
       <Topbar
         breadcrumb={activePlugin ? [pluginManifest(activePlugin).name] : view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : ['My Drive', ...crumbs.map((c) => c.name)]}
+        spaceName={siteList.sites?.find(site => site.current)?.name}
+        onOpenSpaces={() => setSpacesOpen(true)}
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
         onCrumbClick={view === 'drive' ? (index) => upTo(index - 1) : undefined}
         onOpenMenu={() => setMobileNavOpen(true)}
