@@ -6,7 +6,9 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 it('targets the installed viewer and app contracts, without retired portal files', () => {
   expect(buildPluginPrompt('Show .gpx tracks', 'viewer')).toContain('contributes.viewers');
-  expect(buildPluginPrompt('Show .gpx tracks', 'viewer')).toContain('item:read');
+  expect(buildPluginPrompt('Show .gpx tracks', 'viewer')).toContain('{"kind":"item:read"}');
+  expect(buildPluginPrompt('Show .gpx tracks', 'viewer')).toContain('{"kind":"item:write"}');
+  expect(buildPluginPrompt('Show .gpx tracks', 'viewer')).toContain('{"kind":"net:fetch","hosts":["cdn.example.com"]}');
   expect(buildPluginPrompt('A timer', 'app')).toContain('contributes.detailView');
   expect(buildPluginPrompt('A timer', 'app')).not.toContain('apps/portal');
 });

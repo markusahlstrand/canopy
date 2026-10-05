@@ -7,13 +7,13 @@ export type PluginKind = 'viewer' | 'app';
 export function buildPluginPrompt(idea: string, kind: PluginKind): string {
   const goal = idea.trim() || (kind === 'viewer' ? 'Describe the file type and how to display it.' : 'Describe the app and what it should do.');
   const contribution = kind === 'viewer'
-    ? 'contributes.viewers: [{"id":"main","title":"Viewer title","match":[".ext","application/example"]}] and an item:read capability.'
-    : 'contributes.detailView: {"id":"main","title":"App title"}. A self-contained app needs no file capability.';
+    ? 'contributes.viewers: [{"id":"main","title":"Viewer title","match":[".ext","application/example"]}] and capabilities: [{"kind":"item:read"}].'
+    : 'contributes.detailView: {"id":"main","title":"App title"} and capabilities: []. A self-contained app needs no file capability.';
   return `Build a Canopy ${kind === 'viewer' ? 'file viewer' : 'standalone app'} plugin for this idea: ${goal}
 
 Return exactly two fenced code blocks: one json block containing canopy.json, then one js block containing the entire JavaScript entry. The manifest must have a kebab-case id (2–49 characters), name, version, capabilities, and ${contribution}
 
-The JavaScript must be one self-contained ES module with export default function render(ctx). It runs in an opaque-origin iframe. Use ctx.container and, for a viewer, ctx.file {name, mime, bytes, writable}. Do not access the host page, cookies, or storage. Do not use relative imports. If you load code from a public CDN, declare its hostname in a net:fetch capability and provide an offline fallback. For editing, request item:write and emit save with {content} only when ctx.file.writable is true.
+The JavaScript must be one self-contained ES module with export default function render(ctx). It runs in an opaque-origin iframe. Use ctx.container and, for a viewer, ctx.file {name, mime, bytes, writable}. Do not access the host page, cookies, or storage. Do not use relative imports. If you load code from a public CDN, add {"kind":"net:fetch","hosts":["cdn.example.com"]} to capabilities with the real public hostname and provide an offline fallback. For editing, add {"kind":"item:write"} to capabilities and emit save with {content} only when ctx.file.writable is true.
 
 After generating, explain which file type to use for testing. I will paste the manifest and JavaScript into Canopy's Plugin Studio, review the capabilities, and install it there.`;
 }
