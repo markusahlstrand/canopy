@@ -10,12 +10,10 @@
  * The rest is the portal's rail with everything cut that has nothing behind it here:
  *
  *   - Home, Starred and Settings: no such screens. The nav is the two views the drive has.
- *   - Per-space context menus (rename, members, offline files, show-in-my-drive): those
- *     were portal-side space records. A space is a scope now, provisioned by the platform,
- *     and renaming or sharing one is #79's, not a menu item that throws.
+ *   - Portal-only space actions (rename, offline files, show-in-my-drive): a space is
+ *     a scope now. The current space still offers settings, members and plugins.
  *   - Connector status dots and the indexing spinner: no connectors in the vertical yet
  *     (#57/#58), so there is nothing to probe and no honest colour to show.
- *   - Plugin launchers: the plugin seam is #73.
  *   - The storage card: it read `STORAGE` out of the portal's mock data. There is no quota
  *     endpoint, and a progress bar over an invented number is worse than no progress bar.
  *   - The user row: the topbar carries the account menu, and one shell needs one of those.
