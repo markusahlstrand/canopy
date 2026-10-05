@@ -745,7 +745,7 @@ app.post('/api/plugin-import/github', async (c) => {
     const node = await nodeFor(c.req.raw, c.env);
     const token = c.env.ROUTER_SECRET ? await signPluginImport(c.env.ROUTER_SECRET, {
       principal, scope: node.scopeId, manifest: result.manifest, source: result.source, ...result.provenance,
-    }) : undefined;
+    }, Date.now()) : undefined;
     return c.json({...result, provenance: {...result.provenance, token}});
   }
   catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
@@ -761,7 +761,7 @@ app.post('/api/plugin-import/npm', async (c) => {
     const node = await nodeFor(c.req.raw, c.env);
     const token = c.env.ROUTER_SECRET ? await signPluginImport(c.env.ROUTER_SECRET, {
       principal, scope: node.scopeId, manifest: result.manifest, source: result.source, ...result.provenance,
-    }) : undefined;
+    }, Date.now()) : undefined;
     return c.json({...result, provenance: {...result.provenance, token}});
   }
   catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
@@ -775,7 +775,7 @@ app.put('/api/plugins', async (c) => {
   const node = await nodeFor(c.req.raw, c.env);
   const body = await c.req.json() as Record<string, unknown>;
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HTTPException(400, { message: 'Invalid plugin install.' });
-  const provenance = await verifyPluginImport(c.env.ROUTER_SECRET, body.importToken, principal, node.scopeId, body.manifest, body.source);
+  const provenance = await verifyPluginImport(c.env.ROUTER_SECRET, body.importToken, principal, node.scopeId, body.manifest, body.source, Date.now());
   const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
   return c.json(await scope.invoke('drive/save-plugin', {...body, provenance: provenance ?? undefined}));
 });

@@ -24,11 +24,11 @@ async function key(secret: string): Promise<CryptoKey> {
 }
 
 /** Bind a reviewed import to one principal, space, manifest and exact source for 15 minutes. */
-export async function signPluginImport(secret: string, claim: Omit<ImportClaim, 'manifestHash' | 'sourceHash' | 'expiresAt'> & {manifest: unknown; source: string}): Promise<string> {
+export async function signPluginImport(secret: string, claim: Omit<ImportClaim, 'manifestHash' | 'sourceHash' | 'expiresAt'> & {manifest: unknown; source: string}, now: number): Promise<string> {
   const data: ImportClaim = {
     principal: claim.principal, scope: claim.scope, kind: claim.kind, ref: claim.ref, resolved: claim.resolved,
     manifestHash: await sha256(JSON.stringify(installedPluginManifest.parse(claim.manifest))),
-    sourceHash: await sha256(claim.source), expiresAt: Date.now() + 15 * 60_000,
+    sourceHash: await sha256(claim.source), expiresAt: now + 15 * 60_000,
   };
   const payload = bytesToBase64(encoder.encode(JSON.stringify(data)));
   const signature = await crypto.subtle.sign('HMAC', await key(secret), encoder.encode(`canopy-plugin-import-v1\0${payload}`));
@@ -36,7 +36,7 @@ export async function signPluginImport(secret: string, claim: Omit<ImportClaim, 
 }
 
 /** Invalid or edited claims return null; the save path stores them as inline source. */
-export async function verifyPluginImport(secret: string | undefined, token: unknown, principal: string, scope: string, manifest: unknown, source: unknown): Promise<Pick<ImportClaim, 'kind' | 'ref' | 'resolved'> | null> {
+export async function verifyPluginImport(secret: string | undefined, token: unknown, principal: string, scope: string, manifest: unknown, source: unknown, now: number): Promise<Pick<ImportClaim, 'kind' | 'ref' | 'resolved'> | null> {
   if (!secret || typeof token !== 'string' || token.length > 3000 || typeof source !== 'string') return null;
   const [payload, signature, extra] = token.split('.');
   if (!payload || !signature || extra) return null;
@@ -44,7 +44,7 @@ export async function verifyPluginImport(secret: string | undefined, token: unkn
     const valid = await crypto.subtle.verify('HMAC', await key(secret), base64ToBytes(signature).slice().buffer, encoder.encode(`canopy-plugin-import-v1\0${payload}`));
     if (!valid) return null;
     const claim = JSON.parse(new TextDecoder().decode(base64ToBytes(payload))) as ImportClaim;
-    if (claim.principal !== principal || claim.scope !== scope || claim.expiresAt < Date.now() ||
+    if (claim.principal !== principal || claim.scope !== scope || claim.expiresAt < now ||
         !['github', 'npm'].includes(claim.kind) || typeof claim.ref !== 'string' || typeof claim.resolved !== 'string') return null;
     if (claim.sourceHash !== await sha256(source) || claim.manifestHash !== await sha256(JSON.stringify(installedPluginManifest.parse(manifest)))) return null;
     return {kind: claim.kind, ref: claim.ref, resolved: claim.resolved};
