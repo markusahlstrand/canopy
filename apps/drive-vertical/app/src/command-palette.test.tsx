@@ -84,6 +84,15 @@ it('switches to a space selected from the palette', () => {
   fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
   expect(onOpenSpace).toHaveBeenCalledWith('team');
 });
+it('closes without switching when the current space is selected', () => {
+  const onOpenSpace = vi.fn(); const onOpenChange = vi.fn();
+  render(<CommandPalette {...props} onOpenChange={onOpenChange} sites={[{slug:'team',name:'Team',current:true}]} onOpenSpace={onOpenSpace} />);
+  fireEvent.change(screen.getByRole('combobox'), {target:{value:'Team'}});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'ArrowDown'});
+  fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
+  expect(onOpenSpace).not.toHaveBeenCalled();
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+});
 it('opens an installed app from the palette', () => {
   const row: PluginInstall = {id:'install-1',plugin_id:'notes',principal:'space',enabled:1,updated_at:'now',manifest_json:JSON.stringify({id:'notes',name:'Notes',version:'1',capabilities:[],contributes:{detailView:{id:'notes',title:'Notes app'}}})};
   const onOpenPlugin = vi.fn();

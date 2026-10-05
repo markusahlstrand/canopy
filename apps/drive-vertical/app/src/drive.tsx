@@ -817,7 +817,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onOpenChange={setCmdOpen}
         files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
         sites={siteList.sites ?? []}
-        onOpenSpace={openSpace}
+        onOpenSpace={offline ? undefined : openSpace}
         pluginApps={pluginApps}
         onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); }}
         onManageSpaces={() => setSpacesOpen(true)}

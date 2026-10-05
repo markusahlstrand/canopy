@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { listPlugins, type PluginInstall } from './api';
+import { isFileTypeQuery, viewerMatchesSearch } from './plugin-search';
 export interface PluginManifest {
   id: string; name: string; version: string; description?: string;
   capabilities: { kind: string; hosts?: string[] }[];
@@ -12,16 +13,20 @@ export function publishPlugins(plugins: PluginInstall[]) { rows = plugins; liste
 export async function refreshPlugins() { const ticket = ++latest; const result = await listPlugins(); if (!Array.isArray(result.plugins)) throw new Error("Invalid plugin response"); if (ticket === latest) publishPlugins(result.plugins); }
 export const useInstalledPlugins = () => useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => rows);
 export function pluginManifest(row: PluginInstall): PluginManifest { return JSON.parse(row.manifest_json) as PluginManifest; }
+const scopeKeywords: Record<string, 'space' | 'personal'> = {space: 'space', personal: 'personal', you: 'personal', mine: 'personal'};
 /** Search the installed contribution, including the file types and app title users know it by. */
 export function installedPluginMatchesSearch(row: PluginInstall, query: string): boolean {
   const term = query.trim().toLocaleLowerCase();
   if (!term) return true;
+  const scope = scopeKeywords[term];
+  if (scope) return (row.principal === 'space') === (scope === 'space');
   const manifest = pluginManifest(row);
+  const viewers = manifest.contributes.viewers ?? [];
+  if (isFileTypeQuery(term)) return viewers.some(viewer => viewerMatchesSearch(viewer.match, term));
   const searchable = [
     manifest.name, row.plugin_id, manifest.description ?? '',
-    row.principal === 'space' ? 'space' : 'personal',
     ...manifest.capabilities.map(capability => capability.kind),
-    ...manifest.contributes.viewers?.flatMap(viewer => [viewer.title ?? '', ...viewer.match]) ?? [],
+    ...viewers.flatMap(viewer => [viewer.title ?? '', ...viewer.match]),
     manifest.contributes.detailView?.title ?? '',
   ];
   return searchable.some(value => value.toLocaleLowerCase().includes(term));
