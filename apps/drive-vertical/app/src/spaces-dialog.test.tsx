@@ -33,7 +33,7 @@ it('disables space creation while offline and guides managers with no spaces', (
 it('copies a clean link to the selected space', async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-  window.history.replaceState(null, '', '/nested/view?site=old&folder=private&file=secret&path=deep&invite=token#frag');
+  window.history.replaceState(null, '', '/nested?site=old&folder=private&file=secret&path=deep&claim=claim-token&invite=invite-token#private');
   render(<SpacesDialog {...props} sites={[{ slug: 'team', name: 'Team', current: false }]} />);
   fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
   await screen.findByText('Copied link to team');
