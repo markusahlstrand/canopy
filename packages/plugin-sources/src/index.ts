@@ -1,6 +1,7 @@
 import type { PluginEntry, PluginManifest, PluginSourceRef, ResolvedPlugin } from "@canopy/core";
 import { strFromU8 } from "fflate";
 import { unpackZip } from "./unpack-zip";
+import { readNpmTarball } from "./npm-tarball";
 
 // Source paths are literal module identifiers. Do not normalize aliases that
 // could select code outside the manifest's directory or collide with imports.
@@ -10,12 +11,13 @@ const plainPath = (path: string) => path.length > 0 && !path.includes("\\") &&
 
 const encodePath = (p: string) => p.split("/").filter(Boolean).map(encodeURIComponent).join("/");
 
-async function fetchJson<T>(url: string, maxBytes?: number): Promise<T> {
-  const res = await fetch(url, { headers: { "User-Agent": "canopy" } });
+async function fetchJson<T>(url: string, maxBytes?: number, options: {headers?: Record<string,string>; label?: string; fetcher?: typeof fetch} = {}): Promise<T> {
+  const res = await (options.fetcher ?? fetch)(url, { headers: { "User-Agent": "canopy", ...options.headers } });
   if (!res.ok) throw new Error(`fetch ${url} → ${res.status}`);
   if (maxBytes === undefined) return (await res.json()) as T;
-  if (Number(res.headers.get("content-length")) > maxBytes) throw new Error("plugin manifest exceeds size limit");
-  if (!res.body) throw new Error("plugin manifest has no body");
+  const label = options.label ?? "plugin manifest";
+  if (Number(res.headers.get("content-length")) > maxBytes) throw new Error(`${label} exceeds size limit`);
+  if (!res.body) throw new Error(`${label} has no body`);
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -24,7 +26,7 @@ async function fetchJson<T>(url: string, maxBytes?: number): Promise<T> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > maxBytes) { await reader.cancel(); throw new Error("plugin manifest exceeds size limit"); }
+      if (size > maxBytes) { await reader.cancel(); throw new Error(`${label} exceeds size limit`); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
@@ -78,39 +80,42 @@ async function resolveGithub(ref: Extract<PluginSourceRef, { type: "github" }>, 
   return { manifest, entry, version: commit, source: ref, resolvedSource: { ...ref, ref: commit } };
 }
 
-// ── npm: registry version + package.json `canopy` manifest + esm.sh entry ─────
+// ── npm: registry version + integrity-verified package archive ────────────────
 
 interface NpmMeta {
   "dist-tags": Record<string, string>;
-  versions: Record<string, unknown>;
+  versions: Record<string, {dist?: {tarball?: string; integrity?: string}}>;
 }
 
-async function npmResolveVersion(name: string, version?: string, checkingUpdate = false): Promise<string> {
+async function npmRegistryVersion(name: string, version?: string, checkingUpdate = false, fetcher: typeof fetch = fetch) {
   // Names are URL path data, never query/fragment syntax or traversal segments.
   if (name.length > 214 || !/^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/.test(name)) {
     throw new Error(`Invalid npm package name: ${name}`);
   }
-  const meta = await fetchJson<NpmMeta>(`https://registry.npmjs.org/${name}`);
+  const meta = await fetchJson<NpmMeta>(`https://registry.npmjs.org/${name}`, 4 * 1024 * 1024, {
+    headers: {Accept: 'application/vnd.npm.install-v1+json'}, label: 'npm registry metadata', fetcher,
+  });
   // Exact pins can discover newer latest releases. Tag installs stay on their
   // channel, so a prerelease install is not offered stable latest as a downgrade.
   const requested = checkingUpdate && version !== undefined && Object.hasOwn(meta.versions, version)
     ? "latest" : version ?? "latest";
-  if (Object.hasOwn(meta.versions, requested)) return requested;
+  if (Object.hasOwn(meta.versions, requested)) return {version: requested, details: meta.versions[requested]!};
   const resolved = Object.hasOwn(meta["dist-tags"], requested) ? meta["dist-tags"][requested] : undefined;
-  if (typeof resolved === "string" && Object.hasOwn(meta.versions, resolved)) return resolved;
+  if (typeof resolved === "string" && Object.hasOwn(meta.versions, resolved)) return {version: resolved, details: meta.versions[resolved]!};
   throw new Error(`${name}: npm version or tag "${requested}" is unavailable`);
 }
 
-async function resolveNpm(ref: Extract<PluginSourceRef, { type: "npm" }>): Promise<ResolvedPlugin> {
-  const version = await npmResolveVersion(ref.name, ref.version);
-  const pkg = await fetchJson<{ canopy?: PluginManifest }>(
-    `https://cdn.jsdelivr.net/npm/${ref.name}@${version}/package.json`,
-  );
-  if (!pkg.canopy) throw new Error(`${ref.name}@${version} has no "canopy" manifest in package.json`);
-  const manifest: PluginManifest = { ...pkg.canopy, version };
-  // esm.sh serves the package as ESM (deps bundled) — loadable by URL.
-  const entry: PluginEntry = { url: `https://esm.sh/${ref.name}@${version}` };
-  return { manifest, entry, version, source: ref };
+async function npmResolveVersion(name: string, version?: string, checkingUpdate = false): Promise<string> {
+  return (await npmRegistryVersion(name, version, checkingUpdate)).version;
+}
+
+async function resolveNpm(ref: Extract<PluginSourceRef, { type: "npm" }>, opts: ResolveOptions): Promise<ResolvedPlugin> {
+  const {version, details} = await npmRegistryVersion(ref.name, ref.version, false, opts.fetch);
+  const {tarball, integrity} = details.dist ?? {};
+  if (!tarball || !integrity) throw new Error(`${ref.name}@${version} has no verified npm archive.`);
+  const {manifest, source} = await readNpmTarball(tarball, integrity, opts.fetch ?? fetch);
+  return { manifest: {...manifest, version}, entry: {code: source}, version, integrity, source: ref,
+    resolvedSource: {...ref, version} };
 }
 
 // ── zip: unpacked archive (manifest + inline code) ────────────────────────────
@@ -181,6 +186,8 @@ export function resolveZipBytes(bytes: Uint8Array, source: PluginSourceRef, opti
 // ── unified API ───────────────────────────────────────────────────────────────
 
 export interface ResolveOptions {
+  /** Injectable fetch for npm archive resolution. */
+  fetch?: typeof fetch;
   /** Used only for GitHub API lookups, never forwarded to raw URLs. */
   githubToken?: string;
   /** Required for zip refs. Enforce maxBytes while reading (size check or capped stream),
@@ -194,7 +201,7 @@ export async function resolvePlugin(ref: PluginSourceRef, opts: ResolveOptions =
     case "github":
       return resolveGithub(ref, opts);
     case "npm":
-      return resolveNpm(ref);
+      return resolveNpm(ref, opts);
     case "zip": {
       if (!opts.readZip) throw new Error("zip source requires a readZip provider");
       const limits = effectiveZipLimits(opts.zipLimits);

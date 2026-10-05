@@ -61,7 +61,7 @@ it('clears a Studio draft after confirming discard on close', () => {
   expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toBe('');
   confirm.mockRestore();
 });
-it('records bundled provenance only while catalog manifest and source are unchanged', async () => {
+it('does not send client-claimed provenance for a catalog install', async () => {
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => new Response(JSON.stringify(url.endsWith('/people/access') ? {canManage:false} : url.endsWith('/plugins') && init?.method !== 'PUT' ? {plugins:[]} : {})));
   vi.stubGlobal('fetch',fetcher);
   render(<PluginManagement open onOpenChange={() => {}} />);
@@ -70,7 +70,8 @@ it('records bundled provenance only while catalog manifest and source are unchan
   fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
   await waitFor(()=>expect(fetcher.mock.calls.filter(([,init])=>init?.method==='PUT')).toHaveLength(1));
   const request = JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string);
-  expect(request.provenance).toEqual({kind:'bundled',ref:'@canopy/catalog/markdown-editor',resolved:request.manifest.version});
+  expect(request.provenance).toBeUndefined();
+  expect(request.importToken).toBeUndefined();
 });
 it('shows manifest errors before allowing a plugin install', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);

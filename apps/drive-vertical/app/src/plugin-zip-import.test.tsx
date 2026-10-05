@@ -15,7 +15,7 @@ function archive() {
   return file;
 }
 
-it('reviews a ZIP plugin before installing it with ZIP provenance', async () => {
+it('reviews a ZIP plugin without sending client-claimed provenance', async () => {
   const fetcher=vi.fn(async (url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/people/access')?{canManage:false}:url.endsWith('/plugins')&&init?.method!=='PUT'?{plugins:[]}:{id:'zip-install'})));
   vi.stubGlobal('fetch',fetcher);
   render(<PluginManagement open onOpenChange={()=>{}}/>);
@@ -27,7 +27,8 @@ it('reviews a ZIP plugin before installing it with ZIP provenance', async () => 
   fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
   await waitFor(()=>expect(fetcher.mock.calls.some(([,init])=>init?.method==='PUT')).toBe(true));
   const body=JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string);
-  expect(body.provenance).toEqual({kind:'zip',ref:'viewer.zip',resolved:'1.0.0'});
+  expect(body.provenance).toBeUndefined();
+  expect(body.importToken).toBeUndefined();
 });
 it('rejects a ZIP entry that exceeds the plugin source limit before install', async () => {
   zip.source='x'.repeat(256_001);

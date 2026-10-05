@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@canopy/core": "workspace:*",
+    "es-module-lexer": "^2.3.2",
     "fflate": "^0.8.3"
   },
   "devDependencies": {

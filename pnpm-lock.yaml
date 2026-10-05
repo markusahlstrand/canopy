@@ -460,6 +460,9 @@ importers:
       '@canopy/core':
         specifier: workspace:*
         version: link:../core
+      es-module-lexer:
+        specifier: ^2.3.2
+        version: 2.3.2
       fflate:
         specifier: ^0.8.3
         version: 0.8.3

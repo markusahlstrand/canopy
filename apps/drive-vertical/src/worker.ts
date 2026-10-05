@@ -4,6 +4,8 @@ import { mountSpaceSettings } from './space-settings-routes.js';
 import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
 import { importGithubPlugin } from './github-plugin-import.js';
+import { importNpmPlugin } from './npm-plugin-import.js';
+import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
@@ -428,7 +430,7 @@ async function principalFor(env: Env, req: Request): Promise<PrincipalId | null>
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('/api/*', async (c, next) => {
-  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|invites|accept-invite|claim-owner)$/.test(c.req.path);
+  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|accept-invite|claim-owner)$/.test(c.req.path);
   if (jsonMutation && c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HTTPException(415, {message:'Use application/json for this request.'});
   const origin = c.req.header('origin');
   if (jsonMutation && origin && origin !== new URL(c.req.url).origin) throw new HTTPException(403, {message:'Cross-origin mutations are not allowed.'});
@@ -723,21 +725,59 @@ app.get('/api/site-requests', async (c) => {
   return c.json(await scope.invoke('drive/space-requests', {}));
 });
 
-const githubImportBudget = new Map<string, { count: number; resetAt: number }>();
+const pluginImportBudget = new Map<string, { count: number; resetAt: number }>();
+function reservePluginImport(principal: string) {
+  // Shared by GitHub and npm; best effort per isolate, ahead of upstream fetches.
+  const now = Date.now(), previous = pluginImportBudget.get(principal);
+  if (pluginImportBudget.size > 1000) for (const [key, value] of pluginImportBudget) if (value.resetAt <= now) pluginImportBudget.delete(key);
+  const budget = previous && previous.resetAt > now ? previous : { count: 0, resetAt: now + 60 * 60_000 };
+  if (budget.count >= 20) throw new HTTPException(429, { message: 'Too many plugin imports. Try again later.' });
+  pluginImportBudget.set(principal, { ...budget, count: budget.count + 1 });
+}
 app.post('/api/plugin-import/github', async (c) => {
   const principal = await principalFor(c.env, c.req.raw);
   if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
   const input = z.object({repo:z.string().min(3).max(200),ref:z.string().max(100).optional(),path:z.string().max(200).optional()}).safeParse(await c.req.json());
   if (!input.success) throw new HTTPException(400, { message: 'Enter a GitHub repository and optional ref or folder.' });
-  // A per-isolate budget prevents accidental repeated imports from exhausting
-  // GitHub's shared IP quota. An optional token raises the upstream quota.
-  const now = Date.now(), previous = githubImportBudget.get(principal);
-  if (githubImportBudget.size > 1000) for (const [key, value] of githubImportBudget) if (value.resetAt <= now) githubImportBudget.delete(key);
-  const budget = previous && previous.resetAt > now ? previous : { count: 0, resetAt: now + 60 * 60_000 };
-  if (budget.count >= 20) throw new HTTPException(429, { message: 'Too many GitHub plugin imports. Try again later.' });
-  githubImportBudget.set(principal, { ...budget, count: budget.count + 1 });
-  try { return c.json(await importGithubPlugin(input.data, fetch, c.env.GITHUB_TOKEN)); }
+  reservePluginImport(principal);
+  try {
+    const result = await importGithubPlugin(input.data, fetch, c.env.GITHUB_TOKEN);
+    const node = await nodeFor(c.req.raw, c.env);
+    const token = c.env.ROUTER_SECRET ? await signPluginImport(c.env.ROUTER_SECRET, {
+      principal, scope: node.scopeId, manifest: result.manifest, source: result.source, ...result.provenance,
+    }, Date.now()) : undefined;
+    return c.json({...result, provenance: {...result.provenance, token}});
+  }
   catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
+});
+app.post('/api/plugin-import/npm', async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const input = z.object({name:z.string().min(1).max(214),version:z.string().max(100).optional()}).safeParse(await c.req.json());
+  if (!input.success) throw new HTTPException(400, { message: 'Enter an npm package and optional version or tag.' });
+  reservePluginImport(principal);
+  try {
+    const result = await importNpmPlugin(input.data, fetch);
+    const node = await nodeFor(c.req.raw, c.env);
+    const token = c.env.ROUTER_SECRET ? await signPluginImport(c.env.ROUTER_SECRET, {
+      principal, scope: node.scopeId, manifest: result.manifest, source: result.source, ...result.provenance,
+    }, Date.now()) : undefined;
+    return c.json({...result, provenance: {...result.provenance, token}});
+  }
+  catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
+});
+
+// The generic operation accepts a provenance field for other hosts. This HTTP
+// boundary supplies source labels only after checking a signed import claim.
+app.put('/api/plugins', async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, c.env);
+  const body = await c.req.json() as Record<string, unknown>;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HTTPException(400, { message: 'Invalid plugin install.' });
+  const provenance = await verifyPluginImport(c.env.ROUTER_SECRET, body.importToken, principal, node.scopeId, body.manifest, body.source, Date.now());
+  const scope = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+  return c.json(await scope.invoke('drive/save-plugin', {...body, provenance: provenance ?? undefined}));
 });
 
 app.get('/api/sites', async (c) => {

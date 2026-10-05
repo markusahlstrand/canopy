@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, cn } from '@canopy/ui';
 import { setImageViewerEnabled, viewerRegistry } from './image-viewer';
-import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin, importGithubPlugin } from './api';
+import { peopleAccess, pluginSource, savePlugin, togglePlugin, removePlugin, importGithubPlugin, importNpmPlugin } from './api';
 import { pluginCatalog } from './plugin-catalog';
 import { SandboxPlugin } from './sandbox-plugin';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
@@ -33,6 +33,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
   const [studioError, setStudioError] = useState<string | null>(null);
   const [imported, setImported] = useState<{ manifest: string; source: string; provenance: PluginProvenance } | null>(null);
   const [githubRepo, setGithubRepo] = useState(''), [githubRef, setGithubRef] = useState(''), [githubPath, setGithubPath] = useState('');
+  const [npmName, setNpmName] = useState(''), [npmVersion, setNpmVersion] = useState('');
   const manifestCheck = validateManifest(manifest);
   const [approved, setApproved] = useState(false);
 
@@ -104,7 +105,7 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
       const manifest = pluginManifest(row);
       return <section key={row.id} className="flex min-w-0 flex-col gap-2.5 rounded-lg border p-3.5">
         <div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Icon name={manifest.contributes.detailView ? 'plugin' : 'file-text'} size={20} /></span><div className="min-w-0 flex-1"><h4 className="truncate font-medium">{manifest.name}</h4><p className="text-xs text-muted-foreground">{row.principal === 'space' ? 'Applied to this space' : 'Installed for you'}</p></div><span className="rounded-full bg-secondary px-2 py-0.5 text-[11px]">{row.enabled ? 'Enabled' : 'Disabled'}</span></div>
-        <p className="text-xs text-muted-foreground">Origin (client-claimed): {row.source_kind ?? 'inline'} · {row.source_ref ?? 'Client-supplied JavaScript'} {row.resolved ?? ''}</p>
+        <p className="text-xs text-muted-foreground">Source: {row.source_kind ?? 'inline'} · {row.source_ref ?? 'Client-supplied JavaScript'} {row.resolved ?? ''}</p>
         {row.source_sha256 ? <details className="text-xs"><summary>Source fingerprint</summary><code className="break-all">{row.source_sha256}</code></details> : null}
         <p className="text-xs text-muted-foreground">Access: {manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ') || 'None'}</p>
         <div className="mt-auto flex flex-wrap gap-1.5">
@@ -156,6 +157,23 @@ export function PluginManagement({ open, onOpenChange }: { open: boolean; onOpen
             setManifest(nextManifest); setSource(result.source); setImported({manifest:nextManifest,source:result.source,provenance:result.provenance}); setEditingInstall(null); setApproved(false); setStudioOpen(true);
           }).catch(error => { if (manifestRead.current === manifestToken && sourceRead.current === sourceToken) setStudioError(error instanceof Error ? error.message : String(error)); }).finally(()=>setBusy(false));
         }}>Review GitHub plugin</Button>
+      </div>
+      <div className="space-y-2 rounded-lg border p-3 text-sm">
+        <p className="font-medium">Import from npm</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Input aria-label="npm package" placeholder="@scope/package" value={npmName} onChange={event=>setNpmName(event.target.value)} />
+          <Input aria-label="npm version or tag" placeholder="Version or tag (latest)" value={npmVersion} onChange={event=>setNpmVersion(event.target.value)} />
+        </div>
+        <Button variant="outline" disabled={busy || !npmName.trim()} onClick={() => {
+          if ((manifest || source) && !confirmDiscardDrafts()) return;
+          const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
+          setBusy(true); setStudioError(null);
+          void importNpmPlugin(npmName.trim(), npmVersion.trim()).then(result => {
+            if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
+            const nextManifest = JSON.stringify(result.manifest, null, 2);
+            setManifest(nextManifest); setSource(result.source); setImported({manifest:nextManifest,source:result.source,provenance:result.provenance}); setEditingInstall(null); setApproved(false); setStudioOpen(true);
+          }).catch(error => { if (manifestRead.current === manifestToken && sourceRead.current === sourceToken) setStudioError(error instanceof Error ? error.message : String(error)); }).finally(() => setBusy(false));
+        }}>Review npm plugin</Button>
       </div>
       <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setManifest(event.target.value); }} /></label>
       {manifestCheck.error ? <p role="alert" className="text-sm text-destructive">{manifestCheck.error}</p> : null}
