@@ -69,10 +69,10 @@ it('filters installed plugins by personal and space scope', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins } : { canManage: true }))));
   render(<PluginManagement open onOpenChange={() => {}} />);
   await screen.findByText('personal-viewer');
-  fireEvent.click(screen.getByRole('button', { name: 'For this space' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Space installs' }));
   expect(screen.getByText('space-viewer')).toBeTruthy();
   expect(screen.queryByText('personal-viewer')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'For you' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Personal installs' }));
   expect(screen.getByText('personal-viewer')).toBeTruthy();
   expect(screen.queryByText('space-viewer')).toBeNull();
 });

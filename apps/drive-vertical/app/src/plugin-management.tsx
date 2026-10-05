@@ -115,7 +115,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
     {error ? <p role="alert">{error}</p> : null}
     <div><h3 className="font-medium">Your plugins</h3><p className="text-xs text-muted-foreground">Installed for you or applied to this space.</p></div>
     <div className="flex flex-wrap gap-1.5" role="group" aria-label="Installed plugin scope">
-      {([['all', 'All installs'], ['personal', 'For you'], ['space', 'For this space']] as const).map(([value, label]) =>
+      {([['all', 'All installs'], ['personal', 'Personal installs'], ['space', 'Space installs']] as const).map(([value, label]) =>
         <button key={value} type="button" aria-pressed={installScope === value} onClick={() => setInstallScope(value)}
           className={cn('rounded-full px-3 py-1 text-xs font-medium transition-colors', installScope === value ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/70')}>{label}</button>)}
     </div>
