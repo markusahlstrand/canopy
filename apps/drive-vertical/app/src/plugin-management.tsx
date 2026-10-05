@@ -7,7 +7,7 @@ import { SandboxPlugin } from './sandbox-plugin';
 import { PluginAiHandoff } from './plugin-ai-handoff';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 import type { PluginInstall } from './api';
-import { effectivePlugins, refreshPlugins, useInstalledPlugins, pluginManifest } from './installed-plugins';
+import { effectivePlugins, installedPluginMatchesSearch, refreshPlugins, useInstalledPlugins, pluginManifest } from './installed-plugins';
 import { installedPluginManifest } from '@canopy/scope-drive/spec/model';
 import { resolveZipBytes } from '@canopy/plugin-sources';
 import type { PluginProvenance } from './api';
@@ -61,7 +61,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
   const categories = ['All', ...new Set(pluginCatalog.map(entry => entry.category))];
   const enabled = viewerRegistry.has('image-viewer');
   const installed = viewerRegistry.list();
-  const visiblePlugins = plugins.filter(row => `${pluginManifest(row).name} ${row.plugin_id}`.toLowerCase().includes(query.toLowerCase()));
+  const visiblePlugins = plugins.filter(row => installedPluginMatchesSearch(row, query));
   const launchableIds = new Set(effectivePlugins(plugins).filter(row => row.enabled === 1 && !!pluginManifest(row).contributes.detailView).map(row => row.id));
   const available = pluginCatalog.filter(entry =>
     (category === 'All' || entry.category === category) &&
@@ -120,6 +120,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
         <p className="text-xs text-muted-foreground">Source: {row.source_kind ?? 'inline'} · {row.source_ref ?? 'Client-supplied JavaScript'} {row.resolved ?? ''}</p>
         {row.source_sha256 ? <details className="text-xs"><summary>Source fingerprint</summary><code className="break-all">{row.source_sha256}</code></details> : null}
         <p className="text-xs text-muted-foreground">Access: {manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ') || 'None'}</p>
+        {manifest.contributes.viewers?.length ? <p className="text-xs text-muted-foreground">Handles: {manifest.contributes.viewers.flatMap(viewer => viewer.match).join(', ')}</p> : null}
         <div className="mt-auto flex flex-wrap gap-1.5">
           <Button size="sm" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : 'Enable'}</Button>
           <Button size="sm" variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; void change(async () => {const loaded = await pluginSource(row.id,row.updated_at); setEditingInstall(loaded); setManifest(JSON.stringify(pluginManifest(loaded),null,2)); setSource(loaded.source);setForSpace(loaded.principal==='space');setStudioOpen(true);}); }}>Edit source</Button>
