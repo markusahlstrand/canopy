@@ -6,7 +6,7 @@ afterEach(()=>{cleanup();vi.unstubAllGlobals();vi.restoreAllMocks();});
 
 it('loads a GitHub plugin for review before install',async()=>{
   const manifest={id:'github-viewer',name:'GitHub viewer',version:'1',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',match:['text/*']}]}};
-  const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/people/access')?{canManage:false}:url.endsWith('/plugins')&&init?.method!=='PUT'?{plugins:[]}:url.endsWith('/plugin-import/github')?{manifest,source:'export default () => {}',provenance:{kind:'github',ref:'owner/repo@main',resolved:'a'.repeat(40)}}:{})));
+  const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/people/access')?{canManage:false}:url.endsWith('/plugins')&&init?.method!=='PUT'?{plugins:[]}:url.endsWith('/plugin-import/github')?{manifest,source:'export default () => {}',provenance:{kind:'github',ref:'owner/repo@main',resolved:'a'.repeat(40),token:'server-signed-token'}}:{})));
   vi.stubGlobal('fetch',fetcher);
   render(<PluginManagement open onOpenChange={()=>{}}/>);
   fireEvent.click(screen.getByText(/Plugin Studio · import or edit source/));
@@ -18,7 +18,8 @@ it('loads a GitHub plugin for review before install',async()=>{
   fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
   await waitFor(()=>expect(fetcher.mock.calls.some(([,init])=>init?.method==='PUT')).toBe(true));
   const body=JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string);
-  expect(body.provenance).toEqual({kind:'github',ref:'owner/repo@main',resolved:'a'.repeat(40)});
+  expect(body.importToken).toBe('server-signed-token');
+  expect(body.provenance).toBeUndefined();
 });
 it('keeps a Studio draft when GitHub import is canceled', () => {
   const confirm=vi.spyOn(window,'confirm').mockReturnValue(false);
