@@ -10,12 +10,10 @@
  * The rest is the portal's rail with everything cut that has nothing behind it here:
  *
  *   - Home, Starred and Settings: no such screens. The nav is the two views the drive has.
- *   - Per-space context menus (rename, members, offline files, show-in-my-drive): those
- *     were portal-side space records. A space is a scope now, provisioned by the platform,
- *     and renaming or sharing one is #79's, not a menu item that throws.
+ *   - Portal-only space actions (rename, offline files, show-in-my-drive): a space is
+ *     a scope now. The current space still offers settings, members and plugins.
  *   - Connector status dots and the indexing spinner: no connectors in the vertical yet
  *     (#57/#58), so there is nothing to probe and no honest colour to show.
- *   - Plugin launchers: the plugin seam is #73.
  *   - The storage card: it read `STORAGE` out of the portal's mock data. There is no quota
  *     endpoint, and a progress bar over an invented number is worse than no progress bar.
  *   - The user row: the topbar carries the account menu, and one shell needs one of those.
@@ -99,6 +97,10 @@ interface SidebarProps {
   activePluginId?: string | null;
   onOpenPlugin?: (id: string) => void;
   onCreateSpace?: () => void;
+  canManageSpace?: boolean;
+  onSpaceSettings?: () => void;
+  onSpaceMembers?: () => void;
+  onSpacePlugins?: () => void;
 }
 
 /** One space read shared by the desktop rail and the mobile sheet. */
@@ -188,7 +190,7 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, pluginApps = [], activePluginId = null, onOpenPlugin }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const narrow = mobile ? false : collapsed;
 
@@ -295,8 +297,8 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
             </div>
             <nav className="flex flex-col gap-0.5" aria-label="Spaces">
               {sites?.map((s) => (
+                <div key={s.slug} className="flex items-center gap-0.5">
                 <button
-                  key={s.slug}
                   aria-current={s.current ? 'true' : undefined}
                   disabled={offline}
                   onClick={() => {
@@ -319,7 +321,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                     openSpace(s.slug);
                   }}
                   className={cn(
-                    'flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] transition-colors',
+                    'flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 text-[13.5px] transition-colors',
                     s.current
                       ? 'bg-accent font-medium text-foreground'
                       : 'text-foreground/80 hover:bg-accent/60',
@@ -330,6 +332,15 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                   </span>
                   <span className="flex-1 truncate text-left">{s.name}</span>
                 </button>
+                {s.current && canManageSpace && !offline && (onSpaceSettings || onSpaceMembers || onSpacePlugins) ? <DropdownMenu>
+                  <DropdownMenuTrigger asChild><button type="button" aria-label={`Manage ${s.name}`} className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent"><Icon name="more" size={16} /></button></DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {onSpaceSettings ? <DropdownMenuItem onClick={onSpaceSettings}><Icon name="settings" size={15} /> Space settings</DropdownMenuItem> : null}
+                    {onSpaceMembers ? <DropdownMenuItem onClick={onSpaceMembers}><Icon name="users" size={15} /> Manage members</DropdownMenuItem> : null}
+                    {onSpacePlugins ? <DropdownMenuItem onClick={onSpacePlugins}><Icon name="plugin" size={15} /> Space plugins</DropdownMenuItem> : null}
+                  </DropdownMenuContent>
+                </DropdownMenu> : null}
+                </div>
               ))}
             </nav>
             {!failed && sites === null ? <p role="status" className="px-2.5 py-1 text-xs text-muted-foreground">Loading spaces…</p> : null}
