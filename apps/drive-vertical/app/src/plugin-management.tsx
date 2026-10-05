@@ -7,7 +7,7 @@ import { SandboxPlugin } from './sandbox-plugin';
 import { PluginAiHandoff } from './plugin-ai-handoff';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 import type { PluginInstall } from './api';
-import { refreshPlugins, useInstalledPlugins, pluginManifest } from './installed-plugins';
+import { effectivePlugins, refreshPlugins, useInstalledPlugins, pluginManifest } from './installed-plugins';
 import { installedPluginManifest } from '@canopy/scope-drive/spec/model';
 import { resolveZipBytes } from '@canopy/plugin-sources';
 import type { PluginProvenance } from './api';
@@ -62,6 +62,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
   const enabled = viewerRegistry.has('image-viewer');
   const installed = viewerRegistry.list();
   const visiblePlugins = plugins.filter(row => `${pluginManifest(row).name} ${row.plugin_id}`.toLowerCase().includes(query.toLowerCase()));
+  const launchableIds = new Set(effectivePlugins(plugins).filter(row => row.enabled === 1 && !!pluginManifest(row).contributes.detailView).map(row => row.id));
   const available = pluginCatalog.filter(entry =>
     (category === 'All' || entry.category === category) &&
     catalogMatchesSearch(entry, query),
@@ -122,7 +123,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
         <div className="mt-auto flex flex-wrap gap-1.5">
           <Button size="sm" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : 'Enable'}</Button>
           <Button size="sm" variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; void change(async () => {const loaded = await pluginSource(row.id,row.updated_at); setEditingInstall(loaded); setManifest(JSON.stringify(pluginManifest(loaded),null,2)); setSource(loaded.source);setForSpace(loaded.principal==='space');setStudioOpen(true);}); }}>Edit source</Button>
-          {row.enabled && manifest.contributes.detailView && onOpenApp ? <Button size="sm" variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; onOpenApp(row.id); close(); }}>Open app</Button> : null}
+          {launchableIds.has(row.id) && onOpenApp ? <Button size="sm" variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; onOpenApp(row.id); close(); }}>Open app</Button> : null}
           <Button size="sm" variant="ghost" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${manifest.name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
         </div>
       </section>;
