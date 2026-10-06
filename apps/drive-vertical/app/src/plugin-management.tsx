@@ -57,11 +57,13 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
   }, [open]);
   const change = async (action: () => Promise<unknown>) => { setBusy(true); setError(null); try { await action(); await refreshPlugins(); } catch (error) { setError(error instanceof Error ? error.message || 'Could not update this plugin.' : String(error)); } finally { setBusy(false); } };
   const [query, setQuery] = useState('');
+  const [installScope, setInstallScope] = useState<'all' | 'personal' | 'space'>('all');
   const [category, setCategory] = useState('All');
   const categories = ['All', ...new Set(pluginCatalog.map(entry => entry.category))];
   const enabled = viewerRegistry.has('image-viewer');
   const installed = viewerRegistry.list();
-  const visiblePlugins = plugins.filter(row => installedPluginMatchesSearch(row, query));
+  const visiblePlugins = plugins.filter(row =>
+    (installScope === 'all' || (row.principal === 'space') === (installScope === 'space')) && installedPluginMatchesSearch(row, query));
   const launchableIds = new Set(effectivePlugins(plugins).filter(row => row.enabled === 1 && !!pluginManifest(row).contributes.detailView).map(row => row.id));
   const available = pluginCatalog.filter(entry =>
     (category === 'All' || entry.category === category) &&
@@ -112,6 +114,11 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
     <Input aria-label="Find a plugin" placeholder="Find a plugin" value={query} onChange={event => setQuery(event.target.value)} />
     {error ? <p role="alert">{error}</p> : null}
     <div><h3 className="font-medium">Your plugins</h3><p className="text-xs text-muted-foreground">Installed for you or applied to this space.</p></div>
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Installed plugin scope">
+      {([['all', 'All installs'], ['personal', 'Personal installs'], ['space', 'Space installs']] as const).map(([value, label]) =>
+        <button key={value} type="button" aria-pressed={installScope === value} onClick={() => setInstallScope(value)}
+          className={cn('rounded-full px-3 py-1 text-xs font-medium transition-colors', installScope === value ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/70')}>{label}</button>)}
+    </div>
     {pluginsState === 'loading' ? <p role="status" className="text-sm text-muted-foreground">Loading installed plugins…</p> : null}
     {pluginsState === 'loaded' && visiblePlugins.length ? <div className="grid gap-3 sm:grid-cols-2">{visiblePlugins.map(row => {
       const manifest = pluginManifest(row);
@@ -128,7 +135,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp }: { open: bool
           <Button size="sm" variant="ghost" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${manifest.name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
         </div>
       </section>;
-    })}</div> : pluginsState === 'loaded' && !error && !busy ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query ? 'No installed plugins match this search.' : 'No plugins installed yet.'}</p> : null}
+    })}</div> : pluginsState === 'loaded' && !error && !busy ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query || installScope !== 'all' ? 'No installed plugins match these filters.' : 'No plugins installed yet.'}</p> : null}
     <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
     <PluginAiHandoff />
     <details open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)}><summary>Plugin Studio · import or edit source</summary><p className="text-sm">Paste or choose canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
