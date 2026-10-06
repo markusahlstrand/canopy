@@ -780,42 +780,19 @@ app.put('/api/plugins', async (c) => {
   return c.json(await scope.invoke('drive/save-plugin', {...body, provenance: provenance ?? undefined}));
 });
 
-/** Discover direct folder grants across the spaces this login can enter. */
-app.get('/api/shared-folders', async (c) => {
-  const base = baseNode(c.req.raw, c.env);
-  const subject = await (await providerFor(c.env, base)).resolve(c.req.raw.headers);
-  if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
-  const directory = identityDo(c.env, base);
-  const host = hostFor(c.env);
-  const groups = await Promise.all((await directory.listSites()).map(async site => {
-    const principal = await directory.resolvePrincipal(site.scopeId, subject.sub);
-    if (!principal) return [];
-    try {
-      const scope = await host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(site.scopeId));
-      const result = await scope.invoke<{ folders: Array<{ id: string; parent_id: string; name: string; path: string }> }>('drive/list-shared-folders', {});
-      const settings = await directory.readSpaceSettings(site.scopeId);
-      return result.folders.map(folder => ({ ...folder, siteSlug: site.slug, siteName: settings?.name ?? site.name }));
-    } catch {
-      // One inaccessible or deleted scope must not hide grants in the others.
-      return [];
-    }
-  }));
-  return c.json({ folders: groups.flat() });
-});
-
-app.get('/api/sites', async (c) => {
-  const base = baseNode(c.req.raw, c.env);
-
+/** The authenticated, reachable space roster shared by the picker and grant discovery. */
+async function accessibleSites(request: Request, env: Env) {
+  const base = baseNode(request, env);
   // The SUBJECT, not a principal: who is asking is a fact about the install, and a
   // principal is a fact about ONE space (K-22 — the same login is a different principal
   // in each). Going through `principalFor` here asked the wrong question: it resolves
   // against the SELECTED space, so a member of three spaces who happens to be looking at
   // a fourth got 401 from the very endpoint that would have let them leave it.
-  const subject = await (await providerFor(c.env, base)).resolve(c.req.raw.headers);
+  const subject = await (await providerFor(env, base)).resolve(request.headers);
   if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
 
-  const directory = identityDo(c.env, base);
-  const host = hostFor(c.env);
+  const directory = identityDo(env, base);
+  const host = hostFor(env);
 
   /**
    * A space is listed when this login is bound in it AND it still resolves.
@@ -834,20 +811,39 @@ app.get('/api/sites', async (c) => {
    * authenticated; they simply have nowhere to go, and that is what the switcher should
    * say.
    */
-  const registered = await directory.listSites();
   const mine = await Promise.all(
-    registered.map(async (site) => {
+    (await directory.listSites()).map(async (site) => {
       const principal = await directory.resolvePrincipal(site.scopeId, subject.sub);
       if (!principal) return null;
       try {
-        await host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(site.scopeId));
+        const scope = await host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(site.scopeId));
         const settings = await directory.readSpaceSettings(site.scopeId);
-        return {...site, name: settings?.name ?? site.name, icon: settings?.icon, color: settings?.color};
+        return {...site, scope, name: settings?.name ?? site.name, icon: settings?.icon, color: settings?.color};
       } catch {
         return null;
       }
     }),
   );
+  return mine.filter((site): site is NonNullable<typeof site> => site !== null);
+}
+
+/** Discover direct folder grants across the spaces this login can enter. */
+app.get('/api/shared-folders', async (c) => {
+  const mine = await accessibleSites(c.req.raw, c.env);
+  const groups = await Promise.all(mine.map(async site => {
+    try {
+      const result = await site.scope.invoke<{ folders: Array<{ id: string; parent_id: string; name: string; path: string }> }>('drive/list-shared-folders', {});
+      return result.folders.map(folder => ({ ...folder, siteSlug: site.slug, siteName: site.name }));
+    } catch {
+      // One inaccessible scope must not hide grants in the others.
+      return [];
+    }
+  }));
+  return c.json({ folders: groups.flat() });
+});
+
+app.get('/api/sites', async (c) => {
+  const mine = await accessibleSites(c.req.raw, c.env);
 
   /**
    * WHICH of them this request is looking at — the one fact the client cannot work out.
@@ -862,9 +858,7 @@ app.get('/api/sites', async (c) => {
   const here = (await nodeFor(c.req.raw, c.env)).scopeId;
 
   return c.json(
-    mine
-      .filter((site) => site !== null)
-      .map((site) => ({ slug: site.slug, name: site.name, icon: site.icon, color: site.color, current: site.scopeId === here })),
+    mine.map((site) => ({ slug: site.slug, name: site.name, icon: site.icon, color: site.color, current: site.scopeId === here })),
   );
 });
 
