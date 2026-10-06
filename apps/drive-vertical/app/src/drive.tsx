@@ -823,7 +823,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onManageSpaces={() => setSpacesOpen(true)}
         onManagePlugins={() => setViewersOpen(true)}
         onShowAllResults={query => {
+          const sameSearch = view === 'search' && term === query && matchFilter === 'all' && !linkListingUnavailable;
           if (!navigate('search')) return;
+          if (sameSearch) {
+            // navigate already refreshed these exact results; invalidating that read
+            // would leave no changed dependency to start another one.
+            setSelection(new Set());
+            return;
+          }
           reads.current.invalidate();
           setMatchFilter('all');
           setSelection(new Set());

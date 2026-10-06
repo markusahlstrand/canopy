@@ -1963,3 +1963,21 @@ it('resets the previous filter and selection when a palette query replaces an op
   expect(screen.getByRole('status', { name: 'Selection status' }).textContent).toBe('Selection cleared');
   expect(screen.queryByText('body.txt')).toBeNull();
 });
+
+it('keeps the refresh when the palette repeats an open search', async () => {
+  await renderDrive();
+  fireEvent.change(screen.getByLabelText('Search this space'), { target: { value: 'report' } });
+  await flush();
+  await answer('/api/search', { hits: [{ ...file('01A', 'body.txt'), via: 'content' }] });
+  fireEvent.click(within(screen.getByText('body.txt').closest('tr')!).getByRole('checkbox'));
+
+  fireEvent.keyDown(window, { key: 'k', metaKey: true });
+  fireEvent.change(screen.getByPlaceholderText(/Search files/), { target: { value: 'report' } });
+  fireEvent.click(screen.getByRole('option', { name: /Show all results for “report”/ }));
+  expect(screen.getByRole('status', { name: 'Selection status' }).textContent).toBe('Selection cleared');
+
+  await flush();
+  await answer('/api/search', { hits: [{ ...file('01B', 'updated.txt'), via: 'content' }] });
+  expect(screen.getByText('updated.txt')).toBeTruthy();
+  expect(screen.queryByText('Loading…')).toBeNull();
+});
