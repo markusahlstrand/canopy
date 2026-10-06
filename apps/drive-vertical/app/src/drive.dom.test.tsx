@@ -1971,3 +1971,42 @@ it('explains empty filtered pages and resets match filters for a new search', as
   fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'next' } });
   expect((screen.getByRole('combobox', { name: 'Filter search matches' }) as HTMLSelectElement).value).toBe('all');
 });
+
+it('resets the previous filter and selection when a palette query replaces an open search', async () => {
+  await renderDrive();
+  fireEvent.change(screen.getByLabelText('Search this space'), { target: { value: 'report' } });
+  await flush();
+  await answer('/api/search', { hits: [{ ...file('01A', 'body.txt'), via: 'content' }] });
+  fireEvent.change(screen.getByRole('combobox', { name: 'Filter search matches' }), { target: { value: 'content' } });
+  await flush();
+  await answer('via=content', { hits: [{ ...file('01A', 'body.txt'), via: 'content' }] });
+  fireEvent.click(within(screen.getByText('body.txt').closest('tr')!).getByRole('checkbox'));
+  expect(screen.getByRole('status', { name: 'Selection status' }).textContent).toBe('1 selected');
+
+  fireEvent.keyDown(window, { key: 'k', metaKey: true });
+  fireEvent.change(screen.getByPlaceholderText(/Search files/), { target: { value: 'next' } });
+  fireEvent.click(screen.getByRole('option', { name: /Show all results for “next”/ }));
+
+  expect((screen.getByLabelText('Search this space') as HTMLInputElement).value).toBe('next');
+  expect((screen.getByRole('combobox', { name: 'Filter search matches' }) as HTMLSelectElement).value).toBe('all');
+  expect(screen.getByRole('status', { name: 'Selection status' }).textContent).toBe('Selection cleared');
+  expect(screen.queryByText('body.txt')).toBeNull();
+});
+
+it('keeps the refresh when the palette repeats an open search', async () => {
+  await renderDrive();
+  fireEvent.change(screen.getByLabelText('Search this space'), { target: { value: 'report' } });
+  await flush();
+  await answer('/api/search', { hits: [{ ...file('01A', 'body.txt'), via: 'content' }] });
+  fireEvent.click(within(screen.getByText('body.txt').closest('tr')!).getByRole('checkbox'));
+
+  fireEvent.keyDown(window, { key: 'k', metaKey: true });
+  fireEvent.change(screen.getByPlaceholderText(/Search files/), { target: { value: 'report' } });
+  fireEvent.click(screen.getByRole('option', { name: /Show all results for “report”/ }));
+  expect(screen.getByRole('status', { name: 'Selection status' }).textContent).toBe('Selection cleared');
+
+  await flush();
+  await answer('/api/search', { hits: [{ ...file('01B', 'updated.txt'), via: 'content' }] });
+  expect(screen.getByText('updated.txt')).toBeTruthy();
+  expect(screen.queryByText('Loading…')).toBeNull();
+});

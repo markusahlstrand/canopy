@@ -829,6 +829,22 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); }}
         onManageSpaces={() => setSpacesOpen(true)}
         onManagePlugins={() => setViewersOpen(true)}
+        onShowAllResults={query => {
+          const sameSearch = view === 'search' && term === query && matchFilter === 'all' && !linkListingUnavailable;
+          if (!navigate('search')) return;
+          if (sameSearch) {
+            // navigate already refreshed these exact results; invalidating that read
+            // would leave no changed dependency to start another one.
+            setSelection(new Set());
+            return;
+          }
+          reads.current.invalidate();
+          setMatchFilter('all');
+          setSelection(new Set());
+          setHits([]);
+          setBusy(query.length >= SEARCH_MIN);
+          setTerm(query);
+        }}
         onNavigate={(id) => navigate(id === 'trash' ? 'trash' : id === 'shared' ? 'shared' : id === 'search' ? 'search' : 'drive')}
         onOpenFile={(item) => {
           // The palette lists folders too, and a folder is entered rather than previewed —

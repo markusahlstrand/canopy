@@ -45,6 +45,7 @@ interface CommandPaletteProps {
   onOpenPlugin?: (id: string) => void;
   onManageSpaces?: () => void;
   onManagePlugins?: () => void;
+  onShowAllResults?: (query: string) => void;
 }
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
@@ -61,6 +62,7 @@ export function CommandPalette({
   onOpenPlugin,
   onManageSpaces,
   onManagePlugins,
+  onShowAllResults,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => () => {
     onOpenChange(false);
@@ -139,6 +141,10 @@ export function CommandPalette({
         {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>No results found.</CommandEmpty> : null}
 
         <CommandGroup heading="Files">
+          {searching && onShowAllResults ? <CommandItem value={`show all search results ${query}`} onSelect={run(() => onShowAllResults(query.trim()))}>
+            <Icon name="search" size={16} />
+            <span className="flex-1">Show all results for “{query.trim()}”</span>
+          </CommandItem> : null}
           {searching
             ? results.map((hit) => (
                 // value embeds the query so cmdk's own filter keeps server hits visible.
