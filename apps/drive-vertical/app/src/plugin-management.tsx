@@ -62,6 +62,14 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
   const categories = ['All', ...new Set(pluginCatalog.map(entry => entry.category))];
   const enabled = viewerRegistry.has('image-viewer');
   const installed = viewerRegistry.list();
+  const activeRuntimeViewers = effectivePlugins(plugins)
+    .filter(row => row.enabled === 1)
+    .flatMap(row => {
+      const manifest = pluginManifest(row);
+      return (manifest.contributes.viewers ?? []).map(viewer => ({ row, viewer, name: manifest.name }));
+    })
+    .filter(({ row }) => installedPluginMatchesSearch(row, query));
+  const visibleBuiltInViewers = installed.filter(plugin => `${plugin.pluginId} ${plugin.id}`.toLowerCase().includes(query.toLowerCase()));
   const visiblePlugins = plugins.filter(row =>
     (installScope === 'all' || (row.principal === 'space') === (installScope === 'space')) && installedPluginMatchesSearch(row, query));
   const launchableIds = new Set(effectivePlugins(plugins).filter(row => row.enabled === 1 && !!pluginManifest(row).contributes.detailView).map(row => row.id));
@@ -220,8 +228,11 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
     </section> : null}
     {available.length === 0 && !showImageViewer ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No available plugins match this search.</p> : null}
     <h3 className="font-medium">Active file viewers</h3>
-    {installed.length ? <ul className="space-y-2">{installed.filter(plugin => `${plugin.pluginId} ${plugin.id}`.toLowerCase().includes(query.toLowerCase())).map(plugin => <li key={`${plugin.pluginId}:${plugin.id}`} className="rounded border p-2">
+    {visibleBuiltInViewers.length || activeRuntimeViewers.length ? <ul className="space-y-2">{visibleBuiltInViewers.map(plugin => <li key={`${plugin.pluginId}:${plugin.id}`} className="rounded border p-2">
       <p>{plugin.pluginId} / {plugin.id}</p><p className="text-xs text-muted-foreground">Handles: {plugin.match.join(', ')}</p>
+    </li>)}{activeRuntimeViewers.map(({ row, viewer, name }) => <li key={`${row.id}:${viewer.id}`} className="rounded border p-2">
+      <p>{viewer.title ?? name} <span className="text-xs text-muted-foreground">· {row.principal === 'space' ? 'This space' : 'For you'}</span></p>
+      <p className="text-xs text-muted-foreground">Handles: {viewer.match.join(', ')}</p>
     </li>)}</ul> : <p>No optional viewers are enabled.</p>}
     <p className="text-xs text-muted-foreground">Preferences apply to this browser, including its other open tabs.</p>
   </DialogContent></Dialog>;
