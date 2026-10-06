@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { effectivePlugins, installedPluginMatchesSearch, matchingPlugins } from './installed-plugins';
+import { effectivePlugins, installedPluginMatchesSearch, matchingPlugins, pluginManifest } from './installed-plugins';
 import { pluginDocument } from './sandbox-plugin';
 import type { PluginInstall } from './api';
 const plugin = (id: string, principal: string, enabled = 1): PluginInstall => ({id, principal, enabled, plugin_id: 'markdown', source: '', updated_at: 'revision', manifest_json: JSON.stringify({id:'markdown',name:'Markdown',version:'1', capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'md',match:['.md','text/markdown']}]}})});
@@ -36,4 +36,23 @@ it('restricts iframe resources to validated declared HTTPS hosts', () => {
   expect(document).toContain('https://esm.sh');
   expect(document).not.toContain('bad');
   expect(pluginDocument()).toContain("connect-src 'none'");
+});
+it('keeps a damaged install visible for repair without registering its contributions', () => {
+  const damaged = { ...plugin('damaged', 'user'), manifest_json: '{broken' };
+  expect(pluginManifest(damaged).invalid).toBe(true);
+  expect(matchingPlugins([damaged], 'text/markdown', 'readme.md')).toEqual([]);
+  expect(matchingPlugins([plugin('shared', 'space'), damaged], 'text/markdown', 'readme.md').map(row => row.id)).toEqual(['shared']);
+  expect(installedPluginMatchesSearch(damaged, 'markdown')).toBe(true);
+});
+it('preserves legacy installs whose manifest predates id and version fields', () => {
+  const legacy = { ...plugin('legacy', 'user'), manifest_json: JSON.stringify({ name: 'Legacy viewer', capabilities: [{ kind: 'item:read' }], contributes: { viewers: [{ id: 'md', match: ['.md'] }] } }) };
+  expect(pluginManifest(legacy).name).toBe('Legacy viewer');
+  expect(matchingPlugins([legacy], 'text/plain', 'readme.md')).toEqual([legacy]);
+});
+it('reuses parsed manifests until a row changes', () => {
+  const row = plugin('mine', 'user');
+  const first = pluginManifest(row);
+  expect(pluginManifest(row)).toBe(first);
+  row.manifest_json = JSON.stringify({ ...first, name: 'Updated viewer' });
+  expect(pluginManifest(row).name).toBe('Updated viewer');
 });
