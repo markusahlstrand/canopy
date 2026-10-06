@@ -53,3 +53,10 @@ it('puts the current space first and clears an old search when reopened', () => 
  expect(screen.getByText('Home')).toBeTruthy();
  expect((screen.getByLabelText('Find a space') as HTMLInputElement).value).toBe('');
 });
+it('explains an unmatched query while keeping the active space visible', () => {
+  render(<SpacesDialog {...props} sites={[{ slug: 'home', name: 'Home', current: true }, { slug: 'work', name: 'Work', current: false }]} />);
+  fireEvent.change(screen.getByLabelText('Find a space'), { target: { value: 'zzz' } });
+  expect(screen.getByText('Home')).toBeTruthy();
+  expect(screen.queryByText('Work')).toBeNull();
+  expect(screen.getByText('No other spaces match “zzz”.')).toBeTruthy();
+});

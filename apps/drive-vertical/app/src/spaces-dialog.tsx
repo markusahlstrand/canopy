@@ -18,8 +18,11 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
   };
   useEffect(() => { if (open) { setQuery(''); setCopyMessage(''); } }, [open]);
   // The active space is context for the picker, even when the query matches another.
-  const shown = sites?.filter(site => site.current || `${site.name} ${site.slug}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+  const term = query.trim().toLocaleLowerCase();
+  const matches = (site: Site) => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(term);
+  const shown = sites?.filter(site => site.current || matches(site))
     .sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name));
+  const noOtherMatches = term !== '' && shown?.length && !sites?.some(site => !site.current && matches(site));
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[580px]">
     <DialogHeader className="px-5 pt-5"><DialogTitle>Spaces</DialogTitle><DialogDescription>Each space has its own files and members. Open one to browse its drive.</DialogDescription></DialogHeader>
     <div className="flex items-center gap-2 px-5 py-4">
@@ -28,6 +31,7 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
     </div>
     {copyMessage ? <p role="status" className="px-5 text-xs">{copyMessage}</p> : null}
     <div className="min-h-0 overflow-y-auto px-5 pb-5">
+      {noOtherMatches && !failed ? <p role="status" className="mb-3 text-sm text-muted-foreground">No other spaces match “{query.trim()}”.</p> : null}
       {failed ? <div role="alert" className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">Could not load your spaces. <Button variant="outline" size="sm" onClick={onRetry}>Retry spaces</Button></div>
         : sites === null ? <p role="status" className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Loading spaces…</p>
         : sites.length === 0 ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">{offline ? 'You have no saved spaces available. Reconnect to check spaces or create one.' : canManage ? 'You have no spaces available. Create a space to get started.' : 'You have no spaces available. Ask a space owner for an invitation.'}</p>
