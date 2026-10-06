@@ -27,6 +27,7 @@ it('names the selected space before offering space-wide installs', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [] } : { canManage: true }))));
   render(<PluginManagement open onOpenChange={() => {}} spaceName="Family" />);
   expect(screen.getByText(/apply them to “Family”/)).toBeTruthy();
+  expect(screen.getByText('Installed for you or applied to Family.')).toBeTruthy();
   expect(await screen.findByRole('button', { name: 'Apply Markdown to Family' })).toBeTruthy();
 });
 it('restores bundled catalog review and source authoring', () => {

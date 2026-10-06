@@ -118,7 +118,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
     <DialogHeader><DialogTitle>Plugins</DialogTitle><DialogDescription>Install file viewers for yourself or apply them to {spaceName ? `“${spaceName}”` : 'the current space'}. Review the access requested by each plugin before installing.</DialogDescription></DialogHeader>
     <Input aria-label="Find a plugin" placeholder="Find a plugin" value={query} onChange={event => setQuery(event.target.value)} />
     {error ? <p role="alert">{error}</p> : null}
-    <div><h3 className="font-medium">Your plugins</h3><p className="text-xs text-muted-foreground">Installed for you or applied to this space.</p></div>
+    <div><h3 className="font-medium">Your plugins</h3><p className="text-xs text-muted-foreground">Installed for you or applied to {spaceName ?? 'this space'}.</p></div>
     <div className="flex flex-wrap gap-1.5" role="group" aria-label="Installed plugin scope">
       {([['all', 'All installs'], ['personal', 'Personal installs'], ['space', 'Space installs']] as const).map(([value, label]) =>
         <button key={value} type="button" aria-pressed={installScope === value} onClick={() => setInstallScope(value)}
