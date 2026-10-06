@@ -64,8 +64,11 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
   const installed = viewerRegistry.list();
   const activeRuntimeViewers = effectivePlugins(plugins)
     .filter(row => row.enabled === 1)
-    .flatMap(row => (pluginManifest(row).contributes.viewers ?? []).map(viewer => ({ row, viewer, name: pluginManifest(row).name })))
-    .filter(({ row, viewer, name }) => `${row.plugin_id} ${name} ${viewer.title ?? ''} ${viewer.match.join(' ')}`.toLowerCase().includes(query.toLowerCase()));
+    .flatMap(row => {
+      const manifest = pluginManifest(row);
+      return (manifest.contributes.viewers ?? []).map(viewer => ({ row, viewer, name: manifest.name }));
+    })
+    .filter(({ row }) => installedPluginMatchesSearch(row, query));
   const visibleBuiltInViewers = installed.filter(plugin => `${plugin.pluginId} ${plugin.id}`.toLowerCase().includes(query.toLowerCase()));
   const visiblePlugins = plugins.filter(row =>
     (installScope === 'all' || (row.principal === 'space') === (installScope === 'space')) && installedPluginMatchesSearch(row, query));

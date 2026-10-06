@@ -22,6 +22,10 @@ it('lists active runtime viewers alongside bundled viewers', async () => {
   expect(await screen.findByText('Markdown preview', { exact: false })).toBeTruthy();
   expect(screen.getAllByText('Handles: .md')).toHaveLength(2);
   expect(screen.queryByText('No optional viewers are enabled.')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Find a plugin'), { target: { value: 'space' } });
+  expect(screen.getByText('Markdown preview', { exact: false })).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('Find a plugin'), { target: { value: 'personal' } });
+  expect(screen.queryByText('Markdown preview', { exact: false })).toBeNull();
 });
 it('names the selected space before offering space-wide installs', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [] } : { canManage: true }))));
