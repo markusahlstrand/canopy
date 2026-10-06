@@ -830,10 +830,11 @@ async function accessibleSites(request: Request, env: Env) {
 /** Discover direct folder grants across the spaces this login can enter. */
 app.get('/api/shared-folders', async (c) => {
   const mine = await accessibleSites(c.req.raw, c.env);
+  const here = (await nodeFor(c.req.raw, c.env)).scopeId;
   const groups = await Promise.all(mine.map(async site => {
     try {
       const result = await site.scope.invoke<{ folders: Array<{ id: string; parent_id: string; name: string; path: string }> }>('drive/list-shared-folders', {});
-      return result.folders.map(folder => ({ ...folder, siteSlug: site.slug, siteName: site.name }));
+      return result.folders.map(folder => ({ ...folder, siteSlug: site.slug, siteName: site.name, current: site.scopeId === here }));
     } catch {
       // One inaccessible scope must not hide grants in the others.
       return [];
