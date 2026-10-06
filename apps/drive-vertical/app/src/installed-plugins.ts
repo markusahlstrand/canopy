@@ -13,7 +13,10 @@ let latest = 0;
 export function publishPlugins(plugins: PluginInstall[]) { rows = plugins; listeners.forEach(listener => listener()); }
 export async function refreshPlugins() { const ticket = ++latest; const result = await listPlugins(); if (!Array.isArray(result.plugins)) throw new Error("Invalid plugin response"); if (ticket === latest) publishPlugins(result.plugins); }
 export const useInstalledPlugins = () => useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => rows);
+const manifestCache = new WeakMap<PluginInstall, { source: string; value: PluginManifest }>();
 export function pluginManifest(row: PluginInstall): PluginManifest {
+  const cached = manifestCache.get(row);
+  if (cached?.source === row.manifest_json) return cached.value;
   try {
     const value: unknown = JSON.parse(row.manifest_json);
     if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -24,11 +27,16 @@ export function pluginManifest(row: PluginInstall): PluginManifest {
         && Array.isArray(manifest.capabilities) && manifest.capabilities.every(cap => cap && typeof cap.kind === 'string')
         && contributes && typeof contributes === 'object' && !Array.isArray(contributes)
         && (!contributes.viewers || Array.isArray(contributes.viewers) && contributes.viewers.every(viewer => viewer && (viewer.title === undefined || typeof viewer.title === 'string') && Array.isArray(viewer.match) && viewer.match.every((match: unknown) => typeof match === 'string')))
-        && (!contributes.detailView || typeof contributes.detailView === 'object' && typeof (contributes.detailView as Record<string, unknown>).title === 'string'))
-        return { ...manifest, id: typeof manifest.id === 'string' ? manifest.id : row.plugin_id, version: typeof manifest.version === 'string' ? manifest.version : '' } as PluginManifest;
+        && (!contributes.detailView || typeof contributes.detailView === 'object' && typeof (contributes.detailView as Record<string, unknown>).title === 'string')) {
+        const parsed = { ...manifest, id: typeof manifest.id === 'string' ? manifest.id : row.plugin_id, version: typeof manifest.version === 'string' ? manifest.version : '' } as PluginManifest;
+        manifestCache.set(row, { source: row.manifest_json, value: parsed });
+        return parsed;
+      }
     }
   } catch { /* A damaged install still needs to be removable from the UI. */ }
-  return { id: row.plugin_id, name: `Invalid manifest: ${row.plugin_id}`, version: '', capabilities: [], contributes: {}, invalid: true };
+  const invalid: PluginManifest = { id: row.plugin_id, name: `Invalid manifest: ${row.plugin_id}`, version: '', capabilities: [], contributes: {}, invalid: true };
+  manifestCache.set(row, { source: row.manifest_json, value: invalid });
+  return invalid;
 }
 const scopeKeywords: Record<string, 'space' | 'personal'> = {space: 'space', personal: 'personal', you: 'personal', mine: 'personal'};
 /** Search the installed contribution, including the file types and app title users know it by. */

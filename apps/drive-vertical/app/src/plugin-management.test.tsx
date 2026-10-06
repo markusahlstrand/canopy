@@ -83,6 +83,17 @@ it('filters installed plugins by personal and space scope', async () => {
   expect(screen.queryByText('space-viewer')).toBeNull();
 });
 
+it('opens the original damaged manifest for repair', async () => {
+  const row = { id: 'damaged-install', plugin_id: 'damaged', principal: 'user', enabled: 1, source: 'export default function() {}', updated_at: 'revision', manifest_json: '{broken' };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.includes('/source?') ? row : url.endsWith('/plugins') ? { plugins: [row] } : { canManage: true }))));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('Invalid manifest: damaged');
+  fireEvent.click(screen.getByRole('button', { name: 'Edit source' }));
+  await waitFor(() => expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toBe('{broken'));
+  expect(screen.getByText('Manifest must contain valid JSON.')).toBeTruthy();
+  expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
 it('does not claim there are no installed plugins when loading fails', async () => {
   vi.stubGlobal('fetch', vi.fn((url: string) => url.endsWith('/plugins')
     ? Promise.reject(new Error('offline'))
