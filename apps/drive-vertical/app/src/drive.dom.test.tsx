@@ -765,10 +765,25 @@ describe('shared-folder discovery', () => {
     // Leave /api/sites pending: the worker may answer grants before the roster.
     fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
     await flush();
-    await answer('/shared-folders', { folders: [{ id: '01N', parent_id: '01P', path: 'Papers/Leases', name: 'Leases', siteSlug: 'home', siteName: 'Home' }] });
+    await answer('/shared-folders', { folders: [{ id: '01N', parent_id: '01P', path: 'Papers/Leases', name: 'Leases', siteSlug: 'home', siteName: 'Home', current: true }] });
     fireEvent.doubleClick(screen.getByText('Leases'));
     await flush();
     expect(pending.some(request => request.url.includes('/folders/01N/files'))).toBe(true);
+  });
+
+  it('switches spaces for a shared folder before the space roster arrives', async () => {
+    render(<DriveScreen {...shell} onError={() => {}} />);
+    await flush();
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
+    await flush();
+    await answer('/shared-folders', { folders: [{ id: '01N', parent_id: '01P', path: 'Papers/Leases', name: 'Leases', siteSlug: 'other', siteName: 'Other', current: false }] });
+
+    fireEvent.doubleClick(screen.getByText('Leases'));
+    expect(currentSite()).toBe('other');
+    expect(window.location.search).toBe('?folder=01N');
+    expect(pending.some(request => request.url.includes('/folders/01N/files'))).toBe(false);
   });
 
   it('lists direct shares and opens a nested folder by its identity', async () => {

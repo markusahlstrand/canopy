@@ -575,7 +575,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
   const open = (folder: DriveFolder | SharedFolder) => {
     const here = siteList.sites?.find(site => site.current)?.slug ?? currentSite();
-    if ('siteSlug' in folder && here && folder.siteSlug !== here) {
+    if ('siteSlug' in folder && (folder.current === false || (folder.current == null && here && folder.siteSlug !== here))) {
       openSpaceFolder(folder.siteSlug, folder.id);
       return;
     }
