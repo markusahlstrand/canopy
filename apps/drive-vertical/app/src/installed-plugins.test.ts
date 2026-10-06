@@ -49,3 +49,10 @@ it('preserves legacy installs whose manifest predates id and version fields', ()
   expect(pluginManifest(legacy).name).toBe('Legacy viewer');
   expect(matchingPlugins([legacy], 'text/plain', 'readme.md')).toEqual([legacy]);
 });
+it('reuses parsed manifests until a row changes', () => {
+  const row = plugin('mine', 'user');
+  const first = pluginManifest(row);
+  expect(pluginManifest(row)).toBe(first);
+  row.manifest_json = JSON.stringify({ ...first, name: 'Updated viewer' });
+  expect(pluginManifest(row).name).toBe('Updated viewer');
+});
