@@ -656,7 +656,7 @@ describe('external file drops', () => {
     } else {
       fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
       await flush();
-      await answer('/folders/shared-with-me', { folders: [] });
+      await answer('/shared-folders', { folders: [] });
     }
     fireEvent.drop(screen.getByLabelText('File upload area'), { dataTransfer: { types: ['Files'], files: [new File(['a'], 'blocked.txt')], items: [] } });
     expect(pending.filter(p => p.method === 'POST')).toHaveLength(0);
@@ -751,17 +751,31 @@ it('navigates from the palette to the shared-folder listing', async () => {
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Shared with me' } });
   fireEvent.click(screen.getByRole('option', { name: 'Shared with me' }));
   await flush();
-  expect(pending.some(request => request.url === '/api/folders/shared-with-me')).toBe(true);
-  await answer('/api/folders/shared-with-me', { folders: [{ id: 'shared-folder', name: 'Reports', path: 'Team/Reports', parent_id: 'team' }] });
+  expect(pending.some(request => request.url === '/api/shared-folders')).toBe(true);
+  await answer('/api/shared-folders', { folders: [{ id: 'shared-folder', name: 'Reports', path: 'Team/Reports', parent_id: 'team' }] });
   expect(screen.getByText('Reports')).toBeTruthy();
 });
 
 describe('shared-folder discovery', () => {
+  it('opens a shared folder locally while the space roster is still loading', async () => {
+    render(<DriveScreen {...shell} onError={() => {}} />);
+    await flush();
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    // Leave /api/sites pending: the worker may answer grants before the roster.
+    fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
+    await flush();
+    await answer('/shared-folders', { folders: [{ id: '01N', parent_id: '01P', path: 'Papers/Leases', name: 'Leases', siteSlug: 'home', siteName: 'Home' }] });
+    fireEvent.doubleClick(screen.getByText('Leases'));
+    await flush();
+    expect(pending.some(request => request.url.includes('/folders/01N/files'))).toBe(true);
+  });
+
   it('lists direct shares and opens a nested folder by its identity', async () => {
     await renderDrive([], [file('01A', 'lease.pdf')]);
     fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
     await flush();
-    await answer('/folders/shared-with-me', { folders: [
+    await answer('/shared-folders', { folders: [
       { id: '01N', parent_id: '01P', path: 'Papers/Leases', name: 'Leases' },
     ] });
     expect(screen.queryByText('lease.pdf')).toBeNull();

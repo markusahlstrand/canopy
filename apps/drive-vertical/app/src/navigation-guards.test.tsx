@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useNavigationGuard, confirmNavigation } from './navigation-guards';
 import { Sidebar } from './sidebar';
 import { currentSite, selectSite } from './api';
+import { openSpaceFolder } from './space-navigation';
 afterEach(() => { cleanup(); selectSite(null); history.replaceState(null, '', '/'); vi.restoreAllMocks(); });
 it('declining a space switch preserves selection, storage, and URL', () => {
   selectSite('space-a');
@@ -24,4 +25,11 @@ it('an explicitly approved exit suppresses the second browser prompt', () => {
   const event = new Event('beforeunload', { cancelable: true });
   window.dispatchEvent(event);
   expect(event.defaultPrevented).toBe(false);
+});
+it('keeps a shared folder target while switching spaces', () => {
+  selectSite('space-a');
+  history.replaceState(null, '', '/?file=old&path=Old');
+  expect(openSpaceFolder('space-b', 'folder-42')).toBe(true);
+  expect(currentSite()).toBe('space-b');
+  expect(location.search).toBe('?folder=folder-42');
 });
