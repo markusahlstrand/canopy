@@ -216,6 +216,22 @@ describe('search result explanations', () => {
   });
 });
 
+it('returns to the prior view when the search box is cleared', async () => {
+  await renderDrive();
+  fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+  await flush();
+  await answer('/trash', []);
+  const box = screen.getByRole('textbox', { name: 'Search this space' });
+  fireEvent.change(box, { target: { value: 'budget' } });
+  await flush();
+  await answer('/api/search?', { hits: [] });
+  fireEvent.change(box, { target: { value: '' } });
+  await flush();
+  await answer('/trash', []);
+  expect(screen.getByText('Trash is empty')).toBeTruthy();
+  expect(rail().getByRole('button', { name: 'Trash' }).getAttribute('aria-current')).toBe('page');
+});
+
 describe('a stale search answer never reaches the screen', () => {
   it('drops the first term’s hits when the term has moved on', async () => {
     await renderDrive();
