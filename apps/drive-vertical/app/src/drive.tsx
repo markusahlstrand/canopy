@@ -748,7 +748,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   ) : view === 'trash' ? (
     <EmptyList icon="trash" title={trashNext ? "No files on this page" : "Trash is empty"} description={trashNext ? "Load more to continue checking Trash." : "Deleted files will appear here."} />
   ) : view === 'shared' ? (
-    <EmptyList icon="folder" title="No folders shared with you" description="Direct folder grants in this space will appear here." />
+    <EmptyList icon="folder" title="No folders shared with you" description="Folders shared directly with you from any space will appear here." />
   ) : view === 'search' ? (
     term.trim().length < SEARCH_MIN
       ? <EmptyList icon="search" title="Search this space" description={`Enter at least ${SEARCH_MIN} characters to find files.`} />
