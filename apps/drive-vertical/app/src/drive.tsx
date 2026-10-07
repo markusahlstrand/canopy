@@ -703,6 +703,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     if (!offline && !linkPending && !linkListingUnavailable) uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
   };
 
+  const activeSpaceName = siteList.sites?.find(site => site.current)?.name.trim();
+  const rootLabel = activeSpaceName || 'My Drive';
   const empty = linkListingUnavailable && view === 'drive' ? (
     <EmptyList icon="folder" title="Folder context unavailable" description="The file preview remains available. Choose My Drive to browse folders you can access." actions={[{ label: 'Retry folder', onClick: () => void refresh(true) }, { label: 'Go to My Drive', onClick: () => navigate('drive') }]} />
   ) : loadFailed ? (
@@ -723,7 +725,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   ) : (
     <EmptyList
       icon="folder"
-      title={folderId === ROOT_FOLDER_ID ? 'Your drive is empty' : 'This folder is empty'}
+      title={folderId === ROOT_FOLDER_ID ? activeSpaceName ? `${activeSpaceName} is empty` : 'Your drive is empty' : 'This folder is empty'}
       description="Create a folder or upload files to get started."
       actions={[
         { label: 'New folder', onClick: () => setCreating(true) },
@@ -784,8 +786,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       <div className="flex min-w-0 flex-1 flex-col">
       <Topbar
-        breadcrumb={activePlugin ? [pluginManifest(activePlugin).name] : view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : ['My Drive', ...crumbs.map((c) => c.name)]}
-        spaceName={siteList.sites?.find(site => site.current)?.name}
+        breadcrumb={activePlugin ? [pluginManifest(activePlugin).name] : view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : [rootLabel, ...crumbs.map((c) => c.name)]}
+        spaceName={activeSpaceName}
         onOpenSpaces={() => setSpacesOpen(true)}
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
         onCrumbClick={view === 'drive' ? (index) => upTo(index - 1) : undefined}

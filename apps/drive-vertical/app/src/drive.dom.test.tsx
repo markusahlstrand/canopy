@@ -180,6 +180,12 @@ const appInstall: PluginInstall = {
   manifest_json: JSON.stringify({ id: 'notes', name: 'Notes', version: '1', capabilities: [], contributes: { detailView: { id: 'notes', title: 'Notes app' } } }),
 };
 
+it('names the root from the active space when its roster is available', async () => {
+  await renderDrive([], [], [{ slug: 'family', name: 'Family', current: true }]);
+  expect(within(screen.getByRole('banner')).getAllByText('Family').length).toBeGreaterThan(1);
+  expect(screen.getByText('Family is empty')).toBeTruthy();
+});
+
 function DraftMarker() { useUnsavedDraft(true); return null; }
 
 /**
