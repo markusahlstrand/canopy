@@ -32,7 +32,7 @@ import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { CreateSpaceDialog } from './create-space-dialog';
-import { openSpace, openSpaceFolder } from './space-navigation';
+import { openSpace, openSpaceFolder, spaceLabel } from './space-navigation';
 import { SpacesDialog } from './spaces-dialog';
 import { PluginManagement } from './plugin-management';
 import { SandboxPlugin } from './sandbox-plugin';
@@ -151,9 +151,8 @@ const folderItem = (folder: DriveFolder | SharedFolder): FileItem => ({
 const fileItem = (file: DriveFile, mime?: string | null): FileItem => ({
   id: file.id,
   name: file.name,
-  // The kind is a presentation fact derived from the version's mime; a listing does not
-  // carry versions, so an unwritten file reads as a plain document until it is opened.
-  kind: file.current_version_id ? kindOf(mime) : 'doc',
+  // The listing has no MIME; use the filename until an opened version supplies one.
+  kind: kindOf(mime, file.name),
   modified: file.current_version_id ? when(file.updated_at) : 'No content yet',
   size: '—',
   isFolder: false,
@@ -515,7 +514,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   /** ⌘K / Ctrl-K opens the palette — the shortcut the portal had, and the reason it exists. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (offline) return;
       if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setCmdOpen((was) => !was);
@@ -523,7 +521,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [offline]);
+  }, []);
 
   useEffect(() => {
     // A pause, not a keystroke: the index is per scope and cheap, but a request per
@@ -744,7 +742,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     if (!offline && !linkPending && !linkListingUnavailable) uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
   };
 
-  const activeSpaceName = siteList.sites?.find(site => site.current)?.name.trim();
+  const selectedSpace = siteList.sites?.find(site => site.current);
+  const activeSpaceName = selectedSpace ? spaceLabel(selectedSpace) : currentSite() || undefined;
   const rootLabel = activeSpaceName || 'My Drive';
   const empty = linkListingUnavailable && view === 'drive' ? (
     <EmptyList icon="folder" title="Folder context unavailable" description="The file preview remains available. Choose My Drive to browse folders you can access." actions={[{ label: 'Retry folder', onClick: () => void refresh(true) }, { label: 'Go to My Drive', onClick: () => navigate('drive') }]} />
@@ -867,22 +866,23 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       <CommandPalette
         open={cmdOpen}
+        offline={offline}
         onOpenChange={setCmdOpen}
-        files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
+        files={offline ? folders.map(folderItem) : [...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
         sites={siteList.sites ?? []}
         onOpenSpace={offline ? undefined : openSpace}
         pluginApps={pluginApps}
-        onOpenPlugin={id => { if (!confirmDiscardDrafts()) return false; changePreview(null); setActivePluginId(id); return true; }}
+        onOpenPlugin={offline ? undefined : id => { if (!confirmDiscardDrafts()) return false; changePreview(null); setActivePluginId(id); return true; }}
         onManageSpaces={() => setSpacesOpen(true)}
-        onManagePlugins={() => setViewersOpen(true)}
-        onShowAllResults={query => {
+        onManagePlugins={offline ? undefined : () => setViewersOpen(true)}
+        onShowAllResults={offline ? undefined : query => {
           const sameSearch = view === 'search' && term === query && matchFilter === 'all' && !linkListingUnavailable;
-          if (!navigate('search')) return;
+          if (!navigate('search')) return false;
           if (sameSearch) {
             // navigate already refreshed these exact results; invalidating that read
             // would leave no changed dependency to start another one.
             setSelection(new Set());
-            return;
+            return true;
           }
           reads.current.invalidate();
           setMatchFilter('all');
@@ -890,6 +890,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           setHits([]);
           setBusy(query.length >= SEARCH_MIN);
           setTerm(query);
+          return true;
         }}
         onNavigate={(id) => navigate(id === 'trash' ? 'trash' : id === 'shared' ? 'shared' : id === 'search' ? 'search' : 'drive')}
         onOpenFile={(item) => {
@@ -1078,7 +1079,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={siteList.retry} />
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
       <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
-      <PluginManagement open={viewersOpen} onOpenChange={setViewersOpen} spaceName={siteList.sites?.find(site => site.current)?.name} onOpenApp={id => { changePreview(null); setActivePluginId(id); }} />
+      <PluginManagement open={viewersOpen} onOpenChange={setViewersOpen} spaceName={activeSpaceName} onOpenApp={id => { changePreview(null); setActivePluginId(id); }} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 

@@ -1127,10 +1127,7 @@ export function createApp(deps: AppDeps) {
 
   // Folders shared with the caller (direct or via a place), enriched with space name.
   app.get("/api/shared-folders", driveRoute(async (_c, caller) => {
-    const folders = await drive!.service.listSharedFolders(caller.sub);
-    const spaces = await drive!.service.spaces(caller.sub);
-    const nameOf = new Map(spaces.map((s) => [s.id, s.name]));
-    return _c.json(folders.map((f) => ({ ...f, spaceName: nameOf.get(f.spaceId) ?? "Shared" })));
+    return _c.json(await drive!.service.listSharedFolders(caller.sub));
   }));
 
   // ── app passwords (for WebDAV / Basic-auth clients) ─────────────────────────

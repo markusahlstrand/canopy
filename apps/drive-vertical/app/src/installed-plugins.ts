@@ -24,10 +24,11 @@ export function pluginManifest(row: PluginInstall): PluginManifest {
       const contributes = manifest.contributes as Record<string, unknown> | undefined;
       if (typeof manifest.name === 'string'
         && (manifest.description === undefined || typeof manifest.description === 'string')
-        && Array.isArray(manifest.capabilities) && manifest.capabilities.every(cap => cap && typeof cap.kind === 'string')
+        && Array.isArray(manifest.capabilities) && manifest.capabilities.every(cap => cap && typeof cap.kind === 'string'
+          && (cap.hosts === undefined || Array.isArray(cap.hosts) && cap.hosts.every((host: unknown) => typeof host === 'string')))
         && contributes && typeof contributes === 'object' && !Array.isArray(contributes)
-        && (!contributes.viewers || Array.isArray(contributes.viewers) && contributes.viewers.every(viewer => viewer && (viewer.title === undefined || typeof viewer.title === 'string') && Array.isArray(viewer.match) && viewer.match.every((match: unknown) => typeof match === 'string')))
-        && (!contributes.detailView || typeof contributes.detailView === 'object' && typeof (contributes.detailView as Record<string, unknown>).title === 'string')) {
+        && (!contributes.viewers || Array.isArray(contributes.viewers) && contributes.viewers.every(viewer => viewer && typeof viewer.id === 'string' && (viewer.title === undefined || typeof viewer.title === 'string') && (viewer.fill === undefined || typeof viewer.fill === 'boolean') && Array.isArray(viewer.match) && viewer.match.every((match: unknown) => typeof match === 'string')))
+        && (!contributes.detailView || typeof contributes.detailView === 'object' && !Array.isArray(contributes.detailView) && typeof (contributes.detailView as Record<string, unknown>).id === 'string' && typeof (contributes.detailView as Record<string, unknown>).title === 'string')) {
         const parsed = { ...manifest, id: typeof manifest.id === 'string' ? manifest.id : row.plugin_id, version: typeof manifest.version === 'string' ? manifest.version : '' } as PluginManifest;
         manifestCache.set(row, { source: row.manifest_json, value: parsed });
         return parsed;

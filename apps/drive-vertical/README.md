@@ -119,13 +119,15 @@ with `POST /api/maintenance/text-backfill` (response: `runId`, `status`).
 
 ## Viewers
 
-The first-party image viewer is a build-time web component. Its input is the
-current file's name, MIME type and permission-checked content URL. The component
-shares this app's origin; it is trusted code. Runtime-installed plugins use a
-separate opaque-origin iframe host and can be installed for a person or a space
-after capability review. The [plugin guide](../../documentation/03-how-plugins-work.md)
-describes the current flows and trust boundary. The [viewer decision](../../documentation/planning/web-component-viewers.md)
-records the earlier bundled-viewer design.
+The first-party image viewer is a trusted component compiled into the drive. The
+drive also loads installed viewers and full-view apps from personal and space plugin
+installs at runtime. Those plugins run in opaque-origin iframes, receive only the
+capabilities approved for the install, and register their file matches or app view
+from `canopy.json`. The Plugins dialog offers bundled catalog entries, local source,
+and GitHub, npm, or ZIP imports. See [How plugins work](../../documentation/03-how-plugins-work.md)
+and [Writing a plugin](../../documentation/05-writing-a-plugin.md) for the current
+contract. The [viewer decision](../../documentation/planning/web-component-viewers.md)
+records the earlier bundled-viewer design. The old portal's build-time registration is retired.
 
 ## Event feed
 

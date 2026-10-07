@@ -36,7 +36,7 @@ import {
   TooltipTrigger,
   cn,
 } from '@canopy/ui';
-import { openSpace } from './space-navigation';
+import { openSpace, spaceLabel } from './space-navigation';
 import { pluginManifest } from './installed-plugins';
 import { listSites, type PluginInstall, type Site } from './api';
 
@@ -124,7 +124,8 @@ export function useSites() {
       .then(result => { if (request.current === current) { loaded.current = true; setSites(result); } })
       .catch(() => {
         if (request.current !== current) return;
-        if (!loaded.current) { setSites([]); setFailed(true); }
+        if (!loaded.current) setSites([]);
+        setFailed(true);
       })
       .finally(() => { if (request.current === current) inFlight.current = false; });
   }, []);
@@ -283,8 +284,8 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
         {failed && !narrow && (
           <div className="mt-4 px-3">
             <p className="px-2.5 text-[12px] text-muted-foreground">
-              Couldn’t list your spaces.{' '}
-              <button onClick={onRetry} className="underline hover:text-foreground">
+              {sites?.length ? 'Couldn’t refresh your spaces; showing the last list.' : 'Couldn’t list your spaces.'}{' '}
+              <button onClick={onRetry} disabled={offline} className="underline hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50">
                 Try again
               </button>
             </p>
@@ -341,10 +342,10 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
                   <span className={cn('shrink-0', s.current && 'text-primary')}>
                     <Icon name={s.icon ?? "users"} size={17} style={{color:s.color}} />
                   </span>
-                  <span className="flex-1 truncate text-left">{s.name}</span>
+                  <span className="flex-1 truncate text-left">{spaceLabel(s)}</span>
                 </button>
                 {s.current && canManageSpace && !offline && (onSpaceSettings || onSpaceMembers || onSpacePlugins) ? <DropdownMenu>
-                  <DropdownMenuTrigger asChild><button type="button" aria-label={`Manage ${s.name}`} className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent"><Icon name="more" size={16} /></button></DropdownMenuTrigger>
+                  <DropdownMenuTrigger asChild><button type="button" aria-label={`Manage ${spaceLabel(s)}`} className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent"><Icon name="more" size={16} /></button></DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {onSpaceSettings ? <DropdownMenuItem onClick={onSpaceSettings}><Icon name="settings" size={15} /> Space settings</DropdownMenuItem> : null}
                     {onSpaceMembers ? <DropdownMenuItem onClick={onSpaceMembers}><Icon name="users" size={15} /> Manage members</DropdownMenuItem> : null}
@@ -369,8 +370,8 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
         </div>
 
         {onSpaces ? <Button variant="ghost" onClick={onSpaces}
-          aria-label={narrow && currentSpace ? `Spaces, current: ${currentSpace.name}` : 'Manage spaces'}
-          title={narrow ? currentSpace?.name ?? 'Manage spaces' : undefined}>
+          aria-label={narrow && currentSpace ? `Spaces, current: ${spaceLabel(currentSpace)}` : 'Manage spaces'}
+          title={narrow ? currentSpace ? spaceLabel(currentSpace) : 'Manage spaces' : undefined}>
           {narrow ? <Icon name={currentSpace?.icon ?? 'users'} style={{ color: currentSpace?.color }} /> : 'Manage spaces'}
         </Button> : null}
         {narrow && (

@@ -20,6 +20,18 @@ it('opens an installed app in the drive view and closes the Plugins dialog', asy
   expect(screen.queryByTitle('Sample App')).toBeNull();
 });
 
+it('keeps Plugins open when the host declines to launch an app', async () => {
+  const manifest = { id: 'sample-app', name: 'Sample App', version: '1', capabilities: [], contributes: { detailView: { id: 'main', title: 'Sample App' } } };
+  const app = { id: 'install', plugin_id: manifest.id, principal: 'space', manifest_json: JSON.stringify(manifest), enabled: 1, updated_at: 'revision' };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(
+    url.endsWith('/people/access') ? { canManage: false } : { plugins: [app] },
+  ))));
+  const onOpenChange = vi.fn();
+  render(<PluginManagement open onOpenChange={onOpenChange} onOpenApp={() => false} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Open app' }));
+  expect(onOpenChange).not.toHaveBeenCalledWith(false);
+});
+
 it('offers launch only for the effective personal install when a space copy is shadowed', async () => {
   const manifest = { id: 'sample-app', name: 'Sample App', version: '1', capabilities: [], contributes: { detailView: { id: 'main', title: 'Sample App' } } };
   const space = { id: 'space-install', plugin_id: manifest.id, principal: 'space', manifest_json: JSON.stringify(manifest), enabled: 1,

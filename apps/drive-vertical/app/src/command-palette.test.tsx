@@ -10,6 +10,26 @@ it('omits upload when the drive cannot accept writes', () => {
   expect(screen.queryByRole('option', { name: 'Upload' })).toBeNull();
   expect(screen.getByRole('option', { name: /My Drive/ })).toBeTruthy();
 });
+it('explains the minimum file search length before a request starts', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'x' } });
+  expect(screen.getByText('Type at least 2 characters to search files.')).toBeTruthy();
+  expect(fetch).not.toHaveBeenCalled();
+});
+it('offers saved folders without making a file search request while offline', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  const folder = { id: 'saved', name: 'Saved folder', kind: 'folder' as const, modified: '', size: '—', isFolder: true };
+  render(<CommandPalette {...props} offline files={[folder]} />);
+  expect(screen.getByRole('status').textContent).toContain('File search is unavailable while offline');
+  expect(screen.getByRole('option', { name: /Saved folder/ })).toBeTruthy();
+  expect(screen.queryByRole('option', { name: 'Search this space' })).toBeNull();
+  expect(screen.queryByRole('option', { name: 'Trash' })).toBeNull();
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'budget' } });
+  expect(fetch).not.toHaveBeenCalled();
+});
 it('distinguishes failed search from no matches and retries the same query', async () => {
   const fetch = vi.fn().mockRejectedValueOnce(new Error('Connection lost')).mockResolvedValueOnce(new Response(JSON.stringify({ hits: [] })));
   vi.stubGlobal('fetch', fetch);
@@ -87,6 +107,13 @@ it('stays open when a draft blocks navigation', () => {
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
   expect(onOpenChange).not.toHaveBeenCalledWith(false);
 });
+it('keeps search open when showing all results is blocked', () => {
+  const onOpenChange = vi.fn();
+  render(<CommandPalette {...props} onOpenChange={onOpenChange} onShowAllResults={() => false} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'budget' } });
+  fireEvent.click(screen.getByRole('option', { name: /Show all results for/ }));
+  expect(onOpenChange).not.toHaveBeenCalledWith(false);
+});
 it('stays open when a draft blocks opening a file', () => {
   const onOpenChange = vi.fn();
   const item = { id: 'report', name: 'Report', kind: 'doc' as const, modified: '', size: '—', isFolder: false };
@@ -103,6 +130,10 @@ it('switches to a space selected from the palette', () => {
   expect(option.getAttribute('aria-selected')).toBe('true');
   fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
   expect(onOpenSpace).toHaveBeenCalledWith('team');
+});
+it('offers an unnamed space by its slug', () => {
+  render(<CommandPalette {...props} sites={[{slug:'legacy-space',name:' ',current:false}]} onOpenSpace={vi.fn()} />);
+  expect(screen.getByRole('option', {name:'legacy-space'})).toBeTruthy();
 });
 it('does not reload the current space from the palette', () => {
   const onOpenSpace = vi.fn();

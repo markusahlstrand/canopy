@@ -15,6 +15,7 @@ import { FileIcon } from "./file-icon";
 import { SEARCH_MIN, search, type PluginInstall, type SearchHit, type Site } from "./api";
 import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
+import { spaceLabel } from './space-navigation';
 
 /**
  * Where the palette can take you.
@@ -45,7 +46,8 @@ interface CommandPaletteProps {
   onOpenPlugin?: (id: string) => boolean | void;
   onManageSpaces?: () => void;
   onManagePlugins?: () => void;
-  onShowAllResults?: (query: string) => void;
+  onShowAllResults?: (query: string) => boolean | void;
+  offline?: boolean;
 }
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
@@ -63,6 +65,7 @@ export function CommandPalette({
   onManageSpaces,
   onManagePlugins,
   onShowAllResults,
+  offline = false,
 }: CommandPaletteProps) {
   const run = (fn: () => boolean | void) => () => {
     if (fn() !== false) onOpenChange(false);
@@ -76,7 +79,7 @@ export function CommandPalette({
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [settledQuery, setSettledQuery] = useState<string | null>(null);
-  const searching = query.trim().length >= SEARCH_MIN;
+  const searching = !offline && query.trim().length >= SEARCH_MIN;
 
   useEffect(() => {
     if (!open) {
@@ -110,7 +113,7 @@ export function CommandPalette({
       }
     }, 180);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [query, searching, open, retry]);
+  }, [query, searching, open, retry, offline]);
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="top-[18%] translate-y-0">
@@ -128,6 +131,7 @@ export function CommandPalette({
         }}
       />
       <CommandList className="max-h-[60vh]">
+        {offline ? <p role="status" className="p-3 text-sm text-muted-foreground">File search is unavailable while offline. Reconnect to search this space.</p> : null}
         {error ? <>
           <p role="alert" className="p-3 text-sm">{error}</p>
           <CommandItem value={`retry ${query}`} onSelect={() => {
@@ -137,7 +141,8 @@ export function CommandPalette({
         </> : null}
         {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
 
-        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>No results found.</CommandEmpty> : null}
+        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>{offline ? 'File search is unavailable while offline.' : query.trim() && !searching
+          ? `Type at least ${SEARCH_MIN} characters to search files.` : 'No results found.'}</CommandEmpty> : null}
 
         <CommandGroup heading="Files">
           {searching && onShowAllResults ? <CommandItem value={`show all search results ${query}`} onSelect={run(() => onShowAllResults(query.trim()))}>
@@ -154,14 +159,14 @@ export function CommandPalette({
                     onOpenFile({
                       id: hit.id,
                       name: hit.name,
-                      kind: kindOf(null),
+                      kind: kindOf(null, hit.name),
                       modified: '',
                       size: '—',
                       isFolder: false,
                     }),
                   )}
                 >
-                  <FileIcon kind={kindOf(null)} size={22} />
+                  <FileIcon kind={kindOf(null, hit.name)} size={22} />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate"><SearchHighlight text={hit.name} query={query} mode="prefix" /></span>
                     {/* What extraction bought: matching a document's text reads
@@ -184,9 +189,9 @@ export function CommandPalette({
         {onOpenSpace && sites.length ? <>
           <CommandSeparator />
           <CommandGroup heading="Spaces">
-            {sites.map(site => <CommandItem key={site.slug} value={`space ${site.name} ${site.slug}`} onSelect={run(() => site.current ? undefined : onOpenSpace(site.slug))}>
+            {sites.map(site => <CommandItem key={site.slug} value={`space ${spaceLabel(site)} ${site.slug}`} onSelect={run(() => site.current ? undefined : onOpenSpace(site.slug))}>
               <Icon name={site.icon ?? 'users'} size={16} style={{ color: site.color }} />
-              <span className="min-w-0 flex-1 truncate">{site.name}</span>
+              <span className="min-w-0 flex-1 truncate">{spaceLabel(site)}</span>
               {site.current ? <span className="text-xs text-muted-foreground">Current</span> : null}
             </CommandItem>)}
           </CommandGroup>
@@ -207,7 +212,7 @@ export function CommandPalette({
 
         <CommandSeparator />
         <CommandGroup heading="Navigate">
-          {NAV.map((n) => (
+          {NAV.filter(n => !offline || n.id === 'drive').map((n) => (
             <CommandItem key={n.id} value={`go ${n.label}`} onSelect={run(() => onNavigate(n.id))}>
               <Icon name={n.icon} size={16} />
               <span className="flex-1">{n.label}</span>

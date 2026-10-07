@@ -185,6 +185,12 @@ it('names the root from the active space when its roster is available', async ()
   expect(within(screen.getByRole('banner')).getAllByText('Family').length).toBeGreaterThan(1);
   expect(screen.getByText('Family is empty')).toBeTruthy();
 });
+it('uses the selected space slug until its display name is available', async () => {
+  selectSite('family');
+  await renderDrive([], [], []);
+  expect(within(screen.getByRole('banner')).getAllByText('family').length).toBeGreaterThan(0);
+  expect(screen.getByText('family is empty')).toBeTruthy();
+});
 
 function DraftMarker() { useUnsavedDraft(true); return null; }
 
@@ -435,6 +441,11 @@ describe('offline metadata from the scope event mirror', () => {
     expect(screen.getByText('saved.txt')).toBeTruthy();
     expect((screen.getByLabelText('Refresh') as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByLabelText('Search this space') as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Browse saved folders' }));
+    expect(screen.getByRole('option', { name: /Saved folder/ })).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText(/Search files/), { target: { value: 'budget' } });
+    await flush();
+    expect(pending.some(p => p.url.includes('/search?'))).toBe(false);
   });
 });
 

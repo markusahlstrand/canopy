@@ -118,7 +118,7 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([folder.spaceId, folder.path])));
       const key = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
       const label = base(folder.path) || 'Shared space';
-      return { ...folder, label, name: `${Array.from(label).slice(0, 40).join('')} [${key}]` };
+      return { ...folder, label, displayName: `${label} — ${folder.spaceName} [${key.slice(0, 8)}]`, name: `${Array.from(label).slice(0, 40).join('')} [${key}]` };
     }));
     return mounts;
   }
@@ -172,7 +172,7 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
         // An encoded separator must not turn a child name into a path outside the mount.
         const tail = segs.slice(2);
         if (tail.some((s) => s.includes('/') || s.includes('\\'))) throw new NotFoundError();
-        return { spaceId: mount.spaceId, path: [mount.path, ...tail].filter(Boolean).join('/'), personalId, groups };
+        return { spaceId: mount.spaceId, path: [mount.path, ...tail].filter(Boolean).join('/'), personalId, groups, displayName: tail.length ? undefined : mount.displayName };
       }
       const grp = groups.find((g) => g.name === segs[0]);
       if (grp) return { spaceId: grp.id, path: segs.slice(1).join("/"), personalId, groups };
@@ -193,10 +193,10 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
 
   // Map request segments to a concrete { spaceId, path } for the principal. For
   // a share, segments are relative to (and joined onto) its rooted base.
-  async function locate(p: Principal, segs: string[]): Promise<{ spaceId: string; path: string }> {
+  async function locate(p: Principal, segs: string[]): Promise<{ spaceId: string; path: string; displayName?: string }> {
     if (p.kind === "user") {
       const r = await resolveUser(p.sub, segs);
-      return { spaceId: r.spaceId, path: r.path };
+      return { spaceId: r.spaceId, path: r.path, displayName: 'displayName' in r ? r.displayName : undefined };
     }
     const base = await shareBase(p.share);
     const path = [base.path, ...segs].filter(Boolean).join("/");
@@ -295,7 +295,7 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
         responses.push(collectionXml(davHref(segs, true), 'Shared with me'));
         if (depth !== '0') {
           for (const mount of mounts) {
-            responses.push(collectionXml(davHref([...segs, mount.name], true), mount.label));
+            responses.push(collectionXml(davHref([...segs, mount.name], true), mount.displayName));
           }
         }
         return c.body(multistatus(responses), 207, XML);
@@ -307,10 +307,10 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
     if (file && file.version) {
       responses.push(fileXml(segs, file));
     } else if (depth === "0") {
-      responses.push(collectionXml(davHref(segs, true), collectionName(segs, loc.path)));
+      responses.push(collectionXml(davHref(segs, true), loc.displayName ?? collectionName(segs, loc.path)));
     } else {
       const listing = await service.list(p.sub, loc.spaceId, loc.path);
-      responses.push(collectionXml(davHref(segs, true), segs.length ? segs[segs.length - 1]! : loc.path ? base(loc.path) : listing.spaceName));
+      responses.push(collectionXml(davHref(segs, true), loc.displayName ?? (segs.length ? segs[segs.length - 1]! : loc.path ? base(loc.path) : listing.spaceName)));
       for (const folder of listing.folders) responses.push(collectionXml(davHref([...segs, folder], true), folder));
       for (const f of listing.files) responses.push(fileXml([...segs, f.name], f));
     }
@@ -406,7 +406,7 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
       const src = await locate(p, srcSegs);
       const dst = await locate(p, dstSegs);
       if (!src.path || !dst.path) return c.body("Cannot move a space", 403);
-      if (src.spaceId !== dst.spaceId) return c.body("Cannot move across spaces", 502);
+      if (src.spaceId !== dst.spaceId) return c.body("Cannot move across spaces", 409);
       const { created } = await service.moveByPath({ sub: p.sub }, src.spaceId, src.path, dst.path, overwriteOf(c));
       return c.body(null, created ? 201 : 204);
     }),
@@ -423,7 +423,7 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
       const src = await locate(p, srcSegs);
       const dst = await locate(p, dstSegs);
       if (!src.path || !dst.path) return c.body("Cannot copy a space", 403);
-      if (src.spaceId !== dst.spaceId) return c.body("Cannot copy across spaces", 502);
+      if (src.spaceId !== dst.spaceId) return c.body("Cannot copy across spaces", 409);
       const { created } = await service.copyByPath({ sub: p.sub }, src.spaceId, src.path, dst.path, overwriteOf(c));
       return c.body(null, created ? 201 : 204);
     }),

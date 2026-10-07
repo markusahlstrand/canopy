@@ -1839,8 +1839,11 @@ export class FileService {
   }
 
   /** Folders shared with the caller (direct or via a place) — for "Shared with me". */
-  listSharedFolders(userSub: string): Promise<{ spaceId: string; path: string; role: Role }[]> {
-    return sharedFolders(this.db, userSub);
+  async listSharedFolders(userSub: string): Promise<{ spaceId: string; spaceName: string; path: string; role: Role }[]> {
+    const folders = await sharedFolders(this.db, userSub);
+    const names = new Map(await Promise.all([...new Set(folders.map(folder => folder.spaceId))].map(async id =>
+      [id, (await getSpace(this.db, id))?.name ?? 'Shared space'] as const)));
+    return folders.map(folder => ({ ...folder, spaceName: names.get(folder.spaceId)! }));
   }
 
   // ── share links (unguessable secret → scoped capability; see shares.ts) ──────

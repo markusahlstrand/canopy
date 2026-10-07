@@ -35,6 +35,15 @@ it('resumes tracking a pending creation request when reopened', async () => {
   await waitFor(() => expect(created).toHaveBeenCalledWith('family-old'), {timeout:4000});
   expect(fetcher.mock.calls.every(call => call[1]?.method !== 'POST')).toBe(true);
 });
+it('explains a missing status entry and keeps polling the original request', async () => {
+  const created = vi.fn(); let reads = 0;
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({requests: [{id:'old',name:'Family',slug:'family-old',status:++reads >= 3 ? 'done' : 'pending',error:null}].filter(() => reads !== 2)}))));
+  render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={created} />);
+  expect(await screen.findByText(/latest status did not include this request/)).toBeTruthy();
+  expect((screen.getByRole('button', {name:'Create space'}) as HTMLButtonElement).disabled).toBe(true);
+  await waitFor(() => expect(created).toHaveBeenCalledWith('family-old'), { timeout: 4000 });
+  expect(screen.queryByText(/latest status did not include this request/)).toBeNull();
+});
 it('lets an owner start another space after a request has been pending for five minutes', async () => {
   const old = new Date(Date.now() - 6 * 60_000).toISOString();
   vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => new Response(JSON.stringify(init?.method === 'POST'
@@ -45,6 +54,14 @@ it('lets an owner start another space after a request has been pending for five 
   expect((screen.getByLabelText('Space name') as HTMLInputElement).value).toBe('');
   fireEvent.change(screen.getByLabelText('Space name'),{target:{value:'Team'}});
   expect((screen.getByRole('button',{name:'Create space'}) as HTMLButtonElement).disabled).toBe(false);
+});
+it('offers recovery when a pending request becomes stale while the dialog stays open', async () => {
+  const almostOld = new Date(Date.now() - 5 * 60_000 + 400).toISOString();
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({requests:[{id:'old',name:'Family',slug:'family-old',status:'pending',error:null,requestedAt:almostOld}]}))));
+  render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+  await screen.findByText(/Creating your space/);
+  expect(screen.queryByRole('button', { name: 'Start a different space' })).toBeNull();
+  expect(await screen.findByRole('button', { name: 'Start a different space' }, { timeout: 1200 })).toBeTruthy();
 });
 it('keeps Create disabled until a failed status check is retried successfully', async () => {
   let fail = true;

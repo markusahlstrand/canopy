@@ -4,7 +4,8 @@ import { PluginManagement } from './plugin-management';
 import { setImageViewerEnabled } from './image-viewer';
 import { pluginCatalog } from './plugin-catalog';
 import { installedPluginManifest } from '@canopy/scope-drive/spec/model';
-afterEach(() => { cleanup(); setImageViewerEnabled(true); vi.unstubAllGlobals(); });
+import { publishPlugins } from './installed-plugins';
+afterEach(() => { cleanup(); publishPlugins([]); setImageViewerEnabled(true); vi.unstubAllGlobals(); });
 it('manages enabled state and explains file access and matching contributions', () => {
   setImageViewerEnabled(true); render(<PluginManagement open onOpenChange={() => {}} />);
   expect(screen.getByText('Handles: image/*')).toBeTruthy();
@@ -58,6 +59,21 @@ it('shows disabled and damaged catalog installs with their actual scope', async 
   render(<PluginManagement open onOpenChange={() => {}} spaceName="Family" />);
   expect(await screen.findByText('Disabled for you')).toBeTruthy();
   expect(screen.getByText('Needs repair in Family')).toBeTruthy();
+});
+it('names the install being replaced in the confirmation', async () => {
+  const entry = pluginCatalog.find(item => item.manifest.name === 'Markdown')!;
+  const row = { id: 'existing', plugin_id: entry.manifest.id, principal: 'user', enabled: 1, updated_at: '1', manifest_json: JSON.stringify(entry.manifest) };
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [row] } : { canManage: false })));
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  vi.stubGlobal('fetch', fetcher);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('Enabled for you');
+  fireEvent.click(screen.getByRole('button', { name: 'Review Markdown' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /Approve the capabilities/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Install plugin' }));
+  expect(confirm).toHaveBeenCalledWith('Replace Markdown for you and its source?');
+  expect(fetcher.mock.calls.every(([, init]) => init?.method !== 'PUT')).toBe(true);
+  confirm.mockRestore();
 });
 it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
@@ -163,6 +179,23 @@ it('does not claim there are no installed plugins when loading fails', async () 
   expect((await screen.findByRole('alert')).textContent).toContain('Could not load installed plugins.');
   expect(screen.queryByText('No plugins installed yet.')).toBeNull();
 });
+it('keeps a previous plugin list visible but read-only when refresh fails', async () => {
+  const row = { id: 'cached', plugin_id: 'cached-viewer', principal: 'user', enabled: 1, updated_at: '1',
+    manifest_json: JSON.stringify({ id: 'cached-viewer', name: 'Cached viewer', version: '1', capabilities: [{ kind: 'item:read' }], contributes: { viewers: [{ id: 'text', match: ['text/plain'] }] } }) };
+  publishPlugins([row]);
+  vi.stubGlobal('fetch', vi.fn((url: string) => url.endsWith('/plugins')
+    ? Promise.reject(new Error('offline'))
+    : Promise.resolve(new Response(JSON.stringify({ canManage: true })))));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('Showing the last plugin list. Changes are unavailable until it refreshes.');
+  expect(screen.getAllByText('Cached viewer').length).toBeGreaterThan(0);
+  expect((screen.getByRole('button', { name: 'Disable' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Edit source' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Build a plugin' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /Approve the capabilities/ }));
+  expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(true);
+});
 
 it('retries a failed plugin list without closing Studio', async () => {
   let reads = 0;
@@ -176,6 +209,28 @@ it('retries a failed plugin list without closing Studio', async () => {
   await screen.findByText('No plugins installed yet.');
   expect(screen.queryByRole('button', { name: 'Retry installed plugins' })).toBeNull();
   expect(reads).toBe(2);
+});
+it('keeps installs read-only when a completed change cannot refresh the list', async () => {
+  const row = { id: 'viewer', plugin_id: 'viewer', principal: 'user', enabled: 1, updated_at: '1',
+    manifest_json: JSON.stringify({ id: 'viewer', name: 'Viewer', version: '1', capabilities: [], contributes: {} }) };
+  let reads = 0;
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/plugins') && init?.method !== 'PUT') {
+      if (++reads === 2) throw new Error('offline');
+      return new Response(JSON.stringify({ plugins: [{ ...row, enabled: reads === 1 ? 1 : 0 }] }));
+    }
+    if (url.endsWith('/people/access')) return new Response(JSON.stringify({ canManage: false }));
+    return new Response(JSON.stringify(row));
+  });
+  vi.stubGlobal('fetch', fetcher);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Disable' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('change was sent');
+  expect((screen.getByRole('button', { name: 'Disable' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Retry installed plugins' }));
+  expect(await screen.findByRole('button', { name: 'Enable' })).toBeTruthy();
+  expect((screen.getByRole('button', { name: 'Enable' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(1);
 });
 
 it('clears a Studio draft after confirming discard on close', () => {
@@ -239,6 +294,20 @@ it('shows file errors beside Studio and clears them when a valid file is selecte
   await waitFor(()=>expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default'));
   expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
   expect(input.value).toBe('');
+});
+it('clears an old import error when opening a different Studio source', () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  const input = screen.getByLabelText('Choose plugin source file');
+  fireEvent.change(input, { target: { files: [new File(['x'.repeat(256_001)], 'large.js')] } });
+  expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Review Markdown' }));
+  expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
+  fireEvent.change(input, { target: { files: [new File(['x'.repeat(256_001)], 'large.js')] } });
+  expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('Plugin source'), { target: { value: 'export default () => {}' } });
+  expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
+  confirm.mockRestore();
 });
 it('requires fresh approval after a replacement file cannot be read', () => {
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
