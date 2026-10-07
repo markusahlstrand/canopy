@@ -26,7 +26,7 @@ function catalogInstallStatus(row: PluginInstall, scope: string): string {
   return `${row.enabled ? 'Enabled' : 'Disabled'} ${scope}`;
 }
 /** Manage installed viewer contributions; available plugins are reviewed and bundled. */
-export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: { open: boolean; onOpenChange: (open: boolean) => void; onOpenApp?: (id: string) => void; spaceName?: string }) {
+export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: { open: boolean; onOpenChange: (open: boolean) => void; onOpenApp?: (id: string) => boolean | void; spaceName?: string }) {
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
   const [studioOpen, setStudioOpen] = useState(false);
   const [editingInstall, setEditingInstall] = useState<PluginInstall | null>(null);
@@ -147,7 +147,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
         <div className="mt-auto flex flex-wrap gap-1.5">
           <Button size="sm" disabled={busy || (row.principal === 'space' && !canManage) || (manifest.invalid && !row.enabled)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : manifest.invalid ? 'Repair to enable' : 'Enable'}</Button>
           <Button size="sm" variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; void change(async () => {const loaded = await pluginSource(row.id,row.updated_at); const parsed = pluginManifest(loaded); setEditingInstall(loaded); setManifest(parsed.invalid ? loaded.manifest_json : JSON.stringify(parsed,null,2)); setSource(loaded.source);setForSpace(loaded.principal==='space');setStudioOpen(true);}); }}>Edit source</Button>
-          {launchableIds.has(row.id) && onOpenApp ? <Button size="sm" variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; onOpenApp(row.id); close(); }}>Open app</Button> : null}
+          {launchableIds.has(row.id) && onOpenApp ? <Button size="sm" variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; if (onOpenApp(row.id) !== false) close(); }}>Open app</Button> : null}
           <Button size="sm" variant="ghost" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${manifest.name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
         </div>
       </section>;
