@@ -38,7 +38,7 @@ interface CommandPaletteProps {
   onNavigate: (id: string) => void;
   onOpenFile: (f: FileItem) => void;
   /** Upload, which the toolbar also offers; the palette is the keyboard path to it. */
-  onUpload: () => void;
+  onUpload?: () => void;
   sites?: Site[];
   onOpenSpace?: (slug: string) => void;
   pluginApps?: PluginInstall[];
@@ -226,11 +226,11 @@ export function CommandPalette({
           {onManagePlugins ? <CommandItem value="manage plugins" onSelect={run(onManagePlugins)}>
             <Icon name="plugin" size={16} /><span className="flex-1">Manage plugins</span>
           </CommandItem> : null}
-          <CommandItem value="upload" onSelect={run(onUpload)}>
+          {onUpload ? <CommandItem value="upload" onSelect={run(onUpload)}>
             <Icon name="upload" size={16} />
             <span className="flex-1">Upload</span>
             <CommandShortcut>⌘U</CommandShortcut>
-          </CommandItem>
+          </CommandItem> : null}
         </CommandGroup>
       </CommandList>
     </CommandDialog>

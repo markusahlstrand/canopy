@@ -5,6 +5,11 @@ import type { PluginInstall } from './api';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const props = { open: true, onOpenChange: vi.fn(), files: [], onNavigate: vi.fn(), onOpenFile: vi.fn(), onUpload: vi.fn() };
+it('omits upload when the drive cannot accept writes', () => {
+  render(<CommandPalette {...props} onUpload={undefined} />);
+  expect(screen.queryByRole('option', { name: 'Upload' })).toBeNull();
+  expect(screen.getByRole('option', { name: /My Drive/ })).toBeTruthy();
+});
 it('distinguishes failed search from no matches and retries the same query', async () => {
   const fetch = vi.fn().mockRejectedValueOnce(new Error('Connection lost')).mockResolvedValueOnce(new Response(JSON.stringify({ hits: [] })));
   vi.stubGlobal('fetch', fetch);
