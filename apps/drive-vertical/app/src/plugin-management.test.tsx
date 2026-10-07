@@ -195,6 +195,28 @@ it('retries a failed plugin list without closing Studio', async () => {
   expect(screen.queryByRole('button', { name: 'Retry installed plugins' })).toBeNull();
   expect(reads).toBe(2);
 });
+it('keeps installs read-only when a completed change cannot refresh the list', async () => {
+  const row = { id: 'viewer', plugin_id: 'viewer', principal: 'user', enabled: 1, updated_at: '1',
+    manifest_json: JSON.stringify({ id: 'viewer', name: 'Viewer', version: '1', capabilities: [], contributes: {} }) };
+  let reads = 0;
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/plugins') && init?.method !== 'PUT') {
+      if (++reads === 2) throw new Error('offline');
+      return new Response(JSON.stringify({ plugins: [{ ...row, enabled: reads === 1 ? 1 : 0 }] }));
+    }
+    if (url.endsWith('/people/access')) return new Response(JSON.stringify({ canManage: false }));
+    return new Response(JSON.stringify(row));
+  });
+  vi.stubGlobal('fetch', fetcher);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Disable' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('change was sent');
+  expect((screen.getByRole('button', { name: 'Disable' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Retry installed plugins' }));
+  expect(await screen.findByRole('button', { name: 'Enable' })).toBeTruthy();
+  expect((screen.getByRole('button', { name: 'Enable' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(1);
+});
 
 it('clears a Studio draft after confirming discard on close', () => {
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
