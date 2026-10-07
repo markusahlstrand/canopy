@@ -196,6 +196,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [loadFailed, setLoadFailed] = useState(false);
   const [offline, setOffline] = useState(false);
   const [view, setView] = useState<'drive' | 'trash' | 'search' | 'shared'>('drive');
+  const searchOrigin = useRef<'drive' | 'trash' | 'shared'>('drive');
   const [term, setTerm] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [matchFilter, setMatchFilter] = useState<MatchFilter>('all');
@@ -563,6 +564,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     setHits([]);
     setSelection(new Set());
     setBusy(true);
+    if (id === 'search') {
+      if (view !== 'search') searchOrigin.current = view;
+      setView('search');
+      return true;
+    }
     if (id === 'trash') {
       setView('trash');
       return true;
@@ -940,9 +946,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
               setBusy(next.trim().length >= SEARCH_MIN);
               // Emptying the box returns to where you were, rather than leaving an
               // empty result list that looks like "nothing here".
+              if (view !== 'search' && next.trim()) searchOrigin.current = view;
               linkNavigation.current++;
               setLinkPending(false);
-              setView(next.trim() ? 'search' : 'drive');
+              setView(next.trim() ? 'search' : searchOrigin.current);
             }}
           />
         </div>
