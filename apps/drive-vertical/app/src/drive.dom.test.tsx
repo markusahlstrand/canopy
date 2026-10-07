@@ -779,6 +779,14 @@ it('navigates from the palette to the shared-folder listing', async () => {
 });
 
 describe('shared-folder discovery', () => {
+  it('explains that Shared with me includes grants from other spaces', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
+    await flush();
+    await answer('/shared-folders', { folders: [] });
+    expect(screen.getByText('Folders shared directly with you from any space will appear here.')).toBeTruthy();
+  });
+
   it('opens the selected space when two grants have the same local folder id', async () => {
     await renderDrive();
     fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
