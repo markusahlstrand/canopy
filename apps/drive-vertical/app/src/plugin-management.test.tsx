@@ -258,6 +258,20 @@ it('shows file errors beside Studio and clears them when a valid file is selecte
   expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
   expect(input.value).toBe('');
 });
+it('clears an old import error when opening a different Studio source', () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  const input = screen.getByLabelText('Choose plugin source file');
+  fireEvent.change(input, { target: { files: [new File(['x'.repeat(256_001)], 'large.js')] } });
+  expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Review Markdown' }));
+  expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
+  fireEvent.change(input, { target: { files: [new File(['x'.repeat(256_001)], 'large.js')] } });
+  expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('Plugin source'), { target: { value: 'export default () => {}' } });
+  expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
+  confirm.mockRestore();
+});
 it('requires fresh approval after a replacement file cannot be read', () => {
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   render(<PluginManagement open onOpenChange={() => {}} />);

@@ -77,6 +77,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
       setManifest(parsed.invalid ? loaded.manifest_json : JSON.stringify(parsed, null, 2));
       setSource(loaded.source);
       setForSpace(loaded.principal === 'space');
+      setStudioError(null);
       setStudioOpen(true);
     } catch (error) {
       if (manifestRead.current === manifestToken && sourceRead.current === sourceToken)
@@ -108,6 +109,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
   const reviewCatalog = (entry: (typeof pluginCatalog)[number], targetSpace: boolean) => {
     if (!confirmDiscardDrafts()) return;
     manifestRead.current++; sourceRead.current++;
+    setStudioError(null);
     setEditingInstall(null);
     setImported(null);
     setManifest(JSON.stringify(entry.manifest, null, 2));
@@ -174,7 +176,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
         </div>
       </section>;
     })}</div> : pluginsState === 'loaded' && !error && !busy ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">{query || installScope !== 'all' ? 'No installed plugins match these filters.' : 'No plugins installed yet.'}</p> : null}
-    <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
+    <Button variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; setStudioError(null); setEditingInstall(null); setManifest(JSON.stringify({id:'my-plugin',name:'My plugin',version:'0.1.0',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',title:'Text',match:['text/*']}]}}, null, 2)); setSource('export default function render({container, file}) {\n  container.textContent = new TextDecoder().decode(file.bytes);\n}\n'); setForSpace(false); setStudioOpen(true); }}>Build a plugin</Button>
     <PluginAiHandoff />
     <details open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)}><summary>Plugin Studio · import or edit source</summary><p className="text-sm">Paste or choose canopy.json and its JavaScript entry source. Imported code cannot access your Canopy session. A plugin that can read a file can send its contents elsewhere, even without declared network hosts. Install only code you trust.</p>
       <div className="flex flex-wrap gap-3 text-sm">
@@ -233,9 +235,9 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
           }).catch(error => { if (manifestRead.current === manifestToken && sourceRead.current === sourceToken) setStudioError(error instanceof Error ? error.message : String(error)); }).finally(() => setBusy(false));
         }}>Review npm plugin</Button>
       </div>
-      <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setManifest(event.target.value); }} /></label>
+      <label>Plugin manifest<textarea className="w-full rounded border p-2" aria-label="Plugin manifest" value={manifest} onChange={event => { manifestRead.current++; setStudioError(null); setManifest(event.target.value); }} /></label>
       {manifestCheck.error ? <p role="alert" className="text-sm text-destructive">{manifestCheck.error}</p> : null}
-      <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => { sourceRead.current++; setSource(event.target.value); }} /></label>
+      <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => { sourceRead.current++; setStudioError(null); setSource(event.target.value); }} /></label>
       {canManage ? <label><input type="checkbox" checked={forSpace} onChange={event => setForSpace(event.target.checked)} />Apply to {spaceName ?? 'this space'}</label> : null}
       {editingInstall && manifestCheck.manifest && !updatingInstall ? <p role="status" className="text-xs text-muted-foreground">Changing the plugin ID or install scope creates another install. {pluginManifest(editingInstall).name} will remain installed.</p> : null}
       <label className="block"><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Approve the capabilities in this manifest, including added access. Read access lets the plugin share the opened file outside Canopy.</label>
