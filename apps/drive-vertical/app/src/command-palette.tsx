@@ -137,7 +137,8 @@ export function CommandPalette({
         </> : null}
         {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
 
-        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>No results found.</CommandEmpty> : null}
+        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>{query.trim() && !searching
+          ? `Type at least ${SEARCH_MIN} characters to search files.` : 'No results found.'}</CommandEmpty> : null}
 
         <CommandGroup heading="Files">
           {searching && onShowAllResults ? <CommandItem value={`show all search results ${query}`} onSelect={run(() => onShowAllResults(query.trim()))}>
