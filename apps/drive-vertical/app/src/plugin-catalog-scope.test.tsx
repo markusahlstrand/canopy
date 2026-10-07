@@ -18,8 +18,8 @@ it('shows where a catalog plugin is installed and opens review for this space', 
   ))));
   render(<PluginManagement open onOpenChange={() => {}} />);
   const action = await screen.findByRole('button', { name: `Apply ${manifest.name} to space` });
-  expect(screen.getByText('For you')).toBeTruthy();
-  expect(screen.getByText('For this space')).toBeTruthy();
+  expect(screen.getByText('Enabled for you')).toBeTruthy();
+  expect(screen.getByText('Enabled in this space')).toBeTruthy();
   fireEvent.click(action);
   expect((screen.getByRole('checkbox', { name: 'Apply to this space' }) as HTMLInputElement).checked).toBe(true);
   expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toContain(manifest.id);
