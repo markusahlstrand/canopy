@@ -53,9 +53,11 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
   }, [open, request?.id, request?.status, onCreated]);
   useEffect(() => {
     if (!open || request?.status !== 'pending' || !request.requestedAt) return;
-    const remaining = Date.parse(request.requestedAt) + 5 * 60_000 - Date.now();
+    const deadline = Date.parse(request.requestedAt) + 5 * 60_000;
+    const remaining = deadline - Date.now();
     if (remaining <= 0) { setNow(Date.now()); return; }
-    const timer = setTimeout(() => setNow(Date.now()), remaining);
+    // A timer can fire on the millisecond before Date.now reaches the deadline.
+    const timer = setTimeout(() => setNow(current => Math.max(current, Date.now(), deadline)), remaining);
     return () => clearTimeout(timer);
   }, [open, request?.id, request?.requestedAt, request?.status]);
   const create = async () => {
