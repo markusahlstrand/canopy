@@ -126,6 +126,12 @@ describe("folder grant — revoke + move", () => {
 describe("listSharedFolders", () => {
   it("reports folders shared with the user, with role", async () => {
     await svc.shareFolderGrant(owner, space, "Photos", { subjectType: "user", subjectId: BOB, role: "editor" });
-    expect(await svc.listSharedFolders(BOB)).toEqual([{ spaceId: space, path: "Photos", role: "editor" }]);
+    expect(await svc.listSharedFolders(BOB)).toEqual([{ spaceId: space, spaceName: 'My Drive', path: "Photos", role: "editor" }]);
+  });
+  it('includes the source space name for a direct grant without space membership', async () => {
+    const family = await svc.createSpace(owner, { name: 'Family' });
+    await svc.createFolder(family.id, owner.sub, 'Photos');
+    await svc.shareFolderGrant(owner, family.id, 'Photos', { subjectType: 'user', subjectId: BOB, role: 'viewer' });
+    expect(await svc.listSharedFolders(BOB)).toContainEqual({ spaceId: family.id, spaceName: 'Family', path: 'Photos', role: 'viewer' });
   });
 });
