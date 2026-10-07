@@ -15,6 +15,15 @@ it('distinguishes failure, loading and having no spaces', () => {
   view.rerender(<SpacesDialog {...props} sites={[]} failed />); fireEvent.click(screen.getByRole('button', { name: 'Retry spaces' })); expect(props.onRetry).toHaveBeenCalledOnce();
   view.rerender(<SpacesDialog {...props} sites={[]} />); expect(screen.getByText(/You have no spaces available/)).toBeTruthy();
 });
+it('keeps the last space list usable after a refresh failure', () => {
+  render(<SpacesDialog {...props} failed sites={[{ slug: 'team', name: 'Team', current: false }]} />);
+  expect(screen.getByRole('alert').textContent).toContain('Showing the last list');
+  expect(screen.getByRole('button', { name: 'Open Team' })).toBeTruthy();
+});
+it('waits for a connection before retrying a failed roster', () => {
+  render(<SpacesDialog {...props} sites={[]} failed offline />);
+  expect((screen.getByRole('button', { name: 'Retry spaces' }) as HTMLButtonElement).disabled).toBe(true);
+});
 
 it('disables switching and hides management while offline', () => {
  render(<SpacesDialog {...props} offline sites={[{slug:'family',name:'Family',current:true},{slug:'team',name:'Team',current:false}]} />);

@@ -8,7 +8,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); Reflect.d
 
 function Roster() {
   const { sites, failed, retry } = useSites();
-  return <><p>{failed ? 'Failed' : sites?.map(site => site.name).join(', ') ?? 'Loading'}</p><button onClick={retry}>Retry</button></>;
+  return <><p>{sites?.map(site => site.name).join(', ') ?? 'Loading'}</p>{failed ? <p>Failed</p> : null}<button onClick={retry}>Retry</button></>;
 }
 
 it('keeps an older response from overwriting a manual retry', async () => {
@@ -36,7 +36,7 @@ it('keeps the last good roster when a background refresh fails', async () => {
   await waitFor(() => expect(listSites).toHaveBeenCalledTimes(2));
   await act(async () => { rejectRefresh(new Error('offline')); });
   expect(screen.getByText('Home')).toBeTruthy();
-  expect(screen.queryByText('Failed')).toBeNull();
+  expect(screen.getByText('Failed')).toBeTruthy();
   fireEvent(document, new Event('visibilitychange'));
   expect(listSites).toHaveBeenCalledTimes(2);
 });
