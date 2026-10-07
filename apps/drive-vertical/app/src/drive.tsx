@@ -863,7 +863,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         sites={siteList.sites ?? []}
         onOpenSpace={offline ? undefined : openSpace}
         pluginApps={pluginApps}
-        onOpenPlugin={id => { if (!confirmDiscardDrafts()) return; changePreview(null); setActivePluginId(id); }}
+        onOpenPlugin={id => { if (!confirmDiscardDrafts()) return false; changePreview(null); setActivePluginId(id); return true; }}
         onManageSpaces={() => setSpacesOpen(true)}
         onManagePlugins={() => setViewersOpen(true)}
         onShowAllResults={query => {
@@ -888,10 +888,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           // the panel would open on an id `get-file` cannot resolve.
           const folder = folders.find((f) => folderItemId(f) === item.id);
           if (folder) {
-            if (exitPluginApp()) open(folder);
+            if (!exitPluginApp()) return false;
+            open(folder);
           } else if (activePluginId) {
-            if (exitPluginApp()) changePreview(item.id);
-          } else setPreviewing(item.id);
+            if (!exitPluginApp()) return false;
+            changePreview(item.id);
+          } else return setPreviewing(item.id);
         }}
         onUpload={offline || linkPending || linkListingUnavailable ? undefined : () => startWrite(() => uploadRef.current?.click())}
       />

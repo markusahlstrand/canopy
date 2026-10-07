@@ -79,6 +79,21 @@ it('offers Shared with me as a keyboard-selectable navigation destination', () =
   expect(onNavigate).toHaveBeenCalledWith('shared');
   expect(onOpenChange).toHaveBeenCalledWith(false);
 });
+it('stays open when a draft blocks navigation', () => {
+  const onOpenChange = vi.fn();
+  render(<CommandPalette {...props} onOpenChange={onOpenChange} onNavigate={() => false} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Shared with me' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowDown' });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect(onOpenChange).not.toHaveBeenCalledWith(false);
+});
+it('stays open when a draft blocks opening a file', () => {
+  const onOpenChange = vi.fn();
+  const item = { id: 'report', name: 'Report', kind: 'doc' as const, modified: '', size: '—', isFolder: false };
+  render(<CommandPalette {...props} files={[item]} onOpenChange={onOpenChange} onOpenFile={() => false} />);
+  fireEvent.click(screen.getByRole('option', { name: /Report/ }));
+  expect(onOpenChange).not.toHaveBeenCalledWith(false);
+});
 it('switches to a space selected from the palette', () => {
   const onOpenSpace = vi.fn();
   render(<CommandPalette {...props} sites={[{slug:'team',name:'Team',current:false}]} onOpenSpace={onOpenSpace} />);
