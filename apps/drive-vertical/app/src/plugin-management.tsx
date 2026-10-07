@@ -43,6 +43,8 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
 
   useUnsavedDraft(open && (!!manifest || !!source));
   const [forSpace, setForSpace] = useState(false);
+  const updatingInstall = !!editingInstall && manifestCheck.manifest?.id === editingInstall.plugin_id &&
+    (editingInstall.principal === 'space') === forSpace;
   useEffect(() => {setApproved(false);}, [manifest, source, forSpace]);
   const [canManage, setCanManage] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -63,6 +65,24 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
     return () => { alive = false; };
   }, [open, loadRetry]);
   const change = async (action: () => Promise<unknown>) => { setBusy(true); setError(null); try { await action(); await refreshPlugins(); } catch (error) { setError(error instanceof Error ? error.message || 'Could not update this plugin.' : String(error)); } finally { setBusy(false); } };
+  const editSource = async (row: PluginInstall) => {
+    if (!confirmDiscardDrafts()) return;
+    const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
+    setBusy(true); setError(null);
+    try {
+      const loaded = await pluginSource(row.id, row.updated_at);
+      if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
+      const parsed = pluginManifest(loaded);
+      setEditingInstall(loaded);
+      setManifest(parsed.invalid ? loaded.manifest_json : JSON.stringify(parsed, null, 2));
+      setSource(loaded.source);
+      setForSpace(loaded.principal === 'space');
+      setStudioOpen(true);
+    } catch (error) {
+      if (manifestRead.current === manifestToken && sourceRead.current === sourceToken)
+        setError(error instanceof Error ? error.message || 'Could not load plugin source.' : String(error));
+    } finally { setBusy(false); }
+  };
   const [query, setQuery] = useState('');
   const [installScope, setInstallScope] = useState<'all' | 'personal' | 'space'>('all');
   const [category, setCategory] = useState('All');
@@ -148,7 +168,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
         {manifest.contributes.viewers?.length ? <p className="text-xs text-muted-foreground">Handles: {manifest.contributes.viewers.flatMap(viewer => viewer.match).join(', ')}</p> : null}
         <div className="mt-auto flex flex-wrap gap-1.5">
           <Button size="sm" disabled={!canChangeInstall || (row.principal === 'space' && !canManage) || (manifest.invalid && !row.enabled)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : manifest.invalid ? 'Repair to enable' : 'Enable'}</Button>
-          <Button size="sm" variant="outline" disabled={!canChangeInstall || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; void change(async () => {const loaded = await pluginSource(row.id,row.updated_at); const parsed = pluginManifest(loaded); setEditingInstall(loaded); setManifest(parsed.invalid ? loaded.manifest_json : JSON.stringify(parsed,null,2)); setSource(loaded.source);setForSpace(loaded.principal==='space');setStudioOpen(true);}); }}>Edit source</Button>
+          <Button size="sm" variant="outline" disabled={!canChangeInstall || (row.principal === 'space' && !canManage)} onClick={() => void editSource(row)}>Edit source</Button>
           {launchableIds.has(row.id) && onOpenApp ? <Button size="sm" variant="outline" disabled={pluginsState !== 'loaded'} onClick={() => { if (!confirmDiscardDrafts()) return; if (onOpenApp(row.id) !== false) close(); }}>Open app</Button> : null}
           <Button size="sm" variant="ghost" disabled={!canChangeInstall || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${manifest.name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
         </div>
@@ -217,8 +237,9 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
       {manifestCheck.error ? <p role="alert" className="text-sm text-destructive">{manifestCheck.error}</p> : null}
       <label>Plugin source<textarea className="w-full rounded border p-2" aria-label="Plugin source" value={source} onChange={event => { sourceRead.current++; setSource(event.target.value); }} /></label>
       {canManage ? <label><input type="checkbox" checked={forSpace} onChange={event => setForSpace(event.target.checked)} />Apply to {spaceName ?? 'this space'}</label> : null}
+      {editingInstall && manifestCheck.manifest && !updatingInstall ? <p role="status" className="text-xs text-muted-foreground">Changing the plugin ID or install scope creates another install. {pluginManifest(editingInstall).name} will remain installed.</p> : null}
       <label className="block"><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Approve the capabilities in this manifest, including added access. Read access lets the plugin share the opened file outside Canopy.</label>
-      <Button disabled={!canChangeInstall || !manifestCheck.manifest || !source.trim() || !approved} onClick={() => void change(async () => { const parsed = manifestCheck.manifest!; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; const bundled = pluginCatalog.find(entry => { const candidate = installedPluginManifest.safeParse(entry.manifest); return candidate.success && JSON.stringify(candidate.data) === JSON.stringify(parsed) && entry.source === source; }); const provenance = bundled ? {kind:'bundled' as const,ref:`@canopy/catalog/${parsed.id}`,resolved:parsed.version} : imported?.manifest === manifest && imported.source === source ? imported.provenance : undefined; await savePlugin(parsed, source, revision, forSpace, parsed.capabilities, provenance); setEditingInstall(null); setManifest(''); setSource(''); setImported(null); })}>Install plugin</Button>
+      <Button disabled={!canChangeInstall || !manifestCheck.manifest || !source.trim() || !approved} onClick={() => void change(async () => { const parsed = manifestCheck.manifest!; const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === forSpace); if (previous && !window.confirm('Replace this installed plugin and its source?')) return; const revision = editingInstall?.plugin_id === parsed.id && (editingInstall.principal === 'space') === forSpace ? editingInstall.updated_at : previous?.updated_at ?? null; const bundled = pluginCatalog.find(entry => { const candidate = installedPluginManifest.safeParse(entry.manifest); return candidate.success && JSON.stringify(candidate.data) === JSON.stringify(parsed) && entry.source === source; }); const provenance = bundled ? {kind:'bundled' as const,ref:`@canopy/catalog/${parsed.id}`,resolved:parsed.version} : imported?.manifest === manifest && imported.source === source ? imported.provenance : undefined; await savePlugin(parsed, source, revision, forSpace, parsed.capabilities, provenance); setEditingInstall(null); setManifest(''); setSource(''); setImported(null); })}>{updatingInstall ? 'Save plugin changes' : 'Install plugin'}</Button>
     </details>
     <div><h3 className="font-medium">Available plugins</h3><p className="text-xs text-muted-foreground">Browse reviewed viewers and editors, then approve their access before installing.</p></div>
     <div className="flex flex-wrap gap-1.5" role="group" aria-label="Plugin categories">{categories.map(value => <button key={value} type="button" aria-pressed={category === value} onClick={() => setCategory(value)} className={cn('rounded-full px-3 py-1 text-xs font-medium transition-colors', category === value ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/70')}>{value}</button>)}</div>

@@ -16,9 +16,36 @@ it('submits the revision loaded into Studio even if the install list refreshes',
  const widenedCapabilities=[...manifest.capabilities,{kind:'net:fetch',hosts:['example.com']}];
  fireEvent.change(screen.getByLabelText('Plugin manifest'),{target:{value:JSON.stringify({...manifest,capabilities:widenedCapabilities})}});
  expect(approval.checked).toBe(false);
- fireEvent.click(approval);fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
+ fireEvent.click(approval);fireEvent.click(screen.getByRole('button',{name:'Save plugin changes'}));
  await waitFor(()=>expect(fetcher.mock.calls.some(([,init])=>init?.method==='PUT')).toBe(true));
  const request=JSON.parse(fetcher.mock.calls.find(([,init])=>init?.method==='PUT')![1]!.body as string);
  expect(request.expectedRevision).toBe('loaded-revision');
  expect(request.acceptCapabilities).toEqual(widenedCapabilities);
+});
+it('opens installed source without depending on another plugin-list read', async () => {
+ const manifest = { id: 'my-viewer', name: 'My viewer', version: '1', capabilities: [{kind:'item:read'}], contributes: {viewers:[{id:'text',match:['text/*']}]} };
+ const row: PluginInstall = {id:'install',plugin_id:manifest.id,principal:'user',manifest_json:JSON.stringify(manifest),source:'export default function(){}',enabled:1,updated_at:'revision'};
+ let listReads = 0;
+ const fetcher = vi.fn(async (url: string) => {
+   if (url.endsWith('/plugins')) { listReads++; return listReads === 1 ? new Response(JSON.stringify({plugins:[row]})) : new Response('offline', {status:503}); }
+   return new Response(JSON.stringify(url.endsWith('/people/access') ? {canManage:false} : row));
+ });
+ vi.stubGlobal('fetch', fetcher);
+ render(<PluginManagement open onOpenChange={() => {}} />);
+ fireEvent.click(await screen.findByRole('button', {name:'Edit source'}));
+ expect(await screen.findByDisplayValue(row.source!)).toBeTruthy();
+ expect(listReads).toBe(1);
+ expect(screen.queryByText(/Could not update this plugin/)).toBeNull();
+});
+it('warns that changing an installed plugin id creates another install', async () => {
+ const manifest = {id:'my-viewer',name:'My viewer',version:'1',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',match:['text/*']}]}};
+ const row:PluginInstall={id:'install',plugin_id:manifest.id,principal:'user',manifest_json:JSON.stringify(manifest),source:'export default function(){}',enabled:1,updated_at:'revision'};
+ vi.stubGlobal('fetch', vi.fn(async (url:string)=>new Response(JSON.stringify(url.endsWith('/people/access') ? {canManage:false} : url.includes('/source') ? row : {plugins:[row]}))));
+ render(<PluginManagement open onOpenChange={()=>{}} />);
+ fireEvent.click(await screen.findByRole('button',{name:'Edit source'}));
+ await screen.findByDisplayValue(row.source!);
+ expect(screen.getByRole('button',{name:'Save plugin changes'})).toBeTruthy();
+ fireEvent.change(screen.getByLabelText('Plugin manifest'),{target:{value:JSON.stringify({...manifest,id:'another-viewer'})}});
+ expect(screen.getByText(/creates another install/)).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Install plugin'})).toBeTruthy();
 });
