@@ -856,7 +856,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             if (exitPluginApp()) changePreview(item.id);
           } else setPreviewing(item.id);
         }}
-        onUpload={() => startWrite(() => uploadRef.current?.click())}
+        onUpload={offline || linkPending || linkListingUnavailable ? undefined : () => startWrite(() => uploadRef.current?.click())}
       />
 
       {/* The one scrolling region: the rail and the topbar stay put. */}
