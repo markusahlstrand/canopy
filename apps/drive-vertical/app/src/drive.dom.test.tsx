@@ -1223,9 +1223,11 @@ describe('plugin app exits', () => {
     expect(screen.getByRole('button', { name: 'Back to drive' })).toBeTruthy();
     fireEvent.keyDown(window, { key: 'k', metaKey: true });
     fireEvent.click(screen.getByText('lease.pdf'));
-    expect(screen.getByRole('button', { name: 'Back to drive' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Command Palette' })).toBeTruthy();
+    expect(screen.getByText('Back to drive')).toBeTruthy();
     expect(pending.some(request => request.url.endsWith('/files/01A'))).toBe(false);
 
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Command Palette' }), { key: 'Escape' });
     confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Back to drive' }));
     expect(screen.queryByRole('button', { name: 'Back to drive' })).toBeNull();
