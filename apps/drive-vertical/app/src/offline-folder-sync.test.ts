@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { ApiError, type DriveFile, type DriveFolder, type FileVersion } from './api';
-import { clearOfflineContent, getOfflineVersion, listOfflinePins, resumeOfflineContent, setOfflinePin } from './offline-content';
+import { cacheOfflineVersion, clearOfflineContent, getOfflineVersion, listOfflinePins, resumeOfflineContent, setOfflinePin } from './offline-content';
 import { syncOfflineFolder, type OfflineFolderSource } from './offline-folder-sync';
 
 const pin = { principal: 'alice', space: 'family', folderId: 'root', name: 'Family', status: 'syncing' as const, updatedAt: 1 };
@@ -42,6 +42,8 @@ it('walks paged nested folders, saves current versions, and removes a superseded
 });
 
 it('clears a pin and its bytes when a live permission check rejects it', async () => {
+  const saved = { principal: 'alice', space: 'family', fileId: 'report', versionId: 'v1' };
+  await cacheOfflineVersion({ ...saved, folderId: 'root', name: 'report.txt', mime: 'text/plain', url: '/content' });
   const source: OfflineFolderSource = {
     async folders() { throw new ApiError(403, 'no access'); },
     async files() { return { entries: [], next: null }; },
@@ -50,6 +52,7 @@ it('clears a pin and its bytes when a live permission check rejects it', async (
   };
   await expect(syncOfflineFolder(pin, source)).rejects.toThrow('no access');
   expect(await listOfflinePins('alice', 'family')).toEqual([]);
+  expect(await getOfflineVersion(saved)).toBeNull();
 });
 
 it('keeps a failed pin visibly incomplete after a temporary outage', async () => {
