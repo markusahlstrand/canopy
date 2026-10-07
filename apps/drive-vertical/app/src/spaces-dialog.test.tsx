@@ -23,6 +23,7 @@ it('keeps the last space list usable after a refresh failure', () => {
 it('waits for a connection before retrying a failed roster', () => {
   render(<SpacesDialog {...props} sites={[]} failed offline />);
   expect((screen.getByRole('button', { name: 'Retry spaces' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Refresh spaces' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it('disables switching and hides management while offline', () => {

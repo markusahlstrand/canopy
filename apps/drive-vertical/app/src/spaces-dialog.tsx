@@ -48,6 +48,6 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
             {site.current && canManage && !offline ? <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onMembers(); }}>Manage members</Button> : null}</div>
         </li>)}</ul>}
     </div>
-    <div className="border-t px-5 py-3"><Button size="sm" variant="ghost" onClick={onRetry}>Refresh spaces</Button></div>
+    <div className="border-t px-5 py-3"><Button size="sm" variant="ghost" disabled={offline} onClick={onRetry}>Refresh spaces</Button></div>
   </DialogContent></Dialog>;
 }

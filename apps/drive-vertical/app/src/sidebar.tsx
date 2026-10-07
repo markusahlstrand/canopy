@@ -285,7 +285,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
           <div className="mt-4 px-3">
             <p className="px-2.5 text-[12px] text-muted-foreground">
               {sites?.length ? 'Couldn’t refresh your spaces; showing the last list.' : 'Couldn’t list your spaces.'}{' '}
-              <button onClick={onRetry} className="underline hover:text-foreground">
+              <button onClick={onRetry} disabled={offline} className="underline hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50">
                 Try again
               </button>
             </p>
