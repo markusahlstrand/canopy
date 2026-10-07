@@ -46,6 +46,7 @@ interface CommandPaletteProps {
   onManageSpaces?: () => void;
   onManagePlugins?: () => void;
   onShowAllResults?: (query: string) => boolean | void;
+  offline?: boolean;
 }
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
@@ -63,6 +64,7 @@ export function CommandPalette({
   onManageSpaces,
   onManagePlugins,
   onShowAllResults,
+  offline = false,
 }: CommandPaletteProps) {
   const run = (fn: () => boolean | void) => () => {
     if (fn() !== false) onOpenChange(false);
@@ -76,7 +78,7 @@ export function CommandPalette({
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [settledQuery, setSettledQuery] = useState<string | null>(null);
-  const searching = query.trim().length >= SEARCH_MIN;
+  const searching = !offline && query.trim().length >= SEARCH_MIN;
 
   useEffect(() => {
     if (!open) {
@@ -110,7 +112,7 @@ export function CommandPalette({
       }
     }, 180);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [query, searching, open, retry]);
+  }, [query, searching, open, retry, offline]);
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="top-[18%] translate-y-0">
@@ -128,6 +130,7 @@ export function CommandPalette({
         }}
       />
       <CommandList className="max-h-[60vh]">
+        {offline ? <p role="status" className="p-3 text-sm text-muted-foreground">File search is unavailable while offline. Reconnect to search this space.</p> : null}
         {error ? <>
           <p role="alert" className="p-3 text-sm">{error}</p>
           <CommandItem value={`retry ${query}`} onSelect={() => {
@@ -137,7 +140,7 @@ export function CommandPalette({
         </> : null}
         {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
 
-        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>{query.trim() && !searching
+        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>{offline ? 'File search is unavailable while offline.' : query.trim() && !searching
           ? `Type at least ${SEARCH_MIN} characters to search files.` : 'No results found.'}</CommandEmpty> : null}
 
         <CommandGroup heading="Files">
@@ -208,7 +211,7 @@ export function CommandPalette({
 
         <CommandSeparator />
         <CommandGroup heading="Navigate">
-          {NAV.map((n) => (
+          {NAV.filter(n => !offline || n.id === 'drive').map((n) => (
             <CommandItem key={n.id} value={`go ${n.label}`} onSelect={run(() => onNavigate(n.id))}>
               <Icon name={n.icon} size={16} />
               <span className="flex-1">{n.label}</span>

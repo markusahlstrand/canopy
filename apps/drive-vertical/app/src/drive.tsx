@@ -514,7 +514,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   /** ⌘K / Ctrl-K opens the palette — the shortcut the portal had, and the reason it exists. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (offline) return;
       if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setCmdOpen((was) => !was);
@@ -522,7 +521,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [offline]);
+  }, []);
 
   useEffect(() => {
     // A pause, not a keystroke: the index is per scope and cheap, but a request per
@@ -866,15 +865,16 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       <CommandPalette
         open={cmdOpen}
+        offline={offline}
         onOpenChange={setCmdOpen}
-        files={[...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
+        files={offline ? folders.map(folderItem) : [...folders.map(folderItem), ...files.map((file) => fileItem(file))]}
         sites={siteList.sites ?? []}
         onOpenSpace={offline ? undefined : openSpace}
         pluginApps={pluginApps}
-        onOpenPlugin={id => { if (!confirmDiscardDrafts()) return false; changePreview(null); setActivePluginId(id); return true; }}
+        onOpenPlugin={offline ? undefined : id => { if (!confirmDiscardDrafts()) return false; changePreview(null); setActivePluginId(id); return true; }}
         onManageSpaces={() => setSpacesOpen(true)}
-        onManagePlugins={() => setViewersOpen(true)}
-        onShowAllResults={query => {
+        onManagePlugins={offline ? undefined : () => setViewersOpen(true)}
+        onShowAllResults={offline ? undefined : query => {
           const sameSearch = view === 'search' && term === query && matchFilter === 'all' && !linkListingUnavailable;
           if (!navigate('search')) return false;
           if (sameSearch) {
