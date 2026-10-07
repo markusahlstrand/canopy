@@ -284,7 +284,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
           <div className="mt-4 px-3">
             <p className="px-2.5 text-[12px] text-muted-foreground">
               Couldn’t list your spaces.{' '}
-              <button onClick={onRetry} className="underline hover:text-foreground">
+              <button onClick={onRetry} disabled={offline} className="underline hover:text-foreground disabled:opacity-50">
                 Try again
               </button>
             </p>
@@ -368,7 +368,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
         </div> : null}
         </div>
 
-        {onSpaces ? <Button variant="ghost" onClick={onSpaces}
+          {onSpaces ? <Button variant="ghost" onClick={onSpaces}
           aria-label={narrow && currentSpace ? `Spaces, current: ${currentSpace.name}` : 'Manage spaces'}
           title={narrow ? currentSpace?.name ?? 'Manage spaces' : undefined}>
           {narrow ? <Icon name={currentSpace?.icon ?? 'users'} style={{ color: currentSpace?.color }} /> : 'Manage spaces'}

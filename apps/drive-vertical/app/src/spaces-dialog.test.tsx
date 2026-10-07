@@ -20,6 +20,11 @@ it('disables switching and hides management while offline', () => {
  render(<SpacesDialog {...props} offline sites={[{slug:'family',name:'Family',current:true},{slug:'team',name:'Team',current:false}]} />);
  expect((screen.getByRole('button',{name:'Open Team'}) as HTMLButtonElement).disabled).toBe(true);
  expect(screen.queryByRole('button',{name:'Manage members'})).toBeNull();
+ expect((screen.getByRole('button',{name:'Refresh spaces'}) as HTMLButtonElement).disabled).toBe(true);
+});
+it('disables retrying a failed roster while offline', () => {
+  render(<SpacesDialog {...props} sites={[]} failed offline />);
+  expect((screen.getByRole('button', { name: 'Retry spaces' }) as HTMLButtonElement).disabled).toBe(true);
 });
 it('disables space creation while offline and guides managers with no spaces', () => {
  const create = vi.fn();

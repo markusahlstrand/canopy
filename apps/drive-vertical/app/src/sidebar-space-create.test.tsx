@@ -32,6 +32,14 @@ it('hides the current-space menu offline', () => {
     canManageSpace offline onSpaceSettings={vi.fn()} />);
   expect(screen.queryByRole('button', {name:'Manage Family'})).toBeNull();
 });
+it('does not retry a failed space list while offline', () => {
+  const onRetry = vi.fn();
+  render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()}
+    sites={[]} failed onRetry={onRetry} offline />);
+  expect((screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(onRetry).not.toHaveBeenCalled();
+});
 
 it('disables New while a linked folder is unresolved', () => {
   render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()}
