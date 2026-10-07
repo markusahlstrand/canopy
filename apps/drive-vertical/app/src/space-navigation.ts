@@ -6,11 +6,15 @@ export function spaceLink(slug: string): string {
   url.searchParams.set('site', slug);
   return url.toString();
 }
+function clearPreviousSpaceLink(url: URL) {
+  for (const key of ['path', 'folder', 'file', 'claim', 'invite']) url.searchParams.delete(key);
+  url.hash = '';
+}
 /** Switch only after the draft boundary; remove destinations belonging to the old space. */
 export function openSpace(slug: string) {
   if (!confirmNavigation()) return false;
   const url = new URL(window.location.href);
-  for (const key of ['path', 'folder', 'file']) url.searchParams.delete(key);
+  clearPreviousSpaceLink(url);
   if (selectSite(slug)) url.searchParams.delete('site');
   else url.searchParams.set('site', slug);
   window.history.replaceState(null, '', url);
@@ -22,8 +26,7 @@ export function openSpace(slug: string) {
 export function openSpaceFolder(slug: string, folderId: string) {
   if (!confirmNavigation()) return false;
   const url = new URL(window.location.href);
-  url.searchParams.delete('path');
-  url.searchParams.delete('file');
+  clearPreviousSpaceLink(url);
   url.searchParams.set('folder', folderId);
   if (selectSite(slug)) url.searchParams.delete('site');
   else url.searchParams.set('site', slug);
