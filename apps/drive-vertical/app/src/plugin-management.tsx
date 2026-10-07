@@ -48,17 +48,19 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pluginsState, setPluginsState] = useState<'loading' | 'loaded' | 'failed'>('loading');
+  const [loadRetry, setLoadRetry] = useState(0);
   useEffect(() => {
     if (!open) { setPluginsState('loading'); setError(null); return; }
     let alive = true;
     setPluginsState('loading');
     setError(null);
+    setCanManage(false);
     refreshPlugins().then(() => { if (alive) setPluginsState('loaded'); }).catch(() => {
       if (alive) { setPluginsState('failed'); setError('Could not load installed plugins.'); }
     });
     peopleAccess().then(result => { if (alive) setCanManage(result.canManage); }).catch(() => {});
     return () => { alive = false; };
-  }, [open]);
+  }, [open, loadRetry]);
   const change = async (action: () => Promise<unknown>) => { setBusy(true); setError(null); try { await action(); await refreshPlugins(); } catch (error) { setError(error instanceof Error ? error.message || 'Could not update this plugin.' : String(error)); } finally { setBusy(false); } };
   const [query, setQuery] = useState('');
   const [installScope, setInstallScope] = useState<'all' | 'personal' | 'space'>('all');
@@ -132,6 +134,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
           className={cn('rounded-full px-3 py-1 text-xs font-medium transition-colors', installScope === value ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/70')}>{label}</button>)}
     </div>
     {pluginsState === 'loading' ? <p role="status" className="text-sm text-muted-foreground">Loading installed plugins…</p> : null}
+    {pluginsState === 'failed' ? <Button size="sm" variant="outline" onClick={() => setLoadRetry(value => value + 1)}>Retry installed plugins</Button> : null}
     {pluginsState === 'loaded' && visiblePlugins.length ? <div className="grid gap-3 sm:grid-cols-2">{visiblePlugins.map(row => {
       const manifest = pluginManifest(row);
       return <section key={row.id} className="flex min-w-0 flex-col gap-2.5 rounded-lg border p-3.5">
