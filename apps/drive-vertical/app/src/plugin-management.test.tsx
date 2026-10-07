@@ -34,6 +34,17 @@ it('names the selected space before offering space-wide installs', async () => {
   expect(screen.getByText('Installed for you or applied to Family.')).toBeTruthy();
   expect(await screen.findByRole('button', { name: 'Apply Markdown to Family' })).toBeTruthy();
 });
+it('shows disabled and damaged catalog installs with their actual scope', async () => {
+  const id = pluginCatalog.find(entry => entry.manifest.name === 'Markdown')!.manifest.id;
+  const plugins = [
+    { id: 'personal', plugin_id: id, principal: 'user', enabled: 0, updated_at: '1', manifest_json: JSON.stringify(pluginCatalog.find(entry => entry.manifest.id === id)!.manifest) },
+    { id: 'space', plugin_id: id, principal: 'space', enabled: 1, updated_at: '1', manifest_json: '{broken' },
+  ];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins } : { canManage: true }))));
+  render(<PluginManagement open onOpenChange={() => {}} spaceName="Family" />);
+  expect(await screen.findByText('Disabled for you')).toBeTruthy();
+  expect(screen.getByText('Needs repair in Family')).toBeTruthy();
+});
 it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
   expect(screen.getAllByText(/Listed hosts serve code that runs with the opened file/)).toHaveLength(3);
