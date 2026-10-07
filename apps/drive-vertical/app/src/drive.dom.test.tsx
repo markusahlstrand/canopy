@@ -763,6 +763,20 @@ it('navigates from the palette to the shared-folder listing', async () => {
 });
 
 describe('shared-folder discovery', () => {
+  it('opens the selected space when two grants have the same local folder id', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
+    await flush();
+    await answer('/shared-folders', { folders: [
+      { id: '01N', parent_id: 'root', path: 'Reports', name: 'Reports', siteSlug: 'home', siteName: 'Home', current: true },
+      { id: '01N', parent_id: 'root', path: 'Reports', name: 'Reports', siteSlug: 'other', siteName: 'Other', current: false },
+    ] });
+
+    fireEvent.doubleClick(screen.getByText('Other / Reports').closest('tr')!);
+    expect(currentSite()).toBe('other');
+    expect(window.location.search).toBe('?folder=01N');
+  });
+
   it('opens a shared folder locally while the space roster is still loading', async () => {
     render(<DriveScreen {...shell} onError={() => {}} />);
     await flush();
