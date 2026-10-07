@@ -60,6 +60,21 @@ it('shows disabled and damaged catalog installs with their actual scope', async 
   expect(await screen.findByText('Disabled for you')).toBeTruthy();
   expect(screen.getByText('Needs repair in Family')).toBeTruthy();
 });
+it('names the install being replaced in the confirmation', async () => {
+  const entry = pluginCatalog.find(item => item.manifest.name === 'Markdown')!;
+  const row = { id: 'existing', plugin_id: entry.manifest.id, principal: 'user', enabled: 1, updated_at: '1', manifest_json: JSON.stringify(entry.manifest) };
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [row] } : { canManage: false })));
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  vi.stubGlobal('fetch', fetcher);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('Enabled for you');
+  fireEvent.click(screen.getByRole('button', { name: 'Review Markdown' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /Approve the capabilities/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Install plugin' }));
+  expect(confirm).toHaveBeenCalledWith('Replace Markdown for you and its source?');
+  expect(fetcher.mock.calls.every(([, init]) => init?.method !== 'PUT')).toBe(true);
+  confirm.mockRestore();
+});
 it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
   expect(screen.getAllByText(/Listed hosts serve code that runs with the opened file/)).toHaveLength(3);
