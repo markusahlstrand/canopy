@@ -181,12 +181,12 @@ export function Topbar({
       {/* Search trigger */}
       <button
         onClick={onOpenCmd}
-        disabled={offline}
-        aria-label="Search or jump to"
+        title={offline ? 'Browse saved folders while offline' : undefined}
+        aria-label={offline ? 'Browse saved folders' : 'Search or jump to'}
         className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-background text-[13.5px] text-muted-foreground transition-colors hover:bg-accent/40 md:w-[280px] md:justify-start md:gap-2 md:px-3"
       >
         <Icon name="search" size={15} />
-        <span className="hidden flex-1 text-left md:inline">Search or jump to…</span>
+        <span className="hidden flex-1 text-left md:inline">{offline ? 'Browse saved folders…' : 'Search or jump to…'}</span>
         <kbd className="hidden rounded bg-muted px-1.5 font-mono text-[10.5px] md:inline">⌘</kbd>
         <kbd className="hidden rounded bg-muted px-1.5 font-mono text-[10.5px] md:inline">K</kbd>
       </button>

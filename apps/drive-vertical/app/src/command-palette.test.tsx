@@ -18,6 +18,18 @@ it('explains the minimum file search length before a request starts', () => {
   expect(screen.getByText('Type at least 2 characters to search files.')).toBeTruthy();
   expect(fetch).not.toHaveBeenCalled();
 });
+it('offers saved folders without making a file search request while offline', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  const folder = { id: 'saved', name: 'Saved folder', kind: 'folder' as const, modified: '', size: '—', isFolder: true };
+  render(<CommandPalette {...props} offline files={[folder]} />);
+  expect(screen.getByRole('status').textContent).toContain('File search is unavailable while offline');
+  expect(screen.getByRole('option', { name: /Saved folder/ })).toBeTruthy();
+  expect(screen.queryByRole('option', { name: 'Search this space' })).toBeNull();
+  expect(screen.queryByRole('option', { name: 'Trash' })).toBeNull();
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'budget' } });
+  expect(fetch).not.toHaveBeenCalled();
+});
 it('distinguishes failed search from no matches and retries the same query', async () => {
   const fetch = vi.fn().mockRejectedValueOnce(new Error('Connection lost')).mockResolvedValueOnce(new Response(JSON.stringify({ hits: [] })));
   vi.stubGlobal('fetch', fetch);

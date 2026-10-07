@@ -441,6 +441,11 @@ describe('offline metadata from the scope event mirror', () => {
     expect(screen.getByText('saved.txt')).toBeTruthy();
     expect((screen.getByLabelText('Refresh') as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByLabelText('Search this space') as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Browse saved folders' }));
+    expect(screen.getByRole('option', { name: /Saved folder/ })).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText(/Search files/), { target: { value: 'budget' } });
+    await flush();
+    expect(pending.some(p => p.url.includes('/search?'))).toBe(false);
   });
 });
 
