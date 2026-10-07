@@ -11,6 +11,7 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
   const [checking, setChecking] = useState(true);
   const [checkFailed, setCheckFailed] = useState(false), [checkRetry, setCheckRetry] = useState(0);
   const [ignoredRequestId, setIgnoredRequestId] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now);
   const active = useRef(true), slug = useRef('');
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => {
@@ -46,6 +47,13 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
     const interval = setInterval(() => void check(), 3000); void check();
     return () => { alive = false; clearInterval(interval); };
   }, [open, request?.id, request?.status, onCreated]);
+  useEffect(() => {
+    if (!open || request?.status !== 'pending' || !request.requestedAt) return;
+    const remaining = Date.parse(request.requestedAt) + 5 * 60_000 - Date.now();
+    if (remaining <= 0) { setNow(Date.now()); return; }
+    const timer = setTimeout(() => setNow(Date.now()), remaining);
+    return () => clearTimeout(timer);
+  }, [open, request?.id, request?.requestedAt, request?.status]);
   const create = async () => {
     if (busy || checking || checkFailed || !name.trim() || request?.status === 'pending') return;
     setBusy(true); setError(null);
@@ -55,7 +63,7 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
     catch (error) { if (active.current) setError(error instanceof Error ? error.message || 'Could not complete the request.' : String(error)); }
     finally { if (active.current) setBusy(false); }
   };
-  const stalled = request?.status === 'pending' && request.requestedAt && Date.now() - Date.parse(request.requestedAt) >= 5 * 60_000;
+  const stalled = request?.status === 'pending' && request.requestedAt && now - Date.parse(request.requestedAt) >= 5 * 60_000;
   return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
     <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[480px]">
       <DialogHeader className="px-5 pt-5">
