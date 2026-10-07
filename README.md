@@ -2,7 +2,9 @@
 
 Canopy is a drive running as a [Substrat](https://github.com/substrat-run/substrat) vertical. The current product is a React app and same-origin API in <code>apps/drive-vertical</code>, backed by the scope-local <code>@canopy/scope-drive</code> module. One space is one Substrat scope.
 
-The drive supports folder navigation, uploads and downloads, rename and move, Trash and restore, version history reads, file preview, search by name and extracted PDF text, invitations, and folder sharing. OIDC supplies sign-in; the kernel checks roles and grants.
+The drive supports folder navigation, uploads and downloads, rename and move, Trash and restore, version history, file preview and text editing, search by name, extracted content and metadata, invitations, and folder sharing. Plugins can be installed for a person or a space. OIDC supplies sign-in; the kernel checks roles and grants.
+
+Folder sharing is the supported sharing unit in the current vertical. Individual-file sharing is outside the S12a UI closeout scope.
 
 ## Repository layout
 
@@ -42,7 +44,7 @@ The root <code>pnpm deploy</code> deploys the legacy API Worker. It is separate 
 
 ## Migration status
 
-The vertical's uploaded bytes use the platform attachment surface and per-tenant blob stores. PDF extraction currently runs after upload, so older files and missed attempts need [durable backfill](https://github.com/markusahlstrand/canopy/issues/66). Connected storage, semantic search, offline mirroring, WebDAV on the vertical, and migration of legacy spaces remain open. The retired portal's plugin runtime has no vertical replacement yet; see [#73](https://github.com/markusahlstrand/canopy/issues/73).
+The vertical's uploaded bytes use the platform attachment surface and per-tenant blob stores. A durable text backfill revisits older and failed extractions. The browser saves file and folder names for offline browsing; content and writes require a connection. The drive includes a bundled plugin catalog and can import a plugin from a ZIP, public GitHub repository, or npm package for review before installation. [Deployed UI acceptance](https://github.com/markusahlstrand/canopy/issues/78) is still in progress. Connected storage, semantic search, WebDAV on the vertical, and migration of legacy spaces remain open.
 
 For more detail, read the [overview](documentation/01-overview.md), [architecture](documentation/02-architecture.md), [storage model](documentation/07-storage-and-files.md), and [deployment guide](documentation/06-deploying.md). The [convergence rail](documentation/planning/substrat-extraction-tickets.md) records the larger plan, though its September snapshot predates the newest vertical work.
 

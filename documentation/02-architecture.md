@@ -33,7 +33,7 @@ A folder listing invokes <code>drive/list-folder</code> and pages scope-local ro
 
 An upload creates or finds the file row, writes bytes through the attachment surface, then records a version naming the attachment. Bytes never pass through <code>invoke</code>. A download resolves the current version through an operation and opens its attachment through the host's permission-gated attachment surface. The browser and API are served from the same origin.
 
-A PDF upload can extract text after the response and invoke <code>drive/record-text</code>. The module stores the result beside the file and the kernel indexes declared fields. Search returns name and content hits through the kernel checker. There is no durable text backfill yet, so an older file may have no extraction record.
+A PDF or UTF-8 text upload can extract text after the response and invoke <code>drive/record-text</code>. The module stores the result beside the file and the kernel indexes declared fields. Search returns name, content, and metadata hits through the kernel checker. A durable job revisits older files and missed extractions.
 
 ## Identity and permissions
 
@@ -41,4 +41,4 @@ The install receives its OIDC configuration from Substrat. Without an issuer, no
 
 ## Current boundaries
 
-The vertical has no plugin runtime, connected-source byte reader, offline mirror, or WebDAV route. The old API still contains versions of some of those mechanisms, but the current drive UI does not call them. See [the migration plan](planning/substrat-extraction-tickets.md) for the remaining work and [the scope mapping](planning/scope-model-mapping.md) for the original shared-database mismatch.
+The vertical has a scoped plugin install registry, a bundled viewer catalog, a runtime iframe host, and a metadata-only browser mirror. Plugin source runs in an opaque-origin iframe; the bundled image viewer is a trusted web component. The vertical still has no connected-source byte reader or WebDAV route. The old API contains versions of those mechanisms, but the current drive UI does not call them. See [the migration plan](planning/substrat-extraction-tickets.md) for the remaining work and [the scope mapping](planning/scope-model-mapping.md) for the original shared-database mismatch.
