@@ -355,7 +355,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
             </nav>
             {!failed && sites === null ? <p role="status" className="px-2.5 py-1 text-xs text-muted-foreground">Loading spaces…</p> : null}
             {!failed && sites?.length === 0 ? <p className="px-2.5 py-1 text-xs text-muted-foreground">No spaces yet</p> : null}
-            {spaceTerm && sites?.length && !sites.some(site => !site.current && matchesSpace(site)) ? <p role="status" className="px-2.5 py-1 text-xs text-muted-foreground">No matching spaces</p> : null}
+            {spaceTerm && sites?.length && !sites.some(site => !site.current && matchesSpace(site)) ? <p role="status" className="px-2.5 py-1 text-xs text-muted-foreground">No other spaces match “{spaceQuery.trim()}”.</p> : null}
           </div>
         )}
         {pluginApps.length > 0 && onOpenPlugin ? <div className={cn('mt-4 px-3', narrow && 'px-2')}>
