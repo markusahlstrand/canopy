@@ -51,6 +51,15 @@ it('copies a clean link to the selected space', async () => {
   expect(url.search).toBe('?site=team');
   expect(url.hash).toBe('');
 });
+it('shows a selectable space link when the clipboard fails', async () => {
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error('blocked')) } });
+  render(<SpacesDialog {...props} sites={[{ slug: 'team', name: 'Team', current: false }]} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+  expect((await screen.findByRole('status')).textContent).toContain('Copy the address below instead.');
+  const url = new URL((screen.getByRole('textbox', { name: 'Space link' }) as HTMLInputElement).value);
+  expect(url.pathname).toBe('/');
+  expect(url.search).toBe('?site=team');
+});
 it('puts the current space first and clears an old search when reopened', () => {
  const sites = [{slug:'work',name:'Work',current:false},{slug:'home',name:'Home',current:true}];
  const view = render(<SpacesDialog {...props} sites={sites} />);

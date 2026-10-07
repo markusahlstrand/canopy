@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@canopy/ui';
 import type { Site } from './api';
 import { openSpace, spaceLink } from './space-navigation';
@@ -8,15 +8,19 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
 }) {
   const [query, setQuery] = useState('');
   const [copyMessage, setCopyMessage] = useState('');
+  const [copyFallback, setCopyFallback] = useState<string | null>(null);
+  const copyAttempt = useRef(0);
   const copyLink = async (slug: string) => {
+    const attempt = ++copyAttempt.current;
+    const url = spaceLink(slug);
     try {
-      await navigator.clipboard.writeText(spaceLink(slug));
-      setCopyMessage(`Copied link to ${slug}`);
+      await navigator.clipboard.writeText(url);
+      if (copyAttempt.current === attempt) { setCopyMessage(`Copied link to ${slug}`); setCopyFallback(null); }
     } catch {
-      setCopyMessage(`Could not copy link to ${slug}`);
+      if (copyAttempt.current === attempt) { setCopyMessage(`Could not copy link to ${slug}. Copy the address below instead.`); setCopyFallback(url); }
     }
   };
-  useEffect(() => { if (open) { setQuery(''); setCopyMessage(''); } }, [open]);
+  useEffect(() => { copyAttempt.current++; if (open) { setQuery(''); setCopyMessage(''); setCopyFallback(null); } }, [open]);
   // The active space is context for the picker, even when the query matches another.
   const term = query.trim().toLocaleLowerCase();
   const matches = (site: Site) => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(term);
@@ -30,6 +34,7 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
       {canManage && onCreate ? <Button className="shrink-0" disabled={offline} onClick={() => { onOpenChange(false); onCreate(); }}><Icon name="plus" size={16} /> Create space</Button> : null}
     </div>
     {copyMessage ? <p role="status" className="px-5 text-xs">{copyMessage}</p> : null}
+    {copyFallback ? <div className="px-5 pb-2"><Input readOnly aria-label="Space link" value={copyFallback} onFocus={event => event.currentTarget.select()} /></div> : null}
     <div className="min-h-0 overflow-y-auto px-5 pb-5">
       {noOtherMatches && !failed ? <p role="status" className="mb-3 text-sm text-muted-foreground">No other spaces match “{query.trim()}”.</p> : null}
       {failed ? <div role="alert" className="mb-3 rounded-lg border border-dashed p-4 text-sm text-muted-foreground">{sites?.length ? 'Could not refresh spaces. Showing the last list.' : 'Could not load your spaces.'} <Button variant="outline" size="sm" disabled={offline} onClick={onRetry}>Retry spaces</Button></div> : null}
