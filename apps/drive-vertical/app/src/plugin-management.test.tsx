@@ -217,6 +217,18 @@ it('shows file errors beside Studio and clears them when a valid file is selecte
   expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
   expect(input.value).toBe('');
 });
+it('requires fresh approval after a replacement file cannot be read', () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.click(screen.getByRole('button', {name:'Review Markdown'}));
+  fireEvent.click(screen.getByRole('checkbox', {name:/Approve the capabilities/}));
+  expect((screen.getByRole('button', {name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.change(screen.getByLabelText('Choose plugin source file'), {target:{files:[new File(['x'.repeat(256_001)], 'too-large.js')]}});
+  expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
+  expect((screen.getByRole('checkbox', {name:/Approve the capabilities/}) as HTMLInputElement).checked).toBe(false);
+  expect((screen.getByRole('button', {name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(true);
+  confirm.mockRestore();
+});
 it('keeps the latest local file when earlier reads finish later', async () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
   let finishA!: (value:string)=>void, finishB!: (value:string)=>void;
