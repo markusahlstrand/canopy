@@ -833,6 +833,22 @@ describe('Trash actions', () => {
 });
 
 describe('the shell the portal had, on the vertical', () => {
+  it('honors the advertised G T and G D navigation shortcuts outside text fields', async () => {
+    await renderDrive();
+    const spaceFilter = screen.getByLabelText('Search this space');
+    fireEvent.keyDown(spaceFilter, { key: 'g' });
+    fireEvent.keyDown(spaceFilter, { key: 't' });
+    expect(screen.getByRole('banner').textContent).toContain('My Drive');
+
+    fireEvent.keyDown(window, { key: 'g' });
+    fireEvent.keyDown(window, { key: 't' });
+    expect(screen.getByRole('banner').textContent).toContain('Trash');
+
+    fireEvent.keyDown(window, { key: 'g' });
+    fireEvent.keyDown(window, { key: 'd' });
+    expect(screen.getByRole('banner').textContent).toContain('My Drive');
+  });
+
   it('opens the palette on ⌘K and searches the drive with it', async () => {
     await renderDrive([], [file('01A', 'lease.pdf')]);
 

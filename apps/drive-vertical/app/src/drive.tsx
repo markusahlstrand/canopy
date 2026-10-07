@@ -573,6 +573,37 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     return true;
   }, [exitPluginApp, folderId, view, linkListingUnavailable, setPreviewing]);
 
+  // The palette advertises G D and G T. Keep those shortcuts out of text fields
+  // and drafts, and let the normal navigation guard decide whether to leave.
+  useEffect(() => {
+    let armed = false;
+    let timer: number | undefined;
+    const clear = () => { armed = false; window.clearTimeout(timer); };
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (offline || cmdOpen || event.metaKey || event.ctrlKey || event.altKey ||
+          target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) {
+        clear();
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === 'g' && !event.repeat) {
+        clear();
+        armed = true;
+        timer = window.setTimeout(clear, 1000);
+        return;
+      }
+      if (!armed) return;
+      clear();
+      if (key === 'd' || key === 't') {
+        event.preventDefault();
+        navigate(key === 'd' ? 'drive' : 'trash');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => { clear(); window.removeEventListener('keydown', onKey); };
+  }, [cmdOpen, navigate, offline]);
+
   const open = (folder: DriveFolder | SharedFolder) => {
     const here = siteList.sites?.find(site => site.current)?.slug ?? currentSite();
     if ('siteSlug' in folder && (folder.current === false || (folder.current == null && here && folder.siteSlug !== here))) {
