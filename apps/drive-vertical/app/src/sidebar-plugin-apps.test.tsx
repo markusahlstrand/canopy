@@ -30,6 +30,17 @@ it('filters a long space roster by name or slug, keeping the current space', () 
   expect(screen.getByRole('status').textContent).toBe('No matching spaces');
   expect(screen.getByRole('button', {name:'Family'})).toBeTruthy();
 });
+it('keeps the active space identifiable in a collapsed rail', () => {
+  localStorage.setItem('canopy.drive.sidebar-collapsed', '1');
+  const onSpaces = vi.fn();
+  render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()}
+    sites={[{ slug: 'family', name: 'Family', icon: 'folder', color: '#123456', current: true }]}
+    failed={false} onRetry={vi.fn()} onSpaces={onSpaces} />);
+  const switcher = screen.getByRole('button', { name: 'Spaces, current: Family' });
+  expect(switcher.getAttribute('title')).toBe('Family');
+  fireEvent.click(switcher);
+  expect(onSpaces).toHaveBeenCalledOnce();
+});
 it('clears the space filter on Escape before letting it bubble', () => {
   const sites = ['alpha','beta','gamma','delta','epsilon','zeta'].map((slug, i) => ({slug,name:slug,current:i === 0}));
   const onKeyDown = vi.fn();
