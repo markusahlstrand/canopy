@@ -56,6 +56,18 @@ export function installedPluginMatchesSearch(row: PluginInstall, query: string):
   ];
   return searchable.some(value => value.toLocaleLowerCase().includes(term));
 }
+/** Search a viewer row without showing its sibling viewers for a title or file-type match. */
+export function installedViewerMatchesSearch(row: PluginInstall, viewer: NonNullable<PluginManifest['contributes']['viewers']>[number], query: string): boolean {
+  const term = query.trim().toLocaleLowerCase();
+  if (!term) return true;
+  if (scopeKeywords[term]) return installedPluginMatchesSearch(row, term);
+  if (isFileTypeQuery(term)) return viewerMatchesSearch(viewer.match, term);
+  const manifest = pluginManifest(row);
+  const pluginFields = [manifest.name, row.plugin_id, manifest.description ?? '',
+    ...manifest.capabilities.map(capability => capability.kind), manifest.contributes.detailView?.title ?? ''];
+  return [...pluginFields, viewer.id, viewer.title ?? '', ...viewer.match]
+    .some(value => value.toLocaleLowerCase().includes(term));
+}
 /** Personal installs override the same plugin applied to a space. */
 export function effectivePlugins(rows: PluginInstall[]): PluginInstall[] {
   const effective = new Map<string, PluginInstall>();
