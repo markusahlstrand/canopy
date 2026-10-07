@@ -90,6 +90,7 @@ interface SidebarProps {
   onNewFolder: () => void;
   onUpload: () => void;
   offline?: boolean;
+  writeBlocked?: boolean;
   sites: Site[] | null;
   failed: boolean;
   onRetry: () => void;
@@ -193,7 +194,7 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, writeBlocked = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [spaceQuery, setSpaceQuery] = useState('');
   const narrow = mobile ? false : collapsed;
@@ -235,7 +236,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
         <div className={cn('shrink-0 px-3 pb-2', narrow && 'px-2')}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button disabled={offline} className="w-full justify-center gap-1.5" size={narrow ? 'icon' : 'default'}>
+              <Button disabled={offline || writeBlocked} className="w-full justify-center gap-1.5" size={narrow ? 'icon' : 'default'}>
                 <Icon name="plus" size={16} strokeWidth={2.25} />
                 {!narrow && (
                   <>
