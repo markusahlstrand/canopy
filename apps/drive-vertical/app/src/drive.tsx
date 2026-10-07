@@ -133,8 +133,12 @@ function sizeLabel(bytes: number | null | undefined): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
+// Folder ids belong to a space. Two direct grants can carry the same local id.
+const folderItemId = (folder: DriveFolder | SharedFolder): string =>
+  'siteSlug' in folder ? `shared:${JSON.stringify([folder.siteSlug, folder.id])}` : folder.id;
+
 const folderItem = (folder: DriveFolder | SharedFolder): FileItem => ({
-  id: folder.id,
+  id: folderItemId(folder),
   name: folder.name,
   kind: 'folder',
   modified: '—',
@@ -642,7 +646,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const onAction = (action: string, item: FileItem) => {
     if (offline && (action !== 'Open' || !item.isFolder)) return;
     if (action === 'Open') {
-      const folder = folders.find((f) => f.id === item.id);
+      const folder = folders.find((f) => folderItemId(f) === item.id);
       if (folder) open(folder);
       else setPreviewing(item.id);
       return;
@@ -849,7 +853,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onOpenFile={(item) => {
           // The palette lists folders too, and a folder is entered rather than previewed —
           // the panel would open on an id `get-file` cannot resolve.
-          const folder = folders.find((f) => f.id === item.id);
+          const folder = folders.find((f) => folderItemId(f) === item.id);
           if (folder) {
             if (exitPluginApp()) open(folder);
           } else if (activePluginId) {
@@ -976,7 +980,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           selection={selection}
           onSelectionChange={setSelection}
           onOpen={(item) => {
-            const folder = folders.find((f) => f.id === item.id);
+            const folder = folders.find((f) => folderItemId(f) === item.id);
             if (folder) open(folder);
             else if (!offline) setPreviewing(item.id);
           }}
