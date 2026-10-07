@@ -44,6 +44,19 @@ it('keeps a damaged install visible for repair without registering its contribut
   expect(matchingPlugins([plugin('shared', 'space'), damaged], 'text/markdown', 'readme.md').map(row => row.id)).toEqual(['shared']);
   expect(installedPluginMatchesSearch(damaged, 'markdown')).toBe(true);
 });
+it('treats malformed nested capabilities and contributions as damaged installs', () => {
+  const original = plugin('broken', 'user');
+  const manifest = JSON.parse(original.manifest_json);
+  for (const broken of [
+    { ...manifest, capabilities: [{ kind: 'net:fetch', hosts: 'example.com' }] },
+    { ...manifest, contributes: { viewers: [{ match: ['.md'] }] } },
+    { ...manifest, contributes: { detailView: { title: 'App' } } },
+  ]) {
+    const row = { ...original, manifest_json: JSON.stringify(broken) };
+    expect(pluginManifest(row).invalid).toBe(true);
+    expect(matchingPlugins([row], 'text/markdown', 'readme.md')).toEqual([]);
+  }
+});
 it('preserves legacy installs whose manifest predates id and version fields', () => {
   const legacy = { ...plugin('legacy', 'user'), manifest_json: JSON.stringify({ name: 'Legacy viewer', capabilities: [{ kind: 'item:read' }], contributes: { viewers: [{ id: 'md', match: ['.md'] }] } }) };
   expect(pluginManifest(legacy).name).toBe('Legacy viewer');
