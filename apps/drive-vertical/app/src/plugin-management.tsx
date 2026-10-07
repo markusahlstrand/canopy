@@ -39,7 +39,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
 
   useUnsavedDraft(open && (!!manifest || !!source));
   const [forSpace, setForSpace] = useState(false);
-  useEffect(() => {setApproved(false);}, [manifest,forSpace]);
+  useEffect(() => {setApproved(false);}, [manifest, source, forSpace]);
   const [canManage, setCanManage] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
