@@ -7,7 +7,7 @@ import { SandboxPlugin } from './sandbox-plugin';
 import { PluginAiHandoff } from './plugin-ai-handoff';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 import type { PluginInstall } from './api';
-import { effectivePlugins, installedPluginMatchesSearch, refreshPlugins, useInstalledPlugins, pluginManifest } from './installed-plugins';
+import { effectivePlugins, installedPluginMatchesSearch, installedViewerMatchesSearch, refreshPlugins, useInstalledPlugins, pluginManifest } from './installed-plugins';
 import { installedPluginManifest } from '@canopy/scope-drive/spec/model';
 import { resolveZipBytes } from '@canopy/plugin-sources';
 import type { PluginProvenance } from './api';
@@ -72,7 +72,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
       const manifest = pluginManifest(row);
       return (manifest.contributes.viewers ?? []).map(viewer => ({ row, viewer, name: manifest.name }));
     })
-    .filter(({ row }) => installedPluginMatchesSearch(row, query));
+    .filter(({ row, viewer }) => installedViewerMatchesSearch(row, viewer, query));
   const visibleBuiltInViewers = installed.filter(plugin => `${plugin.pluginId} ${plugin.id}`.toLowerCase().includes(query.toLowerCase()));
   const visiblePlugins = plugins.filter(row =>
     (installScope === 'all' || (row.principal === 'space') === (installScope === 'space')) && installedPluginMatchesSearch(row, query));

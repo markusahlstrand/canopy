@@ -27,6 +27,20 @@ it('lists active runtime viewers alongside bundled viewers', async () => {
   fireEvent.change(screen.getByLabelText('Find a plugin'), { target: { value: 'personal' } });
   expect(screen.queryByText('Markdown preview', { exact: false })).toBeNull();
 });
+it('filters individual viewers within a multi-viewer plugin', async () => {
+  setImageViewerEnabled(false);
+  const plugins = [{ id: 'multi', plugin_id: 'multi-viewer', principal: 'space', enabled: 1, source: '', updated_at: '1',
+    manifest_json: JSON.stringify({ id: 'multi-viewer', name: 'Mixed viewer', version: '1', capabilities: [{ kind: 'item:read' }],
+      contributes: { viewers: [{ id: 'md', title: 'Markdown preview', match: ['.md'] }, { id: 'pdf', title: 'PDF preview', match: ['.pdf'] }] } }) }];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins } : { canManage: false }))));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  expect(await screen.findByText('PDF preview', { exact: false })).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('Find a plugin'), { target: { value: '.pdf' } });
+  expect(screen.getByText('PDF preview', { exact: false })).toBeTruthy();
+  expect(screen.queryByText('Markdown preview', { exact: false })).toBeNull();
+  fireEvent.change(screen.getByLabelText('Find a plugin'), { target: { value: 'space' } });
+  expect(screen.getByText('Markdown preview', { exact: false })).toBeTruthy();
+});
 it('names the selected space before offering space-wide installs', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [] } : { canManage: true }))));
   render(<PluginManagement open onOpenChange={() => {}} spaceName="Family" />);
