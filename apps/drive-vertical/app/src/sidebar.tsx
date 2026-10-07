@@ -124,7 +124,8 @@ export function useSites() {
       .then(result => { if (request.current === current) { loaded.current = true; setSites(result); } })
       .catch(() => {
         if (request.current !== current) return;
-        if (!loaded.current) { setSites([]); setFailed(true); }
+        if (!loaded.current) setSites([]);
+        setFailed(true);
       })
       .finally(() => { if (request.current === current) inFlight.current = false; });
   }, []);
@@ -283,7 +284,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
         {failed && !narrow && (
           <div className="mt-4 px-3">
             <p className="px-2.5 text-[12px] text-muted-foreground">
-              Couldn’t list your spaces.{' '}
+              {sites?.length ? 'Couldn’t refresh your spaces; showing the last list.' : 'Couldn’t list your spaces.'}{' '}
               <button onClick={onRetry} className="underline hover:text-foreground">
                 Try again
               </button>
