@@ -100,6 +100,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
     const counter = target === 'manifest' ? manifestRead : sourceRead;
     const token = ++counter.current;
     setStudioError(null);
+    setApproved(false);
     if (file.size > 256_000) { setStudioError(`Plugin ${target} file is too large.`); return; }
     try {
       const contents = await file.text();
@@ -161,7 +162,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
           const file = event.currentTarget.files?.[0]; event.currentTarget.value = '';
           if (!file || ((manifest || source) && !confirmDiscardDrafts())) return;
           const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
-          setStudioError(null);
+          setStudioError(null); setApproved(false);
           if (file.size > 8 * 1024 * 1024) { setStudioError('Plugin ZIP is too large.'); return; }
           void file.arrayBuffer().then(buffer => {
             const result = resolveZipBytes(new Uint8Array(buffer), {type:'zip',key:file.name});
@@ -185,7 +186,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
         <Button variant="outline" disabled={busy || !githubRepo.trim()} onClick={() => {
           if ((manifest || source) && !confirmDiscardDrafts()) return;
           const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
-          setBusy(true); setStudioError(null);
+          setBusy(true); setStudioError(null); setApproved(false);
           void importGithubPlugin(githubRepo.trim(),githubRef.trim(),githubPath.trim()).then(result => {
             if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
             const nextManifest=JSON.stringify(result.manifest,null,2);
@@ -202,7 +203,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
         <Button variant="outline" disabled={busy || !npmName.trim()} onClick={() => {
           if ((manifest || source) && !confirmDiscardDrafts()) return;
           const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
-          setBusy(true); setStudioError(null);
+          setBusy(true); setStudioError(null); setApproved(false);
           void importNpmPlugin(npmName.trim(), npmVersion.trim()).then(result => {
             if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
             const nextManifest = JSON.stringify(result.manifest, null, 2);
