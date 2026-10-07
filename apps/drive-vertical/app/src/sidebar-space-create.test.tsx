@@ -33,6 +33,16 @@ it('hides the current-space menu offline', () => {
   expect(screen.queryByRole('button', {name:'Manage Family'})).toBeNull();
 });
 
+it('waits for reconnection before retrying the space roster', () => {
+  const onRetry = vi.fn();
+  render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()}
+    sites={[]} failed onRetry={onRetry} offline />);
+  const retry = screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement;
+  expect(retry.disabled).toBe(true);
+  fireEvent.click(retry);
+  expect(onRetry).not.toHaveBeenCalled();
+});
+
 it('disables New while a linked folder is unresolved', () => {
   render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()}
     sites={[]} failed={false} onRetry={vi.fn()} writeBlocked />);
