@@ -778,6 +778,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onNewFolder={() => startWrite(() => setCreating(true))}
           onUpload={() => startWrite(() => uploadRef.current?.click())}
           offline={offline}
+          writeBlocked={linkPending || linkListingUnavailable}
           sites={siteList.sites}
           failed={siteList.failed}
           onSpaces={() => setSpacesOpen(true)}
@@ -803,6 +804,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             onNewFolder={() => { setMobileNavOpen(false); startWrite(() => setCreating(true)); }}
             onUpload={() => { setMobileNavOpen(false); startWrite(() => uploadRef.current?.click()); }}
             offline={offline}
+            writeBlocked={linkPending || linkListingUnavailable}
             sites={siteList.sites}
             failed={siteList.failed}
             onSpaces={() => { setMobileNavOpen(false); setSpacesOpen(true); }}
@@ -834,6 +836,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onOpenViewers={() => setViewersOpen(true)}
         onOpenPeople={canManagePeople && !offline ? () => setPeopleOpen(true) : undefined}
         offline={offline}
+        writeBlocked={linkPending || linkListingUnavailable}
         auth={auth}
         onSignIn={onSignIn}
         onSignOut={onSignOut}

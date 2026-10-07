@@ -55,6 +55,8 @@ interface TopbarProps {
   onSignOut: () => void;
   /** Backend unreachable — the app is view-only, so disable uploads. */
   offline?: boolean;
+  /** A deep link has not resolved its destination folder yet. */
+  writeBlocked?: boolean;
   /**
    * Open the People dialog. Absent for anyone who may not manage the people here —
    * a menu item that answers 403 is worse than no menu item.
@@ -79,6 +81,7 @@ export function Topbar({
   onSignIn,
   onSignOut,
   offline,
+  writeBlocked,
   onOpenPeople,
   onOpenViewers,
   onRefresh,
@@ -205,8 +208,8 @@ export function Topbar({
       <Button
         onClick={onUpload}
         size="icon"
-        disabled={offline}
-        title={offline ? "Unavailable while offline" : undefined}
+        disabled={offline || writeBlocked}
+        title={offline ? "Unavailable while offline" : writeBlocked ? "Wait for the folder to load" : undefined}
         aria-label="Upload files"
         className="shrink-0 gap-1.5 sm:w-auto sm:px-3"
       >

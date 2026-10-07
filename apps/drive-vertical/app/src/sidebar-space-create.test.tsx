@@ -32,3 +32,10 @@ it('hides the current-space menu offline', () => {
     canManageSpace offline onSpaceSettings={vi.fn()} />);
   expect(screen.queryByRole('button', {name:'Manage Family'})).toBeNull();
 });
+
+it('disables New while a linked folder is unresolved', () => {
+  render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()}
+    sites={[]} failed={false} onRetry={vi.fn()} writeBlocked />);
+  expect((screen.getByRole('button', {name:'New'}) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', {name:'My Drive'}) as HTMLButtonElement).disabled).toBe(false);
+});
