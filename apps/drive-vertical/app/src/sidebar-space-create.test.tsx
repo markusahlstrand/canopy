@@ -61,3 +61,10 @@ it('keeps the current space visible while explaining that no other space matches
   expect(screen.getByRole('status').textContent).toContain('No other spaces match “Family”.');
   expect(screen.queryByRole('button', {name:'Work'})).toBeNull();
 });
+it('labels an unnamed current space with its slug', () => {
+  render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()}
+    sites={[{slug:'legacy-space',name:' ',current:true}]} failed={false} onRetry={vi.fn()}
+    onSpaces={vi.fn()} canManageSpace onSpaceSettings={vi.fn()} />);
+  expect(screen.getByRole('button', {name:'legacy-space'})).toBeTruthy();
+  expect(screen.getByRole('button', {name:'Manage legacy-space'})).toBeTruthy();
+});

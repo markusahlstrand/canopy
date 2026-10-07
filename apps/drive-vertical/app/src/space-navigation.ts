@@ -1,5 +1,7 @@
-import { selectSite } from './api';
+import { selectSite, type Site } from './api';
 import { confirmNavigation } from './navigation-guards';
+/** Keep a usable label when an older space has no display name. */
+export const spaceLabel = (site: Pick<Site, 'name' | 'slug'>): string => site.name.trim() || site.slug;
 /** A portable link to a space, without a file or folder from the sender's view. */
 export function spaceLink(slug: string): string {
   const url = new URL('/', window.location.origin);

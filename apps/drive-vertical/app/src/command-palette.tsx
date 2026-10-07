@@ -15,6 +15,7 @@ import { FileIcon } from "./file-icon";
 import { SEARCH_MIN, search, type PluginInstall, type SearchHit, type Site } from "./api";
 import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
+import { spaceLabel } from './space-navigation';
 
 /**
  * Where the palette can take you.
@@ -188,9 +189,9 @@ export function CommandPalette({
         {onOpenSpace && sites.length ? <>
           <CommandSeparator />
           <CommandGroup heading="Spaces">
-            {sites.map(site => <CommandItem key={site.slug} value={`space ${site.name} ${site.slug}`} onSelect={run(() => site.current ? undefined : onOpenSpace(site.slug))}>
+            {sites.map(site => <CommandItem key={site.slug} value={`space ${spaceLabel(site)} ${site.slug}`} onSelect={run(() => site.current ? undefined : onOpenSpace(site.slug))}>
               <Icon name={site.icon ?? 'users'} size={16} style={{ color: site.color }} />
-              <span className="min-w-0 flex-1 truncate">{site.name}</span>
+              <span className="min-w-0 flex-1 truncate">{spaceLabel(site)}</span>
               {site.current ? <span className="text-xs text-muted-foreground">Current</span> : null}
             </CommandItem>)}
           </CommandGroup>

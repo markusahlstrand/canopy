@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Icon, Input, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@canopy/ui';
 import type { Site } from './api';
-import { openSpace, spaceLink } from './space-navigation';
+import { openSpace, spaceLabel, spaceLink } from './space-navigation';
 export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canManage, offline = false, onMembers, onCreate, onSettings }: {
   open: boolean; onOpenChange: (open: boolean) => void; sites: Site[] | null; failed: boolean; onRetry: () => void;
   offline?: boolean; canManage: boolean; onMembers: () => void; onCreate?: () => void; onSettings?: () => void;
@@ -39,10 +39,10 @@ export function SpacesDialog({ open, onOpenChange, sites, failed, onRetry, canMa
         : <ul className="grid gap-3 sm:grid-cols-2">{shown?.map(site => <li key={site.slug} className="flex min-w-0 flex-col gap-3 rounded-lg border p-3.5">
           <div className="flex items-start gap-3">
             <span className="grid size-10 shrink-0 place-items-center rounded-lg" style={{ color: site.color, backgroundColor: site.color ? `${site.color}1f` : undefined }}><Icon name={site.icon ?? 'folder'} size={20} /></span>
-            <div className="min-w-0 flex-1"><h3 className="truncate text-sm font-medium">{site.name}</h3><p className="truncate text-xs text-muted-foreground">{site.slug}</p></div>
+            <div className="min-w-0 flex-1"><h3 className="truncate text-sm font-medium">{spaceLabel(site)}</h3><p className="truncate text-xs text-muted-foreground">{site.slug}</p></div>
             {site.current ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">Current space</span> : null}
           </div>
-          <div className="mt-auto flex flex-wrap gap-1.5"><Button size="sm" variant={site.current ? 'secondary' : 'outline'} disabled={site.current || offline} onClick={() => openSpace(site.slug)}>Open {site.name}</Button>
+          <div className="mt-auto flex flex-wrap gap-1.5"><Button size="sm" variant={site.current ? 'secondary' : 'outline'} disabled={site.current || offline} onClick={() => openSpace(site.slug)}>Open {spaceLabel(site)}</Button>
             <Button size="sm" variant="ghost" onClick={() => void copyLink(site.slug)}>Copy link</Button>
             {site.current && canManage && !offline && onSettings ? <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onSettings(); }}>Space settings</Button> : null}
             {site.current && canManage && !offline ? <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onMembers(); }}>Manage members</Button> : null}</div>
