@@ -146,6 +146,15 @@ it('opens the original damaged manifest for repair', async () => {
   expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
+it('does not offer to enable a disabled install whose manifest needs repair', async () => {
+  const row = { id: 'damaged-install', plugin_id: 'damaged', principal: 'user', enabled: 0, source: '', updated_at: 'revision', manifest_json: '{broken' };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [row] } : { canManage: false }))));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('Invalid manifest: damaged');
+  expect((screen.getByRole('button', { name: 'Repair to enable' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole('button', { name: 'Edit source' })).toBeTruthy();
+});
+
 it('does not claim there are no installed plugins when loading fails', async () => {
   vi.stubGlobal('fetch', vi.fn((url: string) => url.endsWith('/plugins')
     ? Promise.reject(new Error('offline'))
