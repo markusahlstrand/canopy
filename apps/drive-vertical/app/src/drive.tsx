@@ -744,7 +744,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     if (!offline && !linkPending && !linkListingUnavailable) uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
   };
 
-  const activeSpaceName = siteList.sites?.find(site => site.current)?.name.trim();
+  const activeSpaceName = siteList.sites?.find(site => site.current)?.name.trim() || currentSite() || undefined;
   const rootLabel = activeSpaceName || 'My Drive';
   const empty = linkListingUnavailable && view === 'drive' ? (
     <EmptyList icon="folder" title="Folder context unavailable" description="The file preview remains available. Choose My Drive to browse folders you can access." actions={[{ label: 'Retry folder', onClick: () => void refresh(true) }, { label: 'Go to My Drive', onClick: () => navigate('drive') }]} />
@@ -1079,7 +1079,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={siteList.retry} />
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
       <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
-      <PluginManagement open={viewersOpen} onOpenChange={setViewersOpen} spaceName={siteList.sites?.find(site => site.current)?.name} onOpenApp={id => { changePreview(null); setActivePluginId(id); }} />
+      <PluginManagement open={viewersOpen} onOpenChange={setViewersOpen} spaceName={activeSpaceName} onOpenApp={id => { changePreview(null); setActivePluginId(id); }} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 
