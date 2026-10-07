@@ -151,9 +151,8 @@ const folderItem = (folder: DriveFolder | SharedFolder): FileItem => ({
 const fileItem = (file: DriveFile, mime?: string | null): FileItem => ({
   id: file.id,
   name: file.name,
-  // The kind is a presentation fact derived from the version's mime; a listing does not
-  // carry versions, so an unwritten file reads as a plain document until it is opened.
-  kind: file.current_version_id ? kindOf(mime) : 'doc',
+  // The listing has no MIME; use the filename until an opened version supplies one.
+  kind: kindOf(mime, file.name),
   modified: file.current_version_id ? when(file.updated_at) : 'No content yet',
   size: '—',
   isFolder: false,
