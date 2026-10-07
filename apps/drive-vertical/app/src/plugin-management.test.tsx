@@ -46,6 +46,18 @@ it('restores bundled catalog review and source authoring', () => {
   expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default');
   expect(screen.getByRole('button', {name:'Install plugin'})).toBeTruthy();
 });
+it('requires approval again after the JavaScript source changes', () => {
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Build a plugin' }));
+  const approval = screen.getByRole('checkbox', { name: /Approve the capabilities/ }) as HTMLInputElement;
+  fireEvent.click(approval);
+  expect(approval.checked).toBe(true);
+  expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(false);
+
+  fireEvent.change(screen.getByLabelText('Plugin source'), { target: { value: 'export default function changed() {}' } });
+  expect(approval.checked).toBe(false);
+  expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(true);
+});
 it('finds viewers by file extension and MIME type', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
   const search = screen.getByLabelText('Find a plugin');
