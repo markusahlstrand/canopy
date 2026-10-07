@@ -154,14 +154,14 @@ export function CommandPalette({
                     onOpenFile({
                       id: hit.id,
                       name: hit.name,
-                      kind: kindOf(null),
+                      kind: kindOf(null, hit.name),
                       modified: '',
                       size: '—',
                       isFolder: false,
                     }),
                   )}
                 >
-                  <FileIcon kind={kindOf(null)} size={22} />
+                  <FileIcon kind={kindOf(null, hit.name)} size={22} />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate"><SearchHighlight text={hit.name} query={query} mode="prefix" /></span>
                     {/* What extraction bought: matching a document's text reads

@@ -45,8 +45,19 @@ export interface FileItem {
 }
 
 /** What the browser can show inline, from the mime the stored bytes produced. */
-export function kindOf(mime: string | null | undefined): FileKind {
-  if (!mime) return 'doc';
+/** Use the old portal's extension mapping when a listing has no version MIME yet. */
+export function kindForName(name: string): FileKind {
+  const extension = name.split('.').pop()?.toLowerCase() ?? '';
+  if (extension === 'pdf') return 'pdf';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'svg'].includes(extension)) return 'image';
+  if (['md', 'txt'].includes(extension)) return 'note';
+  if (['mp3', 'wav', 'flac', 'm4a'].includes(extension)) return 'audio';
+  if (['mp4', 'mov', 'mkv'].includes(extension)) return 'video';
+  return 'doc';
+}
+
+export function kindOf(mime: string | null | undefined, name?: string): FileKind {
+  if (!mime) return name ? kindForName(name) : 'doc';
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('audio/')) return 'audio';
   if (mime.startsWith('video/')) return 'video';
