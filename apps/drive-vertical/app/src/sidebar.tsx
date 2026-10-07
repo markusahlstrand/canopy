@@ -201,6 +201,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
   const matchesSpace = (site: { name: string; slug: string }) => `${site.name} ${site.slug}`.toLocaleLowerCase().includes(spaceTerm);
   // The current space stays visible: its row carries the only way into space settings.
   const shownSites = sites?.filter(site => site.current || matchesSpace(site));
+  const currentSpace = sites?.find(site => site.current);
 
   const toggle = () =>
     setCollapsed((was) => {
@@ -366,7 +367,11 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
         </div> : null}
         </div>
 
-        {onSpaces ? <Button variant="ghost" onClick={onSpaces} aria-label="Manage spaces">{narrow ? <Icon name="users" /> : 'Manage spaces'}</Button> : null}
+        {onSpaces ? <Button variant="ghost" onClick={onSpaces}
+          aria-label={narrow && currentSpace ? `Spaces, current: ${currentSpace.name}` : 'Manage spaces'}
+          title={narrow ? currentSpace?.name ?? 'Manage spaces' : undefined}>
+          {narrow ? <Icon name={currentSpace?.icon ?? 'users'} style={{ color: currentSpace?.color }} /> : 'Manage spaces'}
+        </Button> : null}
         {narrow && (
           <button
             onClick={toggle}
