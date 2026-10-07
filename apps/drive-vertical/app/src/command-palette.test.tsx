@@ -87,6 +87,13 @@ it('stays open when a draft blocks navigation', () => {
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
   expect(onOpenChange).not.toHaveBeenCalledWith(false);
 });
+it('keeps search open when showing all results is blocked', () => {
+  const onOpenChange = vi.fn();
+  render(<CommandPalette {...props} onOpenChange={onOpenChange} onShowAllResults={() => false} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'budget' } });
+  fireEvent.click(screen.getByRole('option', { name: /Show all results for/ }));
+  expect(onOpenChange).not.toHaveBeenCalledWith(false);
+});
 it('stays open when a draft blocks opening a file', () => {
   const onOpenChange = vi.fn();
   const item = { id: 'report', name: 'Report', kind: 'doc' as const, modified: '', size: '—', isFolder: false };

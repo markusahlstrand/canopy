@@ -877,12 +877,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onManagePlugins={() => setViewersOpen(true)}
         onShowAllResults={query => {
           const sameSearch = view === 'search' && term === query && matchFilter === 'all' && !linkListingUnavailable;
-          if (!navigate('search')) return;
+          if (!navigate('search')) return false;
           if (sameSearch) {
             // navigate already refreshed these exact results; invalidating that read
             // would leave no changed dependency to start another one.
             setSelection(new Set());
-            return;
+            return true;
           }
           reads.current.invalidate();
           setMatchFilter('all');
@@ -890,6 +890,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           setHits([]);
           setBusy(query.length >= SEARCH_MIN);
           setTerm(query);
+          return true;
         }}
         onNavigate={(id) => navigate(id === 'trash' ? 'trash' : id === 'shared' ? 'shared' : id === 'search' ? 'search' : 'drive')}
         onOpenFile={(item) => {

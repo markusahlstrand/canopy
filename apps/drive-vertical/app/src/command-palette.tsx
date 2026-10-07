@@ -45,7 +45,7 @@ interface CommandPaletteProps {
   onOpenPlugin?: (id: string) => boolean | void;
   onManageSpaces?: () => void;
   onManagePlugins?: () => void;
-  onShowAllResults?: (query: string) => void;
+  onShowAllResults?: (query: string) => boolean | void;
 }
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
