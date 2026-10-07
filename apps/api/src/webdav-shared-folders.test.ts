@@ -39,10 +39,12 @@ describe('WebDAV shared-folder discovery', () => {
     expect(await root.text()).toContain('/dav/Shared%20with%20me/');
     const listing = await request('/dav/Shared%20with%20me/');
     const xml = await listing.text();
+    expect(xml).toMatch(/Photos — My Drive \[[0-9a-f]{8}\]/);
     const hrefs = [...xml.matchAll(/<D:href>([^<]+)<\/D:href>/g)].map((m) => m[1]!);
     const mounts = hrefs.slice(1);
     expect(new Set(mounts).size).toBe(2);
     const contents = await Promise.all(mounts.map(async (path) => (await request(path)).text()));
+    expect(contents[0]).toMatch(/Photos — My Drive \[[0-9a-f]{8}\]/);
     const first = mounts[contents.findIndex((body) => body.includes('a.txt'))]!;
     expect(await (await request(`${first}a.txt`, 'GET')).text()).toBe('shared');
     expect((await request(`${first}a.txt`, 'PUT')).status).toBe(403);
