@@ -255,10 +255,10 @@ export async function clearMirror(broadcast = true): Promise<void> {
 }
 
 /** A fresh authenticated page may reopen the cache after logout invalidated it. */
-export async function resumeMirror(): Promise<void> {
+export async function resumeMirror(principal?: string): Promise<void> {
   if (blocked) throw new SessionEnded('the mirror session ended');
   const database = await db();
-  const tx = database.transaction('progress', 'readwrite');
+  const tx = database.transaction(['files', 'folders', 'progress'], 'readwrite');
   const progress = tx.objectStore('progress');
   const session = await progress.get(SESSION_KEY);
   if (blocked) {
@@ -266,10 +266,15 @@ export async function resumeMirror(): Promise<void> {
     await tx.done.catch(() => {});
     throw new SessionEnded('the mirror session ended');
   }
+  if (principal && session?.offlinePrincipal && session.offlinePrincipal !== principal) {
+    await tx.objectStore('files').clear();
+    await tx.objectStore('folders').clear();
+    await progress.clear();
+  }
   await progress.put({ principal: SESSION_KEY, cursor: null, ready: false,
-    epoch: (session?.epoch ?? 0) + 1, revoked: false });
+    epoch: (session?.epoch ?? 0) + 1, revoked: false, offlinePrincipal: principal });
   await tx.done;
-  await resumeOfflineContent().catch(() => {});
+  await resumeOfflineContent(principal).catch(() => {});
   blocked = false;
   sessionChannel();
 }

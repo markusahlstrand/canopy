@@ -45,6 +45,14 @@ describe('opt-in offline content store', () => {
     expect(await offlineSpace('alice', '')).toBeNull();
   });
 
+  it('purges the previous principal when the browser signs into a different account', async () => {
+    await resumeOfflineContent('alice');
+    await cacheOfflineVersion(key(), fetcher);
+    await resumeOfflineContent('bob');
+    expect(await getOfflineVersion(key())).toBeNull();
+    expect(await listOfflinePins('alice', 'family')).toEqual([]);
+  });
+
   it('refuses an in-flight download after sign-out and cannot reveal old bytes after re-authentication', async () => {
     let resolve!: (response: Response) => void;
     const pending = new Promise<Response>(r => { resolve = r; });

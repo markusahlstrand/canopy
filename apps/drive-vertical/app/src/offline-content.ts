@@ -48,7 +48,7 @@ interface ContentDb extends DBSchema {
     indexes: { 'by-space': [string, string] };
   };
   routes: { key: [string, string]; value: { principal: string; route: string; space: string } };
-  session: { key: string; value: { key: string; epoch: number; revoked: boolean } };
+  session: { key: string; value: { key: string; epoch: number; revoked: boolean; principal?: string } };
 }
 
 let dbPromise: Promise<IDBPDatabase<ContentDb>> | undefined;
@@ -78,11 +78,17 @@ async function sessionEpoch(): Promise<number> {
 }
 
 /** A successful online sign-in reopens the cache after a previous logout. */
-export async function resumeOfflineContent(): Promise<void> {
+export async function resumeOfflineContent(principal?: string): Promise<void> {
   const database = await db();
-  const tx = database.transaction('session', 'readwrite');
-  const previous = await tx.store.get(SESSION);
-  await tx.store.put({ key: SESSION, epoch: (previous?.epoch ?? 0) + 1, revoked: false });
+  const tx = database.transaction(['versions', 'pins', 'routes', 'session'], 'readwrite');
+  const session = tx.objectStore('session');
+  const previous = await session.get(SESSION);
+  if (principal && previous?.principal && previous.principal !== principal) {
+    await tx.objectStore('versions').clear();
+    await tx.objectStore('pins').clear();
+    await tx.objectStore('routes').clear();
+  }
+  await session.put({ key: SESSION, epoch: (previous?.epoch ?? 0) + 1, revoked: false, principal });
   await tx.done;
 }
 
