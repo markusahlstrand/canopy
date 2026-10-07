@@ -840,6 +840,15 @@ describe('the shell the portal had, on the vertical', () => {
     fireEvent.keyDown(spaceFilter, { key: 't' });
     expect(screen.getByRole('banner').textContent).toContain('My Drive');
 
+    const editor = document.createElement('div');
+    editor.setAttribute('contenteditable', 'plaintext-only');
+    Object.defineProperty(editor, 'isContentEditable', { value: true });
+    document.body.append(editor);
+    fireEvent.keyDown(editor, { key: 'g' });
+    fireEvent.keyDown(editor, { key: 't' });
+    expect(screen.getByRole('banner').textContent).toContain('My Drive');
+    editor.remove();
+
     fireEvent.keyDown(window, { key: 'g' });
     fireEvent.keyDown(window, { key: 't' });
     expect(screen.getByRole('banner').textContent).toContain('Trash');

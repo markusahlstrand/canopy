@@ -582,7 +582,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const onKey = (event: KeyboardEvent) => {
       const target = event.target;
       if (offline || cmdOpen || event.metaKey || event.ctrlKey || event.altKey ||
-          target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) {
+          target instanceof HTMLElement && (target.closest('input, textarea, select') || target.isContentEditable)) {
         clear();
         return;
       }
