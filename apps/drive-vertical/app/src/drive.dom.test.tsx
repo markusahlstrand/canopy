@@ -216,6 +216,22 @@ describe('search result explanations', () => {
   });
 });
 
+it('returns to the prior view when the search box is cleared', async () => {
+  await renderDrive();
+  fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+  await flush();
+  await answer('/trash', []);
+  const box = screen.getByRole('textbox', { name: 'Search this space' });
+  fireEvent.change(box, { target: { value: 'budget' } });
+  await flush();
+  await answer('/api/search?', { hits: [] });
+  fireEvent.change(box, { target: { value: '' } });
+  await flush();
+  await answer('/trash', []);
+  expect(screen.getByText('Trash is empty')).toBeTruthy();
+  expect(rail().getByRole('button', { name: 'Trash' }).getAttribute('aria-current')).toBe('page');
+});
+
 describe('a stale search answer never reaches the screen', () => {
   it('drops the first term’s hits when the term has moved on', async () => {
     await renderDrive();
@@ -763,6 +779,14 @@ it('navigates from the palette to the shared-folder listing', async () => {
 });
 
 describe('shared-folder discovery', () => {
+  it('explains that Shared with me includes grants from other spaces', async () => {
+    await renderDrive();
+    fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
+    await flush();
+    await answer('/shared-folders', { folders: [] });
+    expect(screen.getByText('Folders shared directly with you from any space will appear here.')).toBeTruthy();
+  });
+
   it('opens the selected space when two grants have the same local folder id', async () => {
     await renderDrive();
     fireEvent.click(screen.getByRole('button', { name: 'Shared with me' }));
@@ -1223,9 +1247,11 @@ describe('plugin app exits', () => {
     expect(screen.getByRole('button', { name: 'Back to drive' })).toBeTruthy();
     fireEvent.keyDown(window, { key: 'k', metaKey: true });
     fireEvent.click(screen.getByText('lease.pdf'));
-    expect(screen.getByRole('button', { name: 'Back to drive' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Command Palette' })).toBeTruthy();
+    expect(screen.getByText('Back to drive')).toBeTruthy();
     expect(pending.some(request => request.url.endsWith('/files/01A'))).toBe(false);
 
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Command Palette' }), { key: 'Escape' });
     confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Back to drive' }));
     expect(screen.queryByRole('button', { name: 'Back to drive' })).toBeNull();

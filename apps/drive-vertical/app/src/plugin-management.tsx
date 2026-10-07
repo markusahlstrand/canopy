@@ -48,17 +48,19 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pluginsState, setPluginsState] = useState<'loading' | 'loaded' | 'failed'>('loading');
+  const [loadRetry, setLoadRetry] = useState(0);
   useEffect(() => {
     if (!open) { setPluginsState('loading'); setError(null); return; }
     let alive = true;
     setPluginsState('loading');
     setError(null);
+    setCanManage(false);
     refreshPlugins().then(() => { if (alive) setPluginsState('loaded'); }).catch(() => {
       if (alive) { setPluginsState('failed'); setError('Could not load installed plugins.'); }
     });
     peopleAccess().then(result => { if (alive) setCanManage(result.canManage); }).catch(() => {});
     return () => { alive = false; };
-  }, [open]);
+  }, [open, loadRetry]);
   const change = async (action: () => Promise<unknown>) => { setBusy(true); setError(null); try { await action(); await refreshPlugins(); } catch (error) { setError(error instanceof Error ? error.message || 'Could not update this plugin.' : String(error)); } finally { setBusy(false); } };
   const [query, setQuery] = useState('');
   const [installScope, setInstallScope] = useState<'all' | 'personal' | 'space'>('all');
@@ -98,6 +100,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
     const counter = target === 'manifest' ? manifestRead : sourceRead;
     const token = ++counter.current;
     setStudioError(null);
+    setApproved(false);
     if (file.size > 256_000) { setStudioError(`Plugin ${target} file is too large.`); return; }
     try {
       const contents = await file.text();
@@ -132,6 +135,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
           className={cn('rounded-full px-3 py-1 text-xs font-medium transition-colors', installScope === value ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/70')}>{label}</button>)}
     </div>
     {pluginsState === 'loading' ? <p role="status" className="text-sm text-muted-foreground">Loading installed plugins…</p> : null}
+    {pluginsState === 'failed' ? <Button size="sm" variant="outline" onClick={() => setLoadRetry(value => value + 1)}>Retry installed plugins</Button> : null}
     {pluginsState === 'loaded' && visiblePlugins.length ? <div className="grid gap-3 sm:grid-cols-2">{visiblePlugins.map(row => {
       const manifest = pluginManifest(row);
       return <section key={row.id} className="flex min-w-0 flex-col gap-2.5 rounded-lg border p-3.5">
@@ -141,7 +145,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
         <p className="text-xs text-muted-foreground">Access: {manifest.capabilities.map(cap => cap.kind === 'net:fetch' ? `Network: ${cap.hosts?.join(', ')}` : cap.kind).join(', ') || 'None'}</p>
         {manifest.contributes.viewers?.length ? <p className="text-xs text-muted-foreground">Handles: {manifest.contributes.viewers.flatMap(viewer => viewer.match).join(', ')}</p> : null}
         <div className="mt-auto flex flex-wrap gap-1.5">
-          <Button size="sm" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : 'Enable'}</Button>
+          <Button size="sm" disabled={busy || (row.principal === 'space' && !canManage) || (manifest.invalid && !row.enabled)} onClick={() => void change(() => togglePlugin(row.id, !row.enabled))}>{row.enabled ? 'Disable' : manifest.invalid ? 'Repair to enable' : 'Enable'}</Button>
           <Button size="sm" variant="outline" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (!confirmDiscardDrafts()) return; manifestRead.current++; sourceRead.current++; void change(async () => {const loaded = await pluginSource(row.id,row.updated_at); const parsed = pluginManifest(loaded); setEditingInstall(loaded); setManifest(parsed.invalid ? loaded.manifest_json : JSON.stringify(parsed,null,2)); setSource(loaded.source);setForSpace(loaded.principal==='space');setStudioOpen(true);}); }}>Edit source</Button>
           {launchableIds.has(row.id) && onOpenApp ? <Button size="sm" variant="outline" onClick={() => { if (!confirmDiscardDrafts()) return; onOpenApp(row.id); close(); }}>Open app</Button> : null}
           <Button size="sm" variant="ghost" disabled={busy || (row.principal === 'space' && !canManage)} onClick={() => { if (window.confirm(`Remove ${manifest.name}?`)) void change(() => removePlugin(row.id)); }}>Remove</Button>
@@ -158,7 +162,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
           const file = event.currentTarget.files?.[0]; event.currentTarget.value = '';
           if (!file || ((manifest || source) && !confirmDiscardDrafts())) return;
           const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
-          setStudioError(null);
+          setStudioError(null); setApproved(false);
           if (file.size > 8 * 1024 * 1024) { setStudioError('Plugin ZIP is too large.'); return; }
           void file.arrayBuffer().then(buffer => {
             const result = resolveZipBytes(new Uint8Array(buffer), {type:'zip',key:file.name});
@@ -182,7 +186,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
         <Button variant="outline" disabled={busy || !githubRepo.trim()} onClick={() => {
           if ((manifest || source) && !confirmDiscardDrafts()) return;
           const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
-          setBusy(true); setStudioError(null);
+          setBusy(true); setStudioError(null); setApproved(false);
           void importGithubPlugin(githubRepo.trim(),githubRef.trim(),githubPath.trim()).then(result => {
             if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
             const nextManifest=JSON.stringify(result.manifest,null,2);
@@ -199,7 +203,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
         <Button variant="outline" disabled={busy || !npmName.trim()} onClick={() => {
           if ((manifest || source) && !confirmDiscardDrafts()) return;
           const manifestToken = ++manifestRead.current, sourceToken = ++sourceRead.current;
-          setBusy(true); setStudioError(null);
+          setBusy(true); setStudioError(null); setApproved(false);
           void importNpmPlugin(npmName.trim(), npmVersion.trim()).then(result => {
             if (manifestRead.current !== manifestToken || sourceRead.current !== sourceToken) return;
             const nextManifest = JSON.stringify(result.manifest, null, 2);

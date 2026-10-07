@@ -27,7 +27,7 @@ it('filters a long space roster by name or slug, keeping the current space', () 
   expect(screen.queryByRole('button', {name:'alpha'})).toBeNull();
   expect(screen.queryByRole('status')).toBeNull();
   fireEvent.change(screen.getByRole('textbox', {name:'Filter spaces'}), {target:{value:'absent'}});
-  expect(screen.getByRole('status').textContent).toBe('No matching spaces');
+  expect(screen.getByRole('status').textContent).toBe('No other spaces match “absent”.');
   expect(screen.getByRole('button', {name:'Family'})).toBeTruthy();
 });
 it('keeps the active space identifiable in a collapsed rail', () => {

@@ -146,6 +146,15 @@ it('opens the original damaged manifest for repair', async () => {
   expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
+it('does not offer to enable a disabled install whose manifest needs repair', async () => {
+  const row = { id: 'damaged-install', plugin_id: 'damaged', principal: 'user', enabled: 0, source: '', updated_at: 'revision', manifest_json: '{broken' };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [row] } : { canManage: false }))));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('Invalid manifest: damaged');
+  expect((screen.getByRole('button', { name: 'Repair to enable' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole('button', { name: 'Edit source' })).toBeTruthy();
+});
+
 it('does not claim there are no installed plugins when loading fails', async () => {
   vi.stubGlobal('fetch', vi.fn((url: string) => url.endsWith('/plugins')
     ? Promise.reject(new Error('offline'))
@@ -153,6 +162,20 @@ it('does not claim there are no installed plugins when loading fails', async () 
   render(<PluginManagement open onOpenChange={() => {}} />);
   expect((await screen.findByRole('alert')).textContent).toContain('Could not load installed plugins.');
   expect(screen.queryByText('No plugins installed yet.')).toBeNull();
+});
+
+it('retries a failed plugin list without closing Studio', async () => {
+  let reads = 0;
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    if (!url.endsWith('/plugins')) return Promise.resolve(new Response(JSON.stringify({ canManage: false })));
+    return ++reads === 1 ? Promise.reject(new Error('offline')) : Promise.resolve(new Response(JSON.stringify({ plugins: [] })));
+  }));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('Could not load installed plugins.');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry installed plugins' }));
+  await screen.findByText('No plugins installed yet.');
+  expect(screen.queryByRole('button', { name: 'Retry installed plugins' })).toBeNull();
+  expect(reads).toBe(2);
 });
 
 it('clears a Studio draft after confirming discard on close', () => {
@@ -216,6 +239,18 @@ it('shows file errors beside Studio and clears them when a valid file is selecte
   await waitFor(()=>expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default'));
   expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
   expect(input.value).toBe('');
+});
+it('requires fresh approval after a replacement file cannot be read', () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.click(screen.getByRole('button', {name:'Review Markdown'}));
+  fireEvent.click(screen.getByRole('checkbox', {name:/Approve the capabilities/}));
+  expect((screen.getByRole('button', {name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.change(screen.getByLabelText('Choose plugin source file'), {target:{files:[new File(['x'.repeat(256_001)], 'too-large.js')]}});
+  expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
+  expect((screen.getByRole('checkbox', {name:/Approve the capabilities/}) as HTMLInputElement).checked).toBe(false);
+  expect((screen.getByRole('button', {name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(true);
+  confirm.mockRestore();
 });
 it('keeps the latest local file when earlier reads finish later', async () => {
   render(<PluginManagement open onOpenChange={() => {}} />);

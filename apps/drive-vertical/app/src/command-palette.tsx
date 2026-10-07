@@ -35,14 +35,14 @@ interface CommandPaletteProps {
   onOpenChange: (open: boolean) => void;
   /** The current folder's rows — the zero-query list, before anything is typed. */
   files: FileItem[];
-  onNavigate: (id: string) => void;
-  onOpenFile: (f: FileItem) => void;
+  onNavigate: (id: string) => boolean | void;
+  onOpenFile: (f: FileItem) => boolean | void;
   /** Upload, which the toolbar also offers; the palette is the keyboard path to it. */
   onUpload?: () => void;
   sites?: Site[];
-  onOpenSpace?: (slug: string) => void;
+  onOpenSpace?: (slug: string) => boolean | void;
   pluginApps?: PluginInstall[];
-  onOpenPlugin?: (id: string) => void;
+  onOpenPlugin?: (id: string) => boolean | void;
   onManageSpaces?: () => void;
   onManagePlugins?: () => void;
   onShowAllResults?: (query: string) => void;
@@ -64,9 +64,8 @@ export function CommandPalette({
   onManagePlugins,
   onShowAllResults,
 }: CommandPaletteProps) {
-  const run = (fn: () => void) => () => {
-    onOpenChange(false);
-    fn();
+  const run = (fn: () => boolean | void) => () => {
+    if (fn() !== false) onOpenChange(false);
   };
 
   // Full-text search across the drive (name + body + labels), server-side. The
@@ -185,7 +184,7 @@ export function CommandPalette({
         {onOpenSpace && sites.length ? <>
           <CommandSeparator />
           <CommandGroup heading="Spaces">
-            {sites.map(site => <CommandItem key={site.slug} value={`space ${site.name} ${site.slug}`} onSelect={run(() => { if (!site.current) onOpenSpace(site.slug); })}>
+            {sites.map(site => <CommandItem key={site.slug} value={`space ${site.name} ${site.slug}`} onSelect={run(() => site.current ? undefined : onOpenSpace(site.slug))}>
               <Icon name={site.icon ?? 'users'} size={16} style={{ color: site.color }} />
               <span className="min-w-0 flex-1 truncate">{site.name}</span>
               {site.current ? <span className="text-xs text-muted-foreground">Current</span> : null}

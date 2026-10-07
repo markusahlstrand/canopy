@@ -39,3 +39,15 @@ it('disables New while a linked folder is unresolved', () => {
   expect((screen.getByRole('button', {name:'New'}) as HTMLButtonElement).disabled).toBe(true);
   expect((screen.getByRole('button', {name:'My Drive'}) as HTMLButtonElement).disabled).toBe(false);
 });
+
+it('keeps the current space visible while explaining that no other space matches', () => {
+  render(<Sidebar active="drive" onNavigate={vi.fn()} onNewFolder={vi.fn()} onUpload={vi.fn()}
+    sites={[{slug:'family',name:'Family',current:true},{slug:'work',name:'Work',current:false},
+      {slug:'school',name:'School',current:false},{slug:'travel',name:'Travel',current:false},
+      {slug:'archive',name:'Archive',current:false},{slug:'photos',name:'Photos',current:false}]}
+    failed={false} onRetry={vi.fn()} />);
+  fireEvent.change(screen.getByRole('textbox', {name:'Filter spaces'}), {target:{value:'Family'}});
+  expect(screen.getByRole('button', {name:'Family'})).toBeTruthy();
+  expect(screen.getByRole('status').textContent).toContain('No other spaces match “Family”.');
+  expect(screen.queryByRole('button', {name:'Work'})).toBeNull();
+});
