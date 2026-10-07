@@ -22,3 +22,18 @@ it('submits the revision loaded into Studio even if the install list refreshes',
  expect(request.expectedRevision).toBe('loaded-revision');
  expect(request.acceptCapabilities).toEqual(widenedCapabilities);
 });
+it('opens installed source without depending on another plugin-list read', async () => {
+ const manifest = { id: 'my-viewer', name: 'My viewer', version: '1', capabilities: [{kind:'item:read'}], contributes: {viewers:[{id:'text',match:['text/*']}]} };
+ const row: PluginInstall = {id:'install',plugin_id:manifest.id,principal:'user',manifest_json:JSON.stringify(manifest),source:'export default function(){}',enabled:1,updated_at:'revision'};
+ let listReads = 0;
+ const fetcher = vi.fn(async (url: string) => {
+   if (url.endsWith('/plugins')) { listReads++; return listReads === 1 ? new Response(JSON.stringify({plugins:[row]})) : new Response('offline', {status:503}); }
+   return new Response(JSON.stringify(url.endsWith('/people/access') ? {canManage:false} : row));
+ });
+ vi.stubGlobal('fetch', fetcher);
+ render(<PluginManagement open onOpenChange={() => {}} />);
+ fireEvent.click(await screen.findByRole('button', {name:'Edit source'}));
+ expect(await screen.findByDisplayValue(row.source!)).toBeTruthy();
+ expect(listReads).toBe(1);
+ expect(screen.queryByText(/Could not update this plugin/)).toBeNull();
+});
