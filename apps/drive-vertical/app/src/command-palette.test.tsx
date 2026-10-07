@@ -131,6 +131,10 @@ it('switches to a space selected from the palette', () => {
   fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
   expect(onOpenSpace).toHaveBeenCalledWith('team');
 });
+it('offers an unnamed space by its slug', () => {
+  render(<CommandPalette {...props} sites={[{slug:'legacy-space',name:' ',current:false}]} onOpenSpace={vi.fn()} />);
+  expect(screen.getByRole('option', {name:'legacy-space'})).toBeTruthy();
+});
 it('does not reload the current space from the palette', () => {
   const onOpenSpace = vi.fn();
   const onOpenChange = vi.fn();

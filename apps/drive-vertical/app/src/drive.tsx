@@ -32,7 +32,7 @@ import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { CreateSpaceDialog } from './create-space-dialog';
-import { openSpace, openSpaceFolder } from './space-navigation';
+import { openSpace, openSpaceFolder, spaceLabel } from './space-navigation';
 import { SpacesDialog } from './spaces-dialog';
 import { PluginManagement } from './plugin-management';
 import { SandboxPlugin } from './sandbox-plugin';
@@ -742,7 +742,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     if (!offline && !linkPending && !linkListingUnavailable) uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
   };
 
-  const activeSpaceName = siteList.sites?.find(site => site.current)?.name.trim() || currentSite() || undefined;
+  const selectedSpace = siteList.sites?.find(site => site.current);
+  const activeSpaceName = selectedSpace ? spaceLabel(selectedSpace) : currentSite() || undefined;
   const rootLabel = activeSpaceName || 'My Drive';
   const empty = linkListingUnavailable && view === 'drive' ? (
     <EmptyList icon="folder" title="Folder context unavailable" description="The file preview remains available. Choose My Drive to browse folders you can access." actions={[{ label: 'Retry folder', onClick: () => void refresh(true) }, { label: 'Go to My Drive', onClick: () => navigate('drive') }]} />

@@ -69,3 +69,7 @@ it('explains an unmatched query while keeping the active space visible', () => {
   expect(screen.queryByText('Work')).toBeNull();
   expect(screen.getByText('No other spaces match “zzz”.')).toBeTruthy();
 });
+it('uses the slug when a space has no display name', () => {
+  render(<SpacesDialog {...props} sites={[{ slug: 'legacy-space', name: '  ', current: false }]} />);
+  expect(screen.getByRole('button', { name: 'Open legacy-space' })).toBeTruthy();
+});
