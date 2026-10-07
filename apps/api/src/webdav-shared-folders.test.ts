@@ -125,7 +125,7 @@ describe('WebDAV shared-folder discovery', () => {
       const response = await app.request(`${mount}a.txt`, {
         method, headers: { ...headers, Destination: 'https://canopy.test/dav/copied.txt' },
       });
-      expect(response.status).toBe(502);
+      expect(response.status).toBe(409);
       expect(await response.text()).toBe(`Cannot ${method.toLowerCase()} across spaces`);
       expect(await service.pathKind('recipient', personal, 'copied.txt')).toBeNull();
       const original = await app.request(`${mount}a.txt`, { headers });

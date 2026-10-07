@@ -406,7 +406,7 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
       const src = await locate(p, srcSegs);
       const dst = await locate(p, dstSegs);
       if (!src.path || !dst.path) return c.body("Cannot move a space", 403);
-      if (src.spaceId !== dst.spaceId) return c.body("Cannot move across spaces", 502);
+      if (src.spaceId !== dst.spaceId) return c.body("Cannot move across spaces", 409);
       const { created } = await service.moveByPath({ sub: p.sub }, src.spaceId, src.path, dst.path, overwriteOf(c));
       return c.body(null, created ? 201 : 204);
     }),
@@ -423,7 +423,7 @@ export function registerWebdav(app: Hono, deps: { service: FileService; blobs: B
       const src = await locate(p, srcSegs);
       const dst = await locate(p, dstSegs);
       if (!src.path || !dst.path) return c.body("Cannot copy a space", 403);
-      if (src.spaceId !== dst.spaceId) return c.body("Cannot copy across spaces", 502);
+      if (src.spaceId !== dst.spaceId) return c.body("Cannot copy across spaces", 409);
       const { created } = await service.copyByPath({ sub: p.sub }, src.spaceId, src.path, dst.path, overwriteOf(c));
       return c.body(null, created ? 201 : 204);
     }),
