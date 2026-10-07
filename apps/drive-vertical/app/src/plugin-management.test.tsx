@@ -4,7 +4,8 @@ import { PluginManagement } from './plugin-management';
 import { setImageViewerEnabled } from './image-viewer';
 import { pluginCatalog } from './plugin-catalog';
 import { installedPluginManifest } from '@canopy/scope-drive/spec/model';
-afterEach(() => { cleanup(); setImageViewerEnabled(true); vi.unstubAllGlobals(); });
+import { publishPlugins } from './installed-plugins';
+afterEach(() => { cleanup(); publishPlugins([]); setImageViewerEnabled(true); vi.unstubAllGlobals(); });
 it('manages enabled state and explains file access and matching contributions', () => {
   setImageViewerEnabled(true); render(<PluginManagement open onOpenChange={() => {}} />);
   expect(screen.getByText('Handles: image/*')).toBeTruthy();
@@ -162,6 +163,23 @@ it('does not claim there are no installed plugins when loading fails', async () 
   render(<PluginManagement open onOpenChange={() => {}} />);
   expect((await screen.findByRole('alert')).textContent).toContain('Could not load installed plugins.');
   expect(screen.queryByText('No plugins installed yet.')).toBeNull();
+});
+it('keeps a previous plugin list visible but read-only when refresh fails', async () => {
+  const row = { id: 'cached', plugin_id: 'cached-viewer', principal: 'user', enabled: 1, updated_at: '1',
+    manifest_json: JSON.stringify({ id: 'cached-viewer', name: 'Cached viewer', version: '1', capabilities: [{ kind: 'item:read' }], contributes: { viewers: [{ id: 'text', match: ['text/plain'] }] } }) };
+  publishPlugins([row]);
+  vi.stubGlobal('fetch', vi.fn((url: string) => url.endsWith('/plugins')
+    ? Promise.reject(new Error('offline'))
+    : Promise.resolve(new Response(JSON.stringify({ canManage: true })))));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('Showing the last plugin list. Changes are unavailable until it refreshes.');
+  expect(screen.getAllByText('Cached viewer').length).toBeGreaterThan(0);
+  expect((screen.getByRole('button', { name: 'Disable' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Edit source' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Build a plugin' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /Approve the capabilities/ }));
+  expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it('retries a failed plugin list without closing Studio', async () => {
