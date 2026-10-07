@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   cacheOfflineVersion, clearOfflineContent, getOfflineVersion, listOfflinePins,
-  removeOfflinePin, resumeOfflineContent, setOfflinePin,
+  offlineSpace, rememberOfflineSpace, removeOfflinePin, resumeOfflineContent, setOfflinePin,
 } from './offline-content';
 
 const key = (principal = 'alice', space = 'family', versionId = 'v1') => ({
@@ -34,6 +34,15 @@ describe('opt-in offline content store', () => {
     await removeOfflinePin('alice', 'family', 'docs');
     expect(await listOfflinePins('alice', 'family')).toHaveLength(0);
     expect(await getOfflineVersion(key())).toBeNull();
+  });
+
+  it('remembers the actual scope behind the hostname for offline reloads and clears it on logout', async () => {
+    await rememberOfflineSpace('alice', '', 'family');
+    expect(await offlineSpace('alice', '')).toBe('family');
+    expect(await offlineSpace('bob', '')).toBeNull();
+    await clearOfflineContent();
+    await resumeOfflineContent();
+    expect(await offlineSpace('alice', '')).toBeNull();
   });
 
   it('refuses an in-flight download after sign-out and cannot reveal old bytes after re-authentication', async () => {

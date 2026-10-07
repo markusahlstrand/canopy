@@ -28,7 +28,7 @@ it('opens a completed mirror during an outage but revokes it after an online 401
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network unavailable')));
   const offline = render(<App />);
   expect(await screen.findByText('Saved Docs')).toBeTruthy();
-  expect(screen.getByText(/Offline — showing saved file and folder names/)).toBeTruthy();
+  expect(screen.getByText(/Offline — showing saved names/)).toBeTruthy();
   expect(screen.queryByText('Sign in to this space')).toBeNull();
   offline.unmount();
 

@@ -135,13 +135,21 @@ The response contains current metadata so replaying an old event cannot resurrec
 an obsolete name or version. It contains no bytes. The browser applies pages into
 IndexedDB, committing rows and cursor together under the current scope principal.
 After an online listing, it catches up in the background. If the network fails while
-the signed-in drive is open, folder browsing falls back to those saved names; writes,
-search, trash and content previews remain unavailable until Refresh reconnects.
+the signed-in drive is open, folder browsing falls back to those saved names. A person
+can mark a folder available offline on this device; the browser recursively downloads
+its current, readable file versions into a separate content store (20 MB per file,
+250 MB per space) and reports whether the download is complete. Those saved versions
+can be opened and downloaded read-only during an outage. Writes, search, and Trash
+remain unavailable until Refresh reconnects.
 The browser remembers the last authenticated principal for the current origin and
 selected site. Once the first feed pass has completed, a cold load can show that
 principal's saved names when `/api/me` is unreachable. An online 401 or sign-out
 clears the mirror, including the offline identity; sign-out in another tab also hides
 an already-open offline view.
+The content store is keyed by principal, space, file and version. Sign-out, an online
+401, and cross-tab logout clear both the metadata mirror and saved file bytes. A
+successful online folder walk removes deleted or superseded versions; a 403/404
+removes the affected folder pin and its bytes. A failed walk remains visibly incomplete.
 
 ## Historical versions
 
