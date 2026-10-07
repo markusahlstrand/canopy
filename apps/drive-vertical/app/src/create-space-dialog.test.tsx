@@ -46,6 +46,14 @@ it('lets an owner start another space after a request has been pending for five 
   fireEvent.change(screen.getByLabelText('Space name'),{target:{value:'Team'}});
   expect((screen.getByRole('button',{name:'Create space'}) as HTMLButtonElement).disabled).toBe(false);
 });
+it('offers recovery when a pending request becomes stale while the dialog stays open', async () => {
+  const almostOld = new Date(Date.now() - 5 * 60_000 + 400).toISOString();
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({requests:[{id:'old',name:'Family',slug:'family-old',status:'pending',error:null,requestedAt:almostOld}]}))));
+  render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={() => {}} />);
+  await screen.findByText(/Creating your space/);
+  expect(screen.queryByRole('button', { name: 'Start a different space' })).toBeNull();
+  expect(await screen.findByRole('button', { name: 'Start a different space' }, { timeout: 1200 })).toBeTruthy();
+});
 it('keeps Create disabled until a failed status check is retried successfully', async () => {
   let fail = true;
   vi.stubGlobal('fetch', vi.fn(async () => fail ? new Response('Unavailable',{status:503}) : new Response(JSON.stringify({requests:[]}))));
