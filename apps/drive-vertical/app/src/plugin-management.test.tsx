@@ -155,6 +155,20 @@ it('does not claim there are no installed plugins when loading fails', async () 
   expect(screen.queryByText('No plugins installed yet.')).toBeNull();
 });
 
+it('retries a failed plugin list without closing Studio', async () => {
+  let reads = 0;
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    if (!url.endsWith('/plugins')) return Promise.resolve(new Response(JSON.stringify({ canManage: false })));
+    return ++reads === 1 ? Promise.reject(new Error('offline')) : Promise.resolve(new Response(JSON.stringify({ plugins: [] })));
+  }));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('Could not load installed plugins.');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry installed plugins' }));
+  await screen.findByText('No plugins installed yet.');
+  expect(screen.queryByRole('button', { name: 'Retry installed plugins' })).toBeNull();
+  expect(reads).toBe(2);
+});
+
 it('clears a Studio draft after confirming discard on close', () => {
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   const onOpenChange = vi.fn();
