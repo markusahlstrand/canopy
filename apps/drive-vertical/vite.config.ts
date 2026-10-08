@@ -29,6 +29,7 @@ export default defineConfig({
     // `wrangler dev --var ALLOW_DEV_NODE:true` serves the worker on 8787; without
     // this the dev SPA calls its own origin and gets Vite's index.html back for
     // every API request.
-    proxy: { '/api': 'http://localhost:8787' },
+    // Keep the browser's Host so OIDC callbacks return to the UI origin.
+    proxy: { '/api': { target: 'http://localhost:8787', changeOrigin: false } },
   },
 });

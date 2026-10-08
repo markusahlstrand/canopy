@@ -13,6 +13,7 @@
   // vertical-auth pulls in a password hasher that imports node:crypto and
   // node:async_hooks. The hosted deploy gets this from runtimeNeeds.needsNodeCompat.
   "compatibility_flags": ["nodejs_compat"],
+  "r2_buckets": [{ "binding": "BLOBS__01JZ00000000000000000DEV01", "bucket_name": "canopy-local" }],
   "durable_objects": {
     "bindings": [
       { "name": "SCOPE", "class_name": "ScopeDO" },
