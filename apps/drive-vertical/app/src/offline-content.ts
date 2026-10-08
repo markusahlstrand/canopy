@@ -1,5 +1,6 @@
 /** Device-local, opt-in file bytes. The metadata mirror still owns default offline browsing. */
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { readOfflineBytes } from './offline-bytes';
 
 const DB_NAME = 'canopy.scope-content';
 const MAX_FILE_BYTES = 20_000_000;
@@ -270,10 +271,7 @@ export async function cacheOfflineVersion(
   const epoch = expectedEpoch ?? await sessionEpoch();
   const response = await fetcher(key.url, { credentials: 'same-origin' });
   if (!response.ok) throw new OfflineContentHttpError(response.status, key.name);
-  const advertised = Number(response.headers.get('content-length'));
-  if (advertised > MAX_FILE_BYTES) throw new Error(`${key.name} is larger than the 20 MB offline file limit.`);
-  const bytes = await response.arrayBuffer();
-  if (bytes.byteLength > MAX_FILE_BYTES) throw new Error(`${key.name} is larger than the 20 MB offline file limit.`);
+  const bytes = await readOfflineBytes(response, MAX_FILE_BYTES, `${key.name} is larger than the 20 MB offline file limit.`);
   const database = await db();
   const tx = database.transaction(['versions', 'pins', 'session'], 'readwrite');
   const session = await tx.objectStore('session').get(SESSION);
