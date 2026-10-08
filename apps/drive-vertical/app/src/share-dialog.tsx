@@ -79,6 +79,8 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
   const reads = useRef(latestOnly());
   /** The folder on screen NOW, for actions that resolve after it changed. */
   const openFolder = useRef<string | null>(null);
+  /** Distinguish a return to the same folder from the visit a mutation began in. */
+  const visit = useRef(0);
 
   const folderId = folder?.id ?? null;
   openFolder.current = folderId;
@@ -118,6 +120,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
   useLayoutEffect(() => {
     // A folder switch must not briefly show the previous folder's grants or leave a
     // new dialog busy because an old mutation is still pending.
+    visit.current++;
     reads.current.invalidate();
     setShares(null);
     setPeople(null);
@@ -140,25 +143,25 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
    * check, and writes A's access list under B's title. The ticket cannot catch this one: from
    * its point of view the read is the newest there is.
    *
-   * So the folder is checked instead, through a ref that always holds the one on screen. Same
-   * reasoning as `refreshRef` in the drive screen, where an action's captured refresh had to
-   * give way to the current one.
+   * Check both the folder and the visit: a return to A after visiting B must not let an
+   * earlier A mutation reload grants or clear the new visit's busy state.
    */
   const act = async (fn: () => Promise<unknown>) => {
     const startedOn = folderId;
+    const startedVisit = visit.current;
     setBusy(true);
     setError(null);
     try {
       await fn();
-      if (openFolder.current !== startedOn) return;
+      if (openFolder.current !== startedOn || visit.current !== startedVisit) return;
       load();
     } catch (e: unknown) {
       // The error too: a failure to change folder A is not something to report to somebody
       // now looking at folder B.
-      if (openFolder.current !== startedOn) return;
+      if (openFolder.current !== startedOn || visit.current !== startedVisit) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (openFolder.current === startedOn) setBusy(false);
+      if (openFolder.current === startedOn && visit.current === startedVisit) setBusy(false);
     }
   };
 
@@ -276,6 +279,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
                 onClick={() => {
                   const address = confirming;
                   const startedOn = folderId!;
+                  const startedVisit = visit.current;
                   setConfirming(null);
                   setTyped('');
                   void act(async () => {
@@ -283,7 +287,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
                     // The same guard `act` applies after `fn`, needed here because this write
                     // happens INSIDE it: closed or moved on while the invite was in flight, and
                     // this link would reappear on whatever folder is open next.
-                    if (openFolder.current === startedOn) setInvited(made);
+                    if (openFolder.current === startedOn && visit.current === startedVisit) setInvited(made);
                   });
                 }}
               >
