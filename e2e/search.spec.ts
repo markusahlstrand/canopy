@@ -84,16 +84,28 @@ test('name, extracted contents and metadata match in results and the keyboard pa
   await page.getByRole('button', { name: 'Manage Acceptance Drive', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Space plugins', exact: true }).click();
   const plugins = page.getByRole('dialog', { name: 'Plugins', exact: true });
+  await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
   await plugins.getByRole('button', { name: 'Review Image Viewer', exact: true }).click();
   await plugins.getByRole('checkbox', { name: /Approve the capabilities/ }).check();
   page.once('dialog', dialog => dialog.accept());
   await plugins.getByRole('button', { name: 'Install plugin', exact: true }).click();
-  const installed = plugins.locator('section').filter({ has: page.getByRole('heading', { name: 'Image Viewer', exact: true }) });
+  const installed = plugins.locator('section').filter({ has: page.getByRole('heading', { name: 'Image Viewer', exact: true }) }).filter({ hasText: 'Installed for you' });
   const toggle = installed.getByRole('button', { name: /^(Enable|Disable)$/ });
   await expect(toggle).toBeEnabled();
   if (await toggle.textContent() === 'Enable') await toggle.click();
-  await installed.getByRole('button', { name: 'Disable', exact: true }).click();
-  await expect(installed.getByRole('button', { name: 'Enable', exact: true })).toBeVisible();
+  await plugins.getByRole('button', { name: 'All installs', exact: true }).click();
+  const enabled: { name: string; personal: boolean }[] = [];
+  for (const row of await plugins.locator('section').filter({ has: page.getByRole('button', { name: 'Disable', exact: true }) }).all()) {
+    enabled.push({ name: await row.getByRole('heading').innerText(), personal: await row.getByText('Installed for you', { exact: true }).isVisible() });
+  }
+  const installRow = (item: { name: string; personal: boolean }) => plugins.locator('section')
+    .filter({ has: page.getByRole('heading', { name: item.name, exact: true }) })
+    .filter({ hasText: item.personal ? 'Installed for you' : 'Applied to Acceptance Drive' });
+  for (const item of enabled) {
+    await installRow(item).getByRole('button', { name: 'Disable', exact: true }).click();
+    await expect(installRow(item).getByRole('button', { name: 'Enable', exact: true })).toBeEnabled();
+  }
+  await expect(plugins.getByRole('button', { name: 'Disable', exact: true })).toHaveCount(0);
   await plugins.getByRole('button', { name: 'Disable image viewer', exact: true }).click();
   await plugins.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Search this space', exact: true })).toBeEnabled();
@@ -103,6 +115,16 @@ test('name, extracted contents and metadata match in results and the keyboard pa
   await expect(palette).toBeVisible();
   await palette.getByRole('combobox').fill(marker);
   await expect(palette.getByRole('option', { name: new RegExp(bodyFile) })).toBeVisible();
+  await page.keyboard.press('Escape');
+  if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('button', { name: 'Manage Acceptance Drive', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Space plugins', exact: true }).click();
+  for (const item of enabled) {
+    await installRow(item).getByRole('button', { name: 'Enable', exact: true }).click();
+    await expect(installRow(item).getByRole('button', { name: 'Disable', exact: true })).toBeEnabled();
+  }
+  await plugins.getByRole('button', { name: 'Enable image viewer', exact: true }).click();
+  await plugins.getByRole('button', { name: 'Close', exact: true }).click();
 });
 
 test('another account cannot discover or open files outside its space membership', async ({ page, browser }, info) => {
