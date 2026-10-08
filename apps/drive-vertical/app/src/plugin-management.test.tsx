@@ -87,12 +87,18 @@ it('restores bundled catalog review and source authoring', () => {
   expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default');
   expect(screen.getByRole('button', {name:'Install plugin'})).toBeTruthy();
 });
-it('requires approval again after the JavaScript source changes', () => {
+it('waits for the install list before saving and requires approval again after source changes', async () => {
+  let finishPlugins!: (response: Response) => void;
+  vi.stubGlobal('fetch', vi.fn((url: string) => url.endsWith('/plugins')
+    ? new Promise<Response>(resolve => { finishPlugins = resolve; })
+    : Promise.resolve(new Response(JSON.stringify({ canManage: false })))));
   render(<PluginManagement open onOpenChange={() => {}} />);
   fireEvent.click(screen.getByRole('button', { name: 'Build a plugin' }));
   const approval = screen.getByRole('checkbox', { name: /Approve the capabilities/ }) as HTMLInputElement;
   fireEvent.click(approval);
   expect(approval.checked).toBe(true);
+  expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => finishPlugins(new Response(JSON.stringify({ plugins: [] }))));
   expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(false);
 
   fireEvent.change(screen.getByLabelText('Plugin source'), { target: { value: 'export default function changed() {}' } });
@@ -250,6 +256,7 @@ it('does not send client-claimed provenance for a catalog install', async () => 
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => new Response(JSON.stringify(url.endsWith('/people/access') ? {canManage:false} : url.endsWith('/plugins') && init?.method !== 'PUT' ? {plugins:[]} : {})));
   vi.stubGlobal('fetch',fetcher);
   render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('No plugins installed yet.');
   fireEvent.click(screen.getByRole('button',{name:'Review Markdown'}));
   fireEvent.click(screen.getByRole('checkbox',{name:/Approve the capabilities/}));
   fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
@@ -309,9 +316,11 @@ it('clears an old import error when opening a different Studio source', () => {
   expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
   confirm.mockRestore();
 });
-it('requires fresh approval after a replacement file cannot be read', () => {
+it('requires fresh approval after a replacement file cannot be read', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [] } : { canManage: false }))));
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   render(<PluginManagement open onOpenChange={() => {}} />);
+  await screen.findByText('No plugins installed yet.');
   fireEvent.click(screen.getByRole('button', {name:'Review Markdown'}));
   fireEvent.click(screen.getByRole('checkbox', {name:/Approve the capabilities/}));
   expect((screen.getByRole('button', {name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(false);
