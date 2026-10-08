@@ -313,11 +313,11 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     // action runs — not about which control started it.
     newMenu();
     fireEvent.click(screen.getByText('New folder'));
-    fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
     fireEvent.click(screen.getByText('Create'));
 
-    // …and the user leaves for the root before it answers.
-    fireEvent.click(rail().getByText('My Drive'));
+    // Programmatic navigation can still change the listing while the modal save is pending.
+    fireEvent.click(within(screen.getByRole('complementary', { hidden: true })).getByText('My Drive'));
     await flush();
     await answer('/folders/root/folders', [{ id: '01G', parent_id: 'root', name: 'Notes', path: 'Notes' }]);
     await answer('/folders/root/files', [file('01C', 'at-the-root.md')]);
@@ -1012,8 +1012,8 @@ describe('the mobile drive shell and empty views', () => {
     await renderDrive();
     expect(screen.getByText('Your drive is empty')).toBeTruthy();
     fireEvent.click(within(screen.getByRole('status', { name: '' })).getByText('New folder'));
-    expect(screen.getByRole('dialog', { name: '' })).toBeTruthy();
-    expect(screen.getByLabelText('New folder')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'New folder' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'New folder' })).toBeTruthy();
   });
 
   it('distinguishes a short search from a completed search with no matches', async () => {
@@ -1229,7 +1229,7 @@ describe('a write goes where the person is looking', () => {
 
     newMenu();
     fireEvent.click(screen.getByText('New folder'));
-    fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
     fireEvent.click(screen.getByText('Create'));
 
     // The root, because that is where the screen went — not 01F, the folder the trash
@@ -1279,7 +1279,7 @@ describe('plugin app exits', () => {
     newMenu();
     fireEvent.click(screen.getByText('New folder'));
     expect(screen.queryByRole('button', { name: 'Back to drive' })).toBeNull();
-    fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
     fireEvent.click(screen.getByText('Create'));
     expect(pending.find((p) => p.method === 'POST' && p.url.includes('/folders'))?.url).toContain('/folders/01F/folders');
   });
@@ -2091,4 +2091,19 @@ it('keeps the refresh when the palette repeats an open search', async () => {
   await answer('/api/search', { hits: [{ ...file('01B', 'updated.txt'), via: 'content' }] });
   expect(screen.getByText('updated.txt')).toBeTruthy();
   expect(screen.queryByText('Loading…')).toBeNull();
+});
+
+it('retains a failed new-folder name and closes only after the retry succeeds', async () => {
+  await renderDrive();
+  newMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  const index = pending.findIndex(request => request.method === 'POST' && request.url.includes('/folders'));
+  await act(async () => pending.splice(index, 1)[0]!.reject(new Error('Connection failed')));
+  expect(screen.getByRole('alert').textContent).toBe('Connection failed');
+  expect((screen.getByRole('textbox', { name: 'New folder' }) as HTMLInputElement).value).toBe('Drafts');
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  expect(pending.find(request => request.method === 'POST')?.body).toBe(JSON.stringify({ name: 'Drafts' }));
+  await answer('/folders/root/folders', { id: 'new', parent_id: 'root', name: 'Drafts', path: 'Drafts' });
+  expect(screen.queryByRole('dialog', { name: 'New folder' })).toBeNull();
 });

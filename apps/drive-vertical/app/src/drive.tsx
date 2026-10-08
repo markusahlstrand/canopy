@@ -44,6 +44,7 @@ import { PeopleDialog } from './people-dialog';
 import { CurrentFolderShare } from './current-folder-share';
 import { ShareDialog } from './share-dialog';
 import { MoveDialog } from './move-dialog';
+import { NameDialog } from './name-dialog';
 import { FileDropZone } from './file-drop-zone';
 import { useUploadQueue } from './upload-queue';
 import { CommandPalette } from './command-palette';
@@ -1164,9 +1165,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           initial=""
           confirm="Create"
           onCancel={() => setCreating(false)}
-          onConfirm={(name) => {
+          onConfirm={async (name) => {
+            await createFolder(folderId, name);
             setCreating(false);
-            void act(() => createFolder(folderId, name));
+            void refreshRef.current().catch(error => onError(error instanceof Error ? error.message : String(error)));
           }}
         />
       ) : null}
@@ -1177,12 +1179,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           initial={renaming.name}
           confirm="Rename"
           onCancel={() => setRenaming(null)}
-          onConfirm={(name) => {
+          onConfirm={async (name) => {
             const target = renaming;
+            await (target.kind === 'folder' ? renameFolder(target.id, name) : renameFile(target.id, name));
             setRenaming(null);
-            void act(() =>
-              target.kind === 'folder' ? renameFolder(target.id, name) : renameFile(target.id, name),
-            );
+            void refreshRef.current().catch(error => onError(error instanceof Error ? error.message : String(error)));
           }}
         />
       ) : null}
@@ -1210,61 +1211,6 @@ function EmptyList({ icon, title, description, actions = [] }: {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * One name, typed. The same shape the portal's `NameDialog` has, and it exists for the
- * same reason: `window.prompt` cannot be styled, cannot be tested and is blocked
- * outright in some embedded webviews.
- */
-function NameDialog({
-  title,
-  initial,
-  confirm,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  initial: string;
-  confirm: string;
-  onCancel: () => void;
-  onConfirm: (name: string) => void;
-}) {
-  const [name, setName] = useState(initial);
-  const trimmed = name.trim();
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="dialog" aria-modal>
-      <form
-        className="w-full max-w-sm rounded-lg border border-border bg-background p-4 shadow-lg"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (trimmed) onConfirm(trimmed);
-        }}
-      >
-        <h2 className="mb-3 text-sm font-medium">{title}</h2>
-        {/* Named, because a dialog whose only field has no accessible name is one a
-            screen reader announces as "edit text" — and one a test cannot address
-            unambiguously when the toolbar also holds an input. */}
-        <Input
-          autoFocus
-          aria-label={title}
-          value={name}
-          onChange={(e) => setName(e.currentTarget.value)}
-        />
-        <p className="mt-2 text-xs text-muted-foreground">
-          A name is one segment: no slashes, and not <code>.</code> or <code>..</code>
-        </p>
-        <div className="mt-4 flex justify-end gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button type="submit" size="sm" disabled={!trimmed}>
-            {confirm}
-          </Button>
-        </div>
-      </form>
     </div>
   );
 }

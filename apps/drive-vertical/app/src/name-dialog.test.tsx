@@ -1,0 +1,30 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { NameDialog } from './name-dialog';
+afterEach(cleanup);
+it('retains the proposed name after failure and retries the same name', async () => {
+  const save = vi.fn().mockRejectedValueOnce(new Error('A file already has that name.')).mockResolvedValue(undefined);
+  render(<NameDialog title="Rename file" initial="old.txt" confirm="Rename" onCancel={() => {}} onConfirm={save} />);
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: ' new.txt ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+  await screen.findByRole('alert');
+  expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe(' new.txt ');
+  fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+  await act(async () => {});
+  expect(save.mock.calls).toEqual([['new.txt'], ['new.txt']]);
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+it('blocks duplicate submissions and dismissal while a name is saving', async () => {
+  let finish!: () => void;
+  const save = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  const cancel = vi.fn();
+  render(<NameDialog title="New folder" initial="Nested" confirm="Create" onCancel={cancel} onConfirm={save} />);
+  const form = screen.getByRole('textbox').closest('form')!;
+  fireEvent.submit(form); fireEvent.submit(form);
+  fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+  expect(save).toHaveBeenCalledOnce(); expect(cancel).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Cancel' }).hasAttribute('disabled')).toBe(true);
+  await act(async () => finish());
+  fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+  expect(cancel).toHaveBeenCalledOnce();
+});
