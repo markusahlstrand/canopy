@@ -252,7 +252,7 @@ export default function App() {
     boot()
       .then((me) => {
         if (me) {
-          void resumeMirror()
+          void resumeMirror(me.principal)
             .then(() => rememberOfflineIdentity(offlineSiteKey(), me.principal))
             .catch(() => {})
             .finally(() => setSession({ state: 'in', principal: me.principal }));

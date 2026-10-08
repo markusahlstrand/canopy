@@ -605,8 +605,8 @@ export function appendRows<T extends { id: string }>(rows: T[], incoming: T[]): 
 }
 
 /** History is a bare array with its continuation in Link; never infer the end from row count. */
-export async function fileVersionsPage(fileId: string, next: string | null = null): Promise<{ versions: FileVersion[]; next: string | null }> {
-  const page = await readPage<FileVersion>(`/files/${encodeURIComponent(fileId)}/versions`, next, 'version-history');
+export async function fileVersionsPage(fileId: string, next: string | null = null, selectedSite = site): Promise<{ versions: FileVersion[]; next: string | null }> {
+  const page = await readPage<FileVersion>(`/files/${encodeURIComponent(fileId)}/versions`, next, 'version-history', selectedSite);
   return { versions: page.entries, next: page.next };
 }
 
@@ -623,8 +623,8 @@ export const listSites = () => call<Site[]>('/sites');
 export const listFolders = (folderId: string) =>
   call<DriveFolder[]>(`/folders/${encodeURIComponent(folderId)}/folders`);
 
-export const listFolderPage = (folderId: string, next: string | null = null) =>
-  readPage<DriveFile>(`/folders/${encodeURIComponent(folderId)}/files`, next);
+export const listFolderPage = (folderId: string, next: string | null = null, selectedSite = site) =>
+  readPage<DriveFile>(`/folders/${encodeURIComponent(folderId)}/files`, next, 'listing', selectedSite);
 
 export const listTrashPage = (next: string | null = null) => readPage<DriveFile>('/trash', next);
 
@@ -744,8 +744,8 @@ export function contentUrl(fileId: string): string {
 }
 
 /** Stream an immutable version through the same selected-space attachment gate. */
-export function versionContentUrl(fileId: string, versionId: string): string {
-  const q = site ? `?site=${encodeURIComponent(site)}` : '';
+export function versionContentUrl(fileId: string, versionId: string, selectedSite = site): string {
+  const q = selectedSite ? `?site=${encodeURIComponent(selectedSite)}` : '';
   return `${API}/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}/content${q}`;
 }
 

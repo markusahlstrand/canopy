@@ -22,6 +22,9 @@ import { readViewPreferences, saveViewPreferences, watchViewPreferences } from '
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
 import { indexedMirror, syncMirror } from './scope-mirror';
+import { listOfflinePins, offlineSpace, rememberOfflineSpace, removeOfflinePin, setOfflinePin, type FolderPin } from './offline-content';
+import { refreshOfflinePins, syncOfflineFolderOnce, type FolderSyncProgress } from './offline-folder-sync';
+import { OfflinePreview } from './offline-preview';
 import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
@@ -239,6 +242,34 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    */
   const [canManagePeople, setCanManagePeople] = useState(false);
   const siteList = useSites();
+  const liveSpace = siteList.sites?.find(site => site.current)?.slug ?? null;
+  const [savedSpace, setSavedSpace] = useState<string | null>(null);
+  const cacheSpace = liveSpace ?? savedSpace ?? currentSite();
+  const [offlinePins, setOfflinePins] = useState<FolderPin[]>([]);
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinProgress, setPinProgress] = useState<FolderSyncProgress | null>(null);
+  const [pinError, setPinError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!auth.principal) return;
+    let active = true;
+    if (liveSpace) {
+      setSavedSpace(liveSpace);
+      void rememberOfflineSpace(auth.principal, currentSite() ?? '', liveSpace).catch(() => {});
+    } else {
+      void offlineSpace(auth.principal, currentSite() ?? '').then(space => { if (active) setSavedSpace(space); }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [auth.principal, liveSpace]);
+  const reloadPins = useCallback(async () => {
+    if (!auth.principal || !cacheSpace) { setOfflinePins([]); return; }
+    try { setOfflinePins(await listOfflinePins(auth.principal, cacheSpace)); }
+    catch { setOfflinePins([]); }
+  }, [auth.principal, cacheSpace]);
+  useEffect(() => { void reloadPins(); }, [reloadPins, folderId, offline]);
+  useEffect(() => {
+    if (!auth.principal || !cacheSpace || offline || busy || view !== 'drive') return;
+    void refreshOfflinePins(auth.principal, cacheSpace).then(reloadPins).catch(() => {});
+  }, [auth.principal, cacheSpace, offline, busy, view, files, reloadPins]);
   useEffect(() => { void refreshPlugins().catch(() => {}); }, []);
 
   useEffect(() => {
@@ -745,6 +776,27 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const selectedSpace = siteList.sites?.find(site => site.current);
   const activeSpaceName = selectedSpace ? spaceLabel(selectedSpace) : currentSite() || undefined;
   const rootLabel = activeSpaceName || 'My Drive';
+  const currentPin = offlinePins.find(pin => pin.folderId === folderId);
+  const saveCurrentFolderOffline = async () => {
+    if (!auth.principal || !cacheSpace || pinBusy) return;
+    const pin: FolderPin = { principal: auth.principal, space: cacheSpace, folderId,
+      name: crumbs.at(-1)?.name ?? rootLabel, status: 'syncing', updatedAt: Date.now() };
+    setPinBusy(true); setPinError(null); setPinProgress(null);
+    try {
+      await setOfflinePin(pin);
+      await reloadPins();
+      await syncOfflineFolderOnce(pin, undefined, progress => setPinProgress(progress));
+    } catch (error) {
+      setPinError(error instanceof Error ? error.message : String(error));
+    } finally { setPinBusy(false); await reloadPins(); }
+  };
+  const removeCurrentFolderOffline = async () => {
+    if (!auth.principal || !cacheSpace || pinBusy) return;
+    setPinBusy(true); setPinError(null); setPinProgress(null);
+    try { await removeOfflinePin(auth.principal, cacheSpace, folderId); }
+    catch (error) { setPinError(error instanceof Error ? error.message : String(error)); }
+    finally { setPinBusy(false); await reloadPins(); }
+  };
   const empty = linkListingUnavailable && view === 'drive' ? (
     <EmptyList icon="folder" title="Folder context unavailable" description="The file preview remains available. Choose My Drive to browse folders you can access." actions={[{ label: 'Retry folder', onClick: () => void refresh(true) }, { label: 'Go to My Drive', onClick: () => navigate('drive') }]} />
   ) : loadFailed ? (
@@ -852,7 +904,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         <CurrentFolderShare folderId={folderId} onShare={setSharing} />
         {siteList.sites?.find(site => site.current)?.slug || currentSite() ? <CopyFolderLink key={folderId} folderId={folderId}
           site={siteList.sites?.find(site => site.current)?.slug ?? currentSite() ?? undefined} compact /> : null}
+        {cacheSpace && auth.principal ? <>
+          <Button size="sm" variant="outline" disabled={pinBusy} onClick={() => void (currentPin?.status === 'ready' ? removeCurrentFolderOffline() : saveCurrentFolderOffline())}>
+            {pinBusy ? 'Saving offline…' : currentPin?.status === 'ready' ? 'Remove offline copy' : currentPin ? 'Retry offline download' : 'Available offline on this device'}
+          </Button>
+          {currentPin && currentPin.status !== 'ready' ? <Button size="sm" variant="ghost" disabled={pinBusy} onClick={() => void removeCurrentFolderOffline()}>Remove pin</Button> : null}
+        </> : null}
       </div> : null}
+      {pinBusy && pinProgress ? <p role="status" className="px-4 text-xs text-muted-foreground">Saving {pinProgress.files} files in {pinProgress.folders} folders for offline reading…</p> : null}
+      {pinError ? <p role="alert" className="px-4 text-xs text-destructive">Offline copy incomplete: {pinError}</p> : null}
 
       <input
         ref={uploadRef}
@@ -920,7 +980,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onFiles={chosen => uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen)}>
       {offline ? (
         <p role="status" className="mb-3 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-          Offline — showing saved file and folder names. File content and changes are unavailable.
+          Offline — showing saved names. Saved file copies can open read-only; changes and search are unavailable.
         </p>
       ) : null}
       <SelectionSummary selection={selection} items={view === 'search' ? previewFiles.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file))]} onClear={() => setSelection(new Set())} />
@@ -1028,7 +1088,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onOpen={(item) => {
             const folder = folders.find((f) => folderItemId(f) === item.id);
             if (folder) open(folder);
-            else if (!offline) setPreviewing(item.id);
+            else setPreviewing(item.id);
           }}
           sort={sort}
           onSort={onSort}
@@ -1063,13 +1123,18 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       {previewing ? (
         <div className="fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0">
-          <PreviewPanel
+          {offline && !hasUnsavedDrafts() ? cacheSpace && auth.principal && files.find(file => file.id === previewing) ? <OfflinePreview
+            file={files.find(file => file.id === previewing)!}
+            principal={auth.principal}
+            space={cacheSpace}
+            onClose={() => setPreviewing(null)}
+          /> : <p role="status" className="p-4 text-sm">Saved file details are unavailable. Reconnect to open this file.</p> : <PreviewPanel
             fileId={previewing}
             navigation={previewNavigation}
             onChanged={() => void refresh()}
             onClose={() => setPreviewing(null)}
             onError={onError}
-          />
+          />}
         </div>
       ) : null}
       </>}
