@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import { openDB } from 'idb';
 import { clearMirror, indexedMirror, offlineIdentity, rememberOfflineIdentity, syncFromSpine, type MirrorStore } from './scope-mirror';
+import { cacheOfflineVersion, getOfflineVersion, resumeOfflineContent, setOfflinePin } from './offline-content';
 import type { DriveChange, DriveChanges, DriveFile, DriveFolder } from './api';
 
 function memoryStore() {
@@ -121,7 +122,16 @@ describe('IndexedDB mirror', () => {
     expect(await offlineIdentity('https://drive.test|home')).toBe(principal);
     expect(await offlineIdentity('https://drive.test|family')).toBeNull();
 
+    await resumeOfflineContent();
+    await setOfflinePin({ principal, space: 'home', folderId: 'docs', name: 'Docs', status: 'ready', updatedAt: 1 });
+    const saved = { principal, space: 'home', fileId: 'report', versionId: 'v1' };
+    await cacheOfflineVersion({ ...saved, folderId: 'docs', name: 'Report', mime: 'text/plain', url: '/content' },
+      async () => new Response('private bytes'));
+    expect(await getOfflineVersion(saved)).not.toBeNull();
+
     await clearMirror();
+    await resumeOfflineContent();
+    expect(await getOfflineVersion(saved)).toBeNull();
     expect(await offlineIdentity('https://drive.test|home')).toBeNull();
     const database = await openDB('canopy.scope-mirror', 1);
     expect(await database.getAll('files')).toEqual([]);

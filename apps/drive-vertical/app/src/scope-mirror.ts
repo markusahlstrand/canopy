@@ -5,6 +5,7 @@
  */
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { changes, type DriveChange, type DriveChanges, type DriveFile, type DriveFolder } from './api';
+import { clearOfflineContent, resumeOfflineContent } from './offline-content';
 
 interface SavedFile extends DriveFile { principal: string }
 interface SavedFolder extends DriveFolder { principal: string }
@@ -34,11 +35,7 @@ function sessionChannel(): BroadcastChannel | undefined {
   if (!channel) {
     channel = new BroadcastChannel(CHANNEL);
     channel.onmessage = () => {
-      blocked = true;
-      for (const principal of inFlight.keys()) {
-        generations.set(principal, (generations.get(principal) ?? 0) + 1);
-      }
-      inFlight.clear();
+      void clearMirror(false).catch(() => {});
       for (const listener of logoutListeners) listener();
     };
   }
@@ -234,13 +231,15 @@ export function syncMirror(principal: string): Promise<void> {
 
 /** A logout clears every space mirrored by this origin, including spaces other
  * than the one currently selected. Any in-flight sync is invalidated first. */
-export async function clearMirror(): Promise<void> {
+export async function clearMirror(broadcast = true): Promise<void> {
   blocked = true;
-  sessionChannel()?.postMessage('logout');
+  if (broadcast) sessionChannel()?.postMessage('logout');
   for (const principal of inFlight.keys()) {
     generations.set(principal, (generations.get(principal) ?? 0) + 1);
   }
   inFlight.clear();
+  // A blocked content store must not prevent the metadata identity from being revoked.
+  await clearOfflineContent().catch(() => {});
   const database = await db();
   const tx = database.transaction(['files', 'folders', 'progress'], 'readwrite');
   const progress = tx.objectStore('progress');
@@ -270,6 +269,7 @@ export async function resumeMirror(): Promise<void> {
   await progress.put({ principal: SESSION_KEY, cursor: null, ready: false,
     epoch: (session?.epoch ?? 0) + 1, revoked: false });
   await tx.done;
+  await resumeOfflineContent().catch(() => {});
   blocked = false;
   sessionChannel();
 }
