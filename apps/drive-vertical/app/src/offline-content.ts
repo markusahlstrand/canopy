@@ -285,7 +285,14 @@ export async function cacheOfflineVersion(
     principal: key.principal, space: key.space, fileId: key.fileId, versionId: key.versionId,
     name: key.name, mime: key.mime, bytes, savedAt: Date.now(), pinnedBy,
   };
-  await versions.put(row);
-  await tx.done;
+  try {
+    await versions.put(row);
+    await tx.done;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+      throw new Error('This browser is out of storage space for offline files. Free device space or remove an offline folder, then retry.');
+    }
+    throw error;
+  }
   return row;
 }
