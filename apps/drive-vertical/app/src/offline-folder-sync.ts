@@ -75,7 +75,7 @@ export async function syncOfflineFolder(
           if (!version) continue;
           const key = { principal: pin.principal, space: pin.space, fileId: file.id, versionId: version.id };
           const cached = await getOfflineVersion(key);
-          if (!cached || !await retainOfflineVersion(key, pin.folderId, epoch)) {
+          if (!cached || !await retainOfflineVersion(key, pin.folderId, epoch, { name: file.name })) {
             await cacheOfflineVersion({ ...key, folderId: pin.folderId, name: file.name, mime: version.mime,
               url: source.contentUrl(file.id, version.id, pin.space) }, fetch, epoch);
           }
