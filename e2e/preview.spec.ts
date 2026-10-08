@@ -102,6 +102,7 @@ test('image, PDF, installed viewer and unsupported fallback stay usable within t
   await page.getByRole('button', { name: 'Manage Acceptance Drive', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Space plugins', exact: true }).click();
   const plugins = page.getByRole('dialog', { name: 'Plugins', exact: true });
+  await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
   await plugins.getByRole('button', { name: 'Review Image Viewer', exact: true }).click();
   await plugins.getByRole('checkbox', { name: /Approve the capabilities/ }).check();
   page.once('dialog', dialog => dialog.accept()); // Mobile replaces this run's desktop install.
