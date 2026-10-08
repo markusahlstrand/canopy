@@ -51,8 +51,15 @@ test('native recursive and paged pins recover partial downloads; offline bytes a
   await page.getByRole('button', { name: page.viewportSize()!.width < 768 ? 'Back to parent folder' : folder, exact: true }).click();
   await page.locator('input[type=file]').setInputFiles(Array.from({ length: 52 }, (_, i) => ({ name: `f${String(i).padStart(3, '0')}.txt`, mimeType: 'text/plain', buffer: Buffer.from(`Offline fixture ${i}`) })));
   await expect(page.getByRole('region', { name: 'Uploads' }).getByText('Uploaded', { exact: true })).toHaveCount(53, { timeout: 30_000 });
-  const listing = await (await page.request.get('/api/folders/root/folders')).json();
-  const folderId = listing.find((row: {name:string}) => row.name === folder).id;
+  let listingUrl: string | undefined = '/api/folders/root/folders';
+  let folderId: string | undefined;
+  while (listingUrl && !folderId) {
+    const response = await page.request.get(listingUrl);
+    const entries = await response.json();
+    folderId = entries.find((row: {name:string}) => row.name === folder)?.id;
+    listingUrl = response.headers().link?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
+  }
+  expect(folderId).toBeTruthy();
   const files = await (await page.request.get(`/api/folders/${folderId}/files`)).json();
   const failingId = files.find((row: {name:string}) => row.name === 'f010.txt').id;
   await page.route(`**/api/files/${failingId}/versions/*/content*`, route => route.abort('failed'), { times: 1 });
