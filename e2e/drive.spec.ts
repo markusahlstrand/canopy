@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { signIn, nav, createFolder, action, rename, upload, downloaded } from './support';
+import { revealRow, signIn, nav, createFolder, action, rename, upload, downloaded } from './support';
 
 test('root, nested folders, file lifecycle and every file version retain their identity', async ({ page }, testInfo) => {
   const prefix = testInfo.project.name;
@@ -96,7 +96,7 @@ test('real name collisions and a failed request keep the proposed folder name fo
   await expect(dialog.getByRole('textbox')).toHaveValue(`${name} corrected`);
   await dialog.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole('button', { name: `Actions for ${name} corrected` })).toBeVisible();
+  await revealRow(page, `${name} corrected`);
 });
 
 test('new folders and their contents remain reachable beyond the first listing page', async ({ page }, info) => {
@@ -106,6 +106,8 @@ test('new folders and their contents remain reachable beyond the first listing p
   await createFolder(page, parent);
   await action(page, parent, 'Open');
   for (let index = 0; index < 21; index++) await createFolder(page, `Page folder ${String(index).padStart(2, '0')}`);
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Actions for Page folder 20', exact: true })).toBeVisible();
   await action(page, 'Page folder 20', 'Open');
   await upload(page, 'last-page.txt', 'Bytes reached through the second folder page');
   if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Back to parent folder', exact: true }).click();

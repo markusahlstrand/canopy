@@ -75,6 +75,7 @@ import {
   trashFile,
   type DriveFile,
   type DriveFolder,
+  type ListingPage,
   type SharedFolder,
   type SearchHit,
 } from './api';
@@ -121,6 +122,19 @@ function sorted<T extends { name: string; updated_at?: string }>(rows: T[], sort
       ? dir * (a.updated_at ?? '').localeCompare(b.updated_at ?? '')
       : dir * a.name.localeCompare(b.name),
   );
+}
+
+/** Re-read the pages already visible, so a live refresh cannot collapse navigation. */
+async function readLoadedPages<T extends { id: string }>(
+  read: (next?: string | null) => Promise<ListingPage<T>>, count: number, current: () => boolean,
+): Promise<ListingPage<T>> {
+  let page = await read();
+  let entries = page.entries;
+  for (let index = 1; index < count && page.next && current(); index++) {
+    page = await read(page.next);
+    entries = appendRows(entries, page.entries);
+  }
+  return { entries, next: page.next };
 }
 
 /** Bytes, as the table's `size` column wants them: already formatted, or an em dash. */
@@ -193,6 +207,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [filesNext, setFilesNext] = useState<string | null>(null);
   const [foldersNext, setFoldersNext] = useState<string | null>(null);
   const [loadingPage, setLoadingPage] = useState(false);
+  const listingDepth = useRef({ folder: ROOT_FOLDER_ID, files: 1, folders: 1 });
   const [folders, setFolders] = useState<(DriveFolder | SharedFolder)[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [busy, setBusy] = useState(true);
@@ -377,6 +392,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       finally { if (generation === linkNavigation.current) setBusy(false); }
       return;
     }
+    if (view !== 'drive' || listingDepth.current.folder !== folderId) {
+      listingDepth.current = { folder: view === 'drive' ? folderId : '', files: 1, folders: 1 };
+    }
     const ticket = reads.current.take();
     setBusy(true);
     setLoadingPage(false);
@@ -405,7 +423,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         setTrash(bin.entries);
         setTrashNext(bin.next);
       } else {
-        const [subfolders, contents] = await Promise.all([listFoldersPage(folderId), listFolderPage(folderId)]);
+        const depth = { ...listingDepth.current };
+        const [subfolders, contents] = await Promise.all([
+          readLoadedPages(next => listFoldersPage(folderId, next), depth.folders, () => reads.current.current(ticket)),
+          readLoadedPages(next => listFolderPage(folderId, next), depth.files, () => reads.current.current(ticket)),
+        ]);
         if (!reads.current.current(ticket)) return;
         setFolders(subfolders.entries);
         setFoldersNext(subfolders.next);
@@ -473,6 +495,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     try {
       const page = await listFolderPage(folderId, filesNext);
       if (!reads.current.current(ticket)) return;
+      listingDepth.current.files++;
       setFiles(rows => appendRows(rows, page.entries));
       setFilesNext(page.next);
     } catch (e: unknown) {
@@ -490,6 +513,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     try {
       const page = await listFoldersPage(folderId, foldersNext);
       if (!reads.current.current(ticket)) return;
+      listingDepth.current.folders++;
       setFolders(rows => appendRows(rows, page.entries));
       setFoldersNext(page.next);
       onError(null);
