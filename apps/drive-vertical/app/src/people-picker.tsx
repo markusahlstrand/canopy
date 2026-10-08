@@ -100,6 +100,8 @@ export function PeoplePicker({
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => results.length > 0 && setOpen(true)}
         onKeyDown={(e) => {
+          // Enter confirms IME text before it may choose a person or submit a form.
+          if (e.nativeEvent.isComposing) return;
           // While a suggestion is highlighted, the arrows/Enter drive the list
           // and never reach the form (so Enter picks a person, not submits).
           if (!open || results.length === 0) return;
@@ -113,6 +115,8 @@ export function PeoplePicker({
             e.preventDefault();
             choose(results[active]!);
           } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
             setOpen(false);
           }
         }}
