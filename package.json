@@ -10,7 +10,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm --filter @canopy/drive-vertical dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:worker": "pnpm --filter @canopy/drive-vertical dev",
     "dev:web": "pnpm --filter @canopy/drive-vertical dev:web",
     "dev:api": "pnpm --filter @canopy/api dev",
     "build": "pnpm -r build",
@@ -28,6 +29,8 @@
     "plugin:validate": "node packages/plugin-validator/src/cli.mjs"
   },
   "devDependencies": {
+    "@hono/node-server": "^2.1.3",
+    "@substrat-run/dev-issuer": "0.2.20",
     "concurrently": "^10.0.5",
     "typescript": "~7.0.2",
     "wrangler": "^4.143.0"

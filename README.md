@@ -27,7 +27,9 @@ pnpm install
 pnpm dev
 ~~~
 
-That runs the vertical's worker with Wrangler. For front-end HMR, also run <code>pnpm dev:web</code> and open Vite on port 5769; it proxies <code>/api</code> to the worker on port 8787. Local scope addressing grants no identity, so configure an OIDC issuer to sign in. <code>pnpm dev:api</code> runs the separate legacy API when needed.
+That starts the local OIDC issuer, provisions a local drive in the Wrangler worker on port 8787, and runs Vite with front-end HMR on http://localhost:5769. Sign in and choose **Local Owner** to claim the drive on first use. **Local Guest** can join through an invitation. Local data and uploads persist in Wrangler's ignored `.wrangler` directory between runs. Ctrl+C stops all three services.
+
+<code>pnpm dev:worker</code> and <code>pnpm dev:web</code> start the worker and UI individually. <code>pnpm dev:api</code> runs the separate legacy API when needed.
 
 ## Check and deploy
 

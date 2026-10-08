@@ -8,6 +8,12 @@ importers:
 
   .:
     devDependencies:
+      '@hono/node-server':
+        specifier: ^2.1.3
+        version: 2.1.3(hono@4.13.12)
+      '@substrat-run/dev-issuer':
+        specifier: 0.2.20
+        version: 0.2.20(@cloudflare/workers-types@5.20261001.1)(@libsql/client@0.18.0)(better-sqlite3@13.0.3)(hono@4.13.12)(kysely@0.29.6)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.3(@types/node@26.6.3)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.3)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.5)
       concurrently:
         specifier: ^10.0.5
         version: 10.0.5
@@ -1181,6 +1187,12 @@ packages:
 
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
+
+  '@hono/node-server@1.19.17':
+    resolution: {integrity: sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: ^4
 
   '@hono/node-server@2.1.3':
     resolution: {integrity: sha512-TA//nWMqPhbfdfneACk6t5a9eqbS9lABEPyKn0/xZTah3H3U2XaVg85rJFl0/Fyit0I552YDHgXGVSf3GwqbUw==}
@@ -2532,11 +2544,30 @@ packages:
     peerDependencies:
       zod: ^4.4.0
 
+  '@substrat-run/contracts@0.138.0':
+    resolution: {integrity: sha512-jCPVndrhZY6Rcz3/hlarb6bWPRY959pxkmPq89MUUPvVZ/yc4sryvD2ixg+0qVy6UfsP/XN1Qo3ADmRXtJdZEA==}
+    peerDependencies:
+      zod: ^4.4.0
+
+  '@substrat-run/dev-issuer@0.2.20':
+    resolution: {integrity: sha512-xsWKzlIV8VFiit/9uB7yC49apfBzp4ml3ToP0BbjLfDfGIYD0Ac6EazhKcv3WLcO9KCP0SXhn92/+TiLDUaRwg==}
+    hasBin: true
+    peerDependencies:
+      hono: ^4.13.12
+
   '@substrat-run/kernel@0.135.0':
     resolution: {integrity: sha512-8ceVTpGq0E95MUa3odxuRPSAS2xm3s7hWfhYi8h+w9WfAgucea9Rn+mBIoxTT6aTMwDDi+Y+8PeHpTRidOgR0A==}
 
+  '@substrat-run/kernel@0.138.0':
+    resolution: {integrity: sha512-FWye6xLbG0JXVw754W6rTBXieEMrJeOWH+T5753Q0fQb4ftfghhhgsjK+x4YbmwiQhZJ7N1sCqaqWTZgTKb4oA==}
+
   '@substrat-run/model-providers@0.5.25':
     resolution: {integrity: sha512-hSfQBFodgUCQb06aEgNNhyF26onnyEpfACnJtteU2pZR1o2+uLJEe3S7yjidonMLMZnc4IqcX330o26nl+8x/A==}
+
+  '@substrat-run/oidc-rp@0.10.0':
+    resolution: {integrity: sha512-Odd6qrctV5Gb/WaRFTmurOe4OaXq5PCBoR5oaxJSe3Mk7v/LBQd4+eWM21JnnqsUCl+ImZEynHsZ8P+a7aewpg==}
+    peerDependencies:
+      hono: ^4.13.9
 
   '@substrat-run/oidc-rp@0.9.1':
     resolution: {integrity: sha512-T64/h06ymO7aTbAJsvlguxOXMqpzgGKT/JM0tPOhIuzDFl2TzUsJHWi6TXR3aoQ9ZXdn9z9EJPwIz4p1A0aUWg==}
@@ -2550,6 +2581,11 @@ packages:
     resolution: {integrity: sha512-T+YGpfTCNfA2EeVI413V7pWtycfdY5jE1hTRWiKCrAUjRGcMvU/Qm3rVkG33bVM0+0gELk7GNy8EIaPJdb8bUQ==}
     peerDependencies:
       hono: ^4.13.9
+
+  '@substrat-run/vertical-auth@0.19.1':
+    resolution: {integrity: sha512-GjI6xUxDev86HUD4EjVugmhQDTXHESj0PA50OWI/SPHTo3G//3DVq5BKiNc9+v/u0bYHP6TA0KmV1O+TnDa0/A==}
+    peerDependencies:
+      hono: ^4.13.12
 
   '@substrat-run/vertical-host@0.135.0':
     resolution: {integrity: sha512-Qb4exy/1ULMqTwYe/V98kINnhyIcEZHDrY08v18Arc2eeqG546TQHg2QjCRNliV8nRIba7XXpUHh8SubrVmQrw==}
@@ -5275,6 +5311,10 @@ snapshots:
 
   '@floating-ui/utils@0.2.12': {}
 
+  '@hono/node-server@1.19.17(hono@4.13.12)':
+    dependencies:
+      hono: 4.13.12
+
   '@hono/node-server@2.1.3(hono@4.13.12)':
     dependencies:
       hono: 4.13.12
@@ -6585,9 +6625,72 @@ snapshots:
     dependencies:
       zod: 4.6.5
 
+  '@substrat-run/contracts@0.138.0(zod@4.6.5)':
+    dependencies:
+      zod: 4.6.5
+
+  '@substrat-run/dev-issuer@0.2.20(@cloudflare/workers-types@5.20261001.1)(@libsql/client@0.18.0)(better-sqlite3@13.0.3)(hono@4.13.12)(kysely@0.29.6)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.3(@types/node@26.6.3)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.3)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.5)':
+    dependencies:
+      '@hono/node-server': 1.19.17(hono@4.13.12)
+      '@substrat-run/contracts': 0.138.0(zod@4.6.5)
+      '@substrat-run/vertical-auth': 0.19.1(@cloudflare/workers-types@5.20261001.1)(@libsql/client@0.18.0)(better-sqlite3@13.0.3)(hono@4.13.12)(kysely@0.29.6)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.3(@types/node@26.6.3)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.3)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.5)
+      hono: 4.13.12
+      jose: 6.2.12
+    transitivePeerDependencies:
+      - '@aws-sdk/client-rds-data'
+      - '@cloudflare/workers-types'
+      - '@electric-sql/pglite'
+      - '@libsql/client'
+      - '@libsql/client-wasm'
+      - '@lynx-js/react'
+      - '@neondatabase/serverless'
+      - '@netlify/db'
+      - '@op-engineering/op-sqlite'
+      - '@opentelemetry/api'
+      - '@planetscale/database'
+      - '@prisma/client'
+      - '@sveltejs/kit'
+      - '@tanstack/react-start'
+      - '@tanstack/solid-start'
+      - '@tidbcloud/serverless'
+      - '@types/better-sqlite3'
+      - '@types/pg'
+      - '@types/sql.js'
+      - '@upstash/redis'
+      - '@vercel/postgres'
+      - '@xata.io/client'
+      - better-sqlite3
+      - bun-types
+      - drizzle-kit
+      - expo-sqlite
+      - gel
+      - knex
+      - kysely
+      - mongodb
+      - mysql2
+      - next
+      - pg
+      - postgres
+      - prisma
+      - react
+      - react-dom
+      - solid-js
+      - sql.js
+      - sqlite3
+      - svelte
+      - vitest
+      - vue
+      - zod
+
   '@substrat-run/kernel@0.135.0(zod@4.6.5)':
     dependencies:
       '@substrat-run/contracts': 0.135.0(zod@4.6.5)
+    transitivePeerDependencies:
+      - zod
+
+  '@substrat-run/kernel@0.138.0(zod@4.6.5)':
+    dependencies:
+      '@substrat-run/contracts': 0.138.0(zod@4.6.5)
     transitivePeerDependencies:
       - zod
 
@@ -6598,6 +6701,11 @@ snapshots:
       ai: 7.0.114(zod@4.6.5)
     transitivePeerDependencies:
       - zod
+
+  '@substrat-run/oidc-rp@0.10.0(hono@4.13.12)':
+    dependencies:
+      hono: 4.13.12
+      jose: 6.2.12
 
   '@substrat-run/oidc-rp@0.9.1(hono@4.13.12)':
     dependencies:
@@ -6611,6 +6719,62 @@ snapshots:
       '@substrat-run/contracts': 0.135.0(zod@4.6.5)
       '@substrat-run/kernel': 0.135.0(zod@4.6.5)
       '@substrat-run/oidc-rp': 0.9.1(hono@4.13.12)
+      '@substrat-run/psl': 0.2.5
+      better-auth: 1.7.7(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261001.1)(@libsql/client@0.18.0)(better-sqlite3@13.0.3)(kysely@0.29.6))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.3(@types/node@26.6.3)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.3)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))
+      drizzle-orm: 0.45.3(@cloudflare/workers-types@5.20261001.1)(@libsql/client@0.18.0)(better-sqlite3@13.0.3)(kysely@0.29.6)
+      hono: 4.13.12
+      jose: 6.2.12
+    transitivePeerDependencies:
+      - '@aws-sdk/client-rds-data'
+      - '@cloudflare/workers-types'
+      - '@electric-sql/pglite'
+      - '@libsql/client'
+      - '@libsql/client-wasm'
+      - '@lynx-js/react'
+      - '@neondatabase/serverless'
+      - '@netlify/db'
+      - '@op-engineering/op-sqlite'
+      - '@opentelemetry/api'
+      - '@planetscale/database'
+      - '@prisma/client'
+      - '@sveltejs/kit'
+      - '@tanstack/react-start'
+      - '@tanstack/solid-start'
+      - '@tidbcloud/serverless'
+      - '@types/better-sqlite3'
+      - '@types/pg'
+      - '@types/sql.js'
+      - '@upstash/redis'
+      - '@vercel/postgres'
+      - '@xata.io/client'
+      - better-sqlite3
+      - bun-types
+      - drizzle-kit
+      - expo-sqlite
+      - gel
+      - knex
+      - kysely
+      - mongodb
+      - mysql2
+      - next
+      - pg
+      - postgres
+      - prisma
+      - react
+      - react-dom
+      - solid-js
+      - sql.js
+      - sqlite3
+      - svelte
+      - vitest
+      - vue
+      - zod
+
+  '@substrat-run/vertical-auth@0.19.1(@cloudflare/workers-types@5.20261001.1)(@libsql/client@0.18.0)(better-sqlite3@13.0.3)(hono@4.13.12)(kysely@0.29.6)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.3(@types/node@26.6.3)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.3)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.5)':
+    dependencies:
+      '@substrat-run/contracts': 0.138.0(zod@4.6.5)
+      '@substrat-run/kernel': 0.138.0(zod@4.6.5)
+      '@substrat-run/oidc-rp': 0.10.0(hono@4.13.12)
       '@substrat-run/psl': 0.2.5
       better-auth: 1.7.7(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261001.1)(@libsql/client@0.18.0)(better-sqlite3@13.0.3)(kysely@0.29.6))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.3(@types/node@26.6.3)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.3)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))
       drizzle-orm: 0.45.3(@cloudflare/workers-types@5.20261001.1)(@libsql/client@0.18.0)(better-sqlite3@13.0.3)(kysely@0.29.6)
