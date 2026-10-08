@@ -5,7 +5,38 @@ import { pluginCatalog } from './plugin-catalog';
 import { publishPlugins } from './installed-plugins';
 import type { PluginInstall } from './api';
 
-afterEach(() => { cleanup(); publishPlugins([]); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); publishPlugins([]); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it('requires fresh approval when the reviewed plugin, source, capabilities or install audience changes', async () => {
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  vi.stubGlobal('fetch', async (url: string) => new Response(JSON.stringify(url.endsWith('/people/access') ? { canManage: true } : { plugins: [] })));
+  render(<PluginManagement open onOpenChange={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Review Image Viewer' }));
+  const approve = () => fireEvent.click(screen.getByRole('checkbox', { name: /Approve the capabilities/ }));
+  const refused = () => {
+    expect((screen.getByRole('checkbox', { name: /Approve the capabilities/ }) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(true);
+  };
+  approve();
+  expect((screen.getByRole('button', { name: 'Install plugin' }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Review Image Viewer' }));
+  refused();
+  approve();
+  fireEvent.click(screen.getByRole('button', { name: 'Review PDF Viewer' }));
+  refused();
+  approve();
+  const manifest = screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement;
+  const changed = JSON.parse(manifest.value);
+  changed.capabilities.push({ kind: 'item:write' });
+  fireEvent.change(manifest, { target: { value: JSON.stringify(changed) } });
+  refused();
+  approve();
+  fireEvent.change(screen.getByLabelText('Plugin source'), { target: { value: 'export default function render() {}' } });
+  refused();
+  approve();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Apply to this space' }));
+  refused();
+});
 
 it('shows where a catalog plugin is installed and opens review for this space', async () => {
   const manifest = pluginCatalog[1]!.manifest;
