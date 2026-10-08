@@ -32,7 +32,7 @@ export interface FolderPin {
   space: string;
   folderId: string;
   name: string;
-  status: 'syncing' | 'ready' | 'error';
+  status: 'syncing' | 'ready' | 'partial' | 'error';
   updatedAt: number;
 }
 
@@ -200,6 +200,20 @@ export async function getOfflineVersion(key: OfflineContentKey): Promise<CachedV
     ? await tx.objectStore('versions').get(VERSION_KEY(key)) : null;
   await tx.done;
   return version ?? null;
+}
+
+/** Distinguish an incomplete folder copy with saved bytes from an empty failed pin. */
+export async function hasOfflinePinBytes(principal: string, space: string, folderId: string): Promise<boolean> {
+  const tx = (await db()).transaction(['versions', 'session'], 'readonly');
+  const session = await tx.objectStore('session').get(SESSION);
+  if (!session || session.revoked) { await tx.done; return false; }
+  let cursor = await tx.objectStore('versions').index('by-space').openCursor([principal, space]);
+  while (cursor) {
+    if (cursor.value.pinnedBy.includes(folderId)) { await tx.done; return true; }
+    cursor = await cursor.continue();
+  }
+  await tx.done;
+  return false;
 }
 
 /** Prefer the mirrored current version, then use the newest saved version if metadata lags. */
