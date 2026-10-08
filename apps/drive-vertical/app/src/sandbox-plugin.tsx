@@ -1,4 +1,5 @@
-import { useUnsavedDraft } from './drafts';
+import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
+import { Button } from '@canopy/ui';
 import { useEffect, useRef, useState } from 'react';
 import { pluginSource, versionContentUrl, type PluginInstall } from './api';
 import { pluginManifest } from './installed-plugins';
@@ -22,30 +23,31 @@ export function pluginDocument(hosts: string[] = []): string {
 }
 type SandboxProps = {plugin:PluginInstall;file?:{id:string;versionId:string;name:string;mime:string;size:number|null};onSave?:(text:string)=>Promise<void>};
 export function SandboxPlugin(props:SandboxProps) {
- return <SandboxInstance key={`${props.plugin.id}:${props.plugin.updated_at}:${props.file?.id}:${props.file?.versionId}`} {...props}/>;
+ const [attempt,setAttempt]=useState(0);
+ return <SandboxInstance key={`${props.plugin.id}:${props.plugin.updated_at}:${props.file?.id}:${props.file?.versionId}:${attempt}`} {...props} onRetry={()=>setAttempt(value=>value+1)}/>;
 }
-function SandboxInstance({plugin,file,onSave}:SandboxProps) {
+function SandboxInstance({plugin,file,onSave,onRetry}:SandboxProps & {onRetry:()=>void}) {
  const frame=useRef<HTMLIFrameElement>(null), loads=useRef(0), retired=useRef(false), abortRef=useRef<AbortController|null>(null), saveRef=useRef(onSave);
  saveRef.current=onSave;
  const [error,setError]=useState<string|null>(null),[blocked,setBlocked]=useState(false),[dirty,setDirty]=useState(false);
  useUnsavedDraft(dirty);
  const manifest=pluginManifest(plugin),hosts=manifest.capabilities.filter(cap=>cap.kind==='net:fetch').flatMap(cap=>cap.hosts??[]);
  useEffect(()=>{
-  retired.current=false;const abort=new AbortController();abortRef.current=abort;let ready=false,saving=false;
+  retired.current=false;const abort=new AbortController();abortRef.current=abort;let ready=false,saving=false,editRevision=0;
   let timer=window.setTimeout(()=>setError('Plugin did not start. Choose the built-in preview or retry.'),15000);
   abort.signal.addEventListener('abort',()=>clearTimeout(timer));
   const reply=(value:unknown)=>{if(!retired.current)frame.current?.contentWindow?.postMessage(value,'*');};
   const receive=async(event:MessageEvent)=>{
    if(retired.current || event.origin!=='null' || event.source!==frame.current?.contentWindow || !event.data?.canopyPlugin)return;
-   if(event.data.type==='dirty' && saveRef.current && manifest.capabilities.some(cap=>cap.kind==='item:write'))setDirty(true);
+   if(event.data.type==='dirty' && saveRef.current && manifest.capabilities.some(cap=>cap.kind==='item:write')){editRevision++;setDirty(true);}
    if(event.data.type==='rendered'){clearTimeout(timer);return;}
    if(event.data.type==='error'){clearTimeout(timer);setError(String(event.data.data).slice(0,500));return;}
    if(event.data.type==='action' && event.data.data?.action==='save' && !saving){
     if(!saveRef.current || !manifest.capabilities.some(cap=>cap.kind==='item:write')){reply({type:'canopy:save-result',ok:false,error:'This file is read-only.'});return;}
     const text=event.data.data.data?.content;
     if(typeof text!=='string' || new TextEncoder().encode(text).length>200000){reply({type:'canopy:save-result',ok:false,error:'Text exceeds the 200 KB save limit.'});return;}
-    saving=true;
-    try{await saveRef.current(text);if(!abort.signal.aborted){setDirty(false);reply({type:'canopy:save-result',ok:true});}}
+    saving=true;const savedRevision=editRevision;
+    try{await saveRef.current(text);if(!abort.signal.aborted){if(editRevision===savedRevision)setDirty(false);reply({type:'canopy:save-result',ok:true});}}
     catch(error){if(!abort.signal.aborted){const message=error instanceof Error?error.message:String(error);setError(message);reply({type:'canopy:save-result',ok:false,error:message});}}
     finally{saving=false;}
    }
@@ -64,5 +66,5 @@ function SandboxInstance({plugin,file,onSave}:SandboxProps) {
   return()=>{retired.current=true;abort.abort();clearTimeout(timer);window.removeEventListener('message',receive);};
  },[]);
  const loaded=()=>{if(++loads.current>1){retired.current=true;abortRef.current?.abort();setBlocked(true);setError('Plugin navigated away and was stopped.');}};
- return <>{error?<p role="alert">{error}</p>:null}{!blocked?<iframe ref={frame} onLoad={loaded} title={manifest.name} sandbox="allow-scripts" srcDoc={pluginDocument(hosts)} className="min-h-96 h-full w-full border-0"/>:null}</>;
+ return <>{error?<div className="space-y-2"><p role="alert">{error}</p><Button variant="outline" size="sm" onClick={()=>{if(confirmDiscardDrafts())onRetry();}}>Retry plugin</Button></div>:null}{!blocked?<iframe ref={frame} onLoad={loaded} title={manifest.name} sandbox="allow-scripts" srcDoc={pluginDocument(hosts)} className="min-h-96 h-full w-full border-0"/>:null}</>;
 }
