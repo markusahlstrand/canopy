@@ -1416,7 +1416,11 @@ const operations = {
         if (details) {
           const description = searchSnippet(details.description, input.term);
           const labels = searchSnippet((JSON.parse(details.labels_json) as string[]).join(', '), input.term);
-          snippet = description ? `Description: ${description}` : labels ? `Labels: ${labels}` : null;
+          // A query can match terms across both indexed metadata fields. Always
+          // show their matching contexts; preferring the description hid label hits
+          // whenever it happened to contain another token from the same query.
+          snippet = [description && `Description: ${description}`, labels && `Labels: ${labels}`]
+            .filter(Boolean).join(' · ') || null;
         }
       }
       hits.push({ ...file, via, snippet });
