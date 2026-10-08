@@ -126,7 +126,8 @@ capabilities approved for the install, and register their file matches or app vi
 from `canopy.json`. The Plugins dialog offers bundled catalog entries, local source,
 and GitHub, npm, or ZIP imports. See [How plugins work](../../documentation/03-how-plugins-work.md)
 and [Writing a plugin](../../documentation/05-writing-a-plugin.md) for the current
-contract. The old portal's build-time registration is retired.
+contract. The [viewer decision](../../documentation/planning/web-component-viewers.md)
+records the earlier bundled-viewer design. The old portal's build-time registration is retired.
 
 ## Event feed
 
