@@ -235,7 +235,7 @@ export async function getOfflineFileVersion(
 }
 
 /** Reuse an unchanged version for another pin without a second byte download. */
-export async function retainOfflineVersion(key: OfflineContentKey, folderId: string, expectedEpoch?: number): Promise<boolean> {
+export async function retainOfflineVersion(key: OfflineContentKey, folderId: string, expectedEpoch?: number, metadata?: Pick<CachedVersion, 'name'>): Promise<boolean> {
   const epoch = expectedEpoch ?? await sessionEpoch();
   const tx = (await db()).transaction(['versions', 'pins', 'session'], 'readwrite');
   const session = await tx.objectStore('session').get(SESSION);
@@ -246,8 +246,8 @@ export async function retainOfflineVersion(key: OfflineContentKey, folderId: str
     tx.abort(); await tx.done.catch(() => {});
     throw new Error('The offline session or folder pin ended.');
   }
-  if (existing && !existing.pinnedBy.includes(folderId)) {
-    await versions.put({ ...existing, pinnedBy: [...existing.pinnedBy, folderId] });
+  if (existing && (!existing.pinnedBy.includes(folderId) || (metadata && metadata.name !== existing.name))) {
+    await versions.put({ ...existing, ...metadata, pinnedBy: [...new Set([...existing.pinnedBy, folderId])] });
   }
   await tx.done;
   return !!existing;
