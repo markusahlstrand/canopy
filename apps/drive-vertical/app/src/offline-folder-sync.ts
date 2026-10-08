@@ -3,7 +3,7 @@ import {
   type DriveFile, type DriveFolder, type FileVersion, type ListingPage,
 } from './api';
 import {
-  cacheOfflineVersion, getOfflineVersion, listOfflinePins, offlineSessionEpoch, OfflineContentHttpError, pruneOfflinePin, removeOfflinePin,
+  cacheOfflineVersion, getOfflineVersion, hasOfflinePinBytes, listOfflinePins, offlineSessionEpoch, OfflineContentHttpError, pruneOfflinePin, removeOfflinePin,
   retainOfflineVersion, updateOfflinePinStatus, type FolderPin,
 } from './offline-content';
 import { clearMirror } from './scope-mirror';
@@ -100,7 +100,8 @@ export async function syncOfflineFolder(
     if (status === 403 || status === 404) {
       await removeOfflinePin(pin.principal, pin.space, pin.folderId, epoch).catch(() => {});
     } else {
-      await updateOfflinePinStatus(pin, 'error', epoch).catch(() => {});
+      const partial = await hasOfflinePinBytes(pin.principal, pin.space, pin.folderId).catch(() => false);
+      await updateOfflinePinStatus(pin, partial ? 'partial' : 'error', epoch).catch(() => {});
     }
     throw error;
   }
