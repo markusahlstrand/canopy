@@ -59,6 +59,7 @@ interface ShareDialogProps {
 
 export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
   const [shares, setShares] = useState<PersonShare[] | null>(null);
+  const [sharesFailed, setSharesFailed] = useState(false);
   const [people, setPeople] = useState<Person[] | null>(null);
   const [peopleFailed, setPeopleFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,6 +90,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
     if (!folderId) return;
     const ticket = reads.current.take();
     setError(null);
+    setSharesFailed(false);
     setPeopleFailed(false);
 
     // Two reads, one ticket, landing independently — the shape the People dialog had to be
@@ -101,7 +103,8 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
       })
       .catch((e: unknown) => {
         if (!reads.current.current(ticket)) return;
-        setShares([]);
+        setShares(null);
+        setSharesFailed(true);
         setError(e instanceof Error ? e.message : String(e));
       });
 
@@ -123,6 +126,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
     visit.current++;
     reads.current.invalidate();
     setShares(null);
+    setSharesFailed(false);
     setPeople(null);
     setPeopleFailed(false);
     setError(null);
@@ -345,7 +349,10 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
             Has access
           </h3>
           {shares === null ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            sharesFailed ? <div className="space-y-2 text-sm">
+              <p>Access could not be checked. Existing folder grants may still apply.</p>
+              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={load}>Retry folder access</Button>
+            </div> : <p className="text-sm text-muted-foreground">Loading…</p>
           ) : shares.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nobody yet. Members of this space can read it; nobody can change it.
