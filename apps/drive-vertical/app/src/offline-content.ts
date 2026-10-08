@@ -202,6 +202,24 @@ export async function getOfflineVersion(key: OfflineContentKey): Promise<CachedV
   return version ?? null;
 }
 
+/** Prefer the mirrored current version, then use the newest saved version if metadata lags. */
+export async function getOfflineFileVersion(
+  principal: string, space: string, fileId: string, preferredVersionId: string | null,
+): Promise<CachedVersion | null> {
+  const tx = (await db()).transaction(['versions', 'session'], 'readonly');
+  const session = await tx.objectStore('session').get(SESSION);
+  if (!session || session.revoked) { await tx.done; return null; }
+  const versions = tx.objectStore('versions');
+  const preferred = preferredVersionId
+    ? await versions.get([principal, space, fileId, preferredVersionId]) : null;
+  if (preferred) { await tx.done; return preferred; }
+  const saved = await versions.getAll(IDBKeyRange.bound(
+    [principal, space, fileId, ''], [principal, space, fileId, '\uffff'],
+  ));
+  await tx.done;
+  return saved.reduce<CachedVersion | null>((latest, row) => !latest || row.savedAt >= latest.savedAt ? row : latest, null);
+}
+
 /** Reuse an unchanged version for another pin without a second byte download. */
 export async function retainOfflineVersion(key: OfflineContentKey, folderId: string, expectedEpoch?: number): Promise<boolean> {
   const epoch = expectedEpoch ?? await sessionEpoch();
