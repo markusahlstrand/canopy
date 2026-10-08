@@ -307,6 +307,9 @@ export async function cacheOfflineVersion(
     await versions.put(row);
     await tx.done;
   } catch (error) {
+    // A failed request also rejects the transaction. Consume both failures before
+    // translating the request error into the message shown by the folder sync.
+    await tx.done.catch(() => {});
     if (error instanceof DOMException && error.name === 'QuotaExceededError') {
       throw new Error('This browser is out of storage space for offline files. Free device space or remove an offline folder, then retry.');
     }
