@@ -66,6 +66,21 @@ it('keeps a failed pin visibly incomplete after a temporary outage', async () =>
   expect((await listOfflinePins('alice', 'family'))[0]?.status).toBe('error');
 });
 
+it('marks a failed walk partial when some files remain saved', async () => {
+  const source: OfflineFolderSource = {
+    async folders() { return { entries: [], next: null }; },
+    async files(_id, next) {
+      if (next) throw new TypeError('network lost');
+      return { entries: [file('report', 'root', 'v1')], next: '/next' };
+    },
+    async versions() { return { versions: [version('v1', 'report')], next: null }; },
+    contentUrl() { return '/content'; },
+  };
+  await expect(syncOfflineFolder(pin, source)).rejects.toThrow('network lost');
+  expect((await listOfflinePins('alice', 'family'))[0]?.status).toBe('partial');
+  expect(await getOfflineVersion({ principal: 'alice', space: 'family', fileId: 'report', versionId: 'v1' })).not.toBeNull();
+});
+
 it('shares one walk when a manual save overlaps a background refresh', async () => {
   let entered!: () => void;
   let release!: () => void;
