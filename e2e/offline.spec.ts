@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type APIResponse } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -54,8 +54,8 @@ test('native recursive and paged pins recover partial downloads; offline bytes a
   let listingUrl: string | undefined = '/api/folders/root/folders';
   let folderId: string | undefined;
   while (listingUrl && !folderId) {
-    const response = await page.request.get(listingUrl);
-    const entries = await response.json();
+    const response: APIResponse = await page.request.get(listingUrl);
+    const entries: { name: string; id: string }[] = await response.json();
     folderId = entries.find((row: {name:string}) => row.name === folder)?.id;
     listingUrl = response.headers().link?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
   }
