@@ -38,7 +38,7 @@ it('keeps the Radix sharing dialog open until suggestions have been dismissed', 
   const close = vi.fn();
   render(<ShareDialog folder={{ id: 'folder', name: 'Folder' }} onClose={close} />);
   await screen.findByText(/Nobody yet/);
-  const input = screen.getByRole('combobox');
+  const input = screen.getByRole('combobox', { name: 'Person' });
   fireEvent.change(input, { target: { value: 'Ali' } });
   await screen.findByRole('listbox');
   fireEvent.keyDown(input, { key: 'Escape' });
