@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button, Icon } from '@canopy/ui';
 import { getOfflineVersion, type CachedVersion } from './offline-content';
 import type { DriveFile } from './api';
@@ -25,8 +25,8 @@ export function OfflinePreview({ file, principal, space, onClose }: {
     setUrl(objectUrl);
     return () => { URL.revokeObjectURL(objectUrl); setUrl(null); };
   }, [cached]);
-  const text = cached && (cached.mime.startsWith('text/') || /\b(json|xml|javascript)\b/.test(cached.mime))
-    ? new TextDecoder().decode(cached.bytes) : null;
+  const text = useMemo(() => cached && (cached.mime.startsWith('text/') || /\b(json|xml|javascript)\b/.test(cached.mime))
+    ? new TextDecoder().decode(cached.bytes) : null, [cached]);
   return <section className="flex h-full min-h-0 flex-col" aria-label={`Offline preview of ${file.name}`}>
     <header className="flex items-center gap-2 border-b p-3"><Icon name="file-text" size={18} /><strong className="min-w-0 flex-1 truncate">{file.name}</strong><Button size="sm" variant="outline" onClick={onClose}>Close</Button></header>
     {loading ? <p className="p-4 text-sm">Opening saved version…</p>

@@ -3,7 +3,7 @@ import {
   type DriveFile, type DriveFolder, type FileVersion, type ListingPage,
 } from './api';
 import {
-  cacheOfflineVersion, getOfflineVersion, listOfflinePins, OfflineContentHttpError, pruneOfflinePin, removeOfflinePin,
+  cacheOfflineVersion, getOfflineVersion, listOfflinePins, offlineSessionEpoch, OfflineContentHttpError, pruneOfflinePin, removeOfflinePin,
   retainOfflineVersion, updateOfflinePinStatus, type FolderPin,
 } from './offline-content';
 import { clearMirror } from './scope-mirror';
@@ -42,8 +42,10 @@ export async function syncOfflineFolder(
   source: OfflineFolderSource = liveOfflineFolderSource,
   onProgress: (progress: FolderSyncProgress) => void = () => {},
   shouldContinue: () => boolean = () => true,
+  expectedEpoch?: number,
 ): Promise<FolderSyncProgress> {
-  if (!await updateOfflinePinStatus(pin, 'syncing')) throw new Error('This folder is no longer marked for offline access.');
+  const epoch = expectedEpoch ?? await offlineSessionEpoch();
+  if (!await updateOfflinePinStatus(pin, 'syncing', epoch)) throw new Error('This folder is no longer marked for offline access.');
   const progress: FolderSyncProgress = { folders: 0, files: 0 };
   const current = new Set<string>();
   const queue = [pin.folderId];
@@ -72,9 +74,9 @@ export async function syncOfflineFolder(
           if (!version) continue;
           const key = { principal: pin.principal, space: pin.space, fileId: file.id, versionId: version.id };
           const cached = await getOfflineVersion(key);
-          if (!cached || !await retainOfflineVersion(key, pin.folderId)) {
+          if (!cached || !await retainOfflineVersion(key, pin.folderId, epoch)) {
             await cacheOfflineVersion({ ...key, folderId: pin.folderId, name: file.name, mime: version.mime,
-              url: source.contentUrl(file.id, version.id, pin.space) });
+              url: source.contentUrl(file.id, version.id, pin.space) }, fetch, epoch);
           }
           current.add(`${file.id}\n${version.id}`);
           progress.files++;
@@ -84,38 +86,61 @@ export async function syncOfflineFolder(
       } while (next);
     }
     if (!shouldContinue()) throw new Error('Offline download was stopped.');
-    await pruneOfflinePin(pin.principal, pin.space, pin.folderId, current);
-    if (!await updateOfflinePinStatus(pin, 'ready')) throw new Error('Offline download was stopped.');
+    await pruneOfflinePin(pin.principal, pin.space, pin.folderId, current, epoch);
+    if (!await updateOfflinePinStatus(pin, 'ready', epoch)) throw new Error('Offline download was stopped.');
     return progress;
   } catch (error) {
     const status = error instanceof ApiError || error instanceof OfflineContentHttpError ? error.status : null;
-    if (status === 401) await clearMirror().catch(() => {});
+    if (status === 401 && (await offlineSessionEpoch().catch(() => null)) === epoch) {
+      await clearMirror().catch(() => {});
+    }
     // If the folder itself disappeared or access was revoked, no old cached bytes may
     // remain readable after this online check. A temporary outage keeps the old copy.
     if (status === 403 || status === 404) {
-      await removeOfflinePin(pin.principal, pin.space, pin.folderId).catch(() => {});
+      await removeOfflinePin(pin.principal, pin.space, pin.folderId, epoch).catch(() => {});
     } else {
-      await updateOfflinePinStatus(pin, 'error').catch(() => {});
+      await updateOfflinePinStatus(pin, 'error', epoch).catch(() => {});
     }
     throw error;
   }
 }
 
+const inFlightPins = new Map<string, Promise<FolderSyncProgress>>();
+/** Share one walk per pin and login generation between manual saves and background refreshes. */
+export async function syncOfflineFolderOnce(
+  pin: FolderPin,
+  source: OfflineFolderSource = liveOfflineFolderSource,
+  onProgress: (progress: FolderSyncProgress) => void = () => {},
+  shouldContinue: () => boolean = () => true,
+  expectedEpoch?: number,
+): Promise<FolderSyncProgress> {
+  const epoch = expectedEpoch ?? await offlineSessionEpoch();
+  const key = `${epoch}\n${pin.principal}\n${pin.space}\n${pin.folderId}`;
+  const running = inFlightPins.get(key);
+  if (running) return running;
+  const run = syncOfflineFolder(pin, source, onProgress, shouldContinue, epoch)
+    .finally(() => { if (inFlightPins.get(key) === run) inFlightPins.delete(key); });
+  inFlightPins.set(key, run);
+  return run;
+}
+
 const refreshes = new Map<string, Promise<void>>();
 const lastRefresh = new Map<string, number>();
 /** Refresh device pins after an online listing, without launching a walk per render. */
-export function refreshOfflinePins(principal: string, space: string): Promise<void> {
-  const key = `${principal}\n${space}`;
+export async function refreshOfflinePins(principal: string, space: string): Promise<void> {
+  const epoch = await offlineSessionEpoch();
+  const key = `${epoch}\n${principal}\n${space}`;
   const running = refreshes.get(key);
   if (running) return running;
-  if (Date.now() - (lastRefresh.get(key) ?? 0) < 30_000) return Promise.resolve();
+  if (Date.now() - (lastRefresh.get(key) ?? 0) < 30_000) return;
   const run = (async () => {
-    const pins = await listOfflinePins(principal, space);
-    for (const pin of pins) {
-      try { await syncOfflineFolder(pin); }
-      catch { /* The pin records its error and can be retried from the folder. */ }
-    }
-    lastRefresh.set(key, Date.now());
+    try {
+      const pins = await listOfflinePins(principal, space);
+      for (const pin of pins) {
+        try { await syncOfflineFolderOnce(pin, undefined, undefined, undefined, epoch); }
+        catch { /* The pin records its error and can be retried from the folder. */ }
+      }
+    } finally { lastRefresh.set(key, Date.now()); }
   })().finally(() => { if (refreshes.get(key) === run) refreshes.delete(key); });
   refreshes.set(key, run);
   return run;

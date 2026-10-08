@@ -77,6 +77,9 @@ async function sessionEpoch(): Promise<number> {
   return session.epoch;
 }
 
+/** Capture the login generation before an asynchronous folder walk begins. */
+export const offlineSessionEpoch = sessionEpoch;
+
 /** A successful online sign-in reopens the cache after a previous logout. */
 export async function resumeOfflineContent(principal?: string): Promise<void> {
   const database = await db();
@@ -149,8 +152,8 @@ export async function setOfflinePin(pin: FolderPin): Promise<void> {
 }
 
 /** A background walk may update an existing pin but may never recreate a removed one. */
-export async function updateOfflinePinStatus(pin: FolderPin, status: FolderPin['status']): Promise<boolean> {
-  const epoch = await sessionEpoch();
+export async function updateOfflinePinStatus(pin: FolderPin, status: FolderPin['status'], expectedEpoch?: number): Promise<boolean> {
+  const epoch = expectedEpoch ?? await sessionEpoch();
   const tx = (await db()).transaction(['pins', 'session'], 'readwrite');
   const session = await tx.objectStore('session').get(SESSION);
   const pins = tx.objectStore('pins');
@@ -164,10 +167,15 @@ export async function updateOfflinePinStatus(pin: FolderPin, status: FolderPin['
   return !!current;
 }
 
-export async function removeOfflinePin(principal: string, space: string, folderId: string): Promise<void> {
-  await sessionEpoch();
+export async function removeOfflinePin(principal: string, space: string, folderId: string, expectedEpoch?: number): Promise<void> {
+  const epoch = expectedEpoch ?? await sessionEpoch();
   const database = await db();
-  const tx = database.transaction(['pins', 'versions'], 'readwrite');
+  const tx = database.transaction(['pins', 'versions', 'session'], 'readwrite');
+  const session = await tx.objectStore('session').get(SESSION);
+  if (!session || session.revoked || session.epoch !== epoch) {
+    tx.abort(); await tx.done.catch(() => {});
+    throw new Error('The offline session ended.');
+  }
   await tx.objectStore('pins').delete(PIN_KEY({ principal, space, folderId }));
   const versions = tx.objectStore('versions');
   let cursor = await versions.index('by-space').openCursor([principal, space]);
@@ -190,8 +198,8 @@ export async function getOfflineVersion(key: OfflineContentKey): Promise<CachedV
 }
 
 /** Reuse an unchanged version for another pin without a second byte download. */
-export async function retainOfflineVersion(key: OfflineContentKey, folderId: string): Promise<boolean> {
-  const epoch = await sessionEpoch();
+export async function retainOfflineVersion(key: OfflineContentKey, folderId: string, expectedEpoch?: number): Promise<boolean> {
+  const epoch = expectedEpoch ?? await sessionEpoch();
   const tx = (await db()).transaction(['versions', 'pins', 'session'], 'readwrite');
   const session = await tx.objectStore('session').get(SESSION);
   const pin = await tx.objectStore('pins').get(PIN_KEY({ ...key, folderId }));
@@ -209,10 +217,15 @@ export async function retainOfflineVersion(key: OfflineContentKey, folderId: str
 }
 
 /** Remove versions that a completed folder walk no longer needs. Never prune after a failed walk. */
-export async function pruneOfflinePin(principal: string, space: string, folderId: string, current: Set<string>): Promise<void> {
-  await sessionEpoch();
-  const tx = (await db()).transaction('versions', 'readwrite');
-  let cursor = await tx.store.index('by-space').openCursor([principal, space]);
+export async function pruneOfflinePin(principal: string, space: string, folderId: string, current: Set<string>, expectedEpoch?: number): Promise<void> {
+  const epoch = expectedEpoch ?? await sessionEpoch();
+  const tx = (await db()).transaction(['versions', 'session'], 'readwrite');
+  const session = await tx.objectStore('session').get(SESSION);
+  if (!session || session.revoked || session.epoch !== epoch) {
+    tx.abort(); await tx.done.catch(() => {});
+    throw new Error('The offline session ended.');
+  }
+  let cursor = await tx.objectStore('versions').index('by-space').openCursor([principal, space]);
   while (cursor) {
     const row = cursor.value;
     if (row.pinnedBy.includes(folderId) && !current.has(`${row.fileId}\n${row.versionId}`)) {
@@ -229,8 +242,9 @@ export async function pruneOfflinePin(principal: string, space: string, folderId
 export async function cacheOfflineVersion(
   key: OfflineContentKey & { folderId: string; name: string; mime: string; url: string },
   fetcher: typeof fetch = fetch,
+  expectedEpoch?: number,
 ): Promise<CachedVersion> {
-  const epoch = await sessionEpoch();
+  const epoch = expectedEpoch ?? await sessionEpoch();
   const response = await fetcher(key.url, { credentials: 'same-origin' });
   if (!response.ok) throw new OfflineContentHttpError(response.status, key.name);
   const advertised = Number(response.headers.get('content-length'));

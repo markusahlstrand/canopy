@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   cacheOfflineVersion, clearOfflineContent, getOfflineVersion, listOfflinePins,
-  offlineSpace, rememberOfflineSpace, removeOfflinePin, resumeOfflineContent, setOfflinePin,
+  offlineSessionEpoch, offlineSpace, pruneOfflinePin, rememberOfflineSpace, removeOfflinePin, resumeOfflineContent, setOfflinePin,
 } from './offline-content';
 
 const key = (principal = 'alice', space = 'family', versionId = 'v1') => ({
@@ -63,6 +63,21 @@ describe('opt-in offline content store', () => {
     await expect(download).rejects.toThrow('offline session ended');
     await resumeOfflineContent();
     expect(await getOfflineVersion(key())).toBeNull();
+  });
+
+  it('does not let an old session prune or remove bytes from a new login of the same person', async () => {
+    const oldEpoch = await offlineSessionEpoch();
+    await clearOfflineContent();
+    await resumeOfflineContent('alice');
+    await setOfflinePin({ principal: 'alice', space: 'family', folderId: 'docs', name: 'Docs', status: 'ready', updatedAt: 2 });
+    await cacheOfflineVersion(key(), fetcher);
+
+    await expect(pruneOfflinePin('alice', 'family', 'docs', new Set(), oldEpoch))
+      .rejects.toThrow('offline session ended');
+    await expect(removeOfflinePin('alice', 'family', 'docs', oldEpoch))
+      .rejects.toThrow('offline session ended');
+    expect(await getOfflineVersion(key())).not.toBeNull();
+    expect((await listOfflinePins('alice', 'family'))[0]?.status).toBe('ready');
   });
 
   it('rejects a file above the per-file limit without storing a partial copy', async () => {

@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { ApiError, type DriveFile, type DriveFolder, type FileVersion } from './api';
 import { cacheOfflineVersion, clearOfflineContent, getOfflineVersion, listOfflinePins, resumeOfflineContent, setOfflinePin } from './offline-content';
-import { syncOfflineFolder, type OfflineFolderSource } from './offline-folder-sync';
+import { syncOfflineFolder, syncOfflineFolderOnce, type OfflineFolderSource } from './offline-folder-sync';
 
 const pin = { principal: 'alice', space: 'family', folderId: 'root', name: 'Family', status: 'syncing' as const, updatedAt: 1 };
 const file = (id: string, folder_id: string, version: string): DriveFile => ({
@@ -64,4 +64,50 @@ it('keeps a failed pin visibly incomplete after a temporary outage', async () =>
   };
   await expect(syncOfflineFolder(pin, source)).rejects.toThrow('offline');
   expect((await listOfflinePins('alice', 'family'))[0]?.status).toBe('error');
+});
+
+it('shares one walk when a manual save overlaps a background refresh', async () => {
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  let walks = 0;
+  const source: OfflineFolderSource = {
+    async folders() { walks++; entered(); await blocked; return { entries: [], next: null }; },
+    async files() { return { entries: [file('report', 'root', 'v1')], next: null }; },
+    async versions() { return { versions: [version('v1', 'report')], next: null }; },
+    contentUrl() { return '/content'; },
+  };
+  const background = syncOfflineFolderOnce(pin, source);
+  await started;
+  const manual = syncOfflineFolderOnce(pin, source);
+  release();
+  await Promise.all([background, manual]);
+  expect(walks).toBe(1);
+  expect((await listOfflinePins('alice', 'family'))[0]?.status).toBe('ready');
+  expect(await getOfflineVersion({ principal: 'alice', space: 'family', fileId: 'report', versionId: 'v1' })).not.toBeNull();
+});
+
+it('does not let an old folder walk alter a new login of the same person', async () => {
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const source: OfflineFolderSource = {
+    async folders() { entered(); await blocked; return { entries: [], next: null }; },
+    async files() { return { entries: [], next: null }; },
+    async versions() { return { versions: [], next: null }; },
+    contentUrl() { return '/content'; },
+  };
+  const stale = syncOfflineFolderOnce(pin, source);
+  await started;
+  await clearOfflineContent();
+  await resumeOfflineContent('alice');
+  await setOfflinePin({ ...pin, status: 'ready' });
+  const saved = { principal: 'alice', space: 'family', fileId: 'report', versionId: 'v1' };
+  await cacheOfflineVersion({ ...saved, folderId: 'root', name: 'report.txt', mime: 'text/plain', url: '/content' });
+  release();
+  await expect(stale).rejects.toThrow('offline session ended');
+  expect((await listOfflinePins('alice', 'family'))[0]?.status).toBe('ready');
+  expect(await getOfflineVersion(saved)).not.toBeNull();
 });

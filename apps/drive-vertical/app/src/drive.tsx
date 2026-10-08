@@ -23,7 +23,7 @@ import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
 import { indexedMirror, syncMirror } from './scope-mirror';
 import { listOfflinePins, offlineSpace, rememberOfflineSpace, removeOfflinePin, setOfflinePin, type FolderPin } from './offline-content';
-import { refreshOfflinePins, syncOfflineFolder, type FolderSyncProgress } from './offline-folder-sync';
+import { refreshOfflinePins, syncOfflineFolderOnce, type FolderSyncProgress } from './offline-folder-sync';
 import { OfflinePreview } from './offline-preview';
 import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
@@ -786,7 +786,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     try {
       await setOfflinePin(pin);
       await reloadPins();
-      await syncOfflineFolder(pin, undefined, progress => setPinProgress(progress));
+      await syncOfflineFolderOnce(pin, undefined, progress => setPinProgress(progress));
     } catch (error) {
       setPinError(error instanceof Error ? error.message : String(error));
     } finally { setPinBusy(false); await reloadPins(); }
