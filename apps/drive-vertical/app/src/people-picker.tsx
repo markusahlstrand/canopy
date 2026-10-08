@@ -105,8 +105,9 @@ export function PeoplePicker({
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => results.length > 0 && setOpen(true)}
         onKeyDown={(e) => {
-          // Enter confirms IME text before it may choose a person or submit a form.
-          if (e.nativeEvent.isComposing) return;
+          // WebKit may end composition before the confirming Enter, but still reports
+          // keyCode 229 for that IME key. Neither event should choose a person.
+          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
           // While a suggestion is highlighted, the arrows/Enter drive the list
           // and never reach the form (so Enter picks a person, not submits).
           if (!open || results.length === 0) return;

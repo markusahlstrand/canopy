@@ -18,6 +18,20 @@ it('does not choose a person while Enter confirms composed text', async () => {
   expect(pick).toHaveBeenCalledExactlyOnceWith(people[0]);
 });
 
+it('does not choose a person when WebKit ends composition before the confirming Enter', async () => {
+  const pick = vi.fn();
+  render(<PeoplePicker value="Ali" people={people} onChange={() => {}} onPick={pick} />);
+  await screen.findByRole('option');
+  const input = screen.getByRole('combobox');
+  fireEvent.compositionStart(input);
+  fireEvent.compositionEnd(input, { data: 'Ali' });
+  fireEvent.keyDown(input, { key: 'Enter', keyCode: 229, isComposing: false });
+  expect(pick).not.toHaveBeenCalled();
+  expect(screen.getByRole('listbox')).toBeTruthy();
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(pick).toHaveBeenCalledExactlyOnceWith(people[0]);
+});
+
 it('uses Escape to close suggestions without closing the surrounding dialog', async () => {
   const parentKey = vi.fn();
   render(<div onKeyDown={parentKey}><PeoplePicker value="Ali" people={people} onChange={() => {}} onPick={() => {}} /></div>);
