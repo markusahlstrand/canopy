@@ -933,7 +933,7 @@ app.get('/api/me', async (c) => {
     );
   }
 
-  return principal ? c.json({ principal: principalId.parse(principal) }) : c.json({ error: 'unauthorized' }, 401);
+  return principal ? c.json({ principal: principalId.parse(principal), user: { name: subject?.name, email: subject?.email } }) : c.json({ error: 'unauthorized' }, 401);
 });
 
 /** The claim token rides in the body, so it is never a query string. See the route below. */

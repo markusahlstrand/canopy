@@ -231,7 +231,7 @@ export function Topbar({
       ) : (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-[12px] font-semibold text-primary-foreground">
+            <button aria-label="Account menu" className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-[12px] font-semibold text-primary-foreground">
               {display.initials}
             </button>
           </DropdownMenuTrigger>
