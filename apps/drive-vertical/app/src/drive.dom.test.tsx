@@ -2121,3 +2121,19 @@ it('keeps the refresh when the palette repeats an open search', async () => {
   expect(screen.getByText('updated.txt')).toBeTruthy();
   expect(screen.queryByText('Loading…')).toBeNull();
 });
+
+it('removes earlier search hits and their selection when a refresh is refused', async () => {
+  await renderDrive();
+  fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'report' } });
+  await flush();
+  await answer('/api/search', { hits: [{ ...file('01A', 'earlier.txt'), via: 'content' }] });
+  fireEvent.click(within(screen.getByText('earlier.txt').closest('tr')!).getByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await answerWith('/api/search', 403, { error: 'Access denied' });
+  expect(screen.queryByText('earlier.txt')).toBeNull();
+  expect(screen.getByRole('status', { name: 'Selection status' }).textContent).toBe('Selection cleared');
+  expect(screen.getByText("Couldn't load this view")).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  await answer('/api/search', { hits: [{ ...file('01B', 'allowed.txt'), via: 'name' }] });
+  expect(screen.getByText('allowed.txt')).toBeTruthy();
+});
