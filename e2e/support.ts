@@ -23,9 +23,22 @@ export async function createFolder(page: Page, name: string) {
   await dialog.getByRole('textbox').fill(name);
   await dialog.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole('button', { name: `Actions for ${name}`, exact: true })).toBeVisible();
+  await revealRow(page, name);
+}
+export async function revealRow(page: Page, name: string) {
+  const row = page.getByRole('button', { name: `Actions for ${name}`, exact: true });
+  // Shared acceptance runs naturally outgrow the first real listing page.
+  for (let count = 0; count < 100 && !await row.isVisible(); count++) {
+    const more = page.getByRole('button', { name: /^Load more (folders|files)$/ }).first();
+    if (!await more.isVisible()) break;
+    await more.click();
+    await expect.poll(async () => await row.isVisible() ||
+      await page.getByRole('button', { name: /^Loading (folders|files)…$/ }).count() === 0).toBe(true);
+  }
+  await expect(row).toBeVisible();
 }
 export async function action(page: Page, name: string, action: string) {
+  await revealRow(page, name);
   await page.getByRole('button', { name: `Actions for ${name}`, exact: true }).click();
   await page.getByRole('menuitem', { name: action, exact: true }).click();
 }
@@ -39,7 +52,7 @@ export async function rename(page: Page, name: string, next: string, folder = fa
 }
 export async function upload(page: Page, name: string, content: string) {
   await page.locator('input[type=file]').setInputFiles({ name, mimeType: 'text/plain', buffer: Buffer.from(content) });
-  await expect(page.getByRole('button', { name: `Actions for ${name}`, exact: true })).toBeVisible();
+  await revealRow(page, name);
 }
 export async function downloaded(page: Page, name: string, content: string) {
   const download = page.waitForEvent('download');
