@@ -291,6 +291,21 @@ describe('a stale search answer never reaches the screen', () => {
   });
 });
 
+it('retains a failed new-folder name and closes only after the retry succeeds', async () => {
+  await renderDrive();
+  newMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  const index = pending.findIndex(request => request.method === 'POST' && request.url.includes('/folders'));
+  await act(async () => pending.splice(index, 1)[0]!.reject(new Error('Connection failed')));
+  expect(screen.getByRole('alert').textContent).toBe('Connection failed');
+  expect((screen.getByRole('textbox', { name: 'New folder' }) as HTMLInputElement).value).toBe('Drafts');
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  expect(pending.find(request => request.method === 'POST')?.body).toBe(JSON.stringify({ name: 'Drafts' }));
+  await answer('/folders/root/folders', { id: 'new', parent_id: 'root', name: 'Drafts', path: 'Drafts' });
+  expect(screen.queryByRole('dialog', { name: 'New folder' })).toBeNull();
+});
+
 describe('an action refreshes the folder on screen, not the one it started in', () => {
   it('leaves the second folder’s listing in place after a rename in the first', async () => {
     // "Papers" has to be in the root listing for a click into it to exist.
@@ -2091,19 +2106,4 @@ it('keeps the refresh when the palette repeats an open search', async () => {
   await answer('/api/search', { hits: [{ ...file('01B', 'updated.txt'), via: 'content' }] });
   expect(screen.getByText('updated.txt')).toBeTruthy();
   expect(screen.queryByText('Loading…')).toBeNull();
-});
-
-it('retains a failed new-folder name and closes only after the retry succeeds', async () => {
-  await renderDrive();
-  newMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
-  fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-  const index = pending.findIndex(request => request.method === 'POST' && request.url.includes('/folders'));
-  await act(async () => pending.splice(index, 1)[0]!.reject(new Error('Connection failed')));
-  expect(screen.getByRole('alert').textContent).toBe('Connection failed');
-  expect((screen.getByRole('textbox', { name: 'New folder' }) as HTMLInputElement).value).toBe('Drafts');
-  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-  expect(pending.find(request => request.method === 'POST')?.body).toBe(JSON.stringify({ name: 'Drafts' }));
-  await answer('/folders/root/folders', { id: 'new', parent_id: 'root', name: 'Drafts', path: 'Drafts' });
-  expect(screen.queryByRole('dialog', { name: 'New folder' })).toBeNull();
 });
