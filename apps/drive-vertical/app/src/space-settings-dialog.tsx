@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Input, Icon, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@canopy/ui';
 import { getSpaceSettings, updateSpaceSettings } from './api';
 import { defaultSpaceSettings, type SpaceSettings } from '../../src/space-settings';
@@ -8,8 +8,31 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
   const [settings,setSettings] = useState<SpaceSettings>(defaultSpaceSettings(''));
   const [initial,setInitial] = useState(''), [busy,setBusy] = useState(false), [loaded,setLoaded] = useState(false), [error,setError] = useState<string|null>(null), [retry,setRetry] = useState(0);
   useUnsavedDraft(open && loaded && JSON.stringify(settings) !== initial);
-  useEffect(() => { if (!open) return; let alive = true; setLoaded(false); setError(null); getSpaceSettings().then(settings => { if (alive) {setSettings(settings);setInitial(JSON.stringify(settings));setLoaded(true);} }).catch(error => {if(alive)setError(error instanceof Error ? error.message || 'Could not save or load space settings.' : String(error));}); return () => {alive=false;}; }, [open,retry]);
-  const save = async () => { setBusy(true);setError(null);try {const result=await updateSpaceSettings(settings);setSettings(result);setInitial(JSON.stringify(result));onSaved();onOpenChange(false);}catch(error){setError(error instanceof Error ? error.message || 'Could not save or load space settings.' : String(error));}finally{setBusy(false);} };
+  const generation = useRef(0);
+  useEffect(() => {
+    const ticket = ++generation.current;
+    setBusy(false);
+    if (!open) return;
+    setLoaded(false); setError(null);
+    getSpaceSettings().then(settings => {
+      if (generation.current !== ticket) return;
+      setSettings(settings); setInitial(JSON.stringify(settings)); setLoaded(true);
+    }).catch(error => {
+      if (generation.current === ticket) setError(error instanceof Error ? error.message || 'Could not save or load space settings.' : String(error));
+    });
+    return () => { generation.current++; };
+  }, [open, retry]);
+  const save = async () => {
+    const ticket = generation.current;
+    setBusy(true); setError(null);
+    try {
+      const result = await updateSpaceSettings(settings);
+      if (generation.current !== ticket) return;
+      setSettings(result); setInitial(JSON.stringify(result)); onSaved(); onOpenChange(false);
+    } catch (error) {
+      if (generation.current === ticket) setError(error instanceof Error ? error.message || 'Could not save or load space settings.' : String(error));
+    } finally { if (generation.current === ticket) setBusy(false); }
+  };
   return <Dialog open={open} onOpenChange={next => {if(!busy && (next || confirmDiscardDrafts()))onOpenChange(next);}}>
     <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[480px]">
       <DialogHeader className="px-5 pt-5"><DialogTitle>Space settings</DialogTitle><DialogDescription>Choose how this space appears to its members.</DialogDescription></DialogHeader>
