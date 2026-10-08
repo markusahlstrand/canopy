@@ -57,7 +57,7 @@ interface FileTableProps {
    *  placeholders instead of an empty table (gated on `files.length === 0`, so a
    *  background re-sync over already-listed files never flashes the skeleton). */
   loading?: boolean;
-  /** Offline metadata can be browsed, but bytes and mutations are unavailable. */
+  /** Saved file copies may be opened, but mutations are unavailable. */
   readOnly?: boolean;
   trashed?: boolean;
   /** The view owns the reason its result is empty and the useful next action. */
@@ -149,7 +149,7 @@ const COLUMNS: { key: SortKey; label: string; className: string }[] = [
  * item that is absent.
  */
 export function actionsFor(file: FileItem, readOnly = false, trashed = false): string[] {
-  if (readOnly) return file.isFolder ? ['Open'] : [];
+  if (readOnly) return ['Open'];
   if (trashed) return ['Restore'];
   // Share is a FOLDER action and only a folder action: a grant narrows onto a folder and
   // reaches what is under it, so there is no such thing as sharing one file here.
