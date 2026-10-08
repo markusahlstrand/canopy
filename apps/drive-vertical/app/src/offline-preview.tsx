@@ -4,9 +4,16 @@ import { getOfflineFileVersion, type CachedVersion } from './offline-content';
 import type { DriveFile } from './api';
 
 /** Show a saved file without offering edits or fetching online content. */
-export function OfflinePreview({ file, principal, space, onClose }: {
+type OfflinePreviewProps = {
   file: DriveFile; principal: string; space: string; onClose: () => void;
-}) {
+};
+
+export function OfflinePreview(props: OfflinePreviewProps) {
+  // Reset saved bytes and object URLs before committing a different file or login.
+  return <SavedOfflinePreview key={JSON.stringify([props.principal, props.space, props.file.id, props.file.current_version_id])} {...props} />;
+}
+
+function SavedOfflinePreview({ file, principal, space, onClose }: OfflinePreviewProps) {
   const [cached, setCached] = useState<CachedVersion | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
