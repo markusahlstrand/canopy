@@ -98,3 +98,18 @@ test('real name collisions and a failed request keep the proposed folder name fo
   await expect(dialog).toBeHidden();
   await expect(page.getByRole('button', { name: `Actions for ${name} corrected` })).toBeVisible();
 });
+
+test('new folders and their contents remain reachable beyond the first listing page', async ({ page }, info) => {
+  test.setTimeout(120_000);
+  await signIn(page);
+  const parent = `${info.project.name} Paged browsing`;
+  await createFolder(page, parent);
+  await action(page, parent, 'Open');
+  for (let index = 0; index < 21; index++) await createFolder(page, `Page folder ${String(index).padStart(2, '0')}`);
+  await action(page, 'Page folder 20', 'Open');
+  await upload(page, 'last-page.txt', 'Bytes reached through the second folder page');
+  if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Back to parent folder', exact: true }).click();
+  else await page.getByRole('button', { name: parent, exact: true }).click();
+  await action(page, 'Page folder 20', 'Open');
+  await downloaded(page, 'last-page.txt', 'Bytes reached through the second folder page');
+});

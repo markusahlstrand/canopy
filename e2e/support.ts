@@ -30,7 +30,8 @@ export async function revealRow(page: Page, name: string) {
   // Shared acceptance runs naturally outgrow the first real listing page.
   for (let count = 0; count < 100 && !await row.isVisible(); count++) {
     const more = page.getByRole('button', { name: /^Load more (folders|files)$/ }).first();
-    if (!await more.isVisible()) break;
+    await expect.poll(async () => await row.isVisible() || await more.isVisible()).toBe(true);
+    if (await row.isVisible()) break;
     await more.click();
     await expect.poll(async () => await row.isVisible() ||
       await page.getByRole('button', { name: /^Loading (folders|files)…$/ }).count() === 0).toBe(true);
