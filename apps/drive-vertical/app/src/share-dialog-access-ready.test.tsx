@@ -1,0 +1,21 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { ShareDialog } from './share-dialog';
+import * as api from './api';
+afterEach(()=>{cleanup();vi.restoreAllMocks();});
+it('waits for existing grants before allowing a person to be shared again',async()=>{
+ vi.spyOn(api,'listPeople').mockResolvedValue({people:[{principal:'alice',name:'Alice',email:'alice@example.com',seen_at:''}]});
+ const shares=vi.spyOn(api,'listFolderShares').mockRejectedValueOnce(new Error('Access unavailable')).mockResolvedValue({shares:[]});
+ vi.spyOn(api,'getFolder').mockResolvedValue({id:'folder',name:'Folder',path:'Folder',parent_id:'root',canManage:true});
+ vi.spyOn(api,'listSites').mockResolvedValue([{slug:'test',name:'Test',current:true}]);
+ const share=vi.spyOn(api,'shareFolder');
+ render(<ShareDialog folder={{id:'folder',name:'Folder'}} onClose={()=>{}}/>);
+ await screen.findByText(/Access could not be checked/);
+ expect(screen.getByRole('combobox',{name:'Person'}).hasAttribute('disabled')).toBe(true);
+ expect(screen.getByRole('button',{name:'Share'}).hasAttribute('disabled')).toBe(true);
+ expect(share).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:'Retry folder access'}));
+ await screen.findByText(/Nobody yet/);
+ expect(screen.getByRole('combobox',{name:'Person'}).hasAttribute('disabled')).toBe(false);
+ expect(shares).toHaveBeenCalledTimes(2);
+});
