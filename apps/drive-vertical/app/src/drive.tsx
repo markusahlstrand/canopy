@@ -21,7 +21,7 @@ import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui
 import { readViewPreferences, saveViewPreferences, watchViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
-import { indexedMirror, syncMirror } from './scope-mirror';
+import { clearMirror, indexedMirror, syncMirror } from './scope-mirror';
 import { listOfflinePins, offlineSpace, rememberOfflineSpace, removeOfflinePin, setOfflinePin, type FolderPin } from './offline-content';
 import { refreshOfflinePins, syncOfflineFolderOnce, type FolderSyncProgress } from './offline-folder-sync';
 import { OfflinePreview } from './offline-preview';
@@ -281,11 +281,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     try { setOfflinePins(await listOfflinePins(auth.principal, cacheSpace)); }
     catch { setOfflinePins([]); }
   }, [auth.principal, cacheSpace]);
+  const reportPinUpdate = useCallback(async (error?: unknown) => {
+    if (error !== undefined) setPinError(error == null ? null : error instanceof Error ? error.message : String(error));
+    await reloadPins();
+  }, [reloadPins]);
   useEffect(() => { void reloadPins(); }, [reloadPins, folderId, offline]);
   useEffect(() => {
     if (!auth.principal || !cacheSpace || offline || busy || view !== 'drive') return;
-    void refreshOfflinePins(auth.principal, cacheSpace).then(reloadPins).catch(() => {});
-  }, [auth.principal, cacheSpace, offline, busy, view, files, reloadPins]);
+    void refreshOfflinePins(auth.principal, cacheSpace, undefined, reportPinUpdate).then(reloadPins).catch(() => {});
+  }, [auth.principal, cacheSpace, offline, busy, view, files, reloadPins, reportPinUpdate]);
   useEffect(() => { void refreshPlugins().catch(() => {}); }, []);
 
   useEffect(() => {
@@ -444,6 +448,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       // A stale failure is as misleading as a stale answer: the folder it belonged to
       // is not the one on screen.
       if (!reads.current.current(ticket)) return;
+      if (e instanceof ApiError && e.status === 401) {
+        // A live refusal revokes device access too; an existing tab may have been
+        // authenticated before its membership was removed.
+        await clearMirror().catch(() => {});
+        if (!reads.current.current(ticket)) return;
+        setFiles([]); setFolders([]); setTrash([]); setHits([]);
+        setPreviewing(null); setCmdOpen(false); setOfflinePins([]); setOffline(false);
+      }
       if (view === 'drive' && auth.principal &&
           (e instanceof TypeError || (e instanceof ApiError && e.status >= 500))) {
         try {
@@ -935,8 +947,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         {siteList.sites?.find(site => site.current)?.slug || currentSite() ? <CopyFolderLink key={folderId} folderId={folderId}
           site={siteList.sites?.find(site => site.current)?.slug ?? currentSite() ?? undefined} compact /> : null}
         {cacheSpace && auth.principal ? <>
-          <Button size="sm" variant="outline" disabled={pinBusy} onClick={() => void (currentPin?.status === 'ready' ? removeCurrentFolderOffline() : saveCurrentFolderOffline())}>
-            {pinBusy ? 'Saving offline…' : currentPin?.status === 'ready' ? 'Remove offline copy' : currentPin ? 'Retry offline download' : 'Available offline on this device'}
+          <Button size="sm" variant="outline" disabled={pinBusy || (currentPin?.status === 'syncing' && !pinError)} onClick={() => void (currentPin?.status === 'ready' ? removeCurrentFolderOffline() : saveCurrentFolderOffline())}>
+            {pinBusy || (currentPin?.status === 'syncing' && !pinError) ? 'Saving offline…' : currentPin?.status === 'ready' ? 'Remove offline copy' : currentPin ? 'Retry offline download' : 'Available offline on this device'}
           </Button>
           {currentPin?.status === 'partial' ? <span role="status" className="text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</span> : null}
           {currentPin?.status === 'error' ? <span role="status" className="text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</span> : null}

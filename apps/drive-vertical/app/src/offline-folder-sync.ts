@@ -126,24 +126,39 @@ export async function syncOfflineFolderOnce(
   return run;
 }
 
-const refreshes = new Map<string, Promise<void>>();
+const refreshes = new Map<string, { promise: Promise<void>; requested: boolean }>();
 const lastRefresh = new Map<string, number>();
-/** Refresh device pins after an online listing, without launching a walk per render. */
-export async function refreshOfflinePins(principal: string, space: string): Promise<void> {
+/** Coalesce listings, retaining a trailing refresh instead of dropping changes during the throttle. */
+export async function refreshOfflinePins(principal: string, space: string, source = liveOfflineFolderSource, onUpdated: (error?: unknown) => void | Promise<void> = () => {}): Promise<void> {
   const epoch = await offlineSessionEpoch();
   const key = `${epoch}\n${principal}\n${space}`;
   const running = refreshes.get(key);
-  if (running) return running;
-  if (Date.now() - (lastRefresh.get(key) ?? 0) < 30_000) return;
-  const run = (async () => {
-    try {
+  if (running) { running.requested = true; return running.promise; }
+  const state = { promise: Promise.resolve(), requested: true };
+  state.promise = (async () => {
+    while (state.requested) {
+      state.requested = false;
+      const previous = lastRefresh.get(key);
+      const remaining = previous === undefined ? 0 : 30_000 - (Date.now() - previous);
+      if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+      if (await offlineSessionEpoch().catch(() => null) !== epoch) return;
+      // Requests arriving while waiting are covered by this walk. Requests arriving
+      // during the walk may describe newer data and need another trailing walk.
+      state.requested = false;
       const pins = await listOfflinePins(principal, space);
       for (const pin of pins) {
-        try { await syncOfflineFolderOnce(pin, undefined, undefined, undefined, epoch); }
-        catch { /* The pin records its error and can be retried from the folder. */ }
+        try { await syncOfflineFolderOnce(pin, source, progress => { if (progress.files === 0) void onUpdated(); }, undefined, epoch); }
+        catch (error) {
+          // Full storage can also reject persisting partial/error status. Report
+          // the failure to the live UI even if that last status write failed.
+          await onUpdated(error);
+          continue;
+        }
+        await onUpdated(null);
       }
-    } finally { lastRefresh.set(key, Date.now()); }
-  })().finally(() => { if (refreshes.get(key) === run) refreshes.delete(key); });
-  refreshes.set(key, run);
-  return run;
+      lastRefresh.set(key, Date.now());
+    }
+  })().finally(() => { if (refreshes.get(key) === state) refreshes.delete(key); });
+  refreshes.set(key, state);
+  return state.promise;
 }
