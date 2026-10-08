@@ -36,7 +36,6 @@ function sessionChannel(): BroadcastChannel | undefined {
     channel = new BroadcastChannel(CHANNEL);
     channel.onmessage = () => {
       void clearMirror(false).catch(() => {});
-      for (const listener of logoutListeners) listener();
     };
   }
   return channel;
@@ -233,6 +232,8 @@ export function syncMirror(principal: string): Promise<void> {
  * than the one currently selected. Any in-flight sync is invalidated first. */
 export async function clearMirror(broadcast = true): Promise<void> {
   blocked = true;
+  // Local API refusals must hide this tab's cached preview as well as other tabs.
+  for (const listener of logoutListeners) listener();
   if (broadcast) sessionChannel()?.postMessage('logout');
   for (const principal of inFlight.keys()) {
     generations.set(principal, (generations.get(principal) ?? 0) + 1);

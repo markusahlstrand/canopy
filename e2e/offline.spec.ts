@@ -213,7 +213,7 @@ test('a real member revocation clears a recipient’s saved bytes after an onlin
     await people.getByRole('button', { name: `Remove ${prefix} viewer`, exact: true }).click();
     await people.getByRole('button', { name: 'Confirm', exact: true }).click();
     await expect(people.getByRole('button', { name: `Remove ${prefix} viewer`, exact: true })).toBeHidden();
-    await recipient.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await action(recipient, 'revoked.txt', 'Open');
     await expect.poll(async () => (await contentState(recipient)).versions.length).toBe(0);
     expect((await contentState(recipient)).pins).toEqual([]);
   } finally { await recipientContext.close(); }

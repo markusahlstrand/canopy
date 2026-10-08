@@ -13,6 +13,8 @@
  * state here too, and this hand-written seam is the shape it would replace.
  */
 
+import { offlineSessionEpoch } from './offline-content';
+
 /** Every derived route sits under `/api` — `mountOperations`' default base path. */
 const API = '/api';
 
@@ -158,7 +160,7 @@ export class TextEncodingError extends Error {
 }
 
 export async function fileBodyAsText(fileId: string, versionId?: string): Promise<{ text: string; truncated: boolean }> {
-  const res = await fetch(versionId ? versionContentUrl(fileId, versionId) : contentUrl(fileId), { credentials: 'same-origin' });
+  const res = await checkedApiFetch(versionId ? versionContentUrl(fileId, versionId) : contentUrl(fileId), { credentials: 'same-origin' });
   if (!res.ok) throw new ApiError(res.status, res.statusText);
 
   // Read as a STREAM and stop at the limit. `res.text()` would download and decode the
@@ -218,8 +220,22 @@ export function siteHeaders(extra?: HeadersInit, selectedSite = site): HeadersIn
   return { ...(selectedSite ? { 'x-site': selectedSite } : {}), ...extra };
 }
 
+/** A refusal ends cached access too, but an old scope/login cannot revoke a newer cache. */
+export async function checkedApiFetch(url: string, init?: RequestInit, selectedSite = site, revoke = true): Promise<Response> {
+  // Start the epoch read alongside transport; it must not delay or block network requests.
+  const epoch = revoke ? offlineSessionEpoch().catch(() => null) : null;
+  const response = await fetch(url, init);
+  if (response.status === 401 && epoch && selectedSite === site) {
+    const captured = await epoch;
+    if (captured !== null && captured === await offlineSessionEpoch().catch(() => null)) {
+      await import('./scope-mirror').then(module => module.clearMirror()).catch(() => {});
+    }
+  }
+  return response;
+}
+
 async function request(path: string, init?: RequestInit, selectedSite = site): Promise<Response> {
-  const res = await fetch(`${API}${path}`, {
+  const res = await checkedApiFetch(`${API}${path}`, {
     ...init,
     // The session is a cookie the worker set on /api/auth/callback; without this
     // every call is anonymous and the app renders a permanent logged-out state.
@@ -228,7 +244,7 @@ async function request(path: string, init?: RequestInit, selectedSite = site): P
       init?.body ? { 'content-type': 'application/json', ...init?.headers } : init?.headers,
       selectedSite,
     ),
-  });
+  }, selectedSite, !['/me', '/claim-owner', '/accept-invite'].includes(path));
   if (!res.ok) {
     // The platform answers errors as RFC 9457 problem documents; fall back to the
     // status line for anything that is not one (a proxy, a cold start).
@@ -710,7 +726,7 @@ export const listTrash = () => call<DriveFile[]>('/trash');
  * version records come from the stored bytes, not from anything said here.
  */
 export async function uploadFile(folderId: string, file: File, selectedSite: string | null = currentSite(), signal?: AbortSignal): Promise<DriveFile> {
-  const res = await fetch(
+  const res = await checkedApiFetch(
     `${API}/folders/${encodeURIComponent(folderId)}/content?name=${encodeURIComponent(file.name)}`,
     {
       method: 'POST',
@@ -719,6 +735,7 @@ export async function uploadFile(folderId: string, file: File, selectedSite: str
       body: file,
       signal,
     },
+    selectedSite,
   );
   if (!res.ok) {
     const problem = await res.json().catch(() => null);

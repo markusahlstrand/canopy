@@ -21,7 +21,7 @@ import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui
 import { readViewPreferences, saveViewPreferences, watchViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
-import { clearMirror, indexedMirror, syncMirror } from './scope-mirror';
+import { indexedMirror, syncMirror } from './scope-mirror';
 import { listOfflinePins, offlineSpace, rememberOfflineSpace, removeOfflinePin, setOfflinePin, type FolderPin } from './offline-content';
 import { refreshOfflinePins, syncOfflineFolderOnce, type FolderSyncProgress } from './offline-folder-sync';
 import { OfflinePreview } from './offline-preview';
@@ -449,9 +449,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       // is not the one on screen.
       if (!reads.current.current(ticket)) return;
       if (e instanceof ApiError && e.status === 401) {
-        // A live refusal revokes device access too; an existing tab may have been
-        // authenticated before its membership was removed.
-        await clearMirror().catch(() => {});
+        // The API client revokes device access for the captured login. Clear the
+        // visible listing too, without letting a stale refusal clear a newer cache.
         if (!reads.current.current(ticket)) return;
         setFiles([]); setFolders([]); setTrash([]); setHits([]);
         setPreviewing(null); setCmdOpen(false); setOfflinePins([]); setOffline(false);

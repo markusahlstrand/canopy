@@ -1,6 +1,6 @@
 import { useUnsavedDraft } from './drafts';
 import { useEffect, useRef, useState } from 'react';
-import { pluginSource, versionContentUrl, type PluginInstall } from './api';
+import { checkedApiFetch, pluginSource, versionContentUrl, type PluginInstall } from './api';
 import { pluginManifest } from './installed-plugins';
 /** Source is imported only inside an opaque-origin iframe, never in the application. */
 export function pluginDocument(hosts: string[] = []): string {
@@ -56,7 +56,7 @@ function SandboxInstance({plugin,file,onSave}:SandboxProps) {
     if(file && (file.size==null || file.size>20000000))throw Error('Plugin previews support files up to 20 MB.');
     const loaded=await pluginSource(plugin.id,plugin.updated_at);
     let bytes=new ArrayBuffer(0);
-    if(file){const response=await fetch(versionContentUrl(file.id,file.versionId),{signal:abort.signal});if(!response.ok)throw Error('Could not load this file version.');bytes=await response.arrayBuffer();if(bytes.byteLength>20000000)throw Error('Plugin previews support files up to 20 MB.');}
+    if(file){const response=await checkedApiFetch(versionContentUrl(file.id,file.versionId),{signal:abort.signal});if(!response.ok)throw Error('Could not load this file version.');bytes=await response.arrayBuffer();if(bytes.byteLength>20000000)throw Error('Plugin previews support files up to 20 MB.');}
     if(!abort.signal.aborted && !retired.current)frame.current?.contentWindow?.postMessage({type:'render',source:loaded.source,file:file?{name:file.name,mime:file.mime,bytes,writable:!!saveRef.current && manifest.capabilities.some(cap=>cap.kind==='item:write')}:undefined},'*',[bytes]);
    }catch(error){if(!abort.signal.aborted){clearTimeout(timer);setError(error instanceof Error?error.message:String(error));}}
   };
