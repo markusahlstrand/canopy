@@ -14,7 +14,7 @@
  * the subtree through the declared parent edge, and somebody who does not know that is
  * sharing more than they think.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, PersonAvatar, cn } from '@canopy/ui';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@canopy/ui';
 import { latestOnly } from './reads';
@@ -115,22 +115,20 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
       });
   }, [folderId]);
 
-  useEffect(() => {
-    if (!folderId) {
-      // Anything in flight belongs to the folder being left — and this dialog is reopened
-      // on a DIFFERENT folder, so a late answer would describe the wrong one.
-      reads.current.invalidate();
-      setShares(null);
-      setPeople(null);
-      setPeopleFailed(false);
-      setError(null);
-      setTyped('');
-      setInvited(null);
-      setConfirming(null);
-      setLevel('edit');
-      return;
-    }
-    load();
+  useLayoutEffect(() => {
+    // A folder switch must not briefly show the previous folder's grants or leave a
+    // new dialog busy because an old mutation is still pending.
+    reads.current.invalidate();
+    setShares(null);
+    setPeople(null);
+    setPeopleFailed(false);
+    setError(null);
+    setBusy(false);
+    setTyped('');
+    setInvited(null);
+    setConfirming(null);
+    setLevel('edit');
+    if (folderId) load();
   }, [folderId, load]);
 
   /**
