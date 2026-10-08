@@ -110,6 +110,7 @@ export function PreviewPanel({
   navigation?: { previous: string | null; next: string | null; moreAvailable?: boolean; onOpen: (id: string) => void };
 }) {
   const [retry, setRetry] = useState(0);
+  const [savingText, setSavingText] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [bodyError, setBodyError] = useState<string | null>(null);
   const [versionsError, setVersionsError] = useState<string | null>(null);
@@ -343,9 +344,9 @@ export function PreviewPanel({
         <Icon name="file-text" className="size-4 text-muted-foreground" />
         <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{file?.name ?? 'Loading…'}</h2>
         {navigation ? <div className="flex gap-1" aria-label="File navigation">
-          <Button variant="ghost" size="sm" disabled={!navigation.previous} aria-label="Previous file"
+          <Button variant="ghost" size="sm" disabled={savingText || !navigation.previous} aria-label="Previous file"
             onClick={() => { if (navigation.previous) navigation.onOpen(navigation.previous); }}><Icon name="chevron-left" className="size-4" /></Button>
-          <Button variant="ghost" size="sm" disabled={!navigation.next} aria-label="Next file"
+          <Button variant="ghost" size="sm" disabled={savingText || !navigation.next} aria-label="Next file"
             title={!navigation.next && navigation.moreAvailable ? 'Load more files to continue' : undefined}
             onClick={() => { if (navigation.next) navigation.onOpen(navigation.next); }}><Icon name="chevron-right" className="size-4" /></Button>
         </div> : null}
@@ -357,7 +358,7 @@ export function PreviewPanel({
             </a>
           </Button>
         ) : null}
-        <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close preview">
+        <Button variant="ghost" size="sm" disabled={savingText} onClick={onClose} aria-label="Close preview">
           <Icon name="x" className="size-4" />
         </Button>
       </header>
@@ -370,6 +371,7 @@ export function PreviewPanel({
           <button
             key={t}
             type="button"
+            disabled={savingText}
             onClick={() => loadTab(t)}
             className={cn(
               'rounded px-2 py-1 text-xs capitalize',
@@ -381,7 +383,7 @@ export function PreviewPanel({
         ))}
       </nav>
 
-      {tab === 'file' && matching.length ? <label className="px-3 py-2 text-sm">Open with <select aria-label="Open with" value={selectedPlugin?.id ?? ''} onChange={event => { if (confirmDiscardDrafts()) { setPluginId(event.target.value); setEditing(false); } }}><option value="">Built-in preview</option>{matching.map(row => <option key={row.id} value={row.id}>{pluginManifest(row).name}</option>)}</select></label> : null}
+      {tab === 'file' && matching.length ? <label className="px-3 py-2 text-sm">Open with <select disabled={savingText} aria-label="Open with" value={selectedPlugin?.id ?? ''} onChange={event => { if (confirmDiscardDrafts()) { setPluginId(event.target.value); setEditing(false); } }}><option value="">Built-in preview</option>{matching.map(row => <option key={row.id} value={row.id}>{pluginManifest(row).name}</option>)}</select></label> : null}
       {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
@@ -404,7 +406,7 @@ export function PreviewPanel({
           ) : shape === 'text' ? (
             body ? (
               editing ? <TextEditor key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} text={body.text} wrap={wrapText}
-                onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} /> : <>
+                onBusyChange={setSavingText} onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} /> : <>
                 {canWrite && !body.truncated && version.source === 'blob' ? <Button size="sm" variant="outline" className="mb-3" onClick={() => setEditing(true)}>Edit text</Button> : null}
                 {!body.truncated && (version.mime.split(';')[0]?.trim().toLowerCase() === 'application/json' || version.mime.split(';')[0]?.trim().toLowerCase().endsWith('+json'))
                   ? <JsonPreview key={`${fileId}:${version.id}`} text={body.text} wrap={wrapText} onWrapChange={setWrapText} />

@@ -50,7 +50,18 @@ test('text saves create versions and a concurrent browser write preserves the co
   await expect(panel.getByText(changed, { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Edit text', exact: true }).click();
   await panel.getByRole('textbox', { name: 'File text' }).fill('Accepted browser edit');
+  let releaseSave!: () => void;
+  const holdSave = new Promise<void>(resolve => { releaseSave = resolve; });
+  await page.route(/\/api\/files\/[^/]+\/content\?expectedVersion=/, async route => {
+    await holdSave;
+    await route.continue();
+  }, { times: 1 });
   await panel.getByRole('button', { name: 'Save text', exact: true }).click();
+  try {
+    await expect(panel.getByRole('button', { name: 'Versions', exact: true })).toBeDisabled();
+    await expect(panel.getByRole('button', { name: 'Close preview', exact: true })).toBeDisabled();
+  } finally { releaseSave(); }
+  await expect(panel.getByRole('textbox', { name: 'File text' })).toBeHidden();
   await expect(panel.getByText('Accepted browser edit', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Versions', exact: true }).click();
   await expect(panel.getByRole('link', { name: /Download version/ })).toHaveCount(3);
