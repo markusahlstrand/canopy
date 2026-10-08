@@ -24,6 +24,8 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   const [trail, setTrail] = useState([{ id: ROOT_FOLDER_ID, name: 'My Drive' }]);
   const [folders, setFolders] = useState<DriveFolder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [foldersFailed, setFoldersFailed] = useState(false);
+  const [folderRetry, setFolderRetry] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(items);
@@ -36,17 +38,18 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
     setNext(null);
     setLoadingMore(false);
     setLoading(true);
+    setFoldersFailed(false);
     setFolders([]);
     setError(null);
     listFoldersPage(destination.id, null, site).then((answer) => {
       if (reads.current(ticket)) { setFolders(answer.entries); setNext(answer.next); }
     }).catch((e: unknown) => {
-      if (reads.current(ticket)) setError(e instanceof Error ? e.message : String(e));
+      if (reads.current(ticket)) { setFoldersFailed(true); setError(e instanceof Error ? e.message : String(e)); }
     }).finally(() => {
       if (reads.current(ticket)) setLoading(false);
     });
     return () => reads.invalidate();
-  }, [destination.id]);
+  }, [destination.id, folderRetry]);
 
   const more = async () => {
     if (!next || loadingMore || loading || busy) return;
@@ -75,7 +78,7 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   };
 
   const submit = async () => {
-    if (running.current || loading || !remaining.length || destination.id === sourceFolderId) return;
+    if (running.current || loading || foldersFailed || !remaining.length || destination.id === sourceFolderId) return;
     running.current = true; cancelled.current = false; setBusy(true); setError(null);
     let left = remaining;
     const moved: string[] = [];
@@ -150,9 +153,10 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
         </div>
         {failures.length ? <ul aria-label="Files not moved" className="text-sm text-destructive">{failures.map((failure, i) => <li key={i}>{failure.message}</li>)}</ul> : null}
         {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+        {foldersFailed ? <Button variant="outline" disabled={busy || loading} onClick={() => setFolderRetry(value => value + 1)}>Retry destination folders</Button> : null}
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={() => { if (busy) cancelled.current = true; else onClose(); }}>{busy ? 'Cancel remaining moves' : 'Cancel'}</Button>
-          <Button disabled={busy || loading || !remaining.length || destination.id === sourceFolderId}
+          <Button disabled={busy || loading || foldersFailed || !remaining.length || destination.id === sourceFolderId}
             onClick={() => void submit()}>{busy ? 'Moving…' : 'Move here'}</Button>
         </div>
       </DialogContent>
