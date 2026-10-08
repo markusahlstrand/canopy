@@ -24,7 +24,7 @@ import {
   DialogTitle,
 } from '@canopy/ui';
 import { latestOnly } from './reads';
-import { PeoplePicker } from './people-picker';
+import { PeoplePicker, handlePeoplePickerEscape } from './people-picker';
 import {
   createInvite,
   listInvites,
@@ -237,7 +237,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg" onEscapeKeyDown={handlePeoplePickerEscape}>
         <DialogHeader>
           <DialogTitle>People</DialogTitle>
           <DialogDescription>

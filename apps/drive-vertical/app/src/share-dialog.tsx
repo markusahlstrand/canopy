@@ -19,7 +19,7 @@ import { Button, Icon, Input, PersonAvatar, cn } from '@canopy/ui';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@canopy/ui';
 import { latestOnly } from './reads';
 import { CopyFolderLink } from './copy-folder-link';
-import { PeoplePicker } from './people-picker';
+import { PeoplePicker, handlePeoplePickerEscape } from './people-picker';
 import {
   listFolderShares,
   listPeople,
@@ -177,7 +177,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
 
   return (
     <Dialog open={folder !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg" onEscapeKeyDown={handlePeoplePickerEscape}>
         <DialogHeader>
           <DialogTitle>Share “{folder?.name}”</DialogTitle>
           <DialogDescription>

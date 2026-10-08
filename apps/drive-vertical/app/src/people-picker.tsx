@@ -2,6 +2,11 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Input, PersonAvatar, cn } from '@canopy/ui';
 import type { Person } from './api';
 
+/** Radix handles Escape in capture, before the input can close its suggestions. */
+export function handlePeoplePickerEscape(event: KeyboardEvent) {
+  if (event.target instanceof Element && event.target.matches('[role="combobox"][aria-expanded="true"]')) event.preventDefault();
+}
+
 /**
  * A text field that suggests the people already in this space as you type, so you pick a
  * known person instead of retyping an address.
@@ -100,6 +105,9 @@ export function PeoplePicker({
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => results.length > 0 && setOpen(true)}
         onKeyDown={(e) => {
+          // WebKit may end composition before the confirming Enter, but still reports
+          // keyCode 229 for that IME key. Neither event should choose a person.
+          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
           // While a suggestion is highlighted, the arrows/Enter drive the list
           // and never reach the form (so Enter picks a person, not submits).
           if (!open || results.length === 0) return;
@@ -113,6 +121,8 @@ export function PeoplePicker({
             e.preventDefault();
             choose(results[active]!);
           } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
             setOpen(false);
           }
         }}
