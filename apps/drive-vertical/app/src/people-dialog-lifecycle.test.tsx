@@ -1,0 +1,47 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { PeopleDialog } from './people-dialog';
+import * as api from './api';
+afterEach(()=>{cleanup();vi.restoreAllMocks();});
+it.each(['success','failure'])('ignores an invitation %s from a previous dialog visit',async outcome=>{
+ vi.spyOn(api,'listPeople').mockResolvedValue({people:[]});
+ const list=vi.spyOn(api,'listInvites').mockResolvedValue({invites:[],roles:['viewer']});
+ let resolve!: (value: Awaited<ReturnType<typeof api.createInvite>>)=>void;
+ let reject!: (error: Error)=>void;
+ vi.spyOn(api,'createInvite').mockImplementation(()=>new Promise((yes,no)=>{resolve=yes;reject=no;}));
+ const view=render(<PeopleDialog open onOpenChange={()=>{}}/>);
+ await screen.findByRole('button',{name:'Invite'});
+ await act(async()=>{});
+ fireEvent.change(screen.getByRole('combobox',{name:'Email'}),{target:{value:'test@example.com'}});
+ fireEvent.click(screen.getByRole('button',{name:'Invite'}));
+ view.rerender(<PeopleDialog open={false} onOpenChange={()=>{}}/>);
+ view.rerender(<PeopleDialog open onOpenChange={()=>{}}/>);
+ await act(async()=>{});
+ const reads=list.mock.calls.length;
+ await act(async()=>{if(outcome==='success')resolve({principal:'invited',roleKey:'viewer',email:'test@example.com',acceptUrl:'https://example.com/private-invite'});else reject(new Error('Old visit failed'));});
+ expect(screen.queryByDisplayValue('https://example.com/private-invite')).toBeNull();
+ expect(screen.queryByText('Old visit failed')).toBeNull();
+ expect(list).toHaveBeenCalledTimes(reads);
+ expect((screen.getByRole('combobox',{name:'Email'}) as HTMLInputElement).value).toBe('');
+ expect(screen.getByRole('button',{name:'Invite'}).hasAttribute('disabled')).toBe(false);
+});
+it.each(['remove','withdraw'])('does not reload a new visit after an old %s completes',async operation=>{
+ const person={principal:'alice',name:'Alice',email:'alice@example.com',seen_at:''};
+ vi.spyOn(api,'listPeople').mockResolvedValue({people:operation==='remove'?[person]:[]});
+ const list=vi.spyOn(api,'listInvites').mockResolvedValue({invites:operation==='withdraw'?[{principal:'alice',roleKey:'viewer',email:'alice@example.com',createdAt:''}]:[],roles:['viewer']});
+ let finish!:()=>void;
+ if(operation==='remove') vi.spyOn(api,'removePerson').mockImplementation(()=>new Promise(resolve=>{finish=()=>resolve({principal:'alice',revoked:1,unbound:1});}));
+ else vi.spyOn(api,'revokeInvite').mockImplementation(()=>new Promise<void>(resolve=>{finish=resolve;}));
+ const view=render(<PeopleDialog open onOpenChange={()=>{}}/>);
+ if(operation==='remove'){
+  fireEvent.click(await screen.findByRole('button',{name:'Remove Alice'}));
+  fireEvent.click(screen.getByRole('button',{name:'Confirm'}));
+ }else fireEvent.click(await screen.findByRole('button',{name:'Withdraw the invitation for alice@example.com'}));
+ view.rerender(<PeopleDialog open={false} onOpenChange={()=>{}}/>);
+ view.rerender(<PeopleDialog open onOpenChange={()=>{}}/>);
+ await act(async()=>{});
+ const reads=list.mock.calls.length;
+ await act(async()=>finish());
+ expect(list).toHaveBeenCalledTimes(reads);
+ expect(screen.getByRole('button',{name:'Invite'}).hasAttribute('disabled')).toBe(false);
+});
