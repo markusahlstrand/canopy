@@ -29,3 +29,11 @@ it('does not reveal another principal’s cached file', async () => {
   expect(await screen.findByText(/no saved offline copy/)).toBeTruthy();
   expect(screen.queryByText('hello offline')).toBeNull();
 });
+
+it('opens the newest saved version when the offline name mirror still points to an older version', async () => {
+  await cacheOfflineVersion({ principal: 'alice', space: 'family', fileId: 'file', versionId: 'v2',
+    folderId: 'docs', name: 'note.txt', mime: 'text/plain', url: '/content' }, async () => new Response('newer offline copy'));
+  render(<OfflinePreview file={{ ...file, current_version_id: 'not-in-cache' }} principal="alice" space="family" onClose={() => {}} />);
+  expect(await screen.findByText('newer offline copy')).toBeTruthy();
+  expect(screen.getByText(/saved version v2 from/)).toBeTruthy();
+});

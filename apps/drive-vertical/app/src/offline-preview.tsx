@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Icon } from '@canopy/ui';
-import { getOfflineVersion, type CachedVersion } from './offline-content';
+import { getOfflineFileVersion, type CachedVersion } from './offline-content';
 import type { DriveFile } from './api';
 
 /** Show a saved file without offering edits or fetching online content. */
@@ -13,8 +13,7 @@ export function OfflinePreview({ file, principal, space, onClose }: {
   useEffect(() => {
     let active = true;
     setCached(null); setUrl(null); setLoading(true);
-    if (!file.current_version_id) { setLoading(false); return; }
-    void getOfflineVersion({ principal, space, fileId: file.id, versionId: file.current_version_id })
+    void getOfflineFileVersion(principal, space, file.id, file.current_version_id)
       .then(row => { if (active) setCached(row); })
       .catch(() => { if (active) setCached(null); })
       .finally(() => { if (active) setLoading(false); });
@@ -33,7 +32,7 @@ export function OfflinePreview({ file, principal, space, onClose }: {
     {loading ? <p className="p-4 text-sm">Opening saved version…</p>
       : !cached ? <p role="status" className="p-4 text-sm">This file has no saved offline copy. Reconnect and mark its folder available offline.</p>
       : <>
-        <p className="border-b px-4 py-2 text-xs text-muted-foreground">Read-only saved version from {new Date(cached.savedAt).toLocaleString()}</p>
+        <p className="border-b px-4 py-2 text-xs text-muted-foreground">Read-only saved version {cached.versionId} from {new Date(cached.savedAt).toLocaleString()}</p>
         {text != null ? <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-4 text-sm">{text}</pre>
           : url && cached.mime.startsWith('image/') ? <img src={url} alt={file.name} className="min-h-0 flex-1 object-contain p-4" />
           : url && cached.mime === 'application/pdf' ? <iframe src={url} title={file.name} className="min-h-0 flex-1 border-0" />
