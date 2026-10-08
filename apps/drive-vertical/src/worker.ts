@@ -587,6 +587,22 @@ mountInviteGuards(app, async c => {
  const node=await nodeFor(c.req.raw,c.env),subject=await(await providerFor(c.env,baseNode(c.req.raw,c.env))).resolve(c.req.raw.headers);
  return !!subject && !!await identityDo(c.env,node).existingBinding(node.scopeId,subject.sub);
 });
+// The shared auth route constructs a hostname-local invite. This install serves
+// multiple scopes, so the returned link must also name the scope it was minted in.
+app.use('/api/invites', async (c, next) => {
+  if (c.req.method !== 'POST') return next();
+  const node = await nodeFor(c.req.raw, c.env);
+  const site = (await identityDo(c.env, node).listSites()).find(site => site.scopeId === node.scopeId);
+  if (!site) throw new HTTPException(503, { message: 'This space has no invite address yet. Refresh and try again.' });
+  await next();
+  if (c.res.status !== 201) return;
+  const body = await c.res.clone().json() as { acceptUrl: string };
+  const link = new URL(body.acceptUrl);
+  link.searchParams.set('site', site.slug);
+  const headers = new Headers(c.res.headers);
+  headers.delete('content-length');
+  c.res = new Response(JSON.stringify({ ...body, acceptUrl: link.toString() }), { status: 201, headers });
+});
 mountInviteRoutes<Env, Node>(app, {
   nodeFor,
   requireAdmin: async (c) => ({ principal: await requirePeopleAdmin(c) }),

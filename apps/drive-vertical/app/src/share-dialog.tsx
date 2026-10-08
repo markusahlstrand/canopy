@@ -358,7 +358,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
             </div> : <p className="text-sm text-muted-foreground">Loading…</p>
           ) : shares.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Nobody yet. Members of this space can read it; nobody can change it.
+              Nobody yet has a direct folder grant. Space roles still apply.
             </p>
           ) : (
             <ul className="flex flex-col gap-1">
@@ -413,8 +413,8 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
           )}
           <p className="mt-2 text-[11.5px] text-muted-foreground">
             <Icon name="users" size={13} className="mr-1 inline align-[-2px]" />
-            Everyone in this space already reads everything. Sharing is about who can change
-            what.
+            Space members can read every folder. Editors and owners can also edit through
+            their space role. Removing a folder grant keeps those role permissions.
           </p>
         </div>
       </DialogContent>

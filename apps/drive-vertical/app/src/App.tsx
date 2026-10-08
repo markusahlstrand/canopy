@@ -226,9 +226,9 @@ export default function App() {
               // `returnTo` is where the token would otherwise have to ride. It only does
               // so when storage refused to hold it, which is one more URL than we want
               // and still better than a link nobody can redeem.
-              stash(kind, token)
-                ? LOGIN_URL
-                : `${LOGIN_URL}?returnTo=${encodeURIComponent(`/?${LINKS[kind].param}=${token}`)}`,
+                stash(kind, token)
+                ? folderLoginUrl()
+                : `${LOGIN_URL}?returnTo=${encodeURIComponent(`/?${LINKS[kind].param}=${token}${currentSite() ? `&site=${encodeURIComponent(currentSite()!)}` : ''}`)}`,
             );
             return null;
           }

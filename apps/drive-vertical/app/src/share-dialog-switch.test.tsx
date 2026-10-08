@@ -7,7 +7,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it('hides the previous folder grants while the next folder is loading', async () => {
   let finishNext!: (response: Response) => void;
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
-    const path = String(input);
+    const path = new URL(String(input), location.origin).pathname;
     if (path.endsWith('/folders/a/shares')) return Promise.resolve(new Response(JSON.stringify({ shares: [{
       folder_id: 'a', principal: 'alice', permission: 'drive:write', granted_at: '', granted_by: '',
       name: 'Alice', email: null,
@@ -31,7 +31,7 @@ it('ignores a mutation from an earlier visit after returning to the same folder'
   let aReads = 0;
   let deletes = 0;
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input);
+    const path = new URL(String(input), location.origin).pathname;
     if (path.endsWith('/folders/a/shares') && init?.method === 'DELETE') {
       return ++deletes === 1
         ? new Promise<Response>(resolve => { finishRemove = resolve; })
