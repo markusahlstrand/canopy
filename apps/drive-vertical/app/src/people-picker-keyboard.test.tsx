@@ -1,8 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { PeoplePicker } from './people-picker';
+import { ShareDialog } from './share-dialog';
+import * as api from './api';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const people = [{ principal: 'alice', name: 'Alice', email: 'alice@example.com', seen_at: '' }];
 
 it('does not choose a person while Enter confirms composed text', async () => {
@@ -26,4 +28,22 @@ it('uses Escape to close suggestions without closing the surrounding dialog', as
   expect(parentKey).not.toHaveBeenCalled();
   expect(screen.queryByRole('listbox')).toBeNull();
   expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('Ali');
+});
+
+it('keeps the Radix sharing dialog open until suggestions have been dismissed', async () => {
+  vi.spyOn(api, 'listPeople').mockResolvedValue({ people });
+  vi.spyOn(api, 'listFolderShares').mockResolvedValue({ shares: [] });
+  vi.spyOn(api, 'getFolder').mockResolvedValue({ id: 'folder', name: 'Folder', path: 'Folder', parent_id: 'root', canManage: true });
+  vi.spyOn(api, 'listSites').mockResolvedValue([{ slug: 'family', name: 'Family', current: true }]);
+  const close = vi.fn();
+  render(<ShareDialog folder={{ id: 'folder', name: 'Folder' }} onClose={close} />);
+  await screen.findByText(/Nobody yet/);
+  const input = screen.getByRole('combobox');
+  fireEvent.change(input, { target: { value: 'Ali' } });
+  await screen.findByRole('listbox');
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(close).not.toHaveBeenCalled();
+  expect(screen.queryByRole('listbox')).toBeNull();
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(close).toHaveBeenCalledOnce();
 });
