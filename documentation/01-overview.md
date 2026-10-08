@@ -9,7 +9,7 @@ Canopy is a drive built as a [Substrat](https://github.com/substrat-run/substrat
 - OIDC signs people in. The install has an owner, members can be invited, and folder grants use the kernel permission checker.
 - Uploaded bytes use the platform attachment surface and a per-tenant blob store. Metadata and the file tree live inside the space's scope.
 - A bundled plugin catalog offers viewers and editors. People can review and install plugins personally or for a space, including imports from ZIP, public GitHub, and npm. Runtime plugin source runs in an opaque-origin iframe.
-- The browser mirrors file and folder names for offline browsing after a completed sync. File content, search, and writes still require a connection.
+- The browser mirrors file and folder names for offline browsing after a completed sync. A marked folder can also save readable file versions for read-only offline preview and download. Search and writes still require a connection.
 
 The source of truth for those features is <code>@canopy/scope-drive</code> in <code>packages/scope-drive</code>. The hosted worker and SPA live in <code>apps/drive-vertical</code>. See [Architecture](02-architecture.md) and [Storage & files](07-storage-and-files.md).
 
