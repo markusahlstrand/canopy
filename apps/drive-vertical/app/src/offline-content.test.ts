@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cacheOfflineVersion, clearOfflineContent, getOfflineVersion, listOfflinePins,
   offlineSessionEpoch, offlineSpace, pruneOfflinePin, rememberOfflineSpace, removeOfflinePin, resumeOfflineContent, setOfflinePin,
@@ -83,6 +83,20 @@ describe('opt-in offline content store', () => {
   it('rejects a file above the per-file limit without storing a partial copy', async () => {
     await expect(cacheOfflineVersion(key(), async () => new Response(new Uint8Array(20_000_001))))
       .rejects.toThrow('20 MB offline file limit');
+    expect(await getOfflineVersion(key())).toBeNull();
+  });
+
+  it('explains browser storage exhaustion during a save', async () => {
+    const put = IDBObjectStore.prototype.put;
+    const spy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, ...args) {
+      if (this.name === 'versions') throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      return put.apply(this, args);
+    });
+    try {
+      await expect(cacheOfflineVersion(key(), fetcher)).rejects.toThrow('browser is out of storage space');
+    } finally {
+      spy.mockRestore();
+    }
     expect(await getOfflineVersion(key())).toBeNull();
   });
 });
