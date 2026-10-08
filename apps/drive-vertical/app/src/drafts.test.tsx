@@ -1,9 +1,24 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { useLayoutEffect } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { PreviewPanel } from './preview';
 import { TextEditor } from './text-editor';
-import { confirmDiscardDrafts } from './drafts';
+import { confirmDiscardDrafts, useUnsavedDraft } from './drafts';
+import { confirmNavigation } from './navigation-guards';
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+it('permits navigation as soon as a saved editor is removed from the page', () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  const allowed = vi.fn();
+  function Draft() { useUnsavedDraft(true); return <textarea defaultValue="Saved draft" />; }
+  function Boundary({ saved }: { saved: boolean }) {
+    useLayoutEffect(() => { if (saved) allowed(confirmDiscardDrafts() && confirmNavigation()); }, [saved]);
+    return saved ? <p>Saved text</p> : <Draft />;
+  }
+  const view = render(<Boundary saved={false} />);
+  view.rerender(<Boundary saved />);
+  expect(allowed).toHaveBeenCalledWith(true);
+  expect(confirm).not.toHaveBeenCalled();
+});
 it('protects a dirty draft on cancel and browser exit, then cleans up on unmount', () => {
   const cancel = vi.fn();
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);

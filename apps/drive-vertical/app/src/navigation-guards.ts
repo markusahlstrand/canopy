@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 
 const pending = new Set<symbol>();
 let approved = false;
@@ -11,7 +11,7 @@ export function confirmNavigation(): boolean {
 
 /** Browser exit protection shared by draft editors and the upload queue. */
 export function useNavigationGuard(active: boolean): void {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!active) return;
     const id = Symbol('pending work');
     pending.add(id);

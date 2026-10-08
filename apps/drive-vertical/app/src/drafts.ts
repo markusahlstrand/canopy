@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import { useNavigationGuard } from './navigation-guards';
 
 const drafts = new Set<symbol>();
@@ -10,7 +10,9 @@ export function confirmDiscardDrafts(): boolean {
 
 export function useUnsavedDraft(dirty: boolean): void {
   useNavigationGuard(dirty);
-  useEffect(() => {
+  // Clear saved/unmounted drafts during commit. A passive cleanup can run after
+  // the next click and incorrectly refuse navigation from an already saved editor.
+  useLayoutEffect(() => {
     if (!dirty) return;
     const id = Symbol('draft');
     drafts.add(id);
