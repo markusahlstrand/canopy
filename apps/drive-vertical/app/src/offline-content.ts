@@ -121,6 +121,7 @@ export async function rememberOfflineSpace(principal: string, route: string, spa
   await tx.done;
 }
 
+/** Resolve a remembered hostname route for this signed-in principal. */
 export async function offlineSpace(principal: string, route: string): Promise<string | null> {
   const tx = (await db()).transaction(['routes', 'session'], 'readonly');
   const session = await tx.objectStore('session').get(SESSION);
@@ -129,6 +130,7 @@ export async function offlineSpace(principal: string, route: string): Promise<st
   return row?.space ?? null;
 }
 
+/** List device pins only while the offline session is active. */
 export async function listOfflinePins(principal: string, space: string): Promise<FolderPin[]> {
   const tx = (await db()).transaction(['pins', 'session'], 'readonly');
   const session = await tx.objectStore('session').get(SESSION);
@@ -138,6 +140,7 @@ export async function listOfflinePins(principal: string, space: string): Promise
   return pins;
 }
 
+/** Create or retry a folder pin within the current login generation. */
 export async function setOfflinePin(pin: FolderPin): Promise<void> {
   const epoch = await sessionEpoch();
   const database = await db();
@@ -167,6 +170,7 @@ export async function updateOfflinePinStatus(pin: FolderPin, status: FolderPin['
   return !!current;
 }
 
+/** Unpin a folder and drop versions no other pinned folder needs. */
 export async function removeOfflinePin(principal: string, space: string, folderId: string, expectedEpoch?: number): Promise<void> {
   const epoch = expectedEpoch ?? await sessionEpoch();
   const database = await db();
@@ -188,6 +192,7 @@ export async function removeOfflinePin(principal: string, space: string, folderI
   await tx.done;
 }
 
+/** Read a saved version only while the offline session is active. */
 export async function getOfflineVersion(key: OfflineContentKey): Promise<CachedVersion | null> {
   const tx = (await db()).transaction(['versions', 'session'], 'readonly');
   const session = await tx.objectStore('session').get(SESSION);

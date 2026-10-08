@@ -3,6 +3,7 @@ import { Button, Icon } from '@canopy/ui';
 import { getOfflineVersion, type CachedVersion } from './offline-content';
 import type { DriveFile } from './api';
 
+/** Show a saved file without offering edits or fetching online content. */
 export function OfflinePreview({ file, principal, space, onClose }: {
   file: DriveFile; principal: string; space: string; onClose: () => void;
 }) {

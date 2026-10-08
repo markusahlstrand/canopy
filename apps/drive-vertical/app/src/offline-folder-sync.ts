@@ -22,6 +22,7 @@ export const liveOfflineFolderSource: OfflineFolderSource = {
   contentUrl: (id, version, space) => versionContentUrl(id, version, space),
 };
 
+/** Find the file's current version across paged version history. */
 async function currentVersion(file: DriveFile, space: string, source: OfflineFolderSource): Promise<FileVersion | null> {
   if (!file.current_version_id) return null;
   let next: string | null = null;
