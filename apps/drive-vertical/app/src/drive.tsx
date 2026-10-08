@@ -710,7 +710,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * component moved rather than wired to nothing here.
    */
   const onAction = (action: string, item: FileItem) => {
-    if (offline && (action !== 'Open' || !item.isFolder)) return;
+    if (offline && action !== 'Open') return;
     if (action === 'Open') {
       const folder = folders.find((f) => folderItemId(f) === item.id);
       if (folder) open(folder);

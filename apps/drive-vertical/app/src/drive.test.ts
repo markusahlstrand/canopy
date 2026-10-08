@@ -195,6 +195,10 @@ describe('a text preview stops reading at the limit', () => {
 });
 
 describe('the table offers only what the screen can perform', () => {
+  it('offers Open for files and folders in read-only views', () => {
+    expect(actionsFor({ id: '01A', name: 'a.md', kind: 'note', modified: 'today', size: '1 kB', isFolder: false }, true)).toEqual(['Open']);
+    expect(actionsFor({ id: '01F', name: 'Papers', kind: 'folder', modified: '—', size: '—', isFolder: true }, true)).toEqual(['Open']);
+  });
   it('gives a folder no download and no delete, and Share only now that it exists', () => {
     // Download and Delete were in the moved component's menus for every row. A folder cannot
     // be downloaded — there is no archive endpoint — and `trash-file` takes a file.

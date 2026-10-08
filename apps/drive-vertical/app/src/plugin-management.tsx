@@ -50,7 +50,8 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pluginsState, setPluginsState] = useState<'loading' | 'loaded' | 'failed'>('loading');
-  const canChangeInstall = pluginsState !== 'failed' && !busy;
+  // Replacements need the current install list to identify the target and revision.
+  const canChangeInstall = pluginsState === 'loaded' && !busy;
   const [loadRetry, setLoadRetry] = useState(0);
   useEffect(() => {
     if (!open) { setPluginsState('loading'); setError(null); return; }
