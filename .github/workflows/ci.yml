@@ -58,3 +58,23 @@ jobs:
       # one, which is too late to be useful — by then the branch is already being
       # pushed at the platform.
       - run: pnpm -r --if-present lint:model
+
+  browser-acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: corepack enable && pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm typecheck:e2e
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-acceptance-failures
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

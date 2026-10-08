@@ -737,7 +737,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       return;
     }
     if (action === 'Download' && !item.isFolder) {
-      window.open(contentUrl(item.id), '_blank', 'noopener');
+      const link = document.createElement('a');
+      link.href = contentUrl(item.id);
+      link.download = item.name;
+      document.body.append(link);
+      link.click();
+      link.remove();
       return;
     }
     if (action === 'Move') {

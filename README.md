@@ -31,6 +31,19 @@ That starts the local OIDC issuer, provisions a local drive in the Wrangler work
 
 <code>pnpm dev:worker</code> and <code>pnpm dev:web</code> start the worker and UI individually. <code>pnpm dev:api</code> runs the separate legacy API when needed.
 
+## Browser acceptance
+
+~~~sh
+pnpm exec playwright install chromium
+pnpm test:e2e
+~~~
+
+This builds the SPA and runs desktop and mobile Chromium against the real Wrangler worker, OIDC login, SQLite Durable Objects, and R2 attachments. Each run provisions an empty drive in a disposable directory and removes it when the server stops. It uses ports 8987 and 8989 and refuses to reuse another server. Your local development data and hosted drives are separate.
+
+The drive suite checks navigation and empty states, folder and file rename/move, upload/download byte equality, Trash/restore, historical downloads, and collision/request-failure retries. A separate CI job runs it on every PR. Failure traces and screenshots are ignored by Git and retained as CI artifacts for seven days.
+
+These checks establish browser behavior with the production bundle and real local services. Issue-specific hosted acceptance is recorded separately in `documentation/acceptance`.
+
 ## Check and deploy
 
 ~~~sh
