@@ -355,12 +355,15 @@ describe('description and label search', () => {
     for (const term of ['indexation', 'legal-project']) {
       const found = await (await as(bjorn)).invoke<Hits>('drive/search', { term });
       expect(found.hits.find(hit => hit.id === file.id)?.via).toBe('metadata');
+      expect(found.hits.find(hit => hit.id === file.id)?.snippet).toContain(term === 'indexation' ? 'Description: Discusses indexation' : 'Labels: legal-project');
     }
     await writer.invoke('drive/update-file-details', { fileId: file.id, description: 'Discusses insurance', labels: ['family'], expectedRevision: 1 });
     for (const term of ['indexation', 'legal-project']) {
       expect((await writer.invoke<Hits>('drive/search', { term })).hits.map(hit => hit.id)).not.toContain(file.id);
     }
-    expect((await writer.invoke<Hits>('drive/search', { term: 'insurance' })).hits.find(hit => hit.id === file.id)?.via).toBe('metadata');
+    const current = (await writer.invoke<Hits>('drive/search', { term: 'insurance' })).hits.find(hit => hit.id === file.id);
+    expect(current?.via).toBe('metadata');
+    expect(current?.snippet).toContain('Description: Discusses insurance');
   });
 
   it('deduplicates name/body/metadata hits, excludes trash, and refuses nonmember searches', async () => {

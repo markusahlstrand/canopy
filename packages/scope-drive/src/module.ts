@@ -1409,6 +1409,15 @@ const operations = {
         )[0];
         if (text?.version_id !== file.current_version_id || text.status !== 'indexed') continue;
         snippet = searchSnippet(text.text, input.term);
+      } else if (via === 'metadata') {
+        const details = ctx.sql.query<{ description: string; labels_json: string }>(
+          'SELECT description, labels_json FROM drive_file_details WHERE file_id = ?', [fileId],
+        )[0];
+        if (details) {
+          const description = searchSnippet(details.description, input.term);
+          const labels = searchSnippet((JSON.parse(details.labels_json) as string[]).join(', '), input.term);
+          snippet = description ? `Description: ${description}` : labels ? `Labels: ${labels}` : null;
+        }
       }
       hits.push({ ...file, via, snippet });
     }
