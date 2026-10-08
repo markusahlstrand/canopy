@@ -908,6 +908,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           <Button size="sm" variant="outline" disabled={pinBusy} onClick={() => void (currentPin?.status === 'ready' ? removeCurrentFolderOffline() : saveCurrentFolderOffline())}>
             {pinBusy ? 'Saving offline…' : currentPin?.status === 'ready' ? 'Remove offline copy' : currentPin ? 'Retry offline download' : 'Available offline on this device'}
           </Button>
+          {currentPin?.status === 'partial' ? <span role="status" className="text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</span> : null}
+          {currentPin?.status === 'error' ? <span role="status" className="text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</span> : null}
           {currentPin && currentPin.status !== 'ready' ? <Button size="sm" variant="ghost" disabled={pinBusy} onClick={() => void removeCurrentFolderOffline()}>Remove pin</Button> : null}
         </> : null}
       </div> : null}
