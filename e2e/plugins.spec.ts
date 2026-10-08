@@ -56,6 +56,7 @@ test('a ZIP app follows enable/disable in the rail and palette; editing keeps it
   await signIn(page);
   page.on('dialog', dialog => dialog.accept());
   const plugins = await openPlugins(page);
+  await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
   await plugins.getByText('Plugin Studio · import or edit source', { exact: true }).click();
   await plugins.getByRole('button', { name: 'All installs', exact: true }).click();
   await plugins.getByLabel('Choose plugin ZIP file').setInputFiles({ name: 'app.zip', mimeType: 'application/zip', buffer: archive(manifest, 'export default function render({container}) { container.textContent = "ZIP app is running"; }') });
@@ -107,6 +108,7 @@ test('public GitHub imports pin provenance and malformed ZIP/npm imports keep in
   await signIn(page);
   page.on('dialog', dialog => dialog.accept());
   const plugins = await openPlugins(page);
+  await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
   await plugins.getByText('Plugin Studio · import or edit source', { exact: true }).click();
   await plugins.getByLabel('Choose plugin ZIP file').setInputFiles({ name: 'invalid.zip', mimeType: 'application/zip', buffer: Buffer.from('invalid archive') });
   await expect(plugins.getByRole('alert').filter({ hasText: /zip|archive/i })).toBeVisible();
@@ -141,6 +143,7 @@ test('a ZIP editor retries byte failures and native iframe interaction is blocke
   await action(page, folder, 'Open');
   await upload(page, 'plugin.txt', 'Original plugin text');
   const plugins = await openPlugins(page);
+  await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
   await plugins.getByText('Plugin Studio · import or edit source', { exact: true }).click();
   await plugins.getByLabel('Choose plugin ZIP file').setInputFiles({ name: 'editor.zip', mimeType: 'application/zip', buffer: archive(manifest, source) });
   await installReviewed(page);
@@ -164,4 +167,20 @@ test('a ZIP editor retries byte failures and native iframe interaction is blocke
   } finally { release(); }
   await expect(frame.getByRole('textbox', { name: 'Plugin text' })).toHaveValue('Saved through the real plugin bridge');
   await expect(frame.locator('#root')).toHaveJSProperty('inert', false);
+  await panel.getByRole('button', { name: 'Close preview', exact: true }).click();
+  await openPlugins(page);
+  const installed = plugins.locator('section').filter({ has: page.getByRole('heading', { name, exact: true }) });
+  await installed.getByRole('button', { name: 'Disable', exact: true }).click();
+  await expect(installed.getByRole('button', { name: 'Enable', exact: true })).toBeVisible();
+  await plugins.getByRole('button', { name: 'Close', exact: true }).click();
+  await action(page, 'plugin.txt', 'Open');
+  await expect(panel.getByRole('option', { name, exact: true })).toBeHidden();
+  await expect(panel.getByText('Saved through the real plugin bridge', { exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: 'Close preview', exact: true }).click();
+  await openPlugins(page);
+  await installed.getByRole('button', { name: 'Enable', exact: true }).click();
+  await expect(installed.getByRole('button', { name: 'Disable', exact: true })).toBeVisible();
+  await plugins.getByRole('button', { name: 'Close', exact: true }).click();
+  await action(page, 'plugin.txt', 'Open');
+  await expect(panel.getByRole('option', { name, exact: true })).toBeAttached();
 });
