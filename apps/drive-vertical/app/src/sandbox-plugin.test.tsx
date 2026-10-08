@@ -43,7 +43,11 @@ it('keeps edits made during a pending save marked as unsaved',async()=>{
  const send=(type:string,data?:unknown)=>window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'null',data:{canopyPlugin:true,type,data}}));
  await act(async()=>{send('dirty');});
  await act(async()=>{send('action',{action:'save',data:{content:'first edit'}});});
+ expect(frame.hasAttribute('inert')).toBe(true);
+ expect(screen.getByRole('status').textContent).toBe('Saving plugin edits…');
  await act(async()=>{send('dirty');});
  await act(async()=>finish());
+ expect(frame.hasAttribute('inert')).toBe(false);
+ expect(screen.queryByRole('status')).toBeNull();
  expect(hasUnsavedDrafts()).toBe(true);
 });
