@@ -108,13 +108,17 @@ test('name, extracted contents and metadata match in results and the keyboard pa
       await page.getByRole('button', { name: 'Manage Acceptance Drive', exact: true }).click();
       await page.getByRole('menuitem', { name: 'Space plugins', exact: true }).click();
     }
+    // A reopened dialog renders its rows asynchronously: wait for each toggle before reading it.
     for (const item of enabled) {
+      await expect(installRow(item).getByRole('button', { name: /^(Enable|Disable)$/ })).toBeEnabled();
       const enable = installRow(item).getByRole('button', { name: 'Enable', exact: true });
       if (await enable.isVisible()) await enable.click();
       await expect(installRow(item).getByRole('button', { name: 'Disable', exact: true })).toBeEnabled();
     }
+    await expect(plugins.getByRole('button', { name: /^(Enable|Disable) image viewer$/ })).toBeVisible();
     const enableViewer = plugins.getByRole('button', { name: 'Enable image viewer', exact: true });
     if (await enableViewer.isVisible()) await enableViewer.click();
+    await expect(plugins.getByRole('button', { name: 'Disable image viewer', exact: true })).toBeVisible();
     await plugins.getByRole('button', { name: 'Close', exact: true }).click();
   };
   // The space is shared with later specs: re-enable everything even when an assertion fails.
@@ -162,8 +166,8 @@ test('another account cannot discover or open files outside its space membership
     await expect(spaces.getByRole('button', { name: `Open ${protectedName}`, exact: true })).toBeHidden();
     // Positive control: the same session is authenticated and may search its own space,
     // so the 401s below are refusals rather than a missing session.
-    const acceptanceSlug = await recipient.evaluate(() => localStorage.getItem('canopy.site'));
-    const allowed = await recipient.request.get(`/api/search?q=${marker}`, { headers: { 'x-site': acceptanceSlug! } });
+    // Acceptance Drive is the hostname's home space, so no x-site is needed to reach it.
+    const allowed = await recipient.request.get(`/api/search?q=${marker}`);
     expect(allowed.status()).toBe(200);
     const search = await recipient.request.get(`/api/search?q=${marker}`, { headers: { 'x-site': protectedSlug! } });
     expect(search.status()).toBe(401);
