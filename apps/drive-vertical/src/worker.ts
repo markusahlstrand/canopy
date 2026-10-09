@@ -1,5 +1,6 @@
 import { mountMemberRemoval } from './member-removal-route.js';
 import { claimSafeInvite, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
+import { mountInviteSite } from './invite-site-route.js';
 import { mountSpaceSettings } from './space-settings-routes.js';
 import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
@@ -587,21 +588,9 @@ mountInviteGuards(app, async c => {
  const node=await nodeFor(c.req.raw,c.env),subject=await(await providerFor(c.env,baseNode(c.req.raw,c.env))).resolve(c.req.raw.headers);
  return !!subject && !!await identityDo(c.env,node).existingBinding(node.scopeId,subject.sub);
 });
-// The shared auth route constructs a hostname-local invite. This install serves
-// multiple scopes, so the returned link must also name the scope it was minted in.
-app.use('/api/invites', async (c, next) => {
-  if (c.req.method !== 'POST') return next();
+mountInviteSite(app, requirePeopleAdmin, async (c) => {
   const node = await nodeFor(c.req.raw, c.env);
-  const site = (await identityDo(c.env, node).listSites()).find(site => site.scopeId === node.scopeId);
-  if (!site) throw new HTTPException(503, { message: 'This space has no invite address yet. Refresh and try again.' });
-  await next();
-  if (c.res.status !== 201) return;
-  const body = await c.res.clone().json() as { acceptUrl: string };
-  const link = new URL(body.acceptUrl);
-  link.searchParams.set('site', site.slug);
-  const headers = new Headers(c.res.headers);
-  headers.delete('content-length');
-  c.res = new Response(JSON.stringify({ ...body, acceptUrl: link.toString() }), { status: 201, headers });
+  return { base: baseNode(c.req.raw, c.env).scopeId, scope: node.scopeId, sites: () => identityDo(c.env, node).listSites() };
 });
 mountInviteRoutes<Env, Node>(app, {
   nodeFor,
