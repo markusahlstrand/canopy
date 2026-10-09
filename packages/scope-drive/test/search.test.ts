@@ -351,12 +351,14 @@ describe('description and label search', () => {
   it('keeps the label context when the description shares another query token', async () => {
     const writer = await as(ada);
     const file = await fileWithVersion(writer, ROOT_FOLDER_ID, 'label-context.pdf');
-    await writer.invoke('drive/update-file-details', { fileId: file.id, description: 'Discusses cobalt plans', labels: ['cobalt-label'], expectedRevision: 0 });
+    const description = `${'Background planning notes. '.repeat(8)}Discusses cobalt plans. ${'Further detail follows. '.repeat(8)}`;
+    await writer.invoke('drive/update-file-details', { fileId: file.id, description, labels: ['cobalt-label'], expectedRevision: 0 });
     const hit = (await writer.invoke<Hits>('drive/search', { term: 'cobalt-label' })).hits.find(hit => hit.id === file.id);
     expect(hit?.via).toBe('metadata');
-    expect(hit?.snippet).toContain('Description: Discusses cobalt plans');
-    expect(hit?.snippet).toContain('Labels: cobalt-label');
-    expect(hit!.snippet!.length).toBeLessThanOrEqual(512);
+    // Labels lead and the description window narrows, so clamped UI rows still show the label hit.
+    expect(hit?.snippet?.startsWith('Labels: cobalt-label · Description: ')).toBe(true);
+    expect(hit?.snippet).toContain('Discusses cobalt plans');
+    expect(hit!.snippet!.split(' · Description: ')[1]!.length).toBeLessThanOrEqual(82);
   });
   it('indexes metadata immediately and removes superseded terms on edits', async () => {
     const writer = await as(ada);

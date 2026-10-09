@@ -101,30 +101,42 @@ test('name, extracted contents and metadata match in results and the keyboard pa
   const installRow = (item: { name: string; personal: boolean }) => plugins.locator('section')
     .filter({ has: page.getByRole('heading', { name: item.name, exact: true }) })
     .filter({ hasText: item.personal ? 'Installed for you' : 'Applied to Acceptance Drive' });
-  for (const item of enabled) {
-    await installRow(item).getByRole('button', { name: 'Disable', exact: true }).click();
-    await expect(installRow(item).getByRole('button', { name: 'Enable', exact: true })).toBeEnabled();
+  const restore = async () => {
+    if (!await plugins.isVisible()) {
+      if (await palette.isVisible()) await page.keyboard.press('Escape');
+      if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Open navigation' }).click();
+      await page.getByRole('button', { name: 'Manage Acceptance Drive', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Space plugins', exact: true }).click();
+    }
+    for (const item of enabled) {
+      const enable = installRow(item).getByRole('button', { name: 'Enable', exact: true });
+      if (await enable.isVisible()) await enable.click();
+      await expect(installRow(item).getByRole('button', { name: 'Disable', exact: true })).toBeEnabled();
+    }
+    const enableViewer = plugins.getByRole('button', { name: 'Enable image viewer', exact: true });
+    if (await enableViewer.isVisible()) await enableViewer.click();
+    await plugins.getByRole('button', { name: 'Close', exact: true }).click();
+  };
+  // The space is shared with later specs: re-enable everything even when an assertion fails.
+  try {
+    for (const item of enabled) {
+      await installRow(item).getByRole('button', { name: 'Disable', exact: true }).click();
+      await expect(installRow(item).getByRole('button', { name: 'Enable', exact: true })).toBeEnabled();
+    }
+    await expect(plugins.getByRole('button', { name: 'Disable', exact: true })).toHaveCount(0);
+    await plugins.getByRole('button', { name: 'Disable image viewer', exact: true }).click();
+    await plugins.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: 'Search this space', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await expect(page.getByText(/Showing 3 of 3 returned matches/)).toBeVisible();
+    await page.keyboard.press('ControlOrMeta+k');
+    await expect(palette).toBeVisible();
+    await palette.getByRole('combobox').fill(marker);
+    await expect(palette.getByRole('option', { name: new RegExp(bodyFile) })).toBeVisible();
+    await page.keyboard.press('Escape');
+  } finally {
+    await restore();
   }
-  await expect(plugins.getByRole('button', { name: 'Disable', exact: true })).toHaveCount(0);
-  await plugins.getByRole('button', { name: 'Disable image viewer', exact: true }).click();
-  await plugins.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(page.getByRole('textbox', { name: 'Search this space', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-  await expect(page.getByText(/Showing 3 of 3 returned matches/)).toBeVisible();
-  await page.keyboard.press('ControlOrMeta+k');
-  await expect(palette).toBeVisible();
-  await palette.getByRole('combobox').fill(marker);
-  await expect(palette.getByRole('option', { name: new RegExp(bodyFile) })).toBeVisible();
-  await page.keyboard.press('Escape');
-  if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('button', { name: 'Manage Acceptance Drive', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'Space plugins', exact: true }).click();
-  for (const item of enabled) {
-    await installRow(item).getByRole('button', { name: 'Enable', exact: true }).click();
-    await expect(installRow(item).getByRole('button', { name: 'Disable', exact: true })).toBeEnabled();
-  }
-  await plugins.getByRole('button', { name: 'Enable image viewer', exact: true }).click();
-  await plugins.getByRole('button', { name: 'Close', exact: true }).click();
 });
 
 test('another account cannot discover or open files outside its space membership', async ({ page, browser }, info) => {
@@ -148,6 +160,11 @@ test('another account cannot discover or open files outside its space membership
     await expect(recipient.getByRole('button', { name: `Actions for ${privateName}` })).toBeHidden();
     const spaces = await openSpaces(recipient);
     await expect(spaces.getByRole('button', { name: `Open ${protectedName}`, exact: true })).toBeHidden();
+    // Positive control: the same session is authenticated and may search its own space,
+    // so the 401s below are refusals rather than a missing session.
+    const acceptanceSlug = await recipient.evaluate(() => localStorage.getItem('canopy.site'));
+    const allowed = await recipient.request.get(`/api/search?q=${marker}`, { headers: { 'x-site': acceptanceSlug! } });
+    expect(allowed.status()).toBe(200);
     const search = await recipient.request.get(`/api/search?q=${marker}`, { headers: { 'x-site': protectedSlug! } });
     expect(search.status()).toBe(401);
     const content = await recipient.request.get(`/api/files/${privateId}/content?site=${protectedSlug}`);
