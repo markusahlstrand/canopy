@@ -57,7 +57,7 @@ try {
     ['configure', { entries: [{ key: 'substrat:auth', value: JSON.stringify({ mode: 'oidc', issuer: 'http://127.0.0.1:8989', clientId: 'substrat-dev' }) }] }],
     ['provision', { owner: '01JZ00000000000000000DEV03', slug: 'local-drive', name: 'Acceptance Drive' }],
   ]) {
-    const response = await fetch(`http://127.0.0.1:8987/internal/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-substrat-platform': secret }, body: JSON.stringify({ ...node, ...body }) });
+    const response = await fetch(`http://127.0.0.1:8987/internal/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-substrat-platform': secret }, body: JSON.stringify({ ...node, ...body }), signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error(`${path}: ${response.status} ${await response.text()}`);
   }
   console.log('Acceptance worker provisioned');

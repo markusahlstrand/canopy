@@ -22,7 +22,7 @@ export function NameDialog({ title, initial, confirm, onCancel, onConfirm }: {
     <DialogContent className="sm:max-w-sm">
       <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>A name is one segment: no slashes, and not . or ..</DialogDescription></DialogHeader>
       <form onSubmit={event => { event.preventDefault(); void submit(); }} className="space-y-4">
-        <Input autoFocus aria-label={title} value={name} disabled={busy} onChange={event => setName(event.currentTarget.value)} />
+        <Input autoFocus aria-label={title} value={name} disabled={busy} onChange={event => { setName(event.currentTarget.value); setError(null); }} />
         {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
         <DialogFooter>
           <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onCancel}>Cancel</Button>

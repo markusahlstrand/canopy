@@ -126,14 +126,18 @@ function sorted<T extends { name: string; updated_at?: string }>(rows: T[], sort
 
 const OFFLINE_WRITE = 'You are offline. Reconnect to save this change.';
 
-/** Re-read the pages already visible, so a live refresh cannot collapse navigation. */
+/**
+ * Re-read the pages already visible, so a live refresh cannot collapse navigation.
+ * Only the first page decides whether the view is available: a later page that fails
+ * stops the walk and keeps what loaded, with "Load more" resuming from there.
+ */
 async function readLoadedPages<T extends { id: string }>(
   read: (next?: string | null) => Promise<ListingPage<T>>, count: number, current: () => boolean,
 ): Promise<ListingPage<T>> {
   let page = await read();
   let entries = page.entries;
   for (let index = 1; index < count && page.next && current(); index++) {
-    page = await read(page.next);
+    try { page = await read(page.next); } catch { break; }
     entries = appendRows(entries, page.entries);
   }
   return { entries, next: page.next };
