@@ -1913,6 +1913,20 @@ describe('folder pages', () => {
     expect(screen.queryByText('Beta')).toBeNull();
   });
 
+  it('keeps the loaded first page when a later page fails during refresh', async () => {
+    const onError = vi.fn();
+    await firstPage(onError);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more folders' }));
+    await answer('/folders/root/folders?cursor=older', [folder('01B', 'Beta')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await answerWith('/folders/root/folders', 200, [folder('01A', 'Alpha renamed')], { Link: `<${window.location.origin}/api/folders/root/folders?cursor=fresh>; rel="next"` });
+    await answer('/folders/root/files', []);
+    await answerWith('/folders/root/folders?cursor=fresh', 503, { detail: 'page failed' });
+    expect(screen.getByText('Alpha renamed')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Load more folders' })).toBeTruthy();
+    expect(onError).toHaveBeenLastCalledWith(null);
+  });
+
   it('clears a failed folder page error after a successful retry', async () => {
     const onError = vi.fn();
     await firstPage(onError);

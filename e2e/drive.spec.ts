@@ -112,6 +112,8 @@ test('new folders and their contents remain reachable beyond the first listing p
   const secondPage = page.waitForResponse(response => /\/folders\/[^/]+\/folders\?.*cursor=/.test(response.url()));
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   expect((await secondPage).ok()).toBe(true);
+  // The spinner stops only once the refreshed listing is committed; a collapse would drop the row here.
+  await expect(page.getByRole('button', { name: 'Refresh', exact: true }).locator('.animate-spin')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Actions for Page folder 20', exact: true })).toBeVisible();
   await action(page, 'Page folder 20', 'Open');
   await upload(page, 'last-page.txt', 'Bytes reached through the second folder page');
