@@ -13,7 +13,11 @@ import { PERSONAS } from './dev-personas.mjs';
 const state = await mkdtemp(join(tmpdir(), 'canopy-acceptance-'));
 const secret = randomBytes(32).toString('hex');
 const node = { tenantId: '01JZ00000000000000000DEV01', scopeId: '01JZ00000000000000000DEV02' };
-const issuer = serve({ fetch: createDevIssuer({ personas: PERSONAS }).fetch, hostname: '127.0.0.1', port: 8989 });
+// Recipient personas for the sharing, search and offline specs, one set per viewport.
+const acceptancePersonas = ['desktop', 'mobile'].flatMap(viewport => ['viewer', 'editor', 'restricted'].map(role => ({
+  sub: `acceptance|${viewport}|${role}`, name: `${viewport} ${role}`, email: `${viewport}-${role}@canopy.test`,
+})));
+const issuer = serve({ fetch: createDevIssuer({ personas: [...PERSONAS, ...acceptancePersonas] }).fetch, hostname: '127.0.0.1', port: 8989 });
 const config = join(state, 'wrangler.json');
 await writeFile(config, JSON.stringify({
   name: 'canopy-acceptance', main: resolve('apps/drive-vertical/src/worker.ts'),
