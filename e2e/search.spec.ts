@@ -167,9 +167,9 @@ test('another account cannot discover or open files outside its space membership
     // Positive control: the same session is authenticated and may search its own space,
     // so the 401s below are refusals rather than a missing session.
     // Acceptance Drive is the hostname's home space, so no x-site is needed to reach it.
-    const allowed = await recipient.request.get(`/api/search?q=${marker}`);
+    const allowed = await recipient.request.get(`/api/search?term=${marker}`);
     expect(allowed.status()).toBe(200);
-    const search = await recipient.request.get(`/api/search?q=${marker}`, { headers: { 'x-site': protectedSlug! } });
+    const search = await recipient.request.get(`/api/search?term=${marker}`, { headers: { 'x-site': protectedSlug! } });
     expect(search.status()).toBe(401);
     const content = await recipient.request.get(`/api/files/${privateId}/content?site=${protectedSlug}`);
     expect(content.status()).toBe(401);
