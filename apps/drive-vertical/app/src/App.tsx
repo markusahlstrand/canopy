@@ -29,7 +29,7 @@ import { DriveScreen } from './drive';
 import { clearMirror, offlineIdentity, onMirrorLogout, rememberOfflineIdentity, resumeMirror } from './scope-mirror';
 
 /** Nobody is signed in yet, somebody is, or we have not asked. */
-type Session = { state: 'loading' } | { state: 'out' } | { state: 'in'; principal: string };
+type Session = { state: 'loading' } | { state: 'out' } | { state: 'in'; principal: string; user?: { name?: string; email?: string } };
 
 /** The last verified principal is an offline hint for this routed site only. */
 const offlineSiteKey = () => JSON.stringify([window.location.origin, currentSite()]);
@@ -255,7 +255,7 @@ export default function App() {
           void resumeMirror(me.principal)
             .then(() => rememberOfflineIdentity(offlineSiteKey(), me.principal))
             .catch(() => {})
-            .finally(() => setSession({ state: 'in', principal: me.principal }));
+            .finally(() => setSession({ state: 'in', principal: me.principal, user: me.user }));
         }
       })
       // A 401 is the logged-out state, not a failure — anything else is.
@@ -316,7 +316,7 @@ export default function App() {
       ) : (
         <DriveScreen
           onError={setError}
-          auth={{ user: { name: session.principal }, principal: session.principal }}
+          auth={{ user: session.user ?? {}, principal: session.principal }}
           onSignIn={() => (window.location.href = LOGIN_URL)}
           onSignOut={() => {
             if (!confirmNavigation()) return;

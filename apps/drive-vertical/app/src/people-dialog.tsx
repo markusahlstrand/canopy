@@ -14,7 +14,7 @@
  * its link: the owner copies it and passes it on however they already talk to the person.
  * The email field is a note on the row so an owner can tell two invitations apart.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Button, Icon, Input, PersonAvatar, cn } from '@canopy/ui';
 import {
   Dialog,
@@ -93,6 +93,9 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
    * older answer on screen. Closing invalidates; only the newest read may write.
    */
   const reads = useRef(latestOnly());
+  const visit = useRef(0);
+  // Read by mutations that finish later: the `open` they closed over is from when they started.
+  const shown = useRef(open);
 
   /**
    * One list of people, which is the portal's shape and the better one: an unaccepted
@@ -168,7 +171,10 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
       });
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    visit.current++;
+    shown.current = open;
+    setBusy(false);
     if (!open) {
       // Nothing from the last visit survives: a copied link left on screen is a live
       // credential, and the list is cheap to read again. Anything still in flight belongs
@@ -185,6 +191,7 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
       return;
     }
     load();
+    return () => { visit.current++; shown.current = false; reads.current.invalidate(); };
   }, [open, load]);
 
   const invite = async () => {
@@ -192,46 +199,54 @@ export function PeopleDialog({ open, onOpenChange }: PeopleDialogProps) {
     // No role means the list has not arrived (or the server offers none): there is nothing
     // honest to send, and the button is disabled for the same reason.
     if (!roleKey) return;
+    const ticket = visit.current;
     setBusy(true);
     setError(null);
     try {
       const made = await createInvite(roleKey, email.trim() || undefined);
+      // A later visit's read was sent before this landed, so it still needs refreshing —
+      // `reads` orders that. The link itself belongs to the visit that asked for it.
+      if (shown.current) load();
+      if (visit.current !== ticket) return;
       setMinted({ principal: made.principal, email: made.email, acceptUrl: made.acceptUrl });
       setEmail('');
-      load();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (visit.current === ticket) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (visit.current === ticket) setBusy(false);
     }
   };
 
   const remove = async (principal: string) => {
+    const ticket = visit.current;
     setBusy(true);
     setError(null);
     try {
       await removePerson(principal);
+      if (shown.current) load();
+      if (visit.current !== ticket) return;
       setConfirming(null);
-      load();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (visit.current === ticket) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (visit.current === ticket) setBusy(false);
     }
   };
 
   const withdraw = async (principal: string) => {
+    const ticket = visit.current;
     setBusy(true);
     setError(null);
     try {
       await revokeInvite(principal);
+      if (shown.current) load();
+      if (visit.current !== ticket) return;
       // The one on screen may be the one just withdrawn; its link is dead either way.
       setMinted((was) => (was?.principal === principal ? null : was));
-      load();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (visit.current === ticket) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (visit.current === ticket) setBusy(false);
     }
   };
 

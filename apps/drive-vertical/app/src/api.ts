@@ -260,7 +260,7 @@ export interface Me {
 }
 
 /** Who am I — the first call the app makes, and the one that decides which shell renders. */
-export const whoami = () => call<{ principal: string }>('/me');
+export const whoami = () => call<{ principal: string; user?: NonNullable<Me['user']> }>('/me');
 
 /**
  * Redeem an owner-claim link. The token arrives in the URL as `?claim=` (the platform

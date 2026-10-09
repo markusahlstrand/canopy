@@ -13,7 +13,11 @@ import { PERSONAS } from './dev-personas.mjs';
 const state = await mkdtemp(join(tmpdir(), 'canopy-acceptance-'));
 const secret = randomBytes(32).toString('hex');
 const node = { tenantId: '01JZ00000000000000000DEV01', scopeId: '01JZ00000000000000000DEV02' };
-const issuer = serve({ fetch: createDevIssuer({ personas: PERSONAS }).fetch, hostname: '127.0.0.1', port: 8989 });
+// Recipient personas for the sharing, search and offline specs, one set per viewport.
+const acceptancePersonas = ['desktop', 'mobile'].flatMap(viewport => ['viewer', 'editor', 'restricted'].map(role => ({
+  sub: `acceptance|${viewport}|${role}`, name: `${viewport} ${role}`, email: `${viewport}-${role}@canopy.test`,
+})));
+const issuer = serve({ fetch: createDevIssuer({ personas: [...PERSONAS, ...acceptancePersonas] }).fetch, hostname: '127.0.0.1', port: 8989 });
 const config = join(state, 'wrangler.json');
 await writeFile(config, JSON.stringify({
   name: 'canopy-acceptance', main: resolve('apps/drive-vertical/src/worker.ts'),
@@ -28,9 +32,11 @@ const worker = spawn(process.execPath, ['node_modules/wrangler/bin/wrangler.js',
   stdio: 'inherit', detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false' },
 });
 let stopping = false;
+let drain;
 async function stop(code = 0) {
   if (stopping) return;
   stopping = true;
+  clearInterval(drain);
   issuer.close();
   try { process.kill(-worker.pid, 'SIGTERM'); } catch { /* already stopped */ }
   await new Promise(done => worker.exitCode !== null ? done() : worker.once('exit', done));
@@ -59,4 +65,35 @@ try {
     if (!response.ok) throw new Error(`${path}: ${response.status} ${await response.text()}`);
   }
   console.log('Acceptance worker provisioned');
+  // Only the external control plane is a fixture: consume the real durable
+  // provision-sibling intent and call the same internal provision/configure/settle
+  // surface it uses. UI mutations, identity binding and scope stores stay real.
+  const scopes = [node.scopeId];
+  let draining = false;
+  const platform = async (path, scopeId, body) => {
+    const response = await fetch(`http://127.0.0.1:8987/internal/${path}`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-substrat-platform': secret },
+      body: JSON.stringify({ tenantId: node.tenantId, scopeId, ...body }),
+    });
+    if (!response.ok) throw new Error(`${path}: ${response.status} ${await response.text()}`);
+  };
+  drain = setInterval(async () => {
+    if (draining || stopping) return;
+    draining = true;
+    try {
+      for (const scopeId of [...scopes]) {
+        const response = await fetch(`http://127.0.0.1:8987/internal/platform-requests?tenantId=${node.tenantId}&scopeId=${scopeId}`, { headers: { 'x-substrat-platform': secret } });
+        if (!response.ok) throw new Error(`Intent read failed: ${response.status}`);
+        for (const request of await response.json()) {
+          if (request.kind !== 'provision-sibling') continue;
+          const sibling = `01${randomBytes(12).toString('hex').toUpperCase()}`;
+          await platform('configure', sibling, { entries: [{ key: 'substrat:auth', value: JSON.stringify({ mode: 'oidc', issuer: 'http://127.0.0.1:8989', clientId: 'substrat-dev' }) }] });
+          await platform('provision', sibling, request.payload);
+          scopes.push(sibling);
+          await platform('platform-requests/settle', scopeId, { id: request.id, status: 'done', result: { scopeId: sibling } });
+        }
+      }
+    } catch (error) { if (!stopping) { console.error(error); await stop(1); } }
+    finally { draining = false; }
+  }, 200);
 } catch (error) { console.error(error); await stop(1); }
