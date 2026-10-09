@@ -50,6 +50,7 @@ export async function rename(page: Page, name: string, next: string, folder = fa
   await dialog.getByRole('button', { name: 'Rename', exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByRole('button', { name: `Actions for ${next}`, exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: `Actions for ${name}`, exact: true })).toBeHidden();
 }
 export async function upload(page: Page, name: string, content: string) {
   await page.locator('input[type=file]').setInputFiles({ name, mimeType: 'text/plain', buffer: Buffer.from(content) });
