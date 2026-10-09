@@ -28,3 +28,13 @@ it('blocks duplicate submissions and dismissal while a name is saving', async ()
   fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
   expect(cancel).toHaveBeenCalledOnce();
 });
+it('clears a failed save error once the name is edited, keeping the new name', async () => {
+  const save = vi.fn().mockRejectedValueOnce(new Error('A file already has that name.'));
+  render(<NameDialog title="Rename file" initial="old.txt" confirm="Rename" onCancel={() => {}} onConfirm={save} />);
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'taken.txt' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+  await screen.findByRole('alert');
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'free.txt' } });
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('free.txt');
+});
