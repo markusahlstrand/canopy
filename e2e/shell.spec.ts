@@ -1,6 +1,20 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIResponse, type Page } from '@playwright/test';
 import { signIn, createFolder } from './support';
 import { createSpace, openSpaces, switchSpace, openMembers, invite } from './spaces';
+
+// Every root folder name in one space, following Link continuations: the shared
+// Acceptance Drive grows past one page, so a leaked folder could hide behind "Load more".
+async function rootFolderNames(page: Page, site: string) {
+  const names: string[] = [];
+  let next: string | null = '/api/folders/root/folders';
+  while (next) {
+    const res: APIResponse = await page.request.get(next, { headers: { 'x-site': site } });
+    expect(res.ok()).toBe(true);
+    names.push(...(await res.json() as { name: string }[]).map(folder => folder.name));
+    next = res.headers()['link']?.match(/<([^>]+)>;\s*rel="next"/)?.[1] ?? null;
+  }
+  return names;
+}
 
 test('create, switch, style and manage a long-named space without sending actions to the previous space', async ({ page }, info) => {
   const name = `${info.project.name} A very long acceptance space name for testing the narrow navigation`;
@@ -12,7 +26,12 @@ test('create, switch, style and manage a long-named space without sending action
   await createSpace(page, name);
   await expect(page.getByText(`${name} is empty`, { exact: true })).toBeVisible();
   await createFolder(page, 'Only in the new space');
+  const created = await page.evaluate(() => localStorage.getItem('canopy.site'));
+  expect(await rootFolderNames(page, created!)).toContain('Only in the new space');
   await switchSpace(page, 'Acceptance Drive');
+  const drive = await page.evaluate(() => localStorage.getItem('canopy.site'));
+  expect(drive).not.toBe(created);
+  expect(await rootFolderNames(page, drive!)).not.toContain('Only in the new space');
   await expect(page.getByRole('button', { name: 'Actions for Only in the new space' })).toBeHidden();
   await switchSpace(page, name);
   await expect(page.getByRole('button', { name: 'Actions for Only in the new space' })).toBeVisible();
