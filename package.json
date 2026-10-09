@@ -26,11 +26,15 @@
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "push": "pnpm --filter @canopy/drive-vertical push",
-    "plugin:validate": "node packages/plugin-validator/src/cli.mjs"
+    "plugin:validate": "node packages/plugin-validator/src/cli.mjs",
+    "test:e2e": "pnpm --filter @canopy/scope-drive build && pnpm --filter @canopy/drive-vertical build && playwright test",
+    "typecheck:e2e": "tsc -p e2e/tsconfig.json"
   },
   "devDependencies": {
     "@hono/node-server": "^2.1.3",
+    "@playwright/test": "^1.64.0",
     "@substrat-run/dev-issuer": "0.2.20",
+    "@types/node": "26.6.3",
     "concurrently": "^10.0.5",
     "typescript": "~7.0.2",
     "wrangler": "^4.143.0"

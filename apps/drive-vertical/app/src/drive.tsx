@@ -44,6 +44,7 @@ import { PeopleDialog } from './people-dialog';
 import { CurrentFolderShare } from './current-folder-share';
 import { ShareDialog } from './share-dialog';
 import { MoveDialog } from './move-dialog';
+import { NameDialog } from './name-dialog';
 import { FileDropZone } from './file-drop-zone';
 import { useUploadQueue } from './upload-queue';
 import { CommandPalette } from './command-palette';
@@ -74,6 +75,7 @@ import {
   trashFile,
   type DriveFile,
   type DriveFolder,
+  type ListingPage,
   type SharedFolder,
   type SearchHit,
 } from './api';
@@ -120,6 +122,25 @@ function sorted<T extends { name: string; updated_at?: string }>(rows: T[], sort
       ? dir * (a.updated_at ?? '').localeCompare(b.updated_at ?? '')
       : dir * a.name.localeCompare(b.name),
   );
+}
+
+const OFFLINE_WRITE = 'You are offline. Reconnect to save this change.';
+
+/**
+ * Re-read the pages already visible, so a live refresh cannot collapse navigation.
+ * Only the first page decides whether the view is available: a later page that fails
+ * stops the walk and keeps what loaded, with "Load more" resuming from there.
+ */
+async function readLoadedPages<T extends { id: string }>(
+  read: (next?: string | null) => Promise<ListingPage<T>>, count: number, current: () => boolean,
+): Promise<ListingPage<T>> {
+  let page = await read();
+  let entries = page.entries;
+  for (let index = 1; index < count && page.next && current(); index++) {
+    try { page = await read(page.next); } catch { break; }
+    entries = appendRows(entries, page.entries);
+  }
+  return { entries, next: page.next };
 }
 
 /** Bytes, as the table's `size` column wants them: already formatted, or an em dash. */
@@ -192,6 +213,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [filesNext, setFilesNext] = useState<string | null>(null);
   const [foldersNext, setFoldersNext] = useState<string | null>(null);
   const [loadingPage, setLoadingPage] = useState(false);
+  const listingDepth = useRef({ folder: ROOT_FOLDER_ID, files: 1, folders: 1 });
   const [folders, setFolders] = useState<(DriveFolder | SharedFolder)[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [busy, setBusy] = useState(true);
@@ -376,6 +398,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       finally { if (generation === linkNavigation.current) setBusy(false); }
       return;
     }
+    if (view !== 'drive' || listingDepth.current.folder !== folderId) {
+      listingDepth.current = { folder: view === 'drive' ? folderId : '', files: 1, folders: 1 };
+    }
     const ticket = reads.current.take();
     setBusy(true);
     setLoadingPage(false);
@@ -404,7 +429,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         setTrash(bin.entries);
         setTrashNext(bin.next);
       } else {
-        const [subfolders, contents] = await Promise.all([listFoldersPage(folderId), listFolderPage(folderId)]);
+        const depth = { ...listingDepth.current };
+        const [subfolders, contents] = await Promise.all([
+          readLoadedPages(next => listFoldersPage(folderId, next), depth.folders, () => reads.current.current(ticket)),
+          readLoadedPages(next => listFolderPage(folderId, next), depth.files, () => reads.current.current(ticket)),
+        ]);
         if (!reads.current.current(ticket)) return;
         setFolders(subfolders.entries);
         setFoldersNext(subfolders.next);
@@ -472,6 +501,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     try {
       const page = await listFolderPage(folderId, filesNext);
       if (!reads.current.current(ticket)) return;
+      listingDepth.current.files++;
       setFiles(rows => appendRows(rows, page.entries));
       setFilesNext(page.next);
     } catch (e: unknown) {
@@ -489,6 +519,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     try {
       const page = await listFoldersPage(folderId, foldersNext);
       if (!reads.current.current(ticket)) return;
+      listingDepth.current.folders++;
       setFolders(rows => appendRows(rows, page.entries));
       setFoldersNext(page.next);
       onError(null);
@@ -736,7 +767,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       return;
     }
     if (action === 'Download' && !item.isFolder) {
-      window.open(contentUrl(item.id), '_blank', 'noopener');
+      const link = document.createElement('a');
+      link.href = contentUrl(item.id);
+      link.download = item.name;
+      document.body.append(link);
+      link.click();
+      link.remove();
       return;
     }
     if (action === 'Move') {
@@ -1164,9 +1200,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           initial=""
           confirm="Create"
           onCancel={() => setCreating(false)}
-          onConfirm={(name) => {
+          onConfirm={async (name) => {
+            if (offline) throw new Error(OFFLINE_WRITE);
+            await createFolder(folderId, name);
             setCreating(false);
-            void act(() => createFolder(folderId, name));
+            void refreshRef.current().catch(error => onError(error instanceof Error ? error.message : String(error)));
           }}
         />
       ) : null}
@@ -1177,12 +1215,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           initial={renaming.name}
           confirm="Rename"
           onCancel={() => setRenaming(null)}
-          onConfirm={(name) => {
+          onConfirm={async (name) => {
+            if (offline) throw new Error(OFFLINE_WRITE);
             const target = renaming;
+            await (target.kind === 'folder' ? renameFolder(target.id, name) : renameFile(target.id, name));
             setRenaming(null);
-            void act(() =>
-              target.kind === 'folder' ? renameFolder(target.id, name) : renameFile(target.id, name),
-            );
+            void refreshRef.current().catch(error => onError(error instanceof Error ? error.message : String(error)));
           }}
         />
       ) : null}
@@ -1210,61 +1248,6 @@ function EmptyList({ icon, title, description, actions = [] }: {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * One name, typed. The same shape the portal's `NameDialog` has, and it exists for the
- * same reason: `window.prompt` cannot be styled, cannot be tested and is blocked
- * outright in some embedded webviews.
- */
-function NameDialog({
-  title,
-  initial,
-  confirm,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  initial: string;
-  confirm: string;
-  onCancel: () => void;
-  onConfirm: (name: string) => void;
-}) {
-  const [name, setName] = useState(initial);
-  const trimmed = name.trim();
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="dialog" aria-modal>
-      <form
-        className="w-full max-w-sm rounded-lg border border-border bg-background p-4 shadow-lg"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (trimmed) onConfirm(trimmed);
-        }}
-      >
-        <h2 className="mb-3 text-sm font-medium">{title}</h2>
-        {/* Named, because a dialog whose only field has no accessible name is one a
-            screen reader announces as "edit text" — and one a test cannot address
-            unambiguously when the toolbar also holds an input. */}
-        <Input
-          autoFocus
-          aria-label={title}
-          value={name}
-          onChange={(e) => setName(e.currentTarget.value)}
-        />
-        <p className="mt-2 text-xs text-muted-foreground">
-          A name is one segment: no slashes, and not <code>.</code> or <code>..</code>
-        </p>
-        <div className="mt-4 flex justify-end gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button type="submit" size="sm" disabled={!trimmed}>
-            {confirm}
-          </Button>
-        </div>
-      </form>
     </div>
   );
 }

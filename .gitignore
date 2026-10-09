@@ -27,3 +27,7 @@ coverage/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Browser acceptance artifacts (may contain session cookies in traces)
+/playwright-report/
+/test-results/

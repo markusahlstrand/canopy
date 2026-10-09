@@ -291,6 +291,39 @@ describe('a stale search answer never reaches the screen', () => {
   });
 });
 
+it('retains a failed new-folder name and closes only after the retry succeeds', async () => {
+  await renderDrive();
+  newMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  const index = pending.findIndex(request => request.method === 'POST' && request.url.includes('/folders'));
+  await act(async () => pending.splice(index, 1)[0]!.reject(new Error('Connection failed')));
+  expect(screen.getByRole('alert').textContent).toBe('Connection failed');
+  expect((screen.getByRole('textbox', { name: 'New folder' }) as HTMLInputElement).value).toBe('Drafts');
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  expect(pending.find(request => request.method === 'POST')?.body).toBe(JSON.stringify({ name: 'Drafts' }));
+  await answer('/folders/root/folders', { id: 'new', parent_id: 'root', name: 'Drafts', path: 'Drafts' });
+  expect(screen.queryByRole('dialog', { name: 'New folder' })).toBeNull();
+});
+
+it('refuses a new-folder save once a failed refresh has switched the screen offline', async () => {
+  vi.spyOn(indexedMirror, 'folder').mockResolvedValue({ folders: [], files: [] });
+  await renderDrive();
+  newMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
+  // The dialog is already open when a refresh answers 503 and the screen falls back offline.
+  fireEvent.click(screen.getByLabelText('Refresh'));
+  await flush();
+  await answerWith('/folders/root/files', 503, { error: 'temporarily unavailable' });
+  // The open modal hides the rest of the page from the accessibility tree.
+  expect(screen.getAllByRole('status', { hidden: true }).some(status => status.textContent?.includes('Offline'))).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  await act(async () => {});
+  expect(pending.filter(request => request.method !== 'GET')).toHaveLength(0);
+  expect(screen.getByRole('alert').textContent).toMatch(/offline/i);
+  expect((screen.getByRole('textbox', { name: 'New folder' }) as HTMLInputElement).value).toBe('Drafts');
+});
+
 describe('an action refreshes the folder on screen, not the one it started in', () => {
   it('leaves the second folder’s listing in place after a rename in the first', async () => {
     // "Papers" has to be in the root listing for a click into it to exist.
@@ -313,11 +346,11 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     // action runs — not about which control started it.
     newMenu();
     fireEvent.click(screen.getByText('New folder'));
-    fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
     fireEvent.click(screen.getByText('Create'));
 
-    // …and the user leaves for the root before it answers.
-    fireEvent.click(rail().getByText('My Drive'));
+    // Programmatic navigation can still change the listing while the modal save is pending.
+    fireEvent.click(within(screen.getByRole('complementary', { hidden: true })).getByText('My Drive'));
     await flush();
     await answer('/folders/root/folders', [{ id: '01G', parent_id: 'root', name: 'Notes', path: 'Notes' }]);
     await answer('/folders/root/files', [file('01C', 'at-the-root.md')]);
@@ -1012,8 +1045,8 @@ describe('the mobile drive shell and empty views', () => {
     await renderDrive();
     expect(screen.getByText('Your drive is empty')).toBeTruthy();
     fireEvent.click(within(screen.getByRole('status', { name: '' })).getByText('New folder'));
-    expect(screen.getByRole('dialog', { name: '' })).toBeTruthy();
-    expect(screen.getByLabelText('New folder')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'New folder' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'New folder' })).toBeTruthy();
   });
 
   it('distinguishes a short search from a completed search with no matches', async () => {
@@ -1229,7 +1262,7 @@ describe('a write goes where the person is looking', () => {
 
     newMenu();
     fireEvent.click(screen.getByText('New folder'));
-    fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
     fireEvent.click(screen.getByText('Create'));
 
     // The root, because that is where the screen went — not 01F, the folder the trash
@@ -1279,7 +1312,7 @@ describe('plugin app exits', () => {
     newMenu();
     fireEvent.click(screen.getByText('New folder'));
     expect(screen.queryByRole('button', { name: 'Back to drive' })).toBeNull();
-    fireEvent.change(screen.getByLabelText('New folder'), { target: { value: 'Drafts' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
     fireEvent.click(screen.getByText('Create'));
     expect(pending.find((p) => p.method === 'POST' && p.url.includes('/folders'))?.url).toContain('/folders/01F/folders');
   });
@@ -1865,6 +1898,33 @@ describe('folder pages', () => {
     expect(screen.getAllByText('Alpha')).toHaveLength(1);
     expect(screen.getByText('Beta')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Load more folders' })).toBeNull();
+  });
+
+  it('refreshes all loaded folder pages without losing the second page', async () => {
+    await firstPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more folders' }));
+    await answer('/folders/root/folders?cursor=older', [folder('01B', 'Beta')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await answerWith('/folders/root/folders', 200, [folder('01A', 'Alpha')], { Link: `<${window.location.origin}/api/folders/root/folders?cursor=fresh>; rel="next"` });
+    await answer('/folders/root/files', []);
+    await answer('/folders/root/folders?cursor=fresh', [folder('01B', 'Beta renamed')]);
+    expect(screen.getByText('Alpha')).toBeTruthy();
+    expect(screen.getByText('Beta renamed')).toBeTruthy();
+    expect(screen.queryByText('Beta')).toBeNull();
+  });
+
+  it('keeps the loaded first page when a later page fails during refresh', async () => {
+    const onError = vi.fn();
+    await firstPage(onError);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more folders' }));
+    await answer('/folders/root/folders?cursor=older', [folder('01B', 'Beta')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await answerWith('/folders/root/folders', 200, [folder('01A', 'Alpha renamed')], { Link: `<${window.location.origin}/api/folders/root/folders?cursor=fresh>; rel="next"` });
+    await answer('/folders/root/files', []);
+    await answerWith('/folders/root/folders?cursor=fresh', 503, { detail: 'page failed' });
+    expect(screen.getByText('Alpha renamed')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Load more folders' })).toBeTruthy();
+    expect(onError).toHaveBeenLastCalledWith(null);
   });
 
   it('clears a failed folder page error after a successful retry', async () => {
