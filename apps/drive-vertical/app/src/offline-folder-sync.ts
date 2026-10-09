@@ -126,24 +126,56 @@ export async function syncOfflineFolderOnce(
   return run;
 }
 
-const refreshes = new Map<string, Promise<void>>();
+const refreshes = new Map<string, { promise: Promise<void>; requested: boolean; shouldRun: () => boolean }>();
 const lastRefresh = new Map<string, number>();
-/** Refresh device pins after an online listing, without launching a walk per render. */
-export async function refreshOfflinePins(principal: string, space: string): Promise<void> {
+/**
+ * Coalesce listings, retaining a trailing refresh instead of dropping changes during the throttle.
+ * `shouldRun` is re-checked when a delayed walk fires and before each pin: the caller's
+ * conditions (online, idle, still on the drive) may have changed since it asked.
+ */
+export async function refreshOfflinePins(
+  principal: string,
+  space: string,
+  source = liveOfflineFolderSource,
+  onUpdated: (error?: unknown, pin?: FolderPin) => void | Promise<void> = () => {},
+  shouldRun: () => boolean = () => true,
+): Promise<void> {
   const epoch = await offlineSessionEpoch();
   const key = `${epoch}\n${principal}\n${space}`;
   const running = refreshes.get(key);
-  if (running) return running;
-  if (Date.now() - (lastRefresh.get(key) ?? 0) < 30_000) return;
-  const run = (async () => {
-    try {
+  if (running) { running.requested = true; running.shouldRun = shouldRun; return running.promise; }
+  const state = { promise: Promise.resolve(), requested: true, shouldRun };
+  state.promise = (async () => {
+    while (state.requested) {
+      state.requested = false;
+      const previous = lastRefresh.get(key);
+      const remaining = previous === undefined ? 0 : 30_000 - (Date.now() - previous);
+      if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+      if (await offlineSessionEpoch().catch(() => null) !== epoch) return;
+      // Requests arriving while waiting are covered by this walk. Requests arriving
+      // during the walk may describe newer data and need another trailing walk.
+      state.requested = false;
       const pins = await listOfflinePins(principal, space);
       for (const pin of pins) {
-        try { await syncOfflineFolderOnce(pin, undefined, undefined, undefined, epoch); }
-        catch { /* The pin records its error and can be retried from the folder. */ }
+        if (!state.shouldRun()) return;
+        try { await syncOfflineFolderOnce(pin, source, progress => { if (progress.files === 0) void onUpdated(); }, undefined, epoch); }
+        catch (error) {
+          // A walk cut off by losing the connection leaves the last complete copy intact.
+          if (pin.status === 'ready' && error instanceof TypeError && !state.shouldRun() &&
+              await updateOfflinePinStatus(pin, 'ready', epoch).catch(() => false)) {
+            await onUpdated();
+            return;
+          }
+          // Full storage can also reject persisting partial/error status. Report
+          // the failure to the live UI even if that last status write failed.
+          await onUpdated(error, pin);
+          continue;
+        }
+        await onUpdated(null, pin);
       }
-    } finally { lastRefresh.set(key, Date.now()); }
-  })().finally(() => { if (refreshes.get(key) === run) refreshes.delete(key); });
-  refreshes.set(key, run);
-  return run;
+      lastRefresh.set(key, Date.now());
+    }
+  })().finally(() => { if (refreshes.get(key) === state) refreshes.delete(key); });
+  refreshes.set(key, state);
+  return state.promise;
 }

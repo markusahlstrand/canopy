@@ -72,6 +72,12 @@ const PIN_KEY = (pin: Pick<FolderPin, 'principal' | 'space' | 'folderId'>): [str
   [pin.principal, pin.space, pin.folderId];
 const SESSION = 'current';
 
+/** A rejected IDB request also rejects its transaction, even if the caller never reaches tx.done. */
+function observeTransaction<T extends { done: Promise<void> }>(tx: T): T {
+  void tx.done.catch(() => {});
+  return tx;
+}
+
 async function sessionEpoch(): Promise<number> {
   const session = await (await db()).get('session', SESSION);
   if (!session || session.revoked) throw new Error('The offline session ended. Sign in again.');
@@ -84,7 +90,7 @@ export const offlineSessionEpoch = sessionEpoch;
 /** A successful online sign-in reopens the cache after a previous logout. */
 export async function resumeOfflineContent(principal?: string): Promise<void> {
   const database = await db();
-  const tx = database.transaction(['versions', 'pins', 'routes', 'session'], 'readwrite');
+  const tx = observeTransaction(database.transaction(['versions', 'pins', 'routes', 'session'], 'readwrite'));
   const session = tx.objectStore('session');
   const previous = await session.get(SESSION);
   if (principal && previous?.principal && previous.principal !== principal) {
@@ -99,7 +105,7 @@ export async function resumeOfflineContent(principal?: string): Promise<void> {
 /** Sign-out and online 401 remove every user's bytes and pins at this origin. */
 export async function clearOfflineContent(): Promise<void> {
   const database = await db();
-  const tx = database.transaction(['versions', 'pins', 'routes', 'session'], 'readwrite');
+  const tx = observeTransaction(database.transaction(['versions', 'pins', 'routes', 'session'], 'readwrite'));
   const session = tx.objectStore('session');
   const previous = await session.get(SESSION);
   await tx.objectStore('versions').clear();
@@ -112,7 +118,7 @@ export async function clearOfflineContent(): Promise<void> {
 /** The default hostname has no ?site slug, so remember which scope it resolved to. */
 export async function rememberOfflineSpace(principal: string, route: string, space: string): Promise<void> {
   const epoch = await sessionEpoch();
-  const tx = (await db()).transaction(['routes', 'session'], 'readwrite');
+  const tx = observeTransaction((await db()).transaction(['routes', 'session'], 'readwrite'));
   const session = await tx.objectStore('session').get(SESSION);
   if (!session || session.revoked || session.epoch !== epoch) {
     tx.abort(); await tx.done.catch(() => {});
@@ -124,7 +130,7 @@ export async function rememberOfflineSpace(principal: string, route: string, spa
 
 /** Resolve a remembered hostname route for this signed-in principal. */
 export async function offlineSpace(principal: string, route: string): Promise<string | null> {
-  const tx = (await db()).transaction(['routes', 'session'], 'readonly');
+  const tx = observeTransaction((await db()).transaction(['routes', 'session'], 'readonly'));
   const session = await tx.objectStore('session').get(SESSION);
   const row = session && !session.revoked ? await tx.objectStore('routes').get([principal, route]) : null;
   await tx.done;
@@ -133,7 +139,7 @@ export async function offlineSpace(principal: string, route: string): Promise<st
 
 /** List device pins only while the offline session is active. */
 export async function listOfflinePins(principal: string, space: string): Promise<FolderPin[]> {
-  const tx = (await db()).transaction(['pins', 'session'], 'readonly');
+  const tx = observeTransaction((await db()).transaction(['pins', 'session'], 'readonly'));
   const session = await tx.objectStore('session').get(SESSION);
   const pins = session && !session.revoked
     ? await tx.objectStore('pins').index('by-space').getAll([principal, space]) : [];
@@ -145,7 +151,7 @@ export async function listOfflinePins(principal: string, space: string): Promise
 export async function setOfflinePin(pin: FolderPin): Promise<void> {
   const epoch = await sessionEpoch();
   const database = await db();
-  const tx = database.transaction(['pins', 'session'], 'readwrite');
+  const tx = observeTransaction(database.transaction(['pins', 'session'], 'readwrite'));
   const session = await tx.objectStore('session').get(SESSION);
   if (session?.revoked || (session?.epoch ?? 0) !== epoch) {
     tx.abort(); await tx.done.catch(() => {});
@@ -158,7 +164,7 @@ export async function setOfflinePin(pin: FolderPin): Promise<void> {
 /** A background walk may update an existing pin but may never recreate a removed one. */
 export async function updateOfflinePinStatus(pin: FolderPin, status: FolderPin['status'], expectedEpoch?: number): Promise<boolean> {
   const epoch = expectedEpoch ?? await sessionEpoch();
-  const tx = (await db()).transaction(['pins', 'session'], 'readwrite');
+  const tx = observeTransaction((await db()).transaction(['pins', 'session'], 'readwrite'));
   const session = await tx.objectStore('session').get(SESSION);
   const pins = tx.objectStore('pins');
   const current = await pins.get(PIN_KEY(pin));
@@ -175,7 +181,7 @@ export async function updateOfflinePinStatus(pin: FolderPin, status: FolderPin['
 export async function removeOfflinePin(principal: string, space: string, folderId: string, expectedEpoch?: number): Promise<void> {
   const epoch = expectedEpoch ?? await sessionEpoch();
   const database = await db();
-  const tx = database.transaction(['pins', 'versions', 'session'], 'readwrite');
+  const tx = observeTransaction(database.transaction(['pins', 'versions', 'session'], 'readwrite'));
   const session = await tx.objectStore('session').get(SESSION);
   if (!session || session.revoked || session.epoch !== epoch) {
     tx.abort(); await tx.done.catch(() => {});
@@ -195,7 +201,7 @@ export async function removeOfflinePin(principal: string, space: string, folderI
 
 /** Read a saved version only while the offline session is active. */
 export async function getOfflineVersion(key: OfflineContentKey): Promise<CachedVersion | null> {
-  const tx = (await db()).transaction(['versions', 'session'], 'readonly');
+  const tx = observeTransaction((await db()).transaction(['versions', 'session'], 'readonly'));
   const session = await tx.objectStore('session').get(SESSION);
   const version = session && !session.revoked
     ? await tx.objectStore('versions').get(VERSION_KEY(key)) : null;
@@ -205,7 +211,7 @@ export async function getOfflineVersion(key: OfflineContentKey): Promise<CachedV
 
 /** Distinguish an incomplete folder copy with saved bytes from an empty failed pin. */
 export async function hasOfflinePinBytes(principal: string, space: string, folderId: string): Promise<boolean> {
-  const tx = (await db()).transaction(['versions', 'session'], 'readonly');
+  const tx = observeTransaction((await db()).transaction(['versions', 'session'], 'readonly'));
   const session = await tx.objectStore('session').get(SESSION);
   if (!session || session.revoked) { await tx.done; return false; }
   let cursor = await tx.objectStore('versions').index('by-space').openCursor([principal, space]);
@@ -221,7 +227,7 @@ export async function hasOfflinePinBytes(principal: string, space: string, folde
 export async function getOfflineFileVersion(
   principal: string, space: string, fileId: string, preferredVersionId: string | null,
 ): Promise<CachedVersion | null> {
-  const tx = (await db()).transaction(['versions', 'session'], 'readonly');
+  const tx = observeTransaction((await db()).transaction(['versions', 'session'], 'readonly'));
   const session = await tx.objectStore('session').get(SESSION);
   if (!session || session.revoked) { await tx.done; return null; }
   const versions = tx.objectStore('versions');
@@ -238,7 +244,7 @@ export async function getOfflineFileVersion(
 /** Reuse an unchanged version for another pin without a second byte download. */
 export async function retainOfflineVersion(key: OfflineContentKey, folderId: string, expectedEpoch?: number, metadata?: Pick<CachedVersion, 'name'>): Promise<boolean> {
   const epoch = expectedEpoch ?? await sessionEpoch();
-  const tx = (await db()).transaction(['versions', 'pins', 'session'], 'readwrite');
+  const tx = observeTransaction((await db()).transaction(['versions', 'pins', 'session'], 'readwrite'));
   const session = await tx.objectStore('session').get(SESSION);
   const pin = await tx.objectStore('pins').get(PIN_KEY({ ...key, folderId }));
   const versions = tx.objectStore('versions');
@@ -257,7 +263,7 @@ export async function retainOfflineVersion(key: OfflineContentKey, folderId: str
 /** Remove versions that a completed folder walk no longer needs. Never prune after a failed walk. */
 export async function pruneOfflinePin(principal: string, space: string, folderId: string, current: Set<string>, expectedEpoch?: number): Promise<void> {
   const epoch = expectedEpoch ?? await sessionEpoch();
-  const tx = (await db()).transaction(['versions', 'session'], 'readwrite');
+  const tx = observeTransaction((await db()).transaction(['versions', 'session'], 'readwrite'));
   const session = await tx.objectStore('session').get(SESSION);
   if (!session || session.revoked || session.epoch !== epoch) {
     tx.abort(); await tx.done.catch(() => {});
@@ -287,7 +293,7 @@ export async function cacheOfflineVersion(
   if (!response.ok) throw new OfflineContentHttpError(response.status, key.name);
   const bytes = await readOfflineBytes(response, MAX_FILE_BYTES, `${key.name} is larger than the 20 MB offline file limit.`);
   const database = await db();
-  const tx = database.transaction(['versions', 'pins', 'session'], 'readwrite');
+  const tx = observeTransaction(database.transaction(['versions', 'pins', 'session'], 'readwrite'));
   const session = await tx.objectStore('session').get(SESSION);
   if (session?.revoked || (session?.epoch ?? 0) !== epoch) {
     tx.abort(); await tx.done.catch(() => {});
