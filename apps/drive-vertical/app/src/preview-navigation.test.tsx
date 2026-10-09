@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DriveScreen } from './drive';
 import { selectSite } from './api';
 import { indexedMirror } from './scope-mirror';
@@ -75,4 +75,28 @@ it('hides navigation when refresh falls back offline, keeping an existing draft 
   expect(screen.queryByRole('button', { name: 'Next file' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Previous file' })).toBeNull();
   expect(confirm).not.toHaveBeenCalled();
+});
+it('refuses to open another file from the listing while a text save is in flight', async () => {
+  const fetcher = setup(); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  let releaseSave!: () => void;
+  const held = new Promise<void>(resolve => { releaseSave = resolve; });
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async (url: string) => {
+    if (url.includes('?expectedVersion=')) { await held; return new Response(JSON.stringify({ id: 'a', name: 'alpha.txt' })); }
+    return base(url);
+  });
+  fireEvent.doubleClick(await screen.findByText('alpha.txt'));
+  const panel = await screen.findByLabelText('Preview');
+  fireEvent.click(await within(panel).findByRole('button', { name: 'Edit text' }));
+  fireEvent.change(within(panel).getByRole('textbox', { name: 'File text' }), { target: { value: 'saved' } });
+  fireEvent.click(within(panel).getByRole('button', { name: 'Save text' }));
+  await waitFor(() => expect((within(panel).getByRole('button', { name: 'Close preview' }) as HTMLButtonElement).disabled).toBe(true));
+  fireEvent.doubleClick(screen.getByText('beta.txt'));
+  expect(confirm).not.toHaveBeenCalled();
+  expect(fetcher.mock.calls.some(([url]) => url === '/api/files/b')).toBe(false);
+  expect(within(panel).getByRole('heading', { name: 'alpha.txt' })).toBeTruthy();
+  releaseSave();
+  await waitFor(() => expect((within(panel).getByRole('button', { name: 'Close preview' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.doubleClick(screen.getByText('beta.txt'));
+  await within(screen.getByLabelText('Preview')).findByRole('heading', { name: 'beta.txt' });
 });

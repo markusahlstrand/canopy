@@ -232,7 +232,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [previewing, changePreview] = useState<string | null>(null);
   const previewId = useRef(previewing);
   previewId.current = previewing;
+  const previewSaving = useRef(false);
+  const onPreviewSaving = useCallback((saving: boolean) => { previewSaving.current = saving; }, []);
   const setPreviewing = useCallback((id: string | null) => {
+    // A text save in flight must land before the preview can move, or it would PUT behind a discard prompt.
+    if (id !== previewId.current && previewSaving.current) return false;
     if (id !== previewId.current && !confirmDiscardDrafts()) return false;
     changePreview(id);
     return true;
@@ -1172,6 +1176,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             onChanged={() => void refresh()}
             onClose={() => setPreviewing(null)}
             onError={onError}
+            onSavingChange={onPreviewSaving}
           />}
         </div>
       ) : null}

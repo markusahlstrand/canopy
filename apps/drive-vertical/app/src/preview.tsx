@@ -101,14 +101,27 @@ export function PreviewPanel({
   onClose,
   onError,
   onChanged,
+  onSavingChange,
   navigation,
 }: {
   fileId: string;
   onClose: () => void;
   onError: (message: string | null) => void;
   onChanged?: () => void;
+  /** Reports an in-flight text save so the host can refuse to switch files mid-PUT. */
+  onSavingChange?: (saving: boolean) => void;
   navigation?: { previous: string | null; next: string | null; moreAvailable?: boolean; onOpen: (id: string) => void };
 }) {
+  const [retry, setRetry] = useState(0);
+  const [savingText, setSavingText] = useState(false);
+  useEffect(() => {
+    onSavingChange?.(savingText);
+  }, [savingText, onSavingChange]);
+  useEffect(() => () => onSavingChange?.(false), [onSavingChange]);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [bodyError, setBodyError] = useState<string | null>(null);
+  const [versionsError, setVersionsError] = useState<string | null>(null);
+  const [textError, setTextError] = useState<string | null>(null);
   const plugins = useInstalledPlugins();
   const [pluginId, setPluginId] = useState('');
   useEffect(() => { refreshPlugins().catch(() => {}); }, []);
@@ -167,6 +180,7 @@ export function PreviewPanel({
   /** The file and its current version: everything else hangs off the version's mime. */
   useEffect(() => {
     const ticket = meta.take();
+    setMetaError(null); setBodyError(null); setVersionsError(null); setTextError(null);
     setEditing(false);
     setPluginId('');
     setComparing(null);
@@ -190,11 +204,11 @@ export function PreviewPanel({
       })
       .catch((e: unknown) => {
         if (!meta.current(ticket)) return;
-        onError(e instanceof Error ? e.message : String(e));
+        setMetaError(e instanceof Error ? e.message : String(e));
       });
     // The guards are stable for this panel; re-running on them would defeat them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId, onError]);
+  }, [fileId, retry]);
 
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
   const matching = matchingPlugins(plugins, version?.mime ?? '', file?.name ?? '');
@@ -205,15 +219,16 @@ export function PreviewPanel({
   useEffect(() => {
     if (tab !== 'file' || shape !== 'text' || !version) return;
     const ticket = bodyReads.take();
+    setBodyError(null);
     fileBodyAsText(fileId, version.id)
       .then((got) => {
         if (bodyReads.current(ticket)) setBody(got);
       })
       .catch((e: unknown) => {
-        if (bodyReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+        if (bodyReads.current(ticket)) setBodyError(e instanceof Error ? e.message : String(e));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId, tab, shape, version?.id, onError]);
+  }, [fileId, tab, shape, version?.id]);
 
   const loadTab = useCallback(
     (next: Tab) => {
@@ -221,27 +236,29 @@ export function PreviewPanel({
       setTab(next);
       if (next === 'versions' && versions === null) {
         const ticket = versionReads.take();
+        setVersionsError(null);
         fileVersionsPage(fileId)
           .then((got) => {
             if (versionReads.current(ticket)) { setVersions(got.versions); setHistoryNext(got.next); }
           })
           .catch((e: unknown) => {
-            if (versionReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+            if (versionReads.current(ticket)) setVersionsError(e instanceof Error ? e.message : String(e));
           });
       }
       if (next === 'text' && extracted === undefined) {
         const ticket = textReads.take();
+        setTextError(null);
         fileText(fileId)
           .then((got) => {
             if (textReads.current(ticket)) setExtracted(got);
           })
           .catch((e: unknown) => {
-            if (textReads.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+            if (textReads.current(ticket)) setTextError(e instanceof Error ? e.message : String(e));
           });
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fileId, versions, extracted, onError, tab],
+    [fileId, versions, extracted, tab],
   );
 
   const loadMore = async () => {
@@ -320,8 +337,13 @@ export function PreviewPanel({
 
   const savePluginText = useCallback(async (text: string) => {
     if (!version || !canWrite || !editableTextMime(version.mime, file?.name)) throw new Error('This file cannot be edited as text.');
-    await saveText(fileId, version.id, text);
-    await reloadText();
+    setSavingText(true);
+    try {
+      await saveText(fileId, version.id, text);
+      await reloadText();
+    } finally {
+      setSavingText(false);
+    }
   }, [fileId, version?.id, canWrite]);
 
   return (
@@ -333,9 +355,9 @@ export function PreviewPanel({
         <Icon name="file-text" className="size-4 text-muted-foreground" />
         <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{file?.name ?? 'Loading…'}</h2>
         {navigation ? <div className="flex gap-1" aria-label="File navigation">
-          <Button variant="ghost" size="sm" disabled={!navigation.previous} aria-label="Previous file"
+          <Button variant="ghost" size="sm" disabled={savingText || !navigation.previous} aria-label="Previous file"
             onClick={() => { if (navigation.previous) navigation.onOpen(navigation.previous); }}><Icon name="chevron-left" className="size-4" /></Button>
-          <Button variant="ghost" size="sm" disabled={!navigation.next} aria-label="Next file"
+          <Button variant="ghost" size="sm" disabled={savingText || !navigation.next} aria-label="Next file"
             title={!navigation.next && navigation.moreAvailable ? 'Load more files to continue' : undefined}
             onClick={() => { if (navigation.next) navigation.onOpen(navigation.next); }}><Icon name="chevron-right" className="size-4" /></Button>
         </div> : null}
@@ -347,7 +369,7 @@ export function PreviewPanel({
             </a>
           </Button>
         ) : null}
-        <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close preview">
+        <Button variant="ghost" size="sm" disabled={savingText} onClick={onClose} aria-label="Close preview">
           <Icon name="x" className="size-4" />
         </Button>
       </header>
@@ -360,6 +382,7 @@ export function PreviewPanel({
           <button
             key={t}
             type="button"
+            disabled={savingText}
             onClick={() => loadTab(t)}
             className={cn(
               'rounded px-2 py-1 text-xs capitalize',
@@ -371,12 +394,12 @@ export function PreviewPanel({
         ))}
       </nav>
 
-      {tab === 'file' && matching.length ? <label className="px-3 py-2 text-sm">Open with <select aria-label="Open with" value={selectedPlugin?.id ?? ''} onChange={event => { if (confirmDiscardDrafts()) { setPluginId(event.target.value); setEditing(false); } }}><option value="">Built-in preview</option>{matching.map(row => <option key={row.id} value={row.id}>{pluginManifest(row).name}</option>)}</select></label> : null}
+      {tab === 'file' && matching.length ? <label className="px-3 py-2 text-sm">Open with <select disabled={savingText} aria-label="Open with" value={selectedPlugin?.id ?? ''} onChange={event => { if (confirmDiscardDrafts()) { setPluginId(event.target.value); setEditing(false); } }}><option value="">Built-in preview</option>{matching.map(row => <option key={row.id} value={row.id}>{pluginManifest(row).name}</option>)}</select></label> : null}
       {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : <Empty>Table preview needs the complete text.</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
-          !version ? (
+        {metaError ? <PreviewFailure message={metaError} retry={() => setRetry(value => value + 1)} /> : tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : <Empty>Table preview needs the complete text.</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
+          !file ? <Empty>Loading…</Empty> : !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : selectedPlugin && file && version.source === 'blob' ? <SandboxPlugin key={`${selectedPlugin.id}:${version.id}`} plugin={selectedPlugin} onSave={canWrite && editableTextMime(version.mime, file.name) ? savePluginText : undefined} file={{id: fileId, versionId: version.id, name: file.name, mime: version.mime, size: version.size}} /> : shape === 'image' || shape === 'viewer' ? (
             <ImagePreview fileId={fileId} name={file?.name ?? ''} mime={version.mime} />
@@ -394,7 +417,7 @@ export function PreviewPanel({
           ) : shape === 'text' ? (
             body ? (
               editing ? <TextEditor key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} text={body.text} wrap={wrapText}
-                onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} /> : <>
+                onBusyChange={setSavingText} onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} /> : <>
                 {canWrite && !body.truncated && version.source === 'blob' ? <Button size="sm" variant="outline" className="mb-3" onClick={() => setEditing(true)}>Edit text</Button> : null}
                 {!body.truncated && (version.mime.split(';')[0]?.trim().toLowerCase() === 'application/json' || version.mime.split(';')[0]?.trim().toLowerCase().endsWith('+json'))
                   ? <JsonPreview key={`${fileId}:${version.id}`} text={body.text} wrap={wrapText} onWrapChange={setWrapText} />
@@ -406,7 +429,7 @@ export function PreviewPanel({
                 ) : null}
               </>
             ) : (
-              <Empty>Loading…</Empty>
+              bodyError ? <PreviewFailure message={bodyError} retry={() => setRetry(value => value + 1)} /> : <Empty>Loading…</Empty>
             )
           ) : (
             <Empty>
@@ -415,7 +438,7 @@ export function PreviewPanel({
           )
         ) : tab === 'versions' ? (
           versions === null ? (
-            <Empty>Loading…</Empty>
+            versionsError ? <PreviewFailure message={versionsError} retry={() => loadTab('versions')} /> : <Empty>Loading…</Empty>
           ) : (
             <div className="space-y-3">
             {versions.length === 0 ? <Empty>No versions yet.</Empty> : null}
@@ -469,7 +492,7 @@ export function PreviewPanel({
             </div>
           )
         ) : extracted === undefined ? (
-          <Empty>Loading…</Empty>
+          textError ? <PreviewFailure message={textError} retry={() => loadTab('text')} /> : <Empty>Loading…</Empty>
         ) : (
           <div className="space-y-2 text-sm">
             <p>{textStatusLabel(extracted)}</p>
@@ -532,4 +555,8 @@ function MediaPreview({ fileId, versionId, name, shape }: { fileId: string; vers
   const props = { src: versionContentUrl(fileId, versionId), controls: true, preload: 'metadata', className: 'w-full',
     'aria-label': name, onError: () => setFailed(true), ref: (media: HTMLMediaElement | null) => { player.current = media; } };
   return shape === 'audio' ? <audio {...props} /> : <video {...props} playsInline />;
+}
+
+function PreviewFailure({ message, retry }: { message: string; retry: () => void }) {
+  return <div className="space-y-3"><p role="alert" className="text-sm text-destructive">{message}</p><Button variant="outline" size="sm" onClick={retry}>Retry preview</Button></div>;
 }

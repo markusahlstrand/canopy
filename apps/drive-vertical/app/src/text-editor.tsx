@@ -1,15 +1,19 @@
 import { confirmDiscardDrafts, useUnsavedDraft } from './drafts';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button } from '@canopy/ui';
 import { ApiError, saveText, TEXT_EDIT_LIMIT } from './api';
 import { latestOnly } from './reads';
+import { useNavigationGuard } from './navigation-guards';
 
-export function TextEditor({ fileId, versionId, text, wrap = true, onSaved, onCancel, onReload }: {
+export function TextEditor({ fileId, versionId, text, wrap = true, onSaved, onCancel, onReload, onBusyChange }: {
   fileId: string; versionId: string; text: string; wrap?: boolean;
   onSaved: () => Promise<void>; onReload: () => Promise<void>; onCancel: () => void;
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const [draft, setDraft] = useState(text);
   const [busy, setBusy] = useState(false);
+  useNavigationGuard(busy);
+  useLayoutEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [confirmReload, setConfirmReload] = useState(false);
