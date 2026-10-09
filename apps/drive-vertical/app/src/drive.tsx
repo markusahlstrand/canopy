@@ -124,6 +124,8 @@ function sorted<T extends { name: string; updated_at?: string }>(rows: T[], sort
   );
 }
 
+const OFFLINE_WRITE = 'You are offline. Reconnect to save this change.';
+
 /** Re-read the pages already visible, so a live refresh cannot collapse navigation. */
 async function readLoadedPages<T extends { id: string }>(
   read: (next?: string | null) => Promise<ListingPage<T>>, count: number, current: () => boolean,
@@ -226,7 +228,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [previewing, changePreview] = useState<string | null>(null);
   const previewId = useRef(previewing);
   previewId.current = previewing;
+  const previewSaving = useRef(false);
+  const onPreviewSaving = useCallback((saving: boolean) => { previewSaving.current = saving; }, []);
   const setPreviewing = useCallback((id: string | null) => {
+    // A text save in flight must land before the preview can move, or it would PUT behind a discard prompt.
+    if (id !== previewId.current && previewSaving.current) return false;
     if (id !== previewId.current && !confirmDiscardDrafts()) return false;
     changePreview(id);
     return true;
@@ -1166,6 +1172,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             onChanged={() => void refresh()}
             onClose={() => setPreviewing(null)}
             onError={onError}
+            onSavingChange={onPreviewSaving}
           />}
         </div>
       ) : null}
@@ -1195,6 +1202,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           confirm="Create"
           onCancel={() => setCreating(false)}
           onConfirm={async (name) => {
+            if (offline) throw new Error(OFFLINE_WRITE);
             await createFolder(folderId, name);
             setCreating(false);
             void refreshRef.current().catch(error => onError(error instanceof Error ? error.message : String(error)));
@@ -1209,6 +1217,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           confirm="Rename"
           onCancel={() => setRenaming(null)}
           onConfirm={async (name) => {
+            if (offline) throw new Error(OFFLINE_WRITE);
             const target = renaming;
             await (target.kind === 'folder' ? renameFolder(target.id, name) : renameFile(target.id, name));
             setRenaming(null);

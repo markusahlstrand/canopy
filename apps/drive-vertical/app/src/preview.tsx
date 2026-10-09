@@ -101,16 +101,23 @@ export function PreviewPanel({
   onClose,
   onError,
   onChanged,
+  onSavingChange,
   navigation,
 }: {
   fileId: string;
   onClose: () => void;
   onError: (message: string | null) => void;
   onChanged?: () => void;
+  /** Reports an in-flight text save so the host can refuse to switch files mid-PUT. */
+  onSavingChange?: (saving: boolean) => void;
   navigation?: { previous: string | null; next: string | null; moreAvailable?: boolean; onOpen: (id: string) => void };
 }) {
   const [retry, setRetry] = useState(0);
   const [savingText, setSavingText] = useState(false);
+  useEffect(() => {
+    onSavingChange?.(savingText);
+  }, [savingText, onSavingChange]);
+  useEffect(() => () => onSavingChange?.(false), [onSavingChange]);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [bodyError, setBodyError] = useState<string | null>(null);
   const [versionsError, setVersionsError] = useState<string | null>(null);
@@ -198,11 +205,10 @@ export function PreviewPanel({
       .catch((e: unknown) => {
         if (!meta.current(ticket)) return;
         setMetaError(e instanceof Error ? e.message : String(e));
-        onError(e instanceof Error ? e.message : String(e));
       });
     // The guards are stable for this panel; re-running on them would defeat them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId, onError, retry]);
+  }, [fileId, retry]);
 
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
   const matching = matchingPlugins(plugins, version?.mime ?? '', file?.name ?? '');
@@ -219,10 +225,10 @@ export function PreviewPanel({
         if (bodyReads.current(ticket)) setBody(got);
       })
       .catch((e: unknown) => {
-        if (bodyReads.current(ticket)) { setBodyError(e instanceof Error ? e.message : String(e)); onError(e instanceof Error ? e.message : String(e)); }
+        if (bodyReads.current(ticket)) setBodyError(e instanceof Error ? e.message : String(e));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId, tab, shape, version?.id, onError]);
+  }, [fileId, tab, shape, version?.id]);
 
   const loadTab = useCallback(
     (next: Tab) => {
@@ -236,7 +242,7 @@ export function PreviewPanel({
             if (versionReads.current(ticket)) { setVersions(got.versions); setHistoryNext(got.next); }
           })
           .catch((e: unknown) => {
-            if (versionReads.current(ticket)) { setVersionsError(e instanceof Error ? e.message : String(e)); onError(e instanceof Error ? e.message : String(e)); }
+            if (versionReads.current(ticket)) setVersionsError(e instanceof Error ? e.message : String(e));
           });
       }
       if (next === 'text' && extracted === undefined) {
@@ -247,12 +253,12 @@ export function PreviewPanel({
             if (textReads.current(ticket)) setExtracted(got);
           })
           .catch((e: unknown) => {
-            if (textReads.current(ticket)) { setTextError(e instanceof Error ? e.message : String(e)); onError(e instanceof Error ? e.message : String(e)); }
+            if (textReads.current(ticket)) setTextError(e instanceof Error ? e.message : String(e));
           });
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fileId, versions, extracted, onError, tab],
+    [fileId, versions, extracted, tab],
   );
 
   const loadMore = async () => {
@@ -331,8 +337,13 @@ export function PreviewPanel({
 
   const savePluginText = useCallback(async (text: string) => {
     if (!version || !canWrite || !editableTextMime(version.mime, file?.name)) throw new Error('This file cannot be edited as text.');
-    await saveText(fileId, version.id, text);
-    await reloadText();
+    setSavingText(true);
+    try {
+      await saveText(fileId, version.id, text);
+      await reloadText();
+    } finally {
+      setSavingText(false);
+    }
   }, [fileId, version?.id, canWrite]);
 
   return (
