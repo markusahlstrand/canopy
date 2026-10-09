@@ -35,21 +35,21 @@ function SandboxInstance({plugin,file,onSave,onRetry}:SandboxProps & {onRetry:()
  useUnsavedDraft(dirty);
  const manifest=pluginManifest(plugin),hosts=manifest.capabilities.filter(cap=>cap.kind==='net:fetch').flatMap(cap=>cap.hosts??[]);
  useEffect(()=>{
-  retired.current=false;const abort=new AbortController();abortRef.current=abort;let ready=false,saving=false,editRevision=0;
+  retired.current=false;const abort=new AbortController();abortRef.current=abort;let ready=false,saving=false;
   let timer=window.setTimeout(()=>setError('Plugin did not start. Choose the built-in preview or retry.'),15000);
   abort.signal.addEventListener('abort',()=>clearTimeout(timer));
   const reply=(value:unknown)=>{if(!retired.current)frame.current?.contentWindow?.postMessage(value,'*');};
   const receive=async(event:MessageEvent)=>{
    if(retired.current || event.origin!=='null' || event.source!==frame.current?.contentWindow || !event.data?.canopyPlugin)return;
-   if(event.data.type==='dirty' && saveRef.current && manifest.capabilities.some(cap=>cap.kind==='item:write')){editRevision++;setDirty(true);}
+   if(event.data.type==='dirty' && saveRef.current && manifest.capabilities.some(cap=>cap.kind==='item:write'))setDirty(true);
    if(event.data.type==='rendered'){clearTimeout(timer);return;}
    if(event.data.type==='error'){clearTimeout(timer);setError(String(event.data.data).slice(0,500));return;}
    if(event.data.type==='action' && event.data.data?.action==='save' && !saving){
     if(!saveRef.current || !manifest.capabilities.some(cap=>cap.kind==='item:write')){reply({type:'canopy:save-result',ok:false,error:'This file is read-only.'});return;}
     const text=event.data.data.data?.content;
     if(typeof text!=='string' || new TextEncoder().encode(text).length>200000){reply({type:'canopy:save-result',ok:false,error:'Text exceeds the 200 KB save limit.'});return;}
-    saving=true;setSavingFile(true);const savedRevision=editRevision;
-    try{await saveRef.current(text);if(!abort.signal.aborted){if(editRevision===savedRevision)setDirty(false);reply({type:'canopy:save-result',ok:true});}}
+    saving=true;setSavingFile(true);
+    try{await saveRef.current(text);if(!abort.signal.aborted){setDirty(false);reply({type:'canopy:save-result',ok:true});}}
     catch(error){if(!abort.signal.aborted){const message=error instanceof Error?error.message:String(error);setError(message);reply({type:'canopy:save-result',ok:false,error:message});}}
     finally{saving=false;if(!abort.signal.aborted)setSavingFile(false);}
    }

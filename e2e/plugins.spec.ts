@@ -70,7 +70,8 @@ test('a ZIP app follows enable/disable in the rail and palette; editing keeps it
   await expect(installed.getByRole('button', { name: 'Enable', exact: true })).toBeVisible();
   await plugins.getByRole('button', { name: 'Close', exact: true }).click();
   if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Open navigation' }).click();
-  await expect(page.getByRole('button', { name, exact: true })).toBeHidden();
+  await expect(page.getByRole('navigation', { name: 'Views', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name, exact: true })).not.toBeAttached();
   if (page.viewportSize()!.width < 768) await page.getByRole('dialog', { name: 'Drive navigation', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
   await page.keyboard.press('ControlOrMeta+k');
   const palette = page.getByRole('dialog', { name: 'Command Palette', exact: true });
@@ -174,8 +175,8 @@ test('a ZIP editor retries byte failures and native iframe interaction is blocke
   await expect(installed.getByRole('button', { name: 'Enable', exact: true })).toBeVisible();
   await plugins.getByRole('button', { name: 'Close', exact: true }).click();
   await action(page, 'plugin.txt', 'Open');
-  await expect(panel.getByRole('option', { name, exact: true })).toBeHidden();
   await expect(panel.getByText('Saved through the real plugin bridge', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('option', { name, exact: true })).not.toBeAttached();
   await panel.getByRole('button', { name: 'Close preview', exact: true }).click();
   await openPlugins(page);
   await installed.getByRole('button', { name: 'Enable', exact: true }).click();
