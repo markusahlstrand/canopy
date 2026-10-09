@@ -58,6 +58,7 @@ test('root, nested folders, file lifecycle and every file version retain their i
   await moveFolder.getByRole('button', { name: target, exact: true }).click();
   await moveFolder.getByRole('button', { name: 'Move here', exact: true }).click();
   await expect(moveFolder).toBeHidden();
+  await expect(page.getByRole('button', { name: `Actions for ${renamedFolder}`, exact: true })).toBeHidden();
   await action(page, target, 'Open');
   await action(page, renamedFolder, 'Open');
   await expect(page.getByText('This folder is empty', { exact: true })).toBeVisible();
@@ -106,7 +107,11 @@ test('new folders and their contents remain reachable beyond the first listing p
   await createFolder(page, parent);
   await action(page, parent, 'Open');
   for (let index = 0; index < 21; index++) await createFolder(page, `Page folder ${String(index).padStart(2, '0')}`);
+  // The refresh must re-read the second folder page itself; asserting the row directly
+  // (not through revealRow, which would click "Load more") keeps a collapse visible.
+  const secondPage = page.waitForResponse(response => /\/folders\/[^/]+\/folders\?.*cursor=/.test(response.url()));
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  expect((await secondPage).ok()).toBe(true);
   await expect(page.getByRole('button', { name: 'Actions for Page folder 20', exact: true })).toBeVisible();
   await action(page, 'Page folder 20', 'Open');
   await upload(page, 'last-page.txt', 'Bytes reached through the second folder page');
