@@ -53,7 +53,11 @@ export async function rename(page: Page, name: string, next: string, folder = fa
   await expect(page.getByRole('button', { name: `Actions for ${name}`, exact: true })).toBeHidden();
 }
 export async function upload(page: Page, name: string, content: string) {
+  // A replacement keeps its row, so the row alone cannot show that the bytes landed.
+  const stored = page.waitForResponse(response => response.request().method() === 'POST' &&
+    new URL(response.url()).pathname.endsWith('/content') && new URL(response.url()).searchParams.get('name') === name);
   await page.locator('input[type=file]').setInputFiles({ name, mimeType: 'text/plain', buffer: Buffer.from(content) });
+  expect((await stored).ok()).toBe(true);
   await revealRow(page, name);
 }
 export async function downloaded(page: Page, name: string, content: string) {
