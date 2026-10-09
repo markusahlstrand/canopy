@@ -13,7 +13,11 @@ import { PERSONAS } from './dev-personas.mjs';
 const state = await mkdtemp(join(tmpdir(), 'canopy-acceptance-'));
 const secret = randomBytes(32).toString('hex');
 const node = { tenantId: '01JZ00000000000000000DEV01', scopeId: '01JZ00000000000000000DEV02' };
-const issuer = serve({ fetch: createDevIssuer({ personas: PERSONAS }).fetch, hostname: '127.0.0.1', port: 8989 });
+// Recipient personas for the sharing, search and offline specs, one set per viewport.
+const acceptancePersonas = ['desktop', 'mobile'].flatMap(viewport => ['viewer', 'editor', 'restricted'].map(role => ({
+  sub: `acceptance|${viewport}|${role}`, name: `${viewport} ${role}`, email: `${viewport}-${role}@canopy.test`,
+})));
+const issuer = serve({ fetch: createDevIssuer({ personas: [...PERSONAS, ...acceptancePersonas] }).fetch, hostname: '127.0.0.1', port: 8989 });
 const config = join(state, 'wrangler.json');
 await writeFile(config, JSON.stringify({
   name: 'canopy-acceptance', main: resolve('apps/drive-vertical/src/worker.ts'),
@@ -57,7 +61,7 @@ try {
     ['configure', { entries: [{ key: 'substrat:auth', value: JSON.stringify({ mode: 'oidc', issuer: 'http://127.0.0.1:8989', clientId: 'substrat-dev' }) }] }],
     ['provision', { owner: '01JZ00000000000000000DEV03', slug: 'local-drive', name: 'Acceptance Drive' }],
   ]) {
-    const response = await fetch(`http://127.0.0.1:8987/internal/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-substrat-platform': secret }, body: JSON.stringify({ ...node, ...body }) });
+    const response = await fetch(`http://127.0.0.1:8987/internal/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-substrat-platform': secret }, body: JSON.stringify({ ...node, ...body }), signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error(`${path}: ${response.status} ${await response.text()}`);
   }
   console.log('Acceptance worker provisioned');
