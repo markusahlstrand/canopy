@@ -74,7 +74,7 @@ describe('preview text editing', () => {
   it('offers no editor to readers', async () => { preview(false); await screen.findByText('original'); expect(screen.queryByRole('button', { name: 'Edit text' })).toBeNull(); });
   it('offers no editor for a truncated preview', async () => { preview(true, 'x'.repeat(200_001)); await screen.findByText(/Cut off here/); expect(screen.queryByRole('button', { name: 'Edit text' })).toBeNull(); });
   it('offers no editor when the stored bytes are invalid UTF-8', async () => {
-    const p = preview(true, '', true); await waitFor(() => expect(p.onError).toHaveBeenCalled());
+    const p = preview(true, '', true); await screen.findByRole('button', { name: 'Retry preview' }); expect(p.onError).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'Edit text' })).toBeNull();
   });
 });

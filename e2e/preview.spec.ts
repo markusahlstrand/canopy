@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Request } from '@playwright/test';
 import { signIn, createFolder, action } from './support';
 
 function pdf() {
@@ -148,20 +148,23 @@ test('switching files during a real delayed metadata read cannot display the pre
   await expect(page.getByRole('region', { name: 'Uploads' }).getByText('Uploaded', { exact: true })).toHaveCount(2);
   let release!: () => void;
   const delayed = new Promise<void>(resolve => { release = resolve; });
-  let started!: () => void;
-  const waiting = new Promise<void>(resolve => { started = resolve; });
+  let started!: (request: Request) => void;
+  const waiting = new Promise<Request>(resolve => { started = resolve; });
   await page.route('**/api/files/*', async route => {
-    started();
+    started(route.request());
     await delayed;
     await route.continue();
   }, { times: 1 });
   await action(page, 'a-first.txt', 'Open');
-  await waiting;
+  const stale = await waiting;
   const panel = page.getByRole('complementary', { name: 'Preview' });
   try {
     await panel.getByRole('button', { name: 'Next file', exact: true }).click();
     await expect(panel.getByText('Second file contents', { exact: true })).toBeVisible();
   } finally { release(); }
+  // Wait until the stale a-first metadata has fully arrived, so the assertions below see the race resolved.
+  await (await stale.response())?.finished();
+  await expect(panel.getByRole('heading', { name: 'b-second.txt', exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Details', exact: true }).click();
   await expect(panel.locator('section[aria-label="File information"]').getByText('b-second.txt', { exact: true })).toBeVisible();
   await expect(panel.locator('section[aria-label="File information"]').getByText('a-first.txt', { exact: true })).toBeHidden();
