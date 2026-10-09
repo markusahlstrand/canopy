@@ -5,10 +5,12 @@ import { ApiError, saveText, TEXT_EDIT_LIMIT } from './api';
 import { latestOnly } from './reads';
 import { useNavigationGuard } from './navigation-guards';
 
-export function TextEditor({ fileId, versionId, text, wrap = true, onSaved, onCancel, onReload, onBusyChange }: {
+export function TextEditor({ fileId, versionId, text, wrap = true, onSaved, onCancel, onReload, onBusyChange, onConflict }: {
   fileId: string; versionId: string; text: string; wrap?: boolean;
   onSaved: () => Promise<void>; onReload: () => Promise<void>; onCancel: () => void;
   onBusyChange?: (busy: boolean) => void;
+  /** A save met a newer head; the draft stays here, but the host can learn of the head. */
+  onConflict?: () => void;
 }) {
   const [draft, setDraft] = useState(text);
   const [busy, setBusy] = useState(false);
@@ -43,6 +45,7 @@ export function TextEditor({ fileId, versionId, text, wrap = true, onSaved, onCa
       if (e instanceof ApiError && e.status === 409) {
         setConflict(true);
         setError('This file changed. Your edits are still here. Copy them before reloading the latest version.');
+        onConflict?.();
       } else setError(e instanceof Error ? e.message || 'Could not save text.' : String(e));
     } finally { if (guard.current(ticket)) setBusy(false); }
   };

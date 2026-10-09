@@ -375,6 +375,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   // order, and use the same draft boundary as table and palette navigation.
   const previewFiles = offline ? [] : view === 'drive' ? sorted(files, sort) : view === 'search' ? sorted(visibleHits, sort) : [];
   const previewIndex = previewFiles.findIndex(file => file.id === previewing);
+  const listedPreview = previewing ? (view === 'search' ? hits : files).find(file => file.id === previewing) : undefined;
   const previewNavigation = previewIndex < 0 ? undefined : {
     previous: previewFiles[previewIndex - 1]?.id ?? null,
     next: previewFiles[previewIndex + 1]?.id ?? null,
@@ -789,7 +790,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       return;
     }
     if (action === 'Delete') {
-      if (!item.isFolder) void act(() => trashFile(item.id));
+      if (!item.isFolder) void act(async () => {
+        await trashFile(item.id);
+        // The preview must not stay open on a file that is now in Trash.
+        if (previewId.current === item.id) setPreviewing(null);
+      });
       return;
     }
     if (action === 'Restore') {
@@ -1201,6 +1206,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           /> : <p role="status" className="p-4 text-sm">Saved file details are unavailable. Reconnect to open this file.</p> : <PreviewPanel
             fileId={previewing}
             navigation={previewNavigation}
+            listed={listedPreview && { name: listedPreview.name, currentVersionId: listedPreview.current_version_id }}
             onChanged={() => void refresh()}
             onClose={() => setPreviewing(null)}
             onError={onError}
