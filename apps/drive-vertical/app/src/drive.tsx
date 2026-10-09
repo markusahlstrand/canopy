@@ -264,7 +264,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [offlinePins, setOfflinePins] = useState<FolderPin[]>([]);
   const [pinBusy, setPinBusy] = useState(false);
   const [pinProgress, setPinProgress] = useState<FolderSyncProgress | null>(null);
-  const [pinError, setPinError] = useState<string | null>(null);
+  /** Offline-copy failures per pinned folder, so one folder's outcome cannot clear another's. */
+  const [pinErrors, setPinErrors] = useState<Record<string, string>>({});
+  const setPinError = useCallback((pin: Pick<FolderPin, 'principal' | 'space' | 'folderId'>, error: unknown) => {
+    const key = `${pin.principal}\n${pin.space}\n${pin.folderId}`;
+    setPinErrors(current => {
+      if (error == null) { if (!(key in current)) return current; const rest = { ...current }; delete rest[key]; return rest; }
+      return { ...current, [key]: error instanceof Error ? error.message : String(error) };
+    });
+  }, []);
   useEffect(() => {
     if (!auth.principal) return;
     let active = true;
@@ -281,14 +289,20 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     try { setOfflinePins(await listOfflinePins(auth.principal, cacheSpace)); }
     catch { setOfflinePins([]); }
   }, [auth.principal, cacheSpace]);
-  const reportPinUpdate = useCallback(async (error?: unknown) => {
-    if (error !== undefined) setPinError(error == null ? null : error instanceof Error ? error.message : String(error));
+  const reportPinUpdate = useCallback(async (error?: unknown, pin?: FolderPin) => {
+    if (error !== undefined && pin) setPinError(pin, error);
     await reloadPins();
-  }, [reloadPins]);
+  }, [reloadPins, setPinError]);
   useEffect(() => { void reloadPins(); }, [reloadPins, folderId, offline]);
+  // A delayed background refresh re-reads these when it fires, not when it was requested.
+  const pinRefreshScope = useRef<string | null>(null);
+  pinRefreshScope.current = auth.principal && cacheSpace && !offline && !busy && view === 'drive' ? `${auth.principal}\n${cacheSpace}` : null;
+  useEffect(() => () => { pinRefreshScope.current = null; }, []);
   useEffect(() => {
     if (!auth.principal || !cacheSpace || offline || busy || view !== 'drive') return;
-    void refreshOfflinePins(auth.principal, cacheSpace, undefined, reportPinUpdate).then(reloadPins).catch(() => {});
+    const scope = `${auth.principal}\n${cacheSpace}`;
+    void refreshOfflinePins(auth.principal, cacheSpace, undefined, reportPinUpdate,
+      () => pinRefreshScope.current === scope && navigator.onLine !== false).then(reloadPins).catch(() => {});
   }, [auth.principal, cacheSpace, offline, busy, view, files, reloadPins, reportPinUpdate]);
   useEffect(() => { void refreshPlugins().catch(() => {}); }, []);
 
@@ -451,7 +465,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       if (e instanceof ApiError && e.status === 401) {
         // The API client revokes device access for the captured login. Clear the
         // visible listing too, without letting a stale refusal clear a newer cache.
-        if (!reads.current.current(ticket)) return;
         setFiles([]); setFolders([]); setTrash([]); setHits([]);
         setPreviewing(null); setCmdOpen(false); setOfflinePins([]); setOffline(false);
       }
@@ -818,24 +831,26 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const activeSpaceName = selectedSpace ? spaceLabel(selectedSpace) : currentSite() || undefined;
   const rootLabel = activeSpaceName || 'My Drive';
   const currentPin = offlinePins.find(pin => pin.folderId === folderId);
+  const currentPinError = pinErrors[`${auth.principal}\n${cacheSpace}\n${folderId}`] ?? null;
   const saveCurrentFolderOffline = async () => {
     if (!auth.principal || !cacheSpace || pinBusy) return;
     const pin: FolderPin = { principal: auth.principal, space: cacheSpace, folderId,
       name: crumbs.at(-1)?.name ?? rootLabel, status: 'syncing', updatedAt: Date.now() };
-    setPinBusy(true); setPinError(null); setPinProgress(null);
+    setPinBusy(true); setPinError(pin, null); setPinProgress(null);
     try {
       await setOfflinePin(pin);
       await reloadPins();
       await syncOfflineFolderOnce(pin, undefined, progress => setPinProgress(progress));
     } catch (error) {
-      setPinError(error instanceof Error ? error.message : String(error));
+      setPinError(pin, error);
     } finally { setPinBusy(false); await reloadPins(); }
   };
   const removeCurrentFolderOffline = async () => {
     if (!auth.principal || !cacheSpace || pinBusy) return;
-    setPinBusy(true); setPinError(null); setPinProgress(null);
+    const pin = { principal: auth.principal, space: cacheSpace, folderId };
+    setPinBusy(true); setPinError(pin, null); setPinProgress(null);
     try { await removeOfflinePin(auth.principal, cacheSpace, folderId); }
-    catch (error) { setPinError(error instanceof Error ? error.message : String(error)); }
+    catch (error) { setPinError(pin, error); }
     finally { setPinBusy(false); await reloadPins(); }
   };
   const empty = linkListingUnavailable && view === 'drive' ? (
@@ -946,8 +961,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         {siteList.sites?.find(site => site.current)?.slug || currentSite() ? <CopyFolderLink key={folderId} folderId={folderId}
           site={siteList.sites?.find(site => site.current)?.slug ?? currentSite() ?? undefined} compact /> : null}
         {cacheSpace && auth.principal ? <>
-          <Button size="sm" variant="outline" disabled={pinBusy || (currentPin?.status === 'syncing' && !pinError)} onClick={() => void (currentPin?.status === 'ready' ? removeCurrentFolderOffline() : saveCurrentFolderOffline())}>
-            {pinBusy || (currentPin?.status === 'syncing' && !pinError) ? 'Saving offline…' : currentPin?.status === 'ready' ? 'Remove offline copy' : currentPin ? 'Retry offline download' : 'Available offline on this device'}
+          <Button size="sm" variant="outline" disabled={pinBusy || (currentPin?.status === 'syncing' && !currentPinError)} onClick={() => void (currentPin?.status === 'ready' ? removeCurrentFolderOffline() : saveCurrentFolderOffline())}>
+            {pinBusy || (currentPin?.status === 'syncing' && !currentPinError) ? 'Saving offline…' : currentPin?.status === 'ready' ? 'Remove offline copy' : currentPin ? 'Retry offline download' : 'Available offline on this device'}
           </Button>
           {currentPin?.status === 'partial' ? <span role="status" className="text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</span> : null}
           {currentPin?.status === 'error' ? <span role="status" className="text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</span> : null}
@@ -955,7 +970,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         </> : null}
       </div> : null}
       {pinBusy && pinProgress ? <p role="status" className="px-4 text-xs text-muted-foreground">Saving {pinProgress.files} files in {pinProgress.folders} folders for offline reading…</p> : null}
-      {pinError ? <p role="alert" className="px-4 text-xs text-destructive">Offline copy incomplete: {pinError}</p> : null}
+      {currentPinError ? <p role="alert" className="px-4 text-xs text-destructive">Offline copy incomplete: {currentPinError}</p> : null}
 
       <input
         ref={uploadRef}
