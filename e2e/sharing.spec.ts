@@ -1,7 +1,27 @@
-import { test, expect, type Page } from '@playwright/test';
-import { signIn, createFolder, action, upload, nav } from './support';
+import { test, expect, type Page, type Request, type Response } from '@playwright/test';
+import { signIn, createFolder, action, upload, nav, revealRow } from './support';
 import { createSpace, switchSpace, invite, openMembers } from './spaces';
 import { acceptInvitation } from './recipients';
+
+/** Every folder access check the page makes for `folderId`, so a "hidden" assertion can wait for them to settle. */
+function folderAccessChecks(page: Page, folderId: string) {
+  const path = `/folders/${encodeURIComponent(folderId)}/metadata`;
+  const matches = (method: string, url: string) => method === 'GET' && new URL(url).pathname.endsWith(path);
+  let started = 0;
+  const answers: (boolean | null)[] = [];
+  const onRequest = (r: Request) => { if (matches(r.method(), r.url())) started++; };
+  const onResponse = async (r: Response) => {
+    if (!matches(r.request().method(), r.url())) return;
+    try { answers.push(r.ok() ? (await r.json() as { canManage: boolean }).canManage : null); } catch { answers.push(null); }
+  };
+  page.on('request', onRequest);
+  page.on('response', onResponse);
+  return {
+    settled: () => started > 0 && answers.length === started,
+    answers: () => [...answers],
+    stop: () => { page.off('request', onRequest); page.off('response', onResponse); },
+  };
+}
 
 async function share(page: Page, folder: string, email: string, persona: string, level = 'edit') {
   await action(page, folder, 'Share');
@@ -53,9 +73,20 @@ test('viewer/editor invitations and folder access changes take effect in separat
     await action(viewer, name, 'Open');
     await expect(viewerPanel.getByText('Editor saved these bytes', { exact: true })).toBeVisible();
     await expect(viewerPanel.getByRole('button', { name: 'Edit text', exact: true })).toBeVisible();
-    await access.getByRole('combobox', { name: `Access for ${prefix} viewer`, exact: true }).selectOption('edit');
-    await expect(access.getByRole('combobox', { name: `Access for ${prefix} viewer`, exact: true })).toBeEnabled();
+    const level = access.getByRole('combobox', { name: `Access for ${prefix} viewer`, exact: true });
+    const downgrade = page.waitForResponse(r => r.request().method() === 'DELETE' &&
+      new URL(r.url()).pathname.endsWith('/shares') && new URL(r.url()).searchParams.get('permission') === 'drive:manage');
+    await level.selectOption('edit');
+    expect((await downgrade).ok()).toBe(true);
+    await expect(level).toHaveValue('edit');
+    await expect(level).toBeEnabled();
+    const checks = folderAccessChecks(viewer, new URL(link).searchParams.get('folder')!);
     await viewer.goto(link);
+    await revealRow(viewer, name);
+    await expect.poll(() => checks.settled()).toBe(true);
+    checks.stop();
+    expect(checks.answers()).not.toContain(true);
+    expect(checks.answers()).toContain(false);
     await expect(viewer.getByRole('button', { name: 'Share this folder', exact: true })).toBeHidden();
     await action(viewer, name, 'Open');
     await expect(viewerPanel.getByRole('button', { name: 'Edit text', exact: true })).toBeVisible();

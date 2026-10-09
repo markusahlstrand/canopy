@@ -306,6 +306,24 @@ it('retains a failed new-folder name and closes only after the retry succeeds', 
   expect(screen.queryByRole('dialog', { name: 'New folder' })).toBeNull();
 });
 
+it('refuses a new-folder save once a failed refresh has switched the screen offline', async () => {
+  vi.spyOn(indexedMirror, 'folder').mockResolvedValue({ folders: [], files: [] });
+  await renderDrive();
+  newMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'New folder' }), { target: { value: 'Drafts' } });
+  // The dialog is already open when a refresh answers 503 and the screen falls back offline.
+  fireEvent.click(screen.getByLabelText('Refresh'));
+  await flush();
+  await answerWith('/folders/root/files', 503, { error: 'temporarily unavailable' });
+  // The open modal hides the rest of the page from the accessibility tree.
+  expect(screen.getAllByRole('status', { hidden: true }).some(status => status.textContent?.includes('Offline'))).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  await act(async () => {});
+  expect(pending.filter(request => request.method !== 'GET')).toHaveLength(0);
+  expect(screen.getByRole('alert').textContent).toMatch(/offline/i);
+  expect((screen.getByRole('textbox', { name: 'New folder' }) as HTMLInputElement).value).toBe('Drafts');
+});
+
 describe('an action refreshes the folder on screen, not the one it started in', () => {
   it('leaves the second folder’s listing in place after a rename in the first', async () => {
     // "Papers" has to be in the root listing for a click into it to exist.
