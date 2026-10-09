@@ -34,7 +34,7 @@ export function folderLoginUrl(): string {
   const fileId = linkedFileId();
   const id = linkedFolderId();
   const path = folderPath();
-  if (!fileId && !id && !path) return LOGIN_URL;
+  if (!fileId && !id && !path && !currentSite()) return LOGIN_URL;
   const target = new URL(fileId ? fileLink(fileId) : id ? folderIdLink(id) : folderLink(path));
   return `${LOGIN_URL}?returnTo=${encodeURIComponent(target.pathname + target.search)}`;
 }

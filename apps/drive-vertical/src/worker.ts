@@ -1,5 +1,6 @@
 import { mountMemberRemoval } from './member-removal-route.js';
 import { claimSafeInvite, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
+import { mountInviteSite } from './invite-site-route.js';
 import { mountSpaceSettings } from './space-settings-routes.js';
 import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
@@ -586,6 +587,10 @@ mountInviteGuards(app, async c => {
 },async c => {
  const node=await nodeFor(c.req.raw,c.env),subject=await(await providerFor(c.env,baseNode(c.req.raw,c.env))).resolve(c.req.raw.headers);
  return !!subject && !!await identityDo(c.env,node).existingBinding(node.scopeId,subject.sub);
+});
+mountInviteSite(app, requirePeopleAdmin, async (c) => {
+  const node = await nodeFor(c.req.raw, c.env);
+  return { base: baseNode(c.req.raw, c.env).scopeId, scope: node.scopeId, sites: () => identityDo(c.env, node).listSites() };
 });
 mountInviteRoutes<Env, Node>(app, {
   nodeFor,

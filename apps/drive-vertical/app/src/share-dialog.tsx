@@ -171,6 +171,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
 
   // Whoever is not already on the list, and not the person doing the sharing: they hold the
   // space, so sharing a folder with themselves would do nothing and say something false.
+  const accessReady = shares !== null && people !== null && !peopleFailed;
   const shareable = (people ?? []).filter(
     (person) => person.principal !== me && !(shares ?? []).some((s) => s.principal === person.principal),
   );
@@ -207,6 +208,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
           className="flex items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
+            if (busy || !accessReady) return;
             const address = typed.trim();
             if (!address || !folderId) return;
             // An address somebody in the space already signed in with is that person, not a
@@ -240,9 +242,10 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
               setConfirming(null);
             }}
             people={shareable}
-            disabled={busy}
+            disabled={busy || !accessReady}
             placeholder="Add by name or email…"
             onPick={(person) => {
+              if (busy || !accessReady) return;
               setTyped('');
               void act(() => shareFolder(folderId!, person.principal, level));
             }}
@@ -259,7 +262,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
               </option>
             ))}
           </select>
-          <Button type="submit" className="shrink-0" disabled={busy || !typed.trim()}>
+          <Button type="submit" className="shrink-0" disabled={busy || !accessReady || !typed.trim()}>
             Share
           </Button>
         </form>
@@ -279,7 +282,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
               <Button
                 type="button"
                 size="sm"
-                disabled={busy || !folderId}
+                disabled={busy || !accessReady || !folderId}
                 onClick={() => {
                   const address = confirming;
                   const startedOn = folderId!;
@@ -355,7 +358,7 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
             </div> : <p className="text-sm text-muted-foreground">Loading…</p>
           ) : shares.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Nobody yet. Members of this space can read it; nobody can change it.
+              Nobody yet has a direct folder grant. Space roles still apply.
             </p>
           ) : (
             <ul className="flex flex-col gap-1">
@@ -410,8 +413,8 @@ export function ShareDialog({ folder, onClose, me }: ShareDialogProps) {
           )}
           <p className="mt-2 text-[11.5px] text-muted-foreground">
             <Icon name="users" size={13} className="mr-1 inline align-[-2px]" />
-            Everyone in this space already reads everything. Sharing is about who can change
-            what.
+            Space members can read every folder. Editors and owners can also edit through
+            their space role. Removing a folder grant keeps those role permissions.
           </p>
         </div>
       </DialogContent>

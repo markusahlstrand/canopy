@@ -459,10 +459,10 @@ export async function unshareFolder(
   permissions: readonly string[] = ['drive:manage', 'drive:write'],
 ) {
   for (const permission of permissions) {
-    await call<unknown>(`/folders/${encodeURIComponent(folderId)}/shares`, {
-      method: 'DELETE',
-      body: JSON.stringify({ principal, permission }),
-    });
+    // Derived DELETE routes take their declared input from the query, unlike
+    // POST/PUT/PATCH. A JSON body was ignored and made every revocation a 400.
+    const query = new URLSearchParams({ principal, permission });
+    await call<unknown>(`/folders/${encodeURIComponent(folderId)}/shares?${query}`, { method: 'DELETE' });
   }
 }
 

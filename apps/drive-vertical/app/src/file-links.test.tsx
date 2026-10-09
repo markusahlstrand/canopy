@@ -21,7 +21,8 @@ it('uses only scoped opaque IDs and preserves the file destination through login
   expect([...link.searchParams.keys()]).toEqual(['site', 'file']);
   expect(linkedFileId()).toBe('id/with & chars');
   expect(new URL(folderLoginUrl(), location.origin).searchParams.get('returnTo')).toBe(link.pathname + link.search);
-  selectSite('other'); expect(linkedFileId()).toBe(''); expect(folderLoginUrl()).not.toContain('returnTo');
+  selectSite('other'); expect(linkedFileId()).toBe('');
+  expect(new URL(folderLoginUrl(), location.origin).searchParams.get('returnTo')).toBe('/?site=other');
 });
 it('opens a renamed file in its containing folder without resolving legacy links or private ancestors', async () => {
   selectSite('family'); history.replaceState(null, '', '/?site=family&file=stable&folder=old&path=Old/Name');

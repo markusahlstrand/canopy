@@ -37,7 +37,7 @@ it('preserves only the folder navigation destination through login and rejects a
   selectSite('family'); history.replaceState(null, '', '/?site=family&folder=stable&path=Old&invite=secret');
   expect(new URL(folderLoginUrl(), location.origin).searchParams.get('returnTo')).toBe('/?site=family&folder=stable');
   selectSite('other'); expect(linkedFolderId()).toBe('');
-  expect(new URL(folderLoginUrl(), location.origin).searchParams.has('returnTo')).toBe(false);
+  expect(new URL(folderLoginUrl(), location.origin).searchParams.get('returnTo')).toBe('/?site=other');
 });
 
 it('copies and opens the space root without a blank crumb or folder parameter', async () => {

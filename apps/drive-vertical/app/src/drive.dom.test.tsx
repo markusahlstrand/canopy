@@ -1673,7 +1673,8 @@ describe('sharing a folder', () => {
     const first = pending.filter((p) => p.url.includes('/folders/01F/shares') && p.method !== 'GET');
     expect(first).toHaveLength(1);
     expect(first[0]!.method).toBe('DELETE');
-    expect(first[0]!.body).toContain('drive:manage');
+    expect(new URL(first[0]!.url, location.origin).searchParams.get('permission')).toBe('drive:manage');
+    expect(first[0]!.body).toBeNull();
 
     // So answer it and look at what FOLLOWS. Nothing should: taking both keys away and
     // granting write back is two operations whose second can fail — `ctx.grant` refuses a

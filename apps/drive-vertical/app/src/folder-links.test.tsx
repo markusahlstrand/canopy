@@ -36,6 +36,13 @@ it('keeps a credential-free folder destination across sign-in', () => {
   const login = new URL(folderLoginUrl(), location.origin);
   expect(login.searchParams.get('returnTo')).toBe('/?site=space-a&path=Papers');
 });
+it('keeps an invitation space through sign-in even without a folder destination', () => {
+  selectSite('invited-space');
+  history.replaceState(null, '', '/?site=invited-space&invite=secret');
+  const login = new URL(folderLoginUrl(), location.origin);
+  expect(login.searchParams.get('returnTo')).toBe('/?site=invited-space');
+  expect(login.toString()).not.toContain('secret');
+});
 it('cleans up an unavailable link and reports a single unavailable state', async () => {
   history.replaceState(null, '', '/?path=Missing');
   vi.stubGlobal('fetch', async (url: string) => new Response(JSON.stringify(url.includes('by-path') ? null : url.endsWith('/access') ? { canManage: false } : [])));
