@@ -22,7 +22,7 @@ const config = join(state, 'wrangler.json');
 await writeFile(config, JSON.stringify({
   name: 'canopy-acceptance', main: resolve('apps/drive-vertical/src/worker.ts'),
   compatibility_date: '2026-06-01', compatibility_flags: ['nodejs_compat'],
-  vars: { ALLOW_DEV_NODE: 'true', PLATFORM_SECRET: secret },
+  vars: { ALLOW_DEV_NODE: 'true', PLATFORM_SECRET: secret, ROUTER_SECRET: randomBytes(32).toString('hex') },
   assets: { directory: resolve('apps/drive-vertical/app/dist'), binding: 'ASSETS', not_found_handling: 'single-page-application', run_worker_first: ['/api/*', '/internal/*'] },
   r2_buckets: [{ binding: `BLOBS__${node.tenantId}`, bucket_name: 'canopy-acceptance' }],
   durable_objects: { bindings: ['SCOPE', 'AUTH', 'SWEEPER'].map((name, i) => ({ name, class_name: ['ScopeDO', 'IdentityDO', 'SweeperDO'][i] })) },

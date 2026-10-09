@@ -18,3 +18,43 @@ it('declares the old bundled viewers library hosts in catalog manifests for revi
  expect(pluginCatalog.find(entry=>entry.manifest.id==='markdown-editor')!.manifest.capabilities).toContainEqual({kind:'net:fetch',hosts:['esm.sh','cdn.jsdelivr.net']});
  expect(pluginCatalog.find(entry=>entry.manifest.id==='pdf-viewer')!.manifest.capabilities).toContainEqual({kind:'net:fetch',hosts:['cdn.jsdelivr.net']});
 });
+it('restarts a failed plugin with a fresh sandbox and source request',async()=>{
+ const {fireEvent}=await import('@testing-library/react');
+ const fetcher=vi.fn().mockRejectedValueOnce(new Error('Source unavailable')).mockResolvedValue(new Response(JSON.stringify(row)));
+ vi.stubGlobal('fetch',fetcher);
+ render(<SandboxPlugin plugin={row}/>);
+ const first=screen.getByTitle('Editor') as HTMLIFrameElement;
+ await act(async()=>window.dispatchEvent(new MessageEvent('message',{source:first.contentWindow,origin:'null',data:{canopyPlugin:true,type:'ready'}})));
+ await screen.findByText('Source unavailable');
+ fireEvent.click(screen.getByRole('button',{name:'Retry plugin'}));
+ const second=screen.getByTitle('Editor') as HTMLIFrameElement;
+ expect(second).not.toBe(first);
+ const post=vi.spyOn(second.contentWindow!,'postMessage');
+ await act(async()=>window.dispatchEvent(new MessageEvent('message',{source:second.contentWindow,origin:'null',data:{canopyPlugin:true,type:'ready'}})));
+ expect(fetcher).toHaveBeenCalledTimes(2);
+ await waitFor(()=>expect(post).toHaveBeenCalledWith(expect.objectContaining({type:'render',source:row.source}),'*',expect.anything()));
+ expect(screen.queryByRole('alert')).toBeNull();
+});
+it('blocks frame input during a pending save, then remounts on the saved version',async()=>{
+ const {hasUnsavedDrafts}=await import('./drafts');
+ vi.stubGlobal('fetch',vi.fn(async(url:string)=>new Response(url.includes('/source')?JSON.stringify(row):'content')));
+ let finish!:()=>void;
+ const save=vi.fn(()=>new Promise<void>(resolve=>{finish=resolve;}));
+ const file=(versionId:string)=>({id:'file',versionId,name:'notes.txt',mime:'text/plain',size:7});
+ const view=render(<SandboxPlugin plugin={row} file={file('v1')} onSave={save}/>);
+ const frame=screen.getByTitle('Editor') as HTMLIFrameElement;
+ const send=(type:string,data?:unknown)=>window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'null',data:{canopyPlugin:true,type,data}}));
+ await act(async()=>{send('dirty');});
+ expect(hasUnsavedDrafts()).toBe(true);
+ await act(async()=>{send('action',{action:'save',data:{content:'first edit'}});});
+ expect(frame.hasAttribute('inert')).toBe(true);
+ expect(screen.getByRole('status').textContent).toBe('Saving plugin edits…');
+ // As in preview.tsx: a successful save reloads the file, yielding a new version id.
+ await act(async()=>finish());
+ view.rerender(<SandboxPlugin plugin={row} file={file('v2')} onSave={save}/>);
+ const next=screen.getByTitle('Editor') as HTMLIFrameElement;
+ expect(next).not.toBe(frame);
+ expect(next.hasAttribute('inert')).toBe(false);
+ expect(screen.queryByRole('status')).toBeNull();
+ expect(hasUnsavedDrafts()).toBe(false);
+});

@@ -1,18 +1,19 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {PluginManagement} from './plugin-management';
+import {pluginCatalog} from './plugin-catalog';
 
 afterEach(()=>{cleanup();vi.unstubAllGlobals();vi.restoreAllMocks();});
 
-it('loads a GitHub plugin for review before install',async()=>{
-  const manifest={id:'github-viewer',name:'GitHub viewer',version:'1',capabilities:[{kind:'item:read'}],contributes:{viewers:[{id:'text',match:['text/*']}]}};
-  const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/people/access')?{canManage:false}:url.endsWith('/plugins')&&init?.method!=='PUT'?{plugins:[]}:url.endsWith('/plugin-import/github')?{manifest,source:'export default () => {}',provenance:{kind:'github',ref:'owner/repo@main',resolved:'a'.repeat(40),token:'server-signed-token'}}:{})));
+it('keeps the GitHub attestation when imported bytes also match a bundled plugin',async()=>{
+  const {manifest,source}=pluginCatalog[0]!;
+  const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/people/access')?{canManage:false}:url.endsWith('/plugins')&&init?.method!=='PUT'?{plugins:[]}:url.endsWith('/plugin-import/github')?{manifest,source,provenance:{kind:'github',ref:'owner/repo@main',resolved:'a'.repeat(40),token:'server-signed-token'}}:{})));
   vi.stubGlobal('fetch',fetcher);
   render(<PluginManagement open onOpenChange={()=>{}}/>);
   fireEvent.click(screen.getByText(/Plugin Studio · import or edit source/));
   fireEvent.change(screen.getByLabelText('GitHub repository'),{target:{value:'owner/repo'}});
   fireEvent.click(screen.getByRole('button',{name:'Review GitHub plugin'}));
-  await screen.findByDisplayValue(/github-viewer/);
+  await screen.findByDisplayValue(/image-viewer/);
   expect((screen.getByRole('button',{name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole('checkbox',{name:/Approve the capabilities/}));
   fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
