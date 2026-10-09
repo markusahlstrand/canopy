@@ -1414,9 +1414,13 @@ const operations = {
           'SELECT description, labels_json FROM drive_file_details WHERE file_id = ?', [fileId],
         )[0];
         if (details) {
-          const description = searchSnippet(details.description, input.term);
           const labels = searchSnippet((JSON.parse(details.labels_json) as string[]).join(', '), input.term);
-          snippet = description ? `Description: ${description}` : labels ? `Labels: ${labels}` : null;
+          // A query can match terms across both indexed metadata fields. Labels go
+          // first and the description window shrinks when both match, so the label
+          // context survives the palette's single-line and the table's two-line clamp.
+          const description = searchSnippet(details.description, input.term, labels ? 80 : 240);
+          snippet = [labels && `Labels: ${labels}`, description && `Description: ${description}`]
+            .filter(Boolean).join(' · ') || null;
         }
       }
       hits.push({ ...file, via, snippet });

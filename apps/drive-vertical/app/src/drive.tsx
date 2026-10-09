@@ -473,6 +473,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           // IndexedDB can be unavailable; surface the original network failure.
         }
       }
+      // Any failed refresh (refusal or otherwise) must not leave earlier search hits actionable.
+      if (view === 'search') { setHits([]); setSelection(new Set()); }
       setLoadFailed(true);
       onError(e instanceof Error ? e.message : String(e));
     } finally {
