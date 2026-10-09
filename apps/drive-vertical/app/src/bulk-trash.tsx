@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@canopy/ui';
 import { ApiError, currentSite, trashFile } from './api';
 import { useNavigationGuard } from './navigation-guards';
 
 const filesLabel = (count: number) => `${count} ${count === 1 ? 'file' : 'files'}`;
 
-/** Keep this mounted across views so one batch retains its progress and outcome. */
-export function BulkTrash({ files, disabled, visible = true, contextKey = '', beforeTrash = () => true, onTrashed }: {
-  files: { id: string; name: string }[]; disabled: boolean; visible?: boolean; contextKey?: string; beforeTrash?: (ids: string[]) => boolean; onTrashed: (ids: string[]) => Promise<void>;
+/**
+ * Keep this mounted across views so one batch retains its progress and outcome.
+ * With `trigger`, the idle button renders into that element (the fixed-height selection
+ * bar) and only the confirmation, progress and outcome render here.
+ */
+export function BulkTrash({ files, disabled, visible = true, contextKey = '', beforeTrash = () => true, onTrashed, trigger }: {
+  files: { id: string; name: string }[]; disabled: boolean; visible?: boolean; contextKey?: string; beforeTrash?: (ids: string[]) => boolean; onTrashed: (ids: string[]) => Promise<void>; trigger?: Element | null;
 }) {
   const [confirmation, setConfirmation] = useState<{ files: { id: string; name: string }[]; site: string | null; context: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -64,8 +69,12 @@ export function BulkTrash({ files, disabled, visible = true, contextKey = '', be
     }
     running.current = false;
   };
-  if (!busy && !confirmation && !message && (!visible || !files.length)) return null;
-  return <section aria-label="Move selected files to Trash" className="mb-3 space-y-1">
+  const button = !busy && !confirmation && visible && files.length ? <Button variant="outline" size="sm" disabled={disabled} onClick={() => {
+    if (!running.current && !disabled) { setMessage(null); setConfirmation({ files: files.map(file => ({ ...file })), site: currentSite(), context: contextKey }); }
+  }}>Move {files.length} selected {files.length === 1 ? 'file' : 'files'} to Trash</Button> : null;
+  const inline = trigger ? null : button;
+  return <>{trigger && button ? createPortal(button, trigger) : null}
+    {busy || confirmation || message || inline ? <section aria-label="Move selected files to Trash" className="mb-3 space-y-1">
     {busy ? <><p role="status" className="text-sm">Moving to Trash: {progress.attempted} of {progress.total}…</p>
       <Button variant="outline" size="sm" onClick={() => { cancelled.current = true; }}>Cancel remaining moves</Button></>
        : confirmation ? <div role="group" aria-label="Confirm move to Trash" className="space-y-2">
@@ -73,9 +82,7 @@ export function BulkTrash({ files, disabled, visible = true, contextKey = '', be
         <ul className="max-h-40 overflow-auto">{confirmation.files.map(file => <li key={file.id}>{file.name}</li>)}</ul>
         <Button variant="outline" size="sm" disabled={disabled} onClick={() => void trash()}>Confirm move to Trash</Button>{' '}
         <Button variant="outline" size="sm" onClick={() => setConfirmation(null)}>Cancel</Button>
-      </div> : visible && files.length ? <Button variant="outline" size="sm" disabled={disabled} onClick={() => {
-        if (!running.current && !disabled) { setMessage(null); setConfirmation({ files: files.map(file => ({ ...file })), site: currentSite(), context: contextKey }); }
-      }}>Move {files.length} selected {files.length === 1 ? 'file' : 'files'} to Trash</Button> : null}
+      </div> : inline}
     {message ? <div className="flex flex-wrap items-center gap-2"><p role="status" className="text-sm">{message}</p><Button variant="ghost" size="sm" onClick={() => setMessage(null)}>Dismiss Trash result</Button></div> : null}
-  </section>;
+  </section> : null}</>;
 }

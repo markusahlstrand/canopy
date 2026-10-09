@@ -133,3 +133,15 @@ it('keeps the confirmed snapshot when selection changes within the same context'
   await screen.findByText('Moved to Trash: 1 file.');
   expect(trash).toHaveBeenCalledExactlyOnceWith('a', null);
 });
+
+it('renders the idle action into a supplied trigger and keeps the confirmation here', () => {
+  const trigger = document.body.appendChild(document.createElement('div'));
+  render(<BulkTrash files={[{ id: 'a', name: 'A' }]} disabled={false} onTrashed={async () => {}} trigger={trigger} />);
+  const button = screen.getByRole('button', { name: 'Move 1 selected file to Trash' });
+  expect(trigger.contains(button)).toBe(true);
+  expect(screen.queryByRole('region', { name: 'Move selected files to Trash' })).toBeNull();
+  fireEvent.click(button);
+  expect(trigger.childElementCount).toBe(0);
+  expect(trigger.contains(screen.getByRole('button', { name: 'Confirm move to Trash' }))).toBe(false);
+  trigger.remove();
+});

@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@canopy/ui';
 import { ApiError, currentSite, restoreFile } from './api';
 
 const filesLabel = (count: number) => `${count} ${count === 1 ? 'file' : 'files'}`;
 
-/** Keep this mounted across views so one batch retains its progress and outcome. */
-export function BulkRestore({ files, disabled, visible = true, onRestored }: {
-  files: { id: string; name: string }[]; disabled: boolean; visible?: boolean; onRestored: (ids: string[]) => Promise<void>;
+/**
+ * Keep this mounted across views so one batch retains its progress and outcome.
+ * With `trigger`, the idle button renders into that element (the fixed-height selection
+ * bar) and only progress and outcome render here.
+ */
+export function BulkRestore({ files, disabled, visible = true, onRestored, trigger }: {
+  files: { id: string; name: string }[]; disabled: boolean; visible?: boolean; onRestored: (ids: string[]) => Promise<void>; trigger?: Element | null;
 }) {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState({ attempted: 0, total: 0 });
@@ -57,11 +62,13 @@ export function BulkRestore({ files, disabled, visible = true, onRestored }: {
     }
     running.current = false;
   };
-  if (!busy && !message && (!visible || !files.length)) return null;
-  return <section aria-label="Restore selected files" className="mb-3 space-y-1">
+  const button = !busy && visible && files.length ? <Button variant="outline" size="sm" disabled={disabled} onClick={() => void restore()}>Restore {files.length} selected {files.length === 1 ? 'file' : 'files'}</Button> : null;
+  const inline = trigger ? null : button;
+  return <>{trigger && button ? createPortal(button, trigger) : null}
+    {busy || message || inline ? <section aria-label="Restore selected files" className="mb-3 space-y-1">
     {busy ? <><p role="status" className="text-sm">Restoring {progress.attempted} of {progress.total}…</p>
       <Button variant="outline" size="sm" onClick={() => { cancelled.current = true; }}>Cancel remaining restores</Button></>
-      : visible && files.length ? <Button variant="outline" size="sm" disabled={disabled} onClick={() => void restore()}>Restore {files.length} selected {files.length === 1 ? 'file' : 'files'}</Button> : null}
+      : inline}
     {message ? <p role="status" className="text-sm">{message}</p> : null}
-  </section>;
+  </section> : null}</>;
 }
