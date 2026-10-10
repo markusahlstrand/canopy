@@ -368,6 +368,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   /** The topbar's Upload button and the palette's action both reach the one file input. */
   const uploadRef = useRef<HTMLInputElement>(null);
   const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [bulkTrigger, setBulkTrigger] = useState<HTMLElement | null>(null);
+  /** Items this screen just trashed, restored or moved away are gone from it; so is their selection. */
+  const unselect = (ids: string[]) => setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
   const [savedView] = useState(readViewPreferences);
   const [layout, setLayout] = useState<'list' | 'grid'>(savedView.layout);
   const [sort, setSort] = useState<SortState>(savedView.sort);
@@ -792,13 +795,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     if (action === 'Delete') {
       if (!item.isFolder) void act(async () => {
         await trashFile(item.id);
+        unselect([item.id]);
         // The preview must not stay open on a file that is now in Trash.
         if (previewId.current === item.id) setPreviewing(null);
       });
       return;
     }
     if (action === 'Restore') {
-      void act(() => restoreFile(item.id));
+      void act(async () => { await restoreFile(item.id); unselect([item.id]); });
       return;
     }
     if (action === 'Download' && !item.isFolder) {
@@ -1058,7 +1062,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           Offline — showing saved names. Saved file copies can open read-only; changes and search are unavailable.
         </p>
       ) : null}
-      <SelectionSummary selection={selection} items={view === 'search' ? previewFiles.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file))]} onClear={() => setSelection(new Set())} />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative">
           <Icon
@@ -1109,17 +1112,23 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         </Button>
       </div>
 
-      <BulkTrash contextKey={`${view}:${folderId}:${term}`} beforeTrash={ids => !previewId.current || !ids.includes(previewId.current) || setPreviewing(null)} visible={view === 'drive' || view === 'search'} files={(view === 'search' ? visibleHits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
-        setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
+      {/* Always rendered at one height, so nothing above the rows appears on select: a
+          selection that pushed the table down made a double-click's second click miss. */}
+      <div data-selection-bar className={`mb-3 flex h-10 items-center gap-2 overflow-x-auto whitespace-nowrap rounded border px-2 text-sm ${selection.size ? 'border-border' : 'border-transparent'}`}>
+        <SelectionSummary selection={selection} items={view === 'search' ? previewFiles.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file))]} onClear={() => setSelection(new Set())} />
+        <span ref={setBulkTrigger} className="contents" />
+        {(view === 'drive' || view === 'search') && previewFiles.some(file => selection.has(file.id)) ? <Button variant="outline" size="sm" disabled={offline || busy} onClick={() => {
+          setMoving(previewFiles.filter(file => selection.has(file.id)).map(file => fileItem(file)));
+        }}>Move selected files…</Button> : null}
+      </div>
+
+      <BulkTrash trigger={bulkTrigger} contextKey={`${view}:${folderId}:${term}`} beforeTrash={ids => !previewId.current || !ids.includes(previewId.current) || setPreviewing(null)} visible={view === 'drive' || view === 'search'} files={(view === 'search' ? visibleHits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
+        unselect(ids);
         await refreshRef.current();
       }} />
 
-      {(view === 'drive' || view === 'search') && previewFiles.some(file => selection.has(file.id)) ? <Button variant="outline" size="sm" className="mb-3" disabled={offline || busy} onClick={() => {
-        setMoving(previewFiles.filter(file => selection.has(file.id)).map(file => fileItem(file)));
-      }}>Move selected files…</Button> : null}
-
-      <BulkRestore visible={view === 'trash'} files={trash.filter(file => selection.has(file.id))} disabled={offline || busy} onRestored={async ids => {
-        setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
+      <BulkRestore trigger={bulkTrigger} visible={view === 'trash'} files={trash.filter(file => selection.has(file.id))} disabled={offline || busy} onRestored={async ids => {
+        unselect(ids);
         await refreshRef.current();
       }} />
 
@@ -1146,7 +1155,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           trashed
           selection={selection}
           onSelectionChange={setSelection}
-          onOpen={(item) => void act(() => restoreFile(item.id))}
+          onOpen={(item) => void act(async () => { await restoreFile(item.id); unselect([item.id]); })}
           sort={sort}
           onSort={onSort}
           view={layout}
@@ -1170,8 +1179,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           view={layout}
           onAction={onAction}
           // Drag a file onto a folder: the move the platform's relink makes safe (#75).
-          onMove={offline || view !== 'drive' ? undefined : (item, folder) => void act(() => item.isFolder
-            ? moveFolder(item.id, folder.id) : moveFile(item.id, folder.id))}
+          onMove={offline || view !== 'drive' ? undefined : (item, folder) => void act(async () => {
+            await (item.isFolder ? moveFolder(item.id, folder.id) : moveFile(item.id, folder.id));
+            unselect([item.id]);
+          })}
           pluginMenuItems={() => []}
           previewOpen={previewing !== null}
           loading={busy}
@@ -1229,7 +1240,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       {moving ? <MoveDialog items={moving} sourceFolderId={view === 'drive' ? folderId : null}
         onClose={() => setMoving(null)} onMoved={async ids => {
-          setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
+          unselect(ids);
           await refreshRef.current();
         }} /> : null}
 
