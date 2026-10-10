@@ -106,7 +106,11 @@ test('WebDAV mounts spaces and direct grants with app passwords, and revocation 
     await people.getByRole('button', { name: `Remove ${recipientName}`, exact: true }).click();
     await people.getByRole('button', { name: 'Confirm', exact: true }).click();
     await expect(people.getByRole('button', { name: `Remove ${recipientName}`, exact: true })).toBeHidden();
-    await people.getByRole('button', { name: 'Close', exact: true }).click();
+    // The roster re-renders after a removal; keep closing until the dialog is really gone.
+    await expect(async () => {
+      await page.keyboard.press('Escape');
+      await expect(people).toBeHidden({ timeout: 1_000 });
+    }).toPass();
     expect(await hrefs(await recipient('/dav/', 'PROPFIND', { headers: { Depth: '1' } }))).not.toContain(dec([space], true));
     expect((await recipient(enc([space, papers, 'from-dav.txt']), 'GET')).status()).toBe(404);
 

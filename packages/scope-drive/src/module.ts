@@ -974,7 +974,11 @@ const operations = {
     assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
     const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [input.folderId])[0];
     if (!folder) throw substratError('not_found', 'folder not found');
-    return { ...folder, canManage: (await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId))).allowed };
+    return {
+      ...folder,
+      canManage: (await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId))).allowed,
+      canWrite: (await ctx.check(DRIVE_PERM.write, folderRef(input.folderId))).allowed,
+    };
   },
 
   'drive/folder-by-path': async (ctx, input) => {

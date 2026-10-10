@@ -441,7 +441,15 @@ export function mountWebdav<E extends Env>(app: Hono<E>, authenticate: DavAuthen
     const target = await resolve(loc.space.scope, loc.base, loc.tail, false);
     if (target.kind === 'folder') return text(405, 'A folder has this name');
     if (!target.parent) return text(409, 'The parent folder does not exist');
-    if (target.kind === 'file' && !target.canWrite) return text(403, 'Forbidden');
+    // Refuse before reading the body: a read-only caller must not be able to make the
+    // worker buffer up to 25 MB just to be told no. A new file needs write on its folder.
+    const writable = target.kind === 'file'
+      ? target.canWrite
+      : (await loc.space.scope.invoke<{ canWrite: boolean }>('drive/get-folder', { folderId: target.parent.id })).canWrite;
+    if (!writable) {
+      await c.req.raw.body?.cancel();
+      return text(403, 'Forbidden');
+    }
     const declared = c.req.header('content-type')?.split(';')[0]?.trim();
     const mime = declared && declared !== 'application/octet-stream' ? declared : mimeFor(name);
     const bytes = await readBounded(c.req.raw);

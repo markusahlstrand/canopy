@@ -214,6 +214,19 @@ describe('a viewer', () => {
     expect((await dav('viewer-secret', '/dav/Family/Papers/lease.txt', 'DELETE')).status).toBe(403);
     expect((await dav('viewer-secret', '/dav/Work/', 'PROPFIND')).status).toBe(404);
   });
+
+  it('is refused a new upload before any of the body is read', async () => {
+    let pulled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { pulled = true; controller.enqueue(new Uint8Array(1024)); controller.close(); },
+    }, { highWaterMark: 0 });
+    const refused = await app.request('https://canopy.test/dav/Family/Papers/large.bin', {
+      method: 'PUT', body, headers: auth('viewer-secret'), duplex: 'half',
+    } as RequestInit);
+    expect(refused.status).toBe(403);
+    expect(pulled).toBe(false);
+    expect((await dav('owner-secret', '/dav/Family/Papers/large.bin', 'GET')).status).toBe(404);
+  });
 });
 
 describe('Shared with me', () => {

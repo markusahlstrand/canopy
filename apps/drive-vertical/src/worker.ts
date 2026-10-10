@@ -818,9 +818,8 @@ async function accessibleSites(request: Request, env: Env) {
 }
 
 /** The spaces one login can enter, each with its principal and stub there. */
-async function sitesForSubject(env: Env, base: Node, sub: string) {
+async function sitesForSubject(env: Env, base: Node, sub: string, host = hostFor(env)) {
   const directory = identityDo(env, base);
-  const host = hostFor(env);
 
   /**
    * A space is listed when this login is bound in it AND it still resolves.
@@ -1279,7 +1278,7 @@ mountWebdav(app, async (c, password, username) => {
     return null;
   }
   const host = hostFor(env);
-  const sites = await sitesForSubject(env, base, sub);
+  const sites = await sitesForSubject(env, base, sub, host);
   return sites.map((site) => {
     const tenant = base.tenantId;
     const scope = scopeId.parse(site.scopeId);

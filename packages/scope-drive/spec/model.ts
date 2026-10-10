@@ -718,7 +718,8 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     summary: 'Read a folder by id, including its current server path',
     permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
     input: z.object({ folderId: z.string() }),
-    output: driveEntities.folder.fields.extend({ canManage: z.boolean() }),
+    /** `canWrite` lets a client refuse an upload before sending or buffering its bytes. */
+    output: driveEntities.folder.fields.extend({ canManage: z.boolean(), canWrite: z.boolean() }),
     http: { method: 'GET', path: '/folders/{folderId}/metadata' },
   },
 
