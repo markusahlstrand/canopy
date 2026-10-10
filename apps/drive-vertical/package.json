@@ -37,6 +37,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260928.1",
+    "@substrat-run/adapter-sqlite": "^0.135.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
@@ -76,7 +77,9 @@
         "notFoundHandling": "single-page-application",
         "runWorkerFirst": [
           "/api/*",
-          "/internal/*"
+          "/internal/*",
+          "/dav",
+          "/dav/*"
         ]
       },
       "stores": [

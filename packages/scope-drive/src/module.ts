@@ -974,7 +974,11 @@ const operations = {
     assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
     const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [input.folderId])[0];
     if (!folder) throw substratError('not_found', 'folder not found');
-    return { ...folder, canManage: (await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId))).allowed };
+    return {
+      ...folder,
+      canManage: (await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId))).allowed,
+      canWrite: (await ctx.check(DRIVE_PERM.write, folderRef(input.folderId))).allowed,
+    };
   },
 
   'drive/folder-by-path': async (ctx, input) => {
@@ -990,6 +994,36 @@ const operations = {
     // still recorded by `ctx.check` — it is the CALLER who learns nothing.
     const decision = await ctx.check(DRIVE_PERM.read, folderRef(row.id));
     return decision.allowed ? row : null;
+  },
+
+  'drive/file-by-name': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
+    const file = ctx.sql.query<FileRow>(
+      "SELECT * FROM drive_files WHERE folder_id = ? AND name = ? AND state = 'live'",
+      [input.folderId, input.name],
+    )[0];
+    if (!file) return null;
+    const version = file.current_version_id
+      ? (ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [
+          file.current_version_id,
+        ])[0] ?? null)
+      : null;
+    return { file, version, canWrite: (await ctx.check(DRIVE_PERM.write, fileRef(file.id))).allowed };
+  },
+
+  'drive/list-file-entries': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
+    const limit = input.limit ?? 200;
+    // One more than the page, so `next` is only set when another row exists.
+    const rows = ctx.sql.query<FileRow & { size: number | null; mime: string | null }>(
+      `SELECT f.*, v.size AS size, v.mime AS mime FROM drive_files f
+         LEFT JOIN drive_file_versions v ON v.id = f.current_version_id
+        WHERE f.folder_id = ? AND f.state = 'live' AND f.name > ?
+        ORDER BY f.name LIMIT ?`,
+      [input.folderId, input.after ?? '', limit + 1],
+    );
+    const entries = rows.slice(0, limit);
+    return { entries, next: rows.length > limit ? entries.at(-1)!.name : null };
   },
 
   'drive/record-text': async (ctx, input) => {

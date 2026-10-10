@@ -22,4 +22,4 @@ Extraction runs after the upload response. If a file predates it, or that backgr
 
 ## Remaining migration
 
-The old API and store still implement a shared-database drive, WebDAV, offline change feeds, retention, and connected-storage mechanisms. The vertical does not inherit those routes automatically. [S9](https://github.com/markusahlstrand/canopy/issues/48) extracts document capabilities into the scope model; [S10](https://github.com/markusahlstrand/canopy/issues/49) covers existing data and retirement of the old storage path.
+The old API and store still implement a shared-database drive, offline change feeds, retention, and connected-storage mechanisms. The vertical does not inherit those routes automatically. WebDAV has been ported to the vertical with its own app passwords ([#299](https://github.com/markusahlstrand/canopy/issues/299)); see the vertical's README. [S9](https://github.com/markusahlstrand/canopy/issues/48) extracts document capabilities into the scope model; [S10](https://github.com/markusahlstrand/canopy/issues/49) covers existing data and retirement of the old storage path.

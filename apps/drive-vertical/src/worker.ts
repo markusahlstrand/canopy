@@ -80,6 +80,9 @@ import {
 import { mountInviteRoutes } from '@substrat-run/vertical-auth/invite-routes';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
+import { readBounded } from './upload-limit';
+import { appPasswordName, createAppPassword, listAppPasswords, mintAppPassword, revokeAppPassword, verifyAppPassword, type AppPassword } from './app-passwords';
+import { mountWebdav } from './webdav';
 import { mountFileContent, type FileContentRecord } from './file-content.js';
 import { mountTextContent, editableTextMime, type TextContentRecord } from './text-content.js';
 import { INVITABLE_ROLE_KEYS, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
@@ -147,6 +150,18 @@ export class IdentityDO extends PlatformIdentityDO {
   async spaceCreator(owner: string): Promise<string | null> {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_space_creators (owner TEXT PRIMARY KEY, subject TEXT NOT NULL)');
     return this.ctx.storage.sql.exec<{ subject: string }>('SELECT subject FROM canopy_space_creators WHERE owner = ?', owner).toArray()[0]?.subject ?? null;
+  }
+  async createAppPassword(id: string, subject: string, name: string, tokenHash: string): Promise<AppPassword | { error: 'limit' }> {
+    return this.ctx.storage.transactionSync(() => createAppPassword(this.ctx.storage.sql, { id, sub: subject, name, tokenHash, now: Date.now() }));
+  }
+  async listAppPasswords(subject: string): Promise<AppPassword[]> {
+    return listAppPasswords(this.ctx.storage.sql, subject);
+  }
+  async revokeAppPassword(subject: string, id: string): Promise<boolean> {
+    return this.ctx.storage.transactionSync(() => revokeAppPassword(this.ctx.storage.sql, subject, id));
+  }
+  async verifyAppPassword(tokenHash: string): Promise<string | null> {
+    return verifyAppPassword(this.ctx.storage.sql, tokenHash, Date.now());
   }
 }
 
@@ -345,6 +360,10 @@ type SiteRegistry = {
   reserveSpace(slug: string, subject: string, owner: string): Promise<{owner:string;error?:'cap'|'rate'|'conflict'}>;
   rememberSpaceCreator(owner: string, subject: string): Promise<void>;
   spaceCreator(owner: string): Promise<string | null>;
+  createAppPassword(id: string, subject: string, name: string, tokenHash: string): Promise<AppPassword | { error: 'limit' }>;
+  listAppPasswords(subject: string): Promise<AppPassword[]>;
+  revokeAppPassword(subject: string, id: string): Promise<boolean>;
+  verifyAppPassword(tokenHash: string): Promise<string | null>;
 };
 
 const identityDo = (env: Env, node: Node): IdentityStub & SiteRegistry =>
@@ -431,7 +450,7 @@ async function principalFor(env: Env, req: Request): Promise<PrincipalId | null>
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('/api/*', async (c, next) => {
-  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|accept-invite|claim-owner)$/.test(c.req.path);
+  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|accept-invite|claim-owner|app-passwords)$/.test(c.req.path);
   if (jsonMutation && c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HTTPException(415, {message:'Use application/json for this request.'});
   const origin = c.req.header('origin');
   if (jsonMutation && origin && origin !== new URL(c.req.url).origin) throw new HTTPException(403, {message:'Cross-origin mutations are not allowed.'});
@@ -795,9 +814,12 @@ async function accessibleSites(request: Request, env: Env) {
   // a fourth got 401 from the very endpoint that would have let them leave it.
   const subject = await (await providerFor(env, base)).resolve(request.headers);
   if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
+  return sitesForSubject(env, base, subject.sub);
+}
 
+/** The spaces one login can enter, each with its principal and stub there. */
+async function sitesForSubject(env: Env, base: Node, sub: string, host = hostFor(env)) {
   const directory = identityDo(env, base);
-  const host = hostFor(env);
 
   /**
    * A space is listed when this login is bound in it AND it still resolves.
@@ -818,12 +840,13 @@ async function accessibleSites(request: Request, env: Env) {
    */
   const mine = await Promise.all(
     (await directory.listSites()).map(async (site) => {
-      const principal = await directory.resolvePrincipal(site.scopeId, subject.sub);
-      if (!principal) return null;
+      const bound = await directory.resolvePrincipal(site.scopeId, sub);
+      if (!bound) return null;
       try {
-        const scope = await host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(site.scopeId));
+        const principal = principalId.parse(bound);
+        const scope = await host.getScope(principal, base.tenantId, scopeId.parse(site.scopeId));
         const settings = await directory.readSpaceSettings(site.scopeId);
-        return {...site, scope, name: settings?.name ?? site.name, icon: settings?.icon, color: settings?.color};
+        return {...site, principal, scope, name: settings?.name ?? site.name, icon: settings?.icon, color: settings?.color};
       } catch {
         return null;
       }
@@ -987,55 +1010,6 @@ app.post('/api/claim-owner', async (c) => {
   return c.json({ principal: principalId.parse(principal) });
 });
 
-/**
- * The largest upload this vertical accepts, and why there is a number at all.
- *
- * The attachment surface takes bytes, not a stream — it hashes them and records the
- * length — so an upload is materialized in the isolate before it is stored. A Worker
- * isolate has 128 MB of memory for everything it is doing, and Cloudflare will hand a
- * worker a request body far larger than that (100 MB on the lower plans, more above),
- * so an unbounded read is an out-of-memory waiting for the first person who drags a
- * video in. 25 MB is a document store's honest ceiling; raising it is a decision about
- * isolate memory, not a config tweak.
- */
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-
-/**
- * Read the body, refusing anything past the cap — WITHOUT trusting `content-length`.
- *
- * The header is checked first because it turns the common case into a refusal that
- * costs nothing. It is not sufficient: it can be absent on a chunked upload and it can
- * lie, and a cap that a lying header defeats is not a cap. So the read is bounded too,
- * and stops the moment the accumulated length passes the limit rather than after.
- */
-async function readBounded(req: Request): Promise<Uint8Array> {
-  const declared = Number(req.headers.get('content-length') ?? '');
-  if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) {
-    throw new HTTPException(413, { message: `upload exceeds ${MAX_UPLOAD_BYTES} bytes` });
-  }
-  if (!req.body) return new Uint8Array();
-
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_UPLOAD_BYTES) {
-      await reader.cancel();
-      throw new HTTPException(413, { message: `upload exceeds ${MAX_UPLOAD_BYTES} bytes` });
-    }
-    chunks.push(value);
-  }
-  const body = new Uint8Array(total);
-  let at = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  return body;
-}
 
 /**
  * How much of a document's text the index will hold.
@@ -1253,6 +1227,78 @@ mountFileContent(app, async (c) => {
     ),
     openAttachment: async (id) => (await host.attachments(principal, node.tenantId, node.scopeId)).open(id),
   };
+});
+
+/**
+ * App passwords for WebDAV clients (#299). Managed by the signed-in login, not by a
+ * space: a password belongs to the person and reaches whichever spaces they can enter.
+ * The secret is returned once, at creation, and only its hash is stored.
+ */
+async function sessionSubject(c: Context<{ Bindings: Env }>): Promise<string> {
+  const subject = await (await providerFor(c.env, baseNode(c.req.raw, c.env))).resolve(c.req.raw.headers);
+  if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
+  return subject.sub;
+}
+
+app.get('/api/app-passwords', async (c) => {
+  const sub = await sessionSubject(c);
+  return c.json({ passwords: await identityDo(c.env, baseNode(c.req.raw, c.env)).listAppPasswords(sub) });
+});
+
+app.post('/api/app-passwords', async (c) => {
+  const sub = await sessionSubject(c);
+  const name = appPasswordName((await c.req.json().catch(() => null) as { name?: unknown } | null)?.name);
+  if (!name) throw new HTTPException(400, { message: 'Name this password after the device or app that will use it (at most 60 characters).' });
+  const token = mintAppPassword();
+  const created = await identityDo(c.env, baseNode(c.req.raw, c.env)).createAppPassword(ulid(), sub, name, await sha256Hex(token));
+  if ('error' in created) throw new HTTPException(409, { message: 'This login already has 20 app passwords. Revoke one you no longer use.' });
+  return c.json({ ...created, password: token }, 201);
+});
+
+app.delete('/api/app-passwords/:id', async (c) => {
+  const sub = await sessionSubject(c);
+  const revoked = await identityDo(c.env, baseNode(c.req.raw, c.env)).revokeAppPassword(sub, c.req.param('id'));
+  if (!revoked) throw new HTTPException(404, { message: 'no such app password' });
+  return c.body(null, 204);
+});
+
+/**
+ * `/dav`: the drive over WebDAV. An app password names a login; the spaces it reaches are
+ * worked out per request exactly as the space picker does, and every read and write runs
+ * as that login's principal in the space it touches.
+ */
+mountWebdav(app, async (c, password, username) => {
+  const env = c.env;
+  const base = baseNode(c.req.raw, env);
+  const directory = identityDo(env, base);
+  const sub = await directory.verifyAppPassword(await sha256Hex(password));
+  if (!sub) {
+    // The username decides nothing; it is logged so a failed attempt stays attributable.
+    console.warn('drive.webdav.auth-failed', { username: username.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 128), method: c.req.method });
+    return null;
+  }
+  const host = hostFor(env);
+  const sites = await sitesForSubject(env, base, sub, host);
+  return sites.map((site) => {
+    const tenant = base.tenantId;
+    const scope = scopeId.parse(site.scopeId);
+    const attachments = () => host.attachments(site.principal, tenant, scope);
+    return {
+      slug: site.slug,
+      name: site.name,
+      scope: {
+        invoke: <T,>(operation: string, input: Record<string, unknown>) => site.scope.invoke<T>(operation, input),
+        upload: async (fileId: string, name: string, mime: string, body: Uint8Array) =>
+          (await (await attachments()).upload({ entity: { entityType: 'file', entityId: fileId }, filename: name, contentType: mime, visibility: 'internal', body })).id,
+        open: async (blobRef: string) => (await attachments()).open(blobRef),
+        afterWrite: async (file: { id: string; versionId: string; name: string; mime: string }, bytes: Uint8Array) => {
+          await host.startJobRun(tenant, scope, { moduleId: driveManifest.id, job: BACKFILL_JOB, payload: { tenant, scope } })
+            .catch((error: unknown) => console.error('drive.backfill.queue-failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) }));
+          await defer(c, extractAndRecord(site.scope, file, bytes));
+        },
+      },
+    };
+  });
 });
 
 /**

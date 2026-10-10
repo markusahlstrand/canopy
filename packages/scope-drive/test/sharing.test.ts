@@ -306,10 +306,10 @@ it('reads a folder path by stable id after an ancestor rename', async () => {
 it('reports folder management separately from read and write access', async () => {
   const owner = await as(ada);
   const folder = await owner.invoke<{ id: string }>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Toolbar permission' });
-  expect(await owner.invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: true });
-  expect(await (await as(bjorn)).invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: false });
+  expect(await owner.invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: true, canWrite: true });
+  expect(await (await as(bjorn)).invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: false, canWrite: false });
   await owner.invoke('drive/share-folder', { folderId: folder.id, principal: bjorn, permission: 'drive:write' });
-  expect(await (await as(bjorn)).invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: false });
+  expect(await (await as(bjorn)).invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: false, canWrite: true });
   await owner.invoke('drive/share-folder', { folderId: folder.id, principal: bjorn, permission: 'drive:manage' });
   expect(await (await as(bjorn)).invoke('drive/get-folder', { folderId: folder.id })).toMatchObject({ canManage: true });
 });

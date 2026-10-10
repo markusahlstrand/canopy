@@ -209,9 +209,53 @@ grants produce one row, and renamed folders retain their identity. This view doe
 aggregate other spaces or change the membership model: a member reads the whole space.
 It is unavailable while browsing the offline mirror.
 
+## WebDAV
+
+`/dav/` serves the drive over WebDAV (RFC 4918, class 1 and 2) for Finder, File Explorer
+and other clients. The account menu's **Connect with WebDAV…** shows the server address
+and manages app passwords.
+
+**Sign-in.** A client sends HTTP Basic with an app password; the user name is ignored.
+A signed-in person creates up to 20 passwords, each named after a device or app, and
+sees each secret once (`GET`/`POST /api/app-passwords`, `DELETE /api/app-passwords/:id`).
+Only a SHA-256 hash is stored, in the tenant's identity DO, keyed by the login's OIDC
+subject rather than a principal. Every request resolves that subject to a principal in
+each space through the same `identity` rows as a browser session, so removing a member
+from a space stops their password reaching it, and revoking a password stops it at once.
+
+**Namespace.** It is rebuilt on every request:
+
+- `/dav/` lists one collection per space the login can enter. Two spaces with the same
+  name get their slug appended.
+- `/dav/Shared with me/` lists folders granted directly to the login, in every space.
+  If a space is called "Shared with me", the space keeps the name and this collection
+  becomes "Shared with me (Canopy 1)".
+- Each mount is named `<folder> — <space> [<key>]`. The key comes from the space and
+  folder id, so a mount's URL survives a folder rename, and a withdrawn grant makes the
+  URL answer 404.
+
+**Access.** Every read and write is a scope operation or attachment call made as the
+caller, so viewers can read but not write, and a folder grant allows writing only in
+that folder's subtree.
+
+**Methods and writes.**
+
+| Method | What it does |
+|---|---|
+| `PUT` | Records a new version, up to 25 MB. |
+| `DELETE` | Moves a file to Trash. A trashed file's name stays taken, so reusing it answers 409. |
+| `MOVE` / `COPY` onto an existing file | Writes a new version of that file. |
+| `MKCOL` | Creates a folder. |
+| `PROPFIND` | Lists sizes and dates. |
+| `LOCK` / `UNLOCK` | Return a token without enforcing a lock, because Finder mounts read-write only when it sees lock support. |
+
+These answer 403 with a reason: deleting or copying a folder, and moving between spaces.
+macOS `._*` and `.DS_Store` files are accepted and discarded. Hosted installs route
+`/dav` and `/dav/*` to the worker through `runtimeNeeds.assets.runWorkerFirst`.
+
 ## Not yet wired
 
-WebDAV, connector-backed reads, and any migration of existing canopy spaces. See
+Connector-backed reads and any migration of existing canopy spaces. See
 [`documentation/planning/scope-model-mapping.md`](../../documentation/planning/scope-model-mapping.md) §3.
 
 Text edits use `PUT /api/files/:fileId/content?expectedVersion=:versionId`. The worker requires write access, stored text content, valid UTF-8, and at most 200,000 characters (800,000 bytes). The scope atomically refuses a stale expected version with 409, including writes that race during attachment upload. As with ordinary uploads, an attachment can remain unreferenced if recording its version fails. The editor must preserve the draft on conflict and reload before retrying.

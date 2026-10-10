@@ -794,3 +794,12 @@ export const togglePlugin = (id: string, enabled: boolean) => call<PluginInstall
 export const removePlugin = (id: string) => call<{id: string}>(`/plugins/${encodeURIComponent(id)}`, {method: 'DELETE'});
 
 export const pluginSource = (id:string,revision:string) => call<PluginInstall & {source:string}>(`/plugins/${encodeURIComponent(id)}/source?revision=${encodeURIComponent(revision)}`);
+
+/** A WebDAV app password as listed: the secret itself is only returned once, at creation. */
+export interface AppPassword { id: string; name: string; created_at: number; last_used_at: number | null }
+export const listAppPasswords = () => call<{ passwords: AppPassword[] }>('/app-passwords');
+export const createAppPassword = (name: string) =>
+  call<AppPassword & { password: string }>('/app-passwords', { method: 'POST', body: JSON.stringify({ name }) });
+export const revokeAppPassword = (id: string) => call<void>(`/app-passwords/${encodeURIComponent(id)}`, { method: 'DELETE' });
+/** Where a WebDAV client connects. Every space this login can enter is a folder under it. */
+export const webdavUrl = () => `${window.location.origin}/dav/`;
