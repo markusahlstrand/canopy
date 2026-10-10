@@ -231,3 +231,72 @@ it('re-reads the text behind an open Table tab when the head moves', async () =>
   view.rerender(<PreviewPanel {...props} listed={{ name: state.name, currentVersionId: 'v3' }} />);
   await screen.findByRole('cell', { name: 'text of v3' });
 });
+
+it('keeps the file out of Trash when the row-menu Delete would discard a declined draft', async () => {
+  const { fetch } = server();
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  await openPreview();
+  fireEvent.click(within(panel()).getByRole('button', { name: 'Edit text' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'File text' }), { target: { value: 'my draft' } });
+  fireEvent.contextMenu(screen.getByRole('row', { name: /s12a-note\.txt/ }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
+  expect(confirm).toHaveBeenCalled();
+  expect(screen.getByDisplayValue('my draft')).toBeTruthy();
+  expect(fetch).not.toHaveBeenCalledWith('/api/files/a', expect.objectContaining({ method: 'DELETE' }));
+});
+
+it('drops a listing re-read that lands after editing has begun', async () => {
+  const { state, fetch } = server();
+  let land!: () => void;
+  const base = fetch.getMockImplementation()!;
+  const props = { fileId: 'a', onClose: () => {}, onError: () => {} };
+  const view = render(<PreviewPanel {...props} listed={{ name: state.name, currentVersionId: 'v2' }} />);
+  await screen.findByText('text of v2');
+  fetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === '/api/files/a' && (init?.method ?? 'GET') === 'GET') await new Promise<void>(resolve => { land = resolve; });
+    return base(url, init);
+  });
+  state.head = v3; state.history = [v3, v2];
+  view.rerender(<PreviewPanel {...props} listed={{ name: state.name, currentVersionId: 'v3' }} />);
+  await waitFor(() => expect(land).toBeTypeOf('function'));
+  fireEvent.click(screen.getByRole('button', { name: 'Edit text' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'File text' }), { target: { value: 'my draft' } });
+  await act(async () => { land(); await new Promise(resolve => setTimeout(resolve, 50)); });
+  expect((screen.getByRole('textbox', { name: 'File text' }) as HTMLTextAreaElement).value).toBe('my draft');
+  fireEvent.click(screen.getByRole('button', { name: 'Save text' }));
+  await screen.findByRole('alert');
+  expect(fetch).toHaveBeenCalledWith('/api/files/a/content?expectedVersion=v2', expect.objectContaining({ method: 'PUT' }));
+});
+
+it('follows the head it held still for once the draft clears', async () => {
+  const { state } = server();
+  const Draft = ({ dirty }: { dirty: boolean }) => { useUnsavedDraft(dirty); return null; };
+  const props = { fileId: 'a', onClose: () => {}, onError: () => {} };
+  const view = render(<><Draft dirty /><PreviewPanel {...props} listed={{ name: state.name, currentVersionId: 'v2' }} /></>);
+  await screen.findByText('text of v2');
+  state.head = v3; state.history = [v3, v2];
+  view.rerender(<><Draft dirty /><PreviewPanel {...props} listed={{ name: state.name, currentVersionId: 'v3' }} /></>);
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+  expect(screen.getByText('text of v2')).toBeTruthy();
+  view.rerender(<><Draft dirty={false} /><PreviewPanel {...props} listed={{ name: state.name, currentVersionId: 'v3' }} /></>);
+  await screen.findByText('text of v3');
+});
+
+it('shows a failed Table re-read with a retry instead of an empty table', async () => {
+  const { state, fetch } = server('text/csv');
+  const base = fetch.getMockImplementation()!;
+  let failing = true;
+  fetch.mockImplementation(async (url: string, init?: RequestInit) =>
+    url.endsWith('/versions/v3/content') && failing ? new Response('nope', { status: 500 }) : base(url, init));
+  const props = { fileId: 'a', onClose: () => {}, onError: () => {} };
+  const view = render(<PreviewPanel {...props} listed={{ name: state.name, currentVersionId: 'v2' }} />);
+  await screen.findByText('text of v2');
+  fireEvent.click(screen.getByRole('button', { name: 'Table' }));
+  await screen.findByRole('cell', { name: 'text of v2' });
+  state.head = v3; state.history = [v3, v2];
+  view.rerender(<PreviewPanel {...props} listed={{ name: state.name, currentVersionId: 'v3' }} />);
+  await screen.findByRole('alert');
+  failing = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Retry preview' }));
+  await screen.findByRole('cell', { name: 'text of v3' });
+});

@@ -4,7 +4,7 @@ import { SandboxPlugin } from './sandbox-plugin';
 import { FileMetadata } from './file-metadata';
 import { CsvTable, type CsvDelimiter } from './csv-table';
 import { TextPreview } from './text-preview';
-import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
+import { confirmDiscardDrafts, hasUnsavedDrafts, subscribeDrafts } from './drafts';
 /**
  * File preview (S12a slice 3, #78) — lifted from the portal's `file-preview.tsx` and
  * cut down to what this vertical can actually answer.
@@ -224,34 +224,37 @@ export function PreviewPanel({
    * save over a newer head still meets the 409 rather than silently rebasing the draft.
    * Nor over drafts, a save or a restore in flight (those own `meta` and would lose it).
    * No `onChanged`: the listing is where this came from.
+   *
+   * Those states can also begin while the read is on the wire, so each one re-runs this
+   * effect, and the cleanup drops the answer it would otherwise apply over them. Clearing
+   * a draft re-runs it too: the comparison it skipped is retried, not left for the next
+   * listing change.
    */
+  const drafty = useSyncExternalStore(subscribeDrafts, hasUnsavedDrafts);
   useEffect(() => {
-    if (!listed || !file || file.id !== fileId || editing || savingText || restoring || hasUnsavedDrafts()) return;
+    if (!listed || !file || file.id !== fileId || editing || savingText || restoring || drafty) return;
     const shown = version?.id ?? null;
     if (listed.name === file.name && listed.currentVersionId === shown) return;
     const ticket = meta.take();
+    let superseded = false;
     getFile(fileId)
       .then((got) => {
-        if (!meta.current(ticket)) return;
+        if (superseded || !meta.current(ticket)) return;
         if ((got.version?.id ?? null) !== shown) {
           bodyReads.invalidate(); textReads.invalidate(); versionReads.invalidate();
           setBody(null); setExtracted(undefined); setVersions(null); setHistoryNext(null); setLoadingMore(false);
           if (tabRef.current === 'versions') readVersions();
           if (tabRef.current === 'text') readText();
           // The body effect only reads on the Preview tab; the Table tab needs the new text too.
-          if (tabRef.current === 'table' && got.version) {
-            const bodyTicket = bodyReads.take();
-            fileBodyAsText(fileId, got.version.id)
-              .then((text) => { if (bodyReads.current(bodyTicket)) setBody(text); })
-              .catch(() => {});
-          }
+          if (tabRef.current === 'table' && got.version) readTableBody(got.version.id);
         }
         setFile(got.file); setVersion(got.version); setCanWrite(got.canWrite === true);
       })
       // A failed background re-read leaves the panel as it was; the next listing change retries.
       .catch(() => {});
+    return () => { superseded = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId, listed?.name, listed?.currentVersionId, editing, savingText, restoring]);
+  }, [fileId, listed?.name, listed?.currentVersionId, editing, savingText, restoring, drafty]);
 
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
   const matching = matchingPlugins(plugins, version?.mime ?? '', file?.name ?? '');
@@ -272,6 +275,17 @@ export function PreviewPanel({
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, tab, shape, version?.id]);
+
+  /** The Table tab's text, read again for a new head; a failure is shown with its own retry. */
+  const readTableBody = (versionId: string) => {
+    const ticket = bodyReads.take();
+    setBodyError(null);
+    fileBodyAsText(fileId, versionId)
+      .then((got) => { if (bodyReads.current(ticket)) setBody(got); })
+      .catch((e: unknown) => {
+        if (bodyReads.current(ticket)) setBodyError(e instanceof Error ? e.message : String(e));
+      });
+  };
 
   const readVersions = () => {
     const ticket = versionReads.take();
@@ -445,7 +459,7 @@ export function PreviewPanel({
       {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {metaError ? <PreviewFailure message={metaError} retry={() => setRetry(value => value + 1)} /> : tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : <Empty>Table preview needs the complete text.</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
+        {metaError ? <PreviewFailure message={metaError} retry={() => setRetry(value => value + 1)} /> : tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : bodyError && version ? <PreviewFailure message={bodyError} retry={() => readTableBody(version.id)} /> : body ? <Empty>Table preview needs the complete text.</Empty> : <Empty>Loading…</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
           !file ? <Empty>Loading…</Empty> : !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : selectedPlugin && file && version.source === 'blob' ? <SandboxPlugin key={`${selectedPlugin.id}:${version.id}`} plugin={selectedPlugin} onSave={canWrite && editableTextMime(version.mime, file.name) ? savePluginText : undefined} file={{id: fileId, versionId: version.id, name: file.name, mime: version.mime, size: version.size}} /> : shape === 'image' || shape === 'viewer' ? (

@@ -161,7 +161,8 @@ export class TextEncodingError extends Error {
 
 export async function fileBodyAsText(fileId: string, versionId?: string): Promise<{ text: string; truncated: boolean }> {
   const res = await checkedApiFetch(versionId ? versionContentUrl(fileId, versionId) : contentUrl(fileId), { credentials: 'same-origin' });
-  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  // HTTP/2 carries no status text; an empty message would hide the failure from the preview.
+  if (!res.ok) throw new ApiError(res.status, res.statusText || `Could not read this file (HTTP ${res.status}).`);
 
   // Read as a STREAM and stop at the limit. `res.text()` would download and decode the
   // whole file first and then throw most of it away — so a 2GB log is 2GB through the

@@ -793,12 +793,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       return;
     }
     if (action === 'Delete') {
-      if (!item.isFolder) void act(async () => {
-        await trashFile(item.id);
-        unselect([item.id]);
-        // The preview must not stay open on a file that is now in Trash.
-        if (previewId.current === item.id) setPreviewing(null);
-      });
+      if (item.isFolder) return;
+      // The preview must not stay open on a file that is now in Trash, so it closes first:
+      // a declined discard prompt keeps the file where it is rather than trashing it anyway.
+      if (previewId.current === item.id && !setPreviewing(null)) return;
+      void act(async () => { await trashFile(item.id); unselect([item.id]); });
       return;
     }
     if (action === 'Restore') {
