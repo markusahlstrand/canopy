@@ -4,7 +4,7 @@ import { SandboxPlugin } from './sandbox-plugin';
 import { FileMetadata } from './file-metadata';
 import { CsvTable, type CsvDelimiter } from './csv-table';
 import { TextPreview } from './text-preview';
-import { confirmDiscardDrafts } from './drafts';
+import { confirmDiscardDrafts, hasUnsavedDrafts, subscribeDrafts } from './drafts';
 /**
  * File preview (S12a slice 3, #78) — lifted from the portal's `file-preview.tsx` and
  * cut down to what this vertical can actually answer.
@@ -103,6 +103,7 @@ export function PreviewPanel({
   onChanged,
   onSavingChange,
   navigation,
+  listed,
 }: {
   fileId: string;
   onClose: () => void;
@@ -111,6 +112,8 @@ export function PreviewPanel({
   /** Reports an in-flight text save so the host can refuse to switch files mid-PUT. */
   onSavingChange?: (saving: boolean) => void;
   navigation?: { previous: string | null; next: string | null; moreAvailable?: boolean; onOpen: (id: string) => void };
+  /** The listing's row for this file, when it has one; absence is not removal. */
+  listed?: { name: string; currentVersionId: string | null } | null;
 }) {
   const [retry, setRetry] = useState(0);
   const [savingText, setSavingText] = useState(false);
@@ -134,6 +137,8 @@ export function PreviewPanel({
   const [editing, setEditing] = useState(false);
   const [wrapText, setWrapText] = useTextWrapPreference();
   const [tab, setTab] = useState<Tab>('file');
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
   const [csvSelection, setCsvSelection] = useState<{ fileId: string; delimiter: CsvDelimiter } | null>(null);
   const [file, setFile] = useState<DriveFile | null>(null);
   const [version, setVersion] = useState<FileVersion | null>(null);
@@ -210,6 +215,47 @@ export function PreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, retry]);
 
+  /**
+   * Follow the listing when it disagrees with the panel: a rename, or a head written
+   * elsewhere. The listing only triggers the read — `getFile` is what the panel shows —
+   * so a stale row costs one read, and the effect does not re-run on its own answer.
+   *
+   * Never while editing: the editor's `versionId` must stay the base it loaded, so a
+   * save over a newer head still meets the 409 rather than silently rebasing the draft.
+   * Nor over drafts, a save or a restore in flight (those own `meta` and would lose it).
+   * No `onChanged`: the listing is where this came from.
+   *
+   * Those states can also begin while the read is on the wire, so each one re-runs this
+   * effect, and the cleanup drops the answer it would otherwise apply over them. Clearing
+   * a draft re-runs it too: the comparison it skipped is retried, not left for the next
+   * listing change.
+   */
+  const drafty = useSyncExternalStore(subscribeDrafts, hasUnsavedDrafts);
+  useEffect(() => {
+    if (!listed || !file || file.id !== fileId || editing || savingText || restoring || drafty) return;
+    const shown = version?.id ?? null;
+    if (listed.name === file.name && listed.currentVersionId === shown) return;
+    const ticket = meta.take();
+    let superseded = false;
+    getFile(fileId)
+      .then((got) => {
+        if (superseded || !meta.current(ticket)) return;
+        if ((got.version?.id ?? null) !== shown) {
+          bodyReads.invalidate(); textReads.invalidate(); versionReads.invalidate();
+          setBody(null); setExtracted(undefined); setVersions(null); setHistoryNext(null); setLoadingMore(false);
+          if (tabRef.current === 'versions') readVersions();
+          if (tabRef.current === 'text') readText();
+          // The body effect only reads on the Preview tab; the Table tab needs the new text too.
+          if (tabRef.current === 'table' && got.version) readTableBody(got.version.id);
+        }
+        setFile(got.file); setVersion(got.version); setCanWrite(got.canWrite === true);
+      })
+      // A failed background re-read leaves the panel as it was; the next listing change retries.
+      .catch(() => {});
+    return () => { superseded = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId, listed?.name, listed?.currentVersionId, editing, savingText, restoring, drafty]);
+
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
   const matching = matchingPlugins(plugins, version?.mime ?? '', file?.name ?? '');
   const selectedPlugin = matching.find(row => row.id === pluginId);
@@ -230,32 +276,47 @@ export function PreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, tab, shape, version?.id]);
 
+  /** The Table tab's text, read again for a new head; a failure is shown with its own retry. */
+  const readTableBody = (versionId: string) => {
+    const ticket = bodyReads.take();
+    setBodyError(null);
+    fileBodyAsText(fileId, versionId)
+      .then((got) => { if (bodyReads.current(ticket)) setBody(got); })
+      .catch((e: unknown) => {
+        if (bodyReads.current(ticket)) setBodyError(e instanceof Error ? e.message : String(e));
+      });
+  };
+
+  const readVersions = () => {
+    const ticket = versionReads.take();
+    setVersionsError(null);
+    fileVersionsPage(fileId)
+      .then((got) => {
+        if (versionReads.current(ticket)) { setVersions(got.versions); setHistoryNext(got.next); }
+      })
+      .catch((e: unknown) => {
+        if (versionReads.current(ticket)) setVersionsError(e instanceof Error ? e.message : String(e));
+      });
+  };
+
+  const readText = () => {
+    const ticket = textReads.take();
+    setTextError(null);
+    fileText(fileId)
+      .then((got) => {
+        if (textReads.current(ticket)) setExtracted(got);
+      })
+      .catch((e: unknown) => {
+        if (textReads.current(ticket)) setTextError(e instanceof Error ? e.message : String(e));
+      });
+  };
+
   const loadTab = useCallback(
     (next: Tab) => {
       if (next !== tab && !confirmDiscardDrafts()) return;
       setTab(next);
-      if (next === 'versions' && versions === null) {
-        const ticket = versionReads.take();
-        setVersionsError(null);
-        fileVersionsPage(fileId)
-          .then((got) => {
-            if (versionReads.current(ticket)) { setVersions(got.versions); setHistoryNext(got.next); }
-          })
-          .catch((e: unknown) => {
-            if (versionReads.current(ticket)) setVersionsError(e instanceof Error ? e.message : String(e));
-          });
-      }
-      if (next === 'text' && extracted === undefined) {
-        const ticket = textReads.take();
-        setTextError(null);
-        fileText(fileId)
-          .then((got) => {
-            if (textReads.current(ticket)) setExtracted(got);
-          })
-          .catch((e: unknown) => {
-            if (textReads.current(ticket)) setTextError(e instanceof Error ? e.message : String(e));
-          });
-      }
+      if (next === 'versions' && versions === null) readVersions();
+      if (next === 'text' && extracted === undefined) readText();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fileId, versions, extracted, tab],
@@ -398,7 +459,7 @@ export function PreviewPanel({
       {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {metaError ? <PreviewFailure message={metaError} retry={() => setRetry(value => value + 1)} /> : tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : <Empty>Table preview needs the complete text.</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
+        {metaError ? <PreviewFailure message={metaError} retry={() => setRetry(value => value + 1)} /> : tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : bodyError && version ? <PreviewFailure message={bodyError} retry={() => readTableBody(version.id)} /> : body ? <Empty>Table preview needs the complete text.</Empty> : <Empty>Loading…</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
           !file ? <Empty>Loading…</Empty> : !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : selectedPlugin && file && version.source === 'blob' ? <SandboxPlugin key={`${selectedPlugin.id}:${version.id}`} plugin={selectedPlugin} onSave={canWrite && editableTextMime(version.mime, file.name) ? savePluginText : undefined} file={{id: fileId, versionId: version.id, name: file.name, mime: version.mime, size: version.size}} /> : shape === 'image' || shape === 'viewer' ? (
@@ -417,7 +478,7 @@ export function PreviewPanel({
           ) : shape === 'text' ? (
             body ? (
               editing ? <TextEditor key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} text={body.text} wrap={wrapText}
-                onBusyChange={setSavingText} onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} /> : <>
+                onBusyChange={setSavingText} onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} onConflict={onChanged} /> : <>
                 {canWrite && !body.truncated && version.source === 'blob' ? <Button size="sm" variant="outline" className="mb-3" onClick={() => setEditing(true)}>Edit text</Button> : null}
                 {!body.truncated && (version.mime.split(';')[0]?.trim().toLowerCase() === 'application/json' || version.mime.split(';')[0]?.trim().toLowerCase().endsWith('+json'))
                   ? <JsonPreview key={`${fileId}:${version.id}`} text={body.text} wrap={wrapText} onWrapChange={setWrapText} />
