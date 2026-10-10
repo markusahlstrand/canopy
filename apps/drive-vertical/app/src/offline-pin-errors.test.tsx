@@ -11,6 +11,7 @@ const refresh = vi.hoisted(() => ({
 }));
 const pinA: FolderPin = { principal: '01ADA', space: 'family', folderId: 'root', name: 'Family', status: 'syncing', updatedAt: 1 };
 const pinB: FolderPin = { ...pinA, folderId: 'docs', name: 'Docs', status: 'ready' };
+let rootPin = pinA;
 vi.mock('./live-updates', () => ({ watchDriveChanges: () => () => {} }));
 vi.mock('./offline-folder-sync', () => ({
   refreshOfflinePins: vi.fn(async (_principal: string, _space: string, _source: unknown, onUpdated: typeof refresh.onUpdated, shouldRun: typeof refresh.shouldRun) => {
@@ -20,12 +21,12 @@ vi.mock('./offline-folder-sync', () => ({
 }));
 vi.mock('./offline-content', async importOriginal => ({
   ...await importOriginal<typeof import('./offline-content')>(),
-  listOfflinePins: vi.fn(async () => [pinA, pinB]),
+  listOfflinePins: vi.fn(async () => [rootPin, pinB]),
 }));
 // The first render loads the drive's lazy modules; keep a cold transform from timing out.
 vi.setConfig({ testTimeout: 20_000 });
 let listingOffline = false;
-afterEach(() => { listingOffline = false; cleanup(); selectSite(null); vi.unstubAllGlobals(); vi.restoreAllMocks(); refresh.onUpdated = null; refresh.shouldRun = null; });
+afterEach(() => { listingOffline = false; rootPin = pinA; cleanup(); selectSite(null); vi.unstubAllGlobals(); vi.restoreAllMocks(); refresh.onUpdated = null; refresh.shouldRun = null; });
 
 async function renderRootFolder() {
   selectSite('family');
@@ -84,4 +85,24 @@ it('stops a delayed refresh from running after the drive screen unmounts', async
   expect(shouldRun()).toBe(true);
   cleanup();
   expect(shouldRun()).toBe(false);
+});
+
+it('says when the folder on screen is saved for offline reading, and only then', async () => {
+  await renderRootFolder();
+  const ready = () => screen.queryByText(/Saved for offline reading on this device/);
+  expect(ready()).toBeNull();
+  for (const status of ['partial', 'error'] as const) {
+    rootPin = { ...pinA, status };
+    await act(async () => { await refresh.onUpdated!(undefined, rootPin); });
+    await screen.findByRole('button', { name: 'Retry offline download' });
+    expect(ready()).toBeNull();
+  }
+  rootPin = { ...pinA, status: 'ready', updatedAt: Date.now() };
+  await act(async () => { await refresh.onUpdated!(undefined, rootPin); });
+  await screen.findByRole('button', { name: 'Remove offline copy' });
+  expect(ready()?.getAttribute('role')).toBe('status');
+  expect(ready()?.querySelector('time')?.getAttribute('dateTime')).toBe(new Date(rootPin.updatedAt).toISOString());
+  await act(async () => { await refresh.onUpdated!(new Error('Storage full'), rootPin); });
+  expect(screen.getByRole('alert').textContent).toContain('Storage full');
+  expect(ready()).toBeNull();
 });
