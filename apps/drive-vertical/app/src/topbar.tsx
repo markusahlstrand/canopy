@@ -63,6 +63,8 @@ interface TopbarProps {
    */
   onOpenPeople?: () => void;
   onOpenViewers?: () => void;
+  /** Open the WebDAV app-password dialog. Absent while offline. */
+  onOpenAppPasswords?: () => void;
   /** Force a re-fetch of the current view (re-syncs the offline mirror + reloads). */
   onRefresh?: () => void;
   /** True while a background sync is in flight — spins the refresh icon. */
@@ -84,6 +86,7 @@ export function Topbar({
   writeBlocked,
   onOpenPeople,
   onOpenViewers,
+  onOpenAppPasswords,
   onRefresh,
   syncing,
 }: TopbarProps) {
@@ -249,6 +252,7 @@ export function Topbar({
             </DropdownMenuItem>
           )}
           {onOpenViewers ? <DropdownMenuItem onClick={onOpenViewers}>Plugins…</DropdownMenuItem> : null}
+          {onOpenAppPasswords ? <DropdownMenuItem onClick={onOpenAppPasswords}>Connect with WebDAV…</DropdownMenuItem> : null}
           <DropdownMenuItem onClick={onSignOut}>
             <Icon name="log-out" size={15} /> Sign out
           </DropdownMenuItem>

@@ -38,6 +38,7 @@ import { CreateSpaceDialog } from './create-space-dialog';
 import { openSpace, openSpaceFolder, spaceLabel } from './space-navigation';
 import { SpacesDialog } from './spaces-dialog';
 import { PluginManagement } from './plugin-management';
+import { AppPasswordsDialog } from './app-passwords-dialog';
 import { SandboxPlugin } from './sandbox-plugin';
 import { effectivePlugins, pluginManifest, refreshPlugins, useInstalledPlugins } from './installed-plugins';
 import { PeopleDialog } from './people-dialog';
@@ -248,6 +249,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [spacesOpen, setSpacesOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [viewersOpen, setViewersOpen] = useState(false);
+  const [appPasswordsOpen, setAppPasswordsOpen] = useState(false);
   const [activePluginId, setActivePluginId] = useState<string | null>(null);
   const exitPluginApp = useCallback(() => {
     if (activePluginId && !confirmDiscardDrafts()) return false;
@@ -967,6 +969,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onRefresh={() => void refresh(true)}
         syncing={busy}
         onOpenViewers={() => setViewersOpen(true)}
+        onOpenAppPasswords={offline ? undefined : () => setAppPasswordsOpen(true)}
         onOpenPeople={canManagePeople && !offline ? () => setPeopleOpen(true) : undefined}
         offline={offline}
         writeBlocked={linkPending || linkListingUnavailable}
@@ -1234,6 +1237,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={siteList.retry} />
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
       <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
+      <AppPasswordsDialog open={appPasswordsOpen && !offline} onOpenChange={setAppPasswordsOpen} />
       <PluginManagement open={viewersOpen} onOpenChange={setViewersOpen} spaceName={activeSpaceName} onOpenApp={id => { changePreview(null); setActivePluginId(id); }} />
 
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />

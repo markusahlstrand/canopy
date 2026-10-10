@@ -30,6 +30,9 @@ export default defineConfig({
     // this the dev SPA calls its own origin and gets Vite's index.html back for
     // every API request.
     // Keep the browser's Host so OIDC callbacks return to the UI origin.
-    proxy: { '/api': { target: 'http://localhost:8787', changeOrigin: false } },
+    proxy: {
+      '/api': { target: 'http://localhost:8787', changeOrigin: false },
+      '/dav': { target: 'http://localhost:8787', changeOrigin: false },
+    },
   },
 });

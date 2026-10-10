@@ -736,6 +736,54 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
 
   /**
+   * The live file with this name in a folder, and its current version — or null.
+   *
+   * For clients that address files by name rather than id, which is how WebDAV works.
+   * A refused folder read raises like `list-folder`; only "no live file has that name"
+   * answers null. A trashed file still holds its name (`UNIQUE(folder_id, name)`), but it
+   * is not returned: every read except the trash listing treats it as gone.
+   *
+   * No `http` block: the drive's own UI addresses files by id, and the worker's WebDAV
+   * route calls this through the scope stub.
+   */
+  'drive/file-by-name': {
+    summary: 'The live file with this name in a folder, or null',
+    permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({ folderId: z.string(), name: segment }),
+    output: z
+      .object({
+        file: driveEntities.file.fields,
+        version: driveEntities.file_version.fields.nullable(),
+        canWrite: z.boolean(),
+      })
+      .nullable(),
+  },
+
+  /**
+   * A folder's live files with the size and type of their current versions, by name.
+   *
+   * `list-folder` returns file rows only, so a client that must show sizes for a whole
+   * listing (a WebDAV PROPFIND) would otherwise need one `get-file` per file. Keyset
+   * pages on name: `after` is the last name of the previous page. No `http` block, for
+   * the same reason as `file-by-name`.
+   */
+  'drive/list-file-entries': {
+    summary: 'The live files in a folder with their current version size and type',
+    permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({
+      folderId: z.string(),
+      after: z.string().optional(),
+      limit: z.number().int().min(1).max(500).optional(),
+    }),
+    output: z.object({
+      entries: z.array(
+        driveEntities.file.fields.extend({ size: z.number().nullable(), mime: z.string().nullable() }),
+      ),
+      next: z.string().nullable(),
+    }),
+  },
+
+  /**
    * Record what extraction found — including that it found nothing, and why.
    *
    * Written by the host's extraction driver rather than by a person, but an
