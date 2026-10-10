@@ -642,6 +642,57 @@ describe('the moved table brings its own behaviour with it', () => {
     expect(pending.some((p) => p.url.endsWith('/files/01A'))).toBe(true);
   });
 
+  it('keeps the rows still when a click selects, so a double-click opens an unselected folder', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], [file('01A', 'photo.png')]);
+    // jsdom has no layout, so assert the structure instead: everything in flow above the
+    // table is the same nodes before and after a selection, and the bar that grows the
+    // selection's controls keeps one fixed height.
+    const above = () => {
+      const nodes: Element[] = [];
+      for (let node: Element | null = screen.getByRole('grid', { name: 'Files' }); node && node !== document.body; node = node.parentElement) {
+        for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) nodes.push(sibling);
+      }
+      return nodes;
+    };
+    const before = above();
+    const bar = document.querySelector('[data-selection-bar]')!;
+    expect(before).toContain(bar);
+    expect(bar.className).toContain('h-10');
+
+    fireEvent.click(screen.getByText('photo.png'));
+    expect(bar.contains(screen.getByRole('button', { name: 'Clear selection' }))).toBe(true);
+    expect(bar.contains(screen.getByRole('button', { name: 'Move 1 selected file to Trash' }))).toBe(true);
+    expect(bar.contains(screen.getByRole('button', { name: 'Move selected files…' }))).toBe(true);
+    expect(above()).toEqual(before);
+
+    // The hosted repro: click, click, double-click on a folder nobody had selected yet.
+    const folder = screen.getByText('Papers');
+    fireEvent.click(folder);
+    expect(above()).toEqual(before);
+    fireEvent.click(folder);
+    fireEvent.doubleClick(folder);
+    await flush();
+    expect(pending.some((p) => p.url.includes('/folders/01F/'))).toBe(true);
+  });
+
+  it('drops a file trashed from its row menu from the selection', async () => {
+    await renderDrive([], [file('01A', 'a.txt'), file('01B', 'b.txt')]);
+    fireEvent.click(screen.getByText('a.txt'));
+    fireEvent.click(screen.getByText('b.txt'), { metaKey: true });
+    expect(screen.getByRole('region', { name: 'Selection' }).textContent).toContain('2 items selected');
+
+    fireEvent.contextMenu(screen.getByText('a.txt').closest('tr')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    expect(pending.find((p) => p.url.endsWith('/files/01A'))?.method).toBe('DELETE');
+    await answer('/files/01A', { ...file('01A', 'a.txt'), state: 'trashed' });
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', [file('01B', 'b.txt')]);
+
+    const summary = screen.getByRole('region', { name: 'Selection' }).textContent;
+    expect(summary).toContain('1 item selected: 1 file, 0 folders');
+    expect(summary).not.toContain('earlier selection');
+  });
+
   it('switches to the grid and back', async () => {
     await renderDrive([], [file('01A', 'photo.png')]);
     // The grid has no column headers; the list does. That is the cheapest observable
