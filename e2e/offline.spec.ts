@@ -37,6 +37,7 @@ async function mirrorReady(page: Page) {
 async function pin(page: Page) {
   await page.getByRole('button', { name: 'Available offline on this device', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Remove offline copy', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('status').filter({ hasText: 'Saved for offline reading on this device' })).toBeVisible({ timeout: 30_000 });
 }
 
 test('native recursive and paged pins recover partial downloads; offline bytes are read-only and overlapping pins unpin correctly', async ({ page, context }, info) => {
@@ -65,6 +66,7 @@ test('native recursive and paged pins recover partial downloads; offline bytes a
   await page.route(`**/api/files/${failingId}/versions/*/content*`, route => route.abort('failed'), { times: 1 });
   await page.getByRole('button', { name: 'Available offline on this device', exact: true }).click();
   await expect(page.getByText('Some files are saved offline. Retry to complete this folder.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Saved for offline reading on this device', { exact: false })).toBeHidden();
   const partial = await contentState(page);
   expect(partial.pins[0]?.status).toBe('partial');
   expect(partial.versions.length).toBeGreaterThan(0);
@@ -72,6 +74,7 @@ test('native recursive and paged pins recover partial downloads; offline bytes a
   await page.getByRole('button', { name: 'Retry offline download', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Remove offline copy', exact: true })).toBeVisible({ timeout: 30_000 });
   await expect.poll(async () => (await contentState(page)).versions.length).toBe(53);
+  await expect(page.getByRole('status').filter({ hasText: 'Saved for offline reading on this device' })).toBeVisible({ timeout: 30_000 });
   const complete = await contentState(page);
   expect(complete.pins).toHaveLength(1);
   expect(complete.pins[0].status).toBe('ready');
