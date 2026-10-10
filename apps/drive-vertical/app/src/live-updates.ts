@@ -1,3 +1,4 @@
+import { LIVE_CLOSE } from '@substrat-run/contracts/wire-headers';
 import { currentSite } from './api';
 
 const POLL_MS = 60_000;
@@ -55,7 +56,11 @@ export function watchDriveChanges(onChange: () => void, entity?: { entityType: '
               (!entity || (frame.entityType === entity.entityType && frame.entityId === entity.entityId))) changed();
         } catch { /* An unknown frame is not a reason to refresh the drive. */ }
       };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
+        // The server's "poll instead": this person already holds the per-space socket cap
+        // (open in other tabs), or the session that opened the socket ended. Reconnecting
+        // would only be refused again; the minute poll keeps the view current.
+        if (event?.code === LIVE_CLOSE.tooMany || event?.code === LIVE_CLOSE.revoked) return;
         // Brief successful handshakes must not undo the reconnect backoff.
         if (openedAt !== null && Date.now() - openedAt >= STABLE_CONNECTION_MS) retryMs = 1_000;
         retryLater();

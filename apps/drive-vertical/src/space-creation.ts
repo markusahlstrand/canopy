@@ -12,7 +12,8 @@ export function bindSpaceCreator(sql: DirectorySql, scope: string, owner: string
   sql.exec('INSERT OR IGNORE INTO owner_of_record (scope_id, principal) VALUES (?, ?)', scope, owner);
   sql.exec('INSERT OR IGNORE INTO identity (scope_id, sub, principal) VALUES (?, ?, ?)', scope, subject, owner);
   sql.exec('DELETE FROM pending_owner WHERE scope_id = ?', scope);
-  sql.exec('DELETE FROM owner_claim WHERE scope_id = ?', scope);
+  // The seat is taken: retire the claim link so it can no longer be redeemed (#1686).
+  sql.exec('DELETE FROM owner_claim_capability WHERE scope_id = ?', scope);
   sql.exec('INSERT INTO canopy_creator_claims (scope_id) VALUES (?)', scope);
 }
 export function reserveSpaceCreation(sql: DirectorySql, slug: string, subject: string, owner: string, now: number): {owner: string; error?: 'cap' | 'rate' | 'conflict'} {

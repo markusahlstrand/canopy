@@ -280,6 +280,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       over: { entity: 'file', sortable: ['name', 'updated_at'], filterable: ['folder_id', 'state'] },
     },
     http: { method: 'GET', path: '/folders/{folderId}/files' },
+    authored: "The derived list pages every file row in the folder; this one returns live files only, so Trash stays out of the listing.",
   },
 
   'drive/create-folder': {
@@ -404,6 +405,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     input: z.object({ fileId: z.string(), name: segment }),
     output: driveEntities.file.fields,
     http: { method: 'PATCH', path: '/files/{fileId}' },
+    patchException: 'A rename is a single-field command: the new name is the change, so there is no field bag to leave optional.',
     emits: {
       entity: 'file',
       entityIdFrom: 'id',
@@ -430,6 +432,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     input: z.object({ folderId: z.string(), name: segment }),
     output: driveEntities.folder.fields,
     http: { method: 'PATCH', path: '/folders/{folderId}' },
+    patchException: 'A rename is a single-field command: the new name is the change, so there is no field bag to leave optional.',
     emits: {
       entity: 'folder',
       entityIdFrom: 'id',
@@ -645,6 +648,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     }),
     output: fileDetails,
     http: { method: 'PATCH', path: '/files/{fileId}/details' },
+    patchException: 'Description and labels are replaced together under expectedRevision; a partial edit without the revision would bypass the stale-edit check.',
     emits: {
       entity: 'file', entityIdFrom: 'fileId', type: 'drive.file-details-updated', schemaVersion: 1,
       piiClass: 'none', payload: ['fileId', 'revision'],
@@ -657,6 +661,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     input: z.object({ fileId: z.string(), versionId: z.string(), keep: z.boolean() }),
     output: driveEntities.file_version.fields,
     http: { method: 'PATCH', path: '/files/{fileId}/versions/{versionId}' },
+    patchException: 'Toggling keep is a single-field command: the flag is the change.',
     emits: {
       entity: 'file', entityIdFrom: 'file_id', type: 'drive.version-kept', schemaVersion: 1,
       piiClass: 'none', payload: ['id', 'keep'],
@@ -1185,7 +1190,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
   'drive/toggle-plugin': {
     summary: 'Enable or disable an installed plugin', permission: 'drive:read', input: z.object({id: z.string(), enabled: z.boolean()}), output: storedPlugin,
-    emits: {type: 'drive.plugin-saved', entity: 'plugin_install', entityIdFrom: 'id', schemaVersion: 1, piiClass: 'none'}, http: {method: 'PATCH', path: '/plugins/{id}'},
+    emits: {type: 'drive.plugin-saved', entity: 'plugin_install', entityIdFrom: 'id', schemaVersion: 1, piiClass: 'none'}, http: {method: 'PATCH', path: '/plugins/{id}'}, patchException: 'Enabling or disabling is a single-field command: the flag is the change.',
   },
   'drive/remove-plugin': {
     summary: 'Uninstall a plugin', permission: 'drive:read', input: z.object({id: z.string()}), output: z.object({id: z.string()}),

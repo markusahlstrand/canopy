@@ -1,5 +1,5 @@
 import { mountMemberRemoval } from './member-removal-route.js';
-import { claimSafeInvite, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
+import { claimSafeInvite, claimSafeInviteByCapability, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
 import { mountInviteSite } from './invite-site-route.js';
 import { mountSpaceSettings } from './space-settings-routes.js';
 import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
@@ -7,7 +7,7 @@ import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
 import { importGithubPlugin } from './github-plugin-import.js';
 import { importNpmPlugin } from './npm-plugin-import.js';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
-import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
+import { driveAttachmentExtractors } from './attachment-extractors';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -56,8 +56,8 @@ import {
   type ScopeSweeperDo,
 } from '@substrat-run/adapter-cloudflare';
 import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
-import { ulid, kickFlags, readRoutedNode, RouterAssertionError, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
-import { mountLiveReads, mountPlatformSurface } from '@substrat-run/vertical-host';
+import { ulid, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
+import { invocationLog, kickFlags, mountLiveReads, mountPlatformSurface, readRoutedNode, RouterAssertionError } from '@substrat-run/vertical-host';
 import {
   AuthConfigError,
   IdentityDO as PlatformIdentityDO,
@@ -78,6 +78,7 @@ import {
  * wanting only an `AuthProvider` does not resolve a peer it never uses.
  */
 import { mountInviteRoutes } from '@substrat-run/vertical-auth/invite-routes';
+import { mountOwnerClaim } from '@substrat-run/vertical-auth/owner-claim-routes';
 import { mountApi } from '@canopy/scope-drive/routes';
 import { placesFetch } from './places-fetch.js';
 import { readBounded } from './upload-limit';
@@ -110,6 +111,10 @@ export class IdentityDO extends PlatformIdentityDO {
   }
   override async claimInvite(scope: string, subject: string, hash: string): Promise<string | null> {
     return this.ctx.storage.transactionSync(()=>claimSafeInvite(this.ctx.storage.sql,scope,subject,hash));
+  }
+  /** The capability-era accept gets the same protection as the legacy one: never rebind a login. */
+  override async claimInviteByCapability(scope: string, subject: string, capabilityId: string, principal: string): Promise<string | null> {
+    return this.ctx.storage.transactionSync(()=>claimSafeInviteByCapability(this.ctx.storage.sql,scope,subject,capabilityId,principal));
   }
   async readSpaceSettings(scope: string): Promise<SpaceSettings | null> {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS canopy_space_settings (scope_id TEXT PRIMARY KEY, value TEXT NOT NULL)');
@@ -296,7 +301,7 @@ async function nodeFor(req: Request, env: Env): Promise<Node> {
 function hostFor(env: Env): CloudflareScopeHost {
   const host = new CloudflareScopeHost({
     scope: env.SCOPE,
-    attachmentExtractors: defaultAttachmentExtractors(),
+    attachmentExtractors: driveAttachmentExtractors(),
     // The byte side. The vertical never names a bucket: the platform mints one per
     // tenant and attaches it under a derived name, and this resolves that name. The
     // per-SCOPE isolation inside the store is the kernel's key prefix, not ours.
@@ -449,6 +454,13 @@ async function principalFor(env: Env, req: Request): Promise<PrincipalId | null>
 }
 
 const app = new Hono<{ Bindings: Env }>();
+// First, so it wraps every route: one tenant-stamped line per request for the dashboard's
+// logs. A deployed request is already stamped by the platform and this steps aside; under
+// `wrangler dev` it writes the line itself.
+app.use('*', invocationLog<Env>({
+  routerSecret: (env) => env.ROUTER_SECRET,
+  allowUnsigned: (env) => env.ALLOW_DEV_NODE === 'true',
+}));
 app.use('/api/*', async (c, next) => {
   const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|accept-invite|claim-owner|app-passwords)$/.test(c.req.path);
   if (jsonMutation && c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HTTPException(415, {message:'Use application/json for this request.'});
@@ -546,7 +558,7 @@ mountPlatformSurface<Env>(app, {
   // The recovery path once the first-sign-in window has closed. Without it an install
   // whose owner never signed in is unclaimable, and the seat stays empty forever.
   mintOwnerClaim: (env, ref, input) =>
-    mintOwnerClaimLink(identityDo(env, ref), ref.scopeId, input.origin),
+    mintOwnerClaimLink({ directory: identityDo(env, ref), host: hostFor(env) }, ref, input.origin, input.actor),
 });
 
 /**
@@ -614,8 +626,17 @@ mountInviteSite(app, requirePeopleAdmin, async (c) => {
 mountInviteRoutes<Env, Node>(app, {
   nodeFor,
   requireAdmin: async (c) => ({ principal: await requirePeopleAdmin(c) }),
-  canAssign: (env, node, principal, roleKey) =>
-    hostFor(env).canAssign(node.tenantId, node.scopeId, principal, roleKey),
+  // A withdrawal is bounded by the roles the invitee holds now (#1150).
+  revokeScopeRolesBounded: (env, node, caller, principal) =>
+    hostFor(env).revokeScopeRolesBounded(node.tenantId, node.scopeId, caller, principal),
+  // Invite links are single-use `become` capabilities in the scope (#1686).
+  mintBecomeCapabilityBounded: (env, node, caller, input) =>
+    hostFor(env).mintBecomeCapabilityBounded(node.tenantId, node.scopeId, caller, input),
+  revokeBecomeCapability: (env, node, capabilityId, by) =>
+    hostFor(env).revokeBecomeCapability(node.tenantId, node.scopeId, capabilityId, by),
+  becomeLinkStates: (env, node, ids) => hostFor(env).becomeLinkStates(node.tenantId, node.scopeId, ids),
+  exchangeCapability: (env, node, secret) =>
+    hostFor(env).exchangeCapability(node.tenantId, node.scopeId, secret, { mode: 'become' }),
   assignScopeRoleBounded: (env, node, caller, assignee, roleKey) =>
     hostFor(env).assignScopeRoleBounded(node.tenantId, node.scopeId, caller, assignee, roleKey),
   roles: INVITABLE_ROLE_KEYS,
@@ -965,49 +986,21 @@ app.get('/api/me', async (c) => {
 });
 
 /** The claim token rides in the body, so it is never a query string. See the route below. */
-const claimBody = z.object({ token: z.string().min(1) });
 
 /**
  * Redeem an owner-claim link — the only way into an install whose first-sign-in window
- * has closed, and the missing half of a path the platform already builds.
- *
- * `mintOwnerClaim` above hands the platform a link (`/?claim=<token>`), the dashboard
- * shows it with a copy button and tells the installer to open it. Until this route, this
- * vertical never consumed it, so the link was inert and an install whose window closed
- * was unreachable — sign in, resolve to nobody, get the signed-out shell, sign in again.
- *
- * `vertical-auth` ships `claimOwner` on the directory and a mounted route for the INVITE
- * half (`mountInviteRoutes` → `/api/accept-invite`), but no shared route for the owner
- * half, so each vertical hand-rolls this one. Substrat's own demos do exactly that
- * (callout, manyfold, meridian, ticket0 each serve `POST /api/claim-owner`), and this
- * follows the same shape. substrat-run/substrat#1686 plans to move owner claims onto a
- * `become` capability; when it lands, replace this with whatever that exposes.
- *
- * The caller MUST already be signed in. A claim does not authenticate anybody — it binds
- * an already-verified subject to the pending seat, so the token decides *which* signed-in
- * subject is bound, never *that* someone is. This is also why the subject comes from the
- * provider directly and not from `principalFor`: that resolves to nobody for precisely
- * the person who needs to claim, which is the whole situation.
+ * closed before its owner signed in. Since Substrat #1686 the link is a `become`
+ * capability in the scope, and the platform's route does the whole redemption: it refuses
+ * a signed-out caller, checks the secret is the scope's current link before spending its
+ * one use, exchanges it, and binds the signed-in subject. One refusal for every failure.
  */
-app.post('/api/claim-owner', async (c) => {
-  const node = await nodeFor(c.req.raw, c.env);
-  // Same rule as `/api/me`: who you ARE comes from the install, what you may claim is
-  // the selected space's seat.
-  const subject = await (await providerFor(c.env, baseNode(c.req.raw, c.env))).resolve(c.req.raw.headers);
-  if (!subject) throw new HTTPException(401, { message: 'sign in before claiming this space' });
-
-  const { token } = claimBody.parse(await c.req.json());
-  const principal = await identityDo(c.env, node).claimOwner(
-    node.scopeId,
-    subject.sub,
-    await sha256Hex(token),
-  );
-
-  // ONE answer for invalid, expired, already used, and nothing-to-claim. The directory
-  // refuses to distinguish them on purpose, so a probe with a guessed token learns
-  // nothing about whether this scope has a seat standing — and neither does this route.
-  if (!principal) throw new HTTPException(403, { message: 'this claim link is not valid for this space' });
-  return c.json({ principal: principalId.parse(principal) });
+mountOwnerClaim<Env, Node>(app, {
+  nodeFor,
+  // Identity is the install's; the seat is the selected space's — the `/api/me` split.
+  authProvider: (env, req) => providerFor(env, baseNode(req, env)),
+  directory: (env, node) => identityDo(env, node),
+  host: (env) => hostFor(env),
+  noun: 'space',
 });
 
 

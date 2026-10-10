@@ -6,7 +6,7 @@ class Socket {
   static opened: Socket[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code: number }) => void) | null = null;
   close = vi.fn();
   constructor(readonly url: string) { Socket.opened.push(this); }
 }
@@ -117,5 +117,28 @@ it('filters unrelated entity hints while retaining gap polling', () => {
   expect(changed).toHaveBeenCalledOnce();
   vi.advanceTimersByTime(60_000);
   expect(changed).toHaveBeenCalledTimes(2);
+  stop();
+});
+
+it('stops reconnecting when the server says to poll instead, and keeps polling', () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('WebSocket', Socket);
+  for (const code of [4429, 1008]) {
+    Socket.opened = [];
+    const changed = vi.fn();
+    const stop = watchDriveChanges(changed);
+    Socket.opened[0]?.onclose?.({ code });
+    vi.advanceTimersByTime(120_000);
+    expect(Socket.opened).toHaveLength(1);
+    vi.advanceTimersByTime(150);
+    expect(changed).toHaveBeenCalled();
+    stop();
+  }
+  // Any other close still reconnects.
+  Socket.opened = [];
+  const stop = watchDriveChanges(vi.fn());
+  Socket.opened[0]?.onclose?.({ code: 1006 });
+  vi.advanceTimersByTime(1_000);
+  expect(Socket.opened).toHaveLength(2);
   stop();
 });
