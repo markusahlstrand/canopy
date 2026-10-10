@@ -22,16 +22,19 @@ import {
   dataSubjectId,
   PROVISION_SIBLING_KIND,
   provisionSiblingPayload,
-  operationInputsOf,
+  isUndecodablePlatformRequest,
   permissionKey,
   principalId,
   substratError,
   type HandlerInput,
   type HandlerOutput,
   type Page,
+  type PlatformRequest,
+  type PlatformRequestEntry,
 } from '@substrat-run/contracts';
 import {
   assertAllowed,
+  operationsFor,
   ulid,
   type ModuleRegistration,
   type OperationContext,
@@ -172,10 +175,19 @@ async function pluginForMutation(ctx: OperationContext, id: string, mutate = tru
 const capabilityKeys = (caps: {kind:string;hosts?:string[]}[]) => [...new Set(caps.flatMap(cap => cap.kind === 'net:fetch' ? (cap.hosts ?? []).map(host => `net:fetch:${host}`) : [cap.kind]))].sort();
 const pluginWeb = globalThis as unknown as {crypto:{subtle:{digest(algorithm:string,bytes:Uint8Array):Promise<ArrayBuffer>}};TextEncoder:new()=>{encode(source:string):Uint8Array}};
 async function sourceDigest(source:string) {return [...new Uint8Array(await pluginWeb.crypto.subtle.digest('SHA-256',new pluginWeb.TextEncoder().encode(source)))].map(byte=>byte.toString(16).padStart(2,'0')).join('');}
+/**
+ * This caller's space-creation requests. A journal row that no longer decodes is skipped
+ * rather than failing the whole read (Substrat #1637): it cannot be shown or matched.
+ */
+const mySpaceRequests = (ctx: OperationContext): PlatformRequest[] =>
+  ctx.platformRequests({ kind: PROVISION_SIBLING_KIND, limit: 100 })
+    .filter((request: PlatformRequestEntry): request is PlatformRequest => !isUndecodablePlatformRequest(request))
+    .filter(request => request.requestedBy === ctx.principal);
+
 const operations = {
   'drive/request-space': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
-    const previous = ctx.platformRequests({ kind: PROVISION_SIBLING_KIND, limit: 100 }).find(request => request.requestedBy === ctx.principal && provisionSiblingPayload.safeParse(request.payload).data?.slug === input.slug);
+    const previous = mySpaceRequests(ctx).find(request => provisionSiblingPayload.safeParse(request.payload).data?.slug === input.slug);
     if (previous && previous.status !== 'failed') return { id: previous.id, slug: input.slug, name: provisionSiblingPayload.parse(previous.payload).name };
     const payload = provisionSiblingPayload.parse(input);
     const id = ctx.requestPlatform({ kind: PROVISION_SIBLING_KIND, payload });
@@ -183,7 +195,7 @@ const operations = {
   },
   'drive/space-requests': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
-    return { requests: ctx.platformRequests({ kind: PROVISION_SIBLING_KIND, limit: 100 }).filter(request => request.requestedBy === ctx.principal).flatMap(request => {
+    return { requests: mySpaceRequests(ctx).flatMap(request => {
       const payload = provisionSiblingPayload.safeParse(request.payload);
       return payload.success ? [{ id: request.id, slug: payload.data.slug, name: payload.data.name, status: request.status, error: request.lastError, requestedAt: request.requestedAt }] : [];
     }) };
@@ -1468,9 +1480,11 @@ const operations = {
   >;
 };
 
+/** The typed handlers, for tests that bind a wrapped variant through `operationsFor`. */
+export const driveHandlers = operations;
+
 export const driveModule: ModuleRegistration = {
   manifest: driveManifest,
   migrations: driveMigrations,
-  operationInputs: operationInputsOf(driveOperations),
-  operations: operations as ModuleRegistration['operations'],
+  ...operationsFor(driveOperations)(operations),
 };

@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { platformActorId, principalId, scopeId, tenantId } from '@substrat-run/contracts';
-import { ulid, type ScopeHost } from '@substrat-run/kernel';
+import { operationsFor, ulid, type ScopeHost } from '@substrat-run/kernel';
 import { driveModule, driveManifest, DRIVE_PERM, ROOT_FOLDER_ID } from '../src/index.js';
 import { ROLES } from '../src/provision.js';
+import { driveHandlers } from '../src/module.js';
+import { driveOperations } from '../spec/model.js';
 
 let dir: string;
 let host: ScopeHost;
@@ -26,9 +28,9 @@ beforeAll(async () => {
   host = new SqliteScopeHost({ dir });
   // Read-port fixtures: seed a pre-existing thread when this one file is created.
   // The production write operations land in the next slice; this wrapper stays in the test.
-  host.registerModule({ ...driveModule, operations: { ...driveModule.operations,
-    'drive/ensure-file': async (ctx, input: Record<string, unknown>) => {
-      const file = await driveModule.operations!['drive/ensure-file']!(ctx, input as never) as { id: string };
+  host.registerModule({ ...driveModule, ...operationsFor(driveOperations)({ ...driveHandlers,
+    'drive/ensure-file': async (ctx, input) => {
+      const file = await driveHandlers['drive/ensure-file'](ctx, input);
       if (input.name === 'seeded.txt') {
         for (const [author, body, deleted] of [[ada, 'First', null], [bjorn, 'Second', null], [ada, 'Deleted', '2026-01-01']] as const) {
           const id = ulid();
@@ -38,7 +40,7 @@ beforeAll(async () => {
       }
       return file;
     },
-  } });
+  }) });
   await host.admin.createTenant(staff, { id: tenant, slug: `comments-${tenant.slice(-6).toLowerCase()}`, name: 'Comments' });
   await host.admin.grantEntitlement(staff, tenant, driveManifest.entitlementKey as string);
   await host.provisionScope(staff, { tenantId: tenant, scopeId: scope, vertical: 'drive' });
