@@ -239,4 +239,10 @@ ALTER TABLE drive_plugin_installs ADD COLUMN resolved TEXT NOT NULL DEFAULT '';
 ALTER TABLE drive_plugin_installs ADD COLUMN source_sha256 TEXT NOT NULL DEFAULT '';
 ALTER TABLE drive_plugin_installs ADD COLUMN granted_capabilities TEXT NOT NULL DEFAULT '[]';
 UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(manifest_json) THEN COALESCE(json_extract(manifest_json, '$.capabilities'), '[]') ELSE '[]' END;`},
+  /**
+   * #169: content search reads the kernel's attachment text, which already extracts every
+   * upload, so the drive's own copy of the text goes. Dropping the table drops the triggers
+   * that fed its search index; nothing reads that index any more.
+   */
+  {version: '0011', sql: `DROP TABLE IF EXISTS drive_file_text;`},
 ];

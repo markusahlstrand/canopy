@@ -84,8 +84,12 @@ export function humanSize(bytes: number | null | undefined): string {
 export function textStatusLabel(row: FileTextRow | null): string {
   if (!row) return 'Nobody has looked inside this file yet.';
   switch (row.status) {
+    case 'pending':
+      return 'Reading the text inside this file…';
     case 'indexed':
-      return `${row.chars.toLocaleString()} characters, searchable.`;
+      return row.truncated
+        ? `${row.chars.toLocaleString()} characters searchable; the rest of this long file is not.`
+        : `${row.chars.toLocaleString()} characters, searchable.`;
     case 'empty':
       return 'Looked, and found no text — a scan or an image, most likely.';
     case 'unsupported':

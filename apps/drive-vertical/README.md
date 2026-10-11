@@ -106,16 +106,24 @@ serving an empty body that reads as an empty file.
 
 ## Text extraction and backfill
 
-PDF and UTF-8 text uploads extract at most 200,000 characters for content search. The scope stores the
-extractor result as `indexed`, `empty`, `unsupported`, or `failed`, alongside the file
-version and extractor revision. Search ignores text from a superseded version.
+Content search reads the kernel's attachment text (#169). Each upload queues extraction
+inside the same transaction as the upload. The supported types are text, Markdown, CSV,
+HTML, DOCX, XLSX, PPTX and PDF; a generic type is read by its file extension.
 
-The `text-backfill` job scans current blob versions in batches of 20. It picks up
-missing or stale text, retries failed rows on a later run, and revisits unsupported
-rows when the extractor revision changes. The scope sweeper advances durable job
-passes and starts a new pass every 12 hours. Uploads queue a run immediately; the
-job driver coalesces concurrent starts. A space administrator can start one manually
-with `POST /api/maintenance/text-backfill` (response: `runId`, `status`).
+After an upload, a text save or a WebDAV write, the worker runs the scope's due jobs once
+the response has been sent, so new content is searchable within seconds. The sweeper runs
+them every two minutes as a backstop, together with the kernel's one-off backfill for
+attachments that predate extraction. The kernel bounds each extraction in size, time and
+memory and records why a file has no text: `empty` (for example a scan), `unsupported`,
+or `failed`.
+
+`drive/search` ranks content matches by bm25 beside name and metadata matches. It reads the
+kernel's index directly, because the public `ScopeAttachments.search` returns no score and
+no snippet. A match counts only for the file's current version, and every hit is
+permission-checked. The kernel indexes whole words with prefix matching, so `inv` finds
+"invoice", but a fragment from the middle of a word does not match. `GET
+/api/files/:id/text` reports the current version's status, and a space administrator can
+run due extraction now with `POST /api/maintenance/text-backfill`.
 
 ## Viewers
 

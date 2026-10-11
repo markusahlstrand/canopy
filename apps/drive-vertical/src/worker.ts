@@ -7,7 +7,7 @@ import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
 import { importGithubPlugin } from './github-plugin-import.js';
 import { importNpmPlugin } from './npm-plugin-import.js';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
-import { driveAttachmentExtractors } from './attachment-extractors';
+import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -38,8 +38,6 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import {
   blobStoreBindingName,
-  errorCodeOf,
-  platformActorId,
   principalId,
   scopeId,
   tenantId,
@@ -52,11 +50,10 @@ import {
   defineScopeDO,
   defineScopeSweeperDO,
   SCOPE_SWEEPER_NAME,
-  type ScopeSweepHost,
   type ScopeSweeperDo,
 } from '@substrat-run/adapter-cloudflare';
 import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
-import { ulid, type JobPassContext, type ScopeStub } from '@substrat-run/kernel';
+import { ulid, type ScopeStub } from '@substrat-run/kernel';
 import { invocationLog, kickFlags, mountLiveReads, mountPlatformSurface, readRoutedNode, RouterAssertionError } from '@substrat-run/vertical-host';
 import {
   AuthConfigError,
@@ -85,14 +82,10 @@ import { readBounded } from './upload-limit';
 import { appPasswordName, createAppPassword, listAppPasswords, mintAppPassword, revokeAppPassword, verifyAppPassword, type AppPassword } from './app-passwords';
 import { mountWebdav } from './webdav';
 import { mountFileContent, type FileContentRecord } from './file-content.js';
-import { mountTextContent, editableTextMime, type TextContentRecord } from './text-content.js';
+import { mountTextContent, type TextContentRecord } from './text-content.js';
 import { INVITABLE_ROLE_KEYS, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
 import { driveManifest, DRIVE_PERM } from '@canopy/scope-drive';
 
-const EXTRACTOR_REVISION = 'pdf-text-v2';
-const BACKFILL_JOB = 'text-backfill';
-const BACKFILL_BATCH = 20;
-const BACKFILL_ACTOR = platformActorId.parse('01JZ00000000000000000SYS01');
 
 /**
  * The scope-DO class = the app binary: kernel + the drive module, bundled. One
@@ -181,11 +174,6 @@ const sweeperConfig = {
   host: hostFor,
   runJobs: true,
   jobStartIntervalMs: 12 * 60 * 60 * 1000,
-  startJobs: async (host: ScopeSweepHost, tenant: TenantId, scope: ScopeId) => {
-    await (host as CloudflareScopeHost).startJobRun(tenant, scope, {
-      moduleId: driveManifest.id, job: BACKFILL_JOB, payload: { tenant, scope },
-    });
-  },
 } satisfies Parameters<typeof defineScopeSweeperDO<Env>>[0];
 export const SweeperDO = defineScopeSweeperDO<Env>(sweeperConfig);
 
@@ -301,45 +289,14 @@ async function nodeFor(req: Request, env: Env): Promise<Node> {
 function hostFor(env: Env): CloudflareScopeHost {
   const host = new CloudflareScopeHost({
     scope: env.SCOPE,
-    attachmentExtractors: driveAttachmentExtractors(),
+    // Text, HTML, Office and PDF: the kernel's extraction is the drive's content search (#169).
+    attachmentExtractors: defaultAttachmentExtractors(),
     // The byte side. The vertical never names a bucket: the platform mints one per
     // tenant and attaches it under a derived name, and this resolves that name. The
     // per-SCOPE isolation inside the store is the kernel's key prefix, not ours.
     attachmentBuckets: (tid) => env[blobStoreBindingName('BLOBS', tid)] as R2Bucket | undefined,
   });
   for (const m of MODULES) host.registerModule(m);
-  host.registerJob(driveManifest.id, BACKFILL_JOB, async (pass: JobPassContext) => {
-    const { tenant, scope: scopeId } = pass.payload as { tenant: TenantId; scope: ScopeId };
-    const scope = await pass.scope();
-    const page = await scope.invoke<{
-      files: { id: string; versionId: string; name: string; mime: string; blobRef: string }[];
-      next: string | null;
-    }>('drive/list-extraction-candidates', {
-      after: (pass.cursor as string | null) ?? undefined,
-      limit: BACKFILL_BATCH,
-      extractorRevision: EXTRACTOR_REVISION,
-    });
-    if (page.files.length === 0) return { cursor: page.next ?? pass.cursor, done: page.next === null };
-    const attachments = await host.getSystemAttachments(driveManifest.id, tenant, scopeId);
-    for (const file of page.files) {
-      await pass.step(`${file.id}:${file.versionId}`, async () => {
-        const opened = await attachments.open(file.blobRef);
-        if (!opened) {
-          await scope.invoke('drive/record-text', {
-            fileId: file.id, versionId: file.versionId, extractorRevision: EXTRACTOR_REVISION,
-            status: 'failed', detail: 'attachment bytes are missing',
-          }).catch((error: unknown) => {
-            if (errorCodeOf(error) !== 'conflict') throw error;
-          });
-          return true;
-        }
-        await extractAndRecord(scope, { id: file.id, versionId: file.versionId, name: file.name, mime: file.mime }, opened.body);
-        return true;
-      });
-      pass.count('examined');
-    }
-    return { cursor: page.next ?? page.files.at(-1)?.id ?? pass.cursor, done: page.next === null };
-  });
   return host;
 }
 
@@ -494,24 +451,6 @@ mountPlatformSurface<Env>(app, {
   onProvision: async (env, b) => {
     const node = { tenantId: b.tenantId, scopeId: b.scopeId };
     const host = hostFor(env);
-    const switchedOff = (await host.systemGrantsStatusLocal(b.scopeId)).some(
-      (entry) => entry.moduleId === driveManifest.id && entry.schedules === 'off',
-    );
-    if (!switchedOff) {
-      for (const permission of [DRIVE_PERM.read, DRIVE_PERM.write]) {
-        await host.admin.grantToSystem(BACKFILL_ACTOR, {
-          moduleId: driveManifest.id,
-          permission,
-          node,
-          grantedBy: BACKFILL_ACTOR,
-        });
-      }
-      await host.startJobRun(b.tenantId, b.scopeId, {
-        moduleId: driveManifest.id,
-        job: BACKFILL_JOB,
-        payload: { tenant: b.tenantId, scope: b.scopeId },
-      });
-    }
     const directory = identityDo(env, node);
     const creator = await directory.spaceCreator(b.owner);
     if (creator) await directory.bindCreatingOwner(b.scopeId, b.owner, creator);
@@ -1005,95 +944,16 @@ mountOwnerClaim<Env, Node>(app, {
 
 
 /**
- * How much of a document's text the index will hold.
- *
- * There is a number because a 25 MB PDF is a lot of prose, the text lands in the
- * scope's own SQLite, and the FTS index over it is a second copy. 200k characters
- * is roughly a 400-page book — past the point where "find the document" stops
- * being the question and "find the passage" starts, which is the semantic half
- * (#57) and a different index. A document longer than this is still findable by
- * everything in its first 200k characters, and `chars` records what was kept.
+ * Index what was just written now rather than at the next sweep (#169). The kernel queued
+ * the attachment's text extraction inside the upload; running the scope's due jobs reads,
+ * extracts and indexes it, and also advances the one-off backfill of older attachments.
+ * After the response where the runtime allows it, so a large PDF never delays an upload.
  */
-const MAX_INDEXED_CHARS = 200_000;
-
-/**
- * Extract a file's text and record what came of it — INCLUDING nothing.
- *
- * Runs after the upload's response or in a durable backfill pass. Extraction is slow enough to
- * notice on a large PDF and it must never be the reason a file failed to store:
- * the bytes and the version are the upload, and the text is a thing we learn
- * about them afterwards. So every path here ends in a `drive/record-text` call —
- * there is no branch that stays quiet, because "never extracted" is a state the
- * drive already has a meaning for (no row at all) and it must keep meaning that.
- *
- * PDFs only for now, deliberately. `@canopy/docworker` also parses spreadsheets,
- * but a spreadsheet's content is TABLES, and flattening a sheet into a prose blob
- * indexes a shape it does not have. DOCX has no extractor here at all. Both are
- * recorded as `unsupported` with the reason, which is exactly what that status is
- * for — and what makes adding an extractor later a visible change rather than a
- * silent one.
- */
-async function extractAndRecord(
-  stub: ScopeStub,
-  file: { id: string; versionId: string; name: string; mime: string },
-  bytes: Uint8Array,
-): Promise<void> {
-  const record = async (body: Record<string, unknown>) => {
-    try {
-      await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, extractorRevision: EXTRACTOR_REVISION, ...body });
-    } catch (e) {
-      // The file moved on while this was parsing — a newer upload is already
-      // current, and its own extraction owns the text now. Extraction runs off
-      // the request, so a 20 MB PDF uploaded first can still be working when a
-      // 4 KB one lands after it; the slow one finishing last is ORDINARY, not a
-      // failure, and the scope refusing its stale answer is the thing working.
-      if (errorCodeOf(e) === 'conflict') return;
-      throw e;
-    }
-  };
-
-  try {
-    if (editableTextMime(file.mime)) {
-      const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes).slice(0, MAX_INDEXED_CHARS);
-      await record(text.trim() ? { status: 'indexed', text } : { status: 'empty', detail: 'the document has no text' });
-      return;
-    }
-    // Imported HERE, not at the top. `@canopy/docworker/pdf` pulls in pdf.js —
-    // about 570 KB gzipped of the worker's 1.26 MB — and this function runs on
-    // uploads and backfill, never on a read. A static import would instantiate that module graph
-    // in every isolate that serves a folder listing. The bytes are in the bundle
-    // either way; what this saves is the startup cost of evaluating them.
-    const { isPdf, pdfText } = await import('@canopy/docworker/pdf');
-
-    if (!isPdf(file.name, file.mime)) {
-      await record({ status: 'unsupported', detail: `no text extractor for ${file.mime || file.name}` });
-      return;
-    }
-
-    const out = await pdfText(bytes, file.name, file.mime, { limit: MAX_INDEXED_CHARS });
-    // A PDF of scanned pages parses perfectly and yields nothing. That is a fact
-    // about the document, not a failure, and the two must not look alike.
-    if (!out || out.text.trim() === '') {
-      await record({ status: 'empty', detail: 'the document has no text layer' });
-      return;
-    }
-    await record({ status: 'indexed', text: out.text });
-  } catch (e) {
-    // The extractor threw — a malformed file, an unsupported encoding, a bug.
-    // Recorded rather than swallowed: a search that silently never covers one
-    // document is indistinguishable from one that covers it and finds nothing.
-    const detail = e instanceof Error ? e.message : String(e);
-    console.error('drive.extract.failed', { fileId: file.id, detail });
-    await record({ status: 'failed', detail }).catch((inner: unknown) => {
-      // If even the recording fails the scope keeps "never extracted", which is
-      // honest — a backfill sweep is what picks it up, and it is the same state
-      // every file uploaded before this feature is already in.
-      console.error('drive.extract.unrecorded', {
-        fileId: file.id,
-        detail: inner instanceof Error ? inner.message : String(inner),
-      });
-    });
-  }
+async function indexSoon(c: Pick<Context, 'executionCtx'>, host: CloudflareScopeHost, node: Node): Promise<void> {
+  const work = host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
+    console.error('drive.text-index.run-failed', { error: error instanceof Error ? error.message : String(error) });
+  });
+  await defer(c, work);
 }
 
 /**
@@ -1140,31 +1000,12 @@ app.post('/api/folders/:folderId/content', async (c) => {
     { fileId: file.id, location: { source: 'blob', blobRef: attachment.id } },
   );
 
-  // After the response, on the bytes already in this isolate — re-reading them
-  // from the store would be a second full download of something we are holding.
-  // `waitUntil` is what keeps the runtime alive for it without the caller waiting.
-  if (written.current_version_id) {
-    await hostFor(env).startJobRun(node.tenantId, node.scopeId, {
-      moduleId: driveManifest.id,
-      job: BACKFILL_JOB,
-      payload: { tenant: node.tenantId, scope: node.scopeId },
-    }).catch((error: unknown) => {
-      console.error('drive.backfill.queue-failed', {
-        fileId: file.id, error: error instanceof Error ? error.message : String(error),
-      });
-    });
-    const work = extractAndRecord(
-      stub,
-      { id: file.id, versionId: written.current_version_id, name, mime: contentType },
-      body,
-    );
-    await defer(c, work);
-  }
+  if (written.current_version_id) await indexSoon(c, hostFor(env), node);
 
   return c.json(written, 201);
 });
 
-/** An administrator can request a fresh, coalesced pass without waiting for the timer. */
+/** An administrator can run the scope's due text extraction without waiting for the sweep. */
 app.post('/api/maintenance/text-backfill', async (c) => {
   const principal = await principalFor(c.env, c.req.raw);
   if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
@@ -1173,12 +1014,9 @@ app.post('/api/maintenance/text-backfill', async (c) => {
   const stub = await host.getScope(principal, node.tenantId, node.scopeId);
   const access = await stub.invoke<{ canManage: boolean }>('drive/people-access');
   if (!access.canManage) throw new HTTPException(403, { message: 'manage access required' });
-  const run = await host.startJobRun(node.tenantId, node.scopeId, {
-    moduleId: driveManifest.id,
-    job: BACKFILL_JOB,
-    payload: { tenant: node.tenantId, scope: node.scopeId },
-  });
-  return c.json({ runId: run.id, status: run.status }, 202);
+  // The kernel owns extraction and its backfill; this runs whatever is due now.
+  const report = await host.runDueJobs(node.tenantId, node.scopeId);
+  return c.json(report, 202);
 });
 
 /**
@@ -1203,7 +1041,7 @@ mountTextContent(app, async (c) => {
     record: (fileId, blobRef, expectedCurrentVersion) => stub.invoke<{ id: string; current_version_id: string | null }>(
       'drive/record-version', { fileId, expectedCurrentVersion, location: { source: 'blob', blobRef } },
     ),
-    afterWrite: (file, bytes) => extractAndRecord(stub, file, bytes),
+    afterWrite: () => indexSoon(c, host, node),
   };
 });
 
@@ -1284,11 +1122,7 @@ mountWebdav(app, async (c, password, username) => {
         upload: async (fileId: string, name: string, mime: string, body: Uint8Array) =>
           (await (await attachments()).upload({ entity: { entityType: 'file', entityId: fileId }, filename: name, contentType: mime, visibility: 'internal', body })).id,
         open: async (blobRef: string) => (await attachments()).open(blobRef),
-        afterWrite: async (file: { id: string; versionId: string; name: string; mime: string }, bytes: Uint8Array) => {
-          await host.startJobRun(tenant, scope, { moduleId: driveManifest.id, job: BACKFILL_JOB, payload: { tenant, scope } })
-            .catch((error: unknown) => console.error('drive.backfill.queue-failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) }));
-          await defer(c, extractAndRecord(site.scope, file, bytes));
-        },
+        afterWrite: () => indexSoon(c, host, { tenantId: tenant, scopeId: scope }),
       },
     };
   });

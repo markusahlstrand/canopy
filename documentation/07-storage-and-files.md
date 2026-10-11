@@ -16,7 +16,7 @@ The schema can describe an external version by key and etag, but the vertical ha
 
 ## Search and extraction
 
-The kernel indexes declared entity fields: file names and <code>file_text.text</code>. After a PDF upload, the worker attempts extraction and records one of <code>indexed</code>, <code>empty</code>, <code>unsupported</code>, or <code>failed</code> for the current version. No row means extraction has never been attempted. Search returns matching files under the caller's scope permissions.
+The drive indexes file names and descriptive metadata. The kernel extracts the text inside every uploaded version (text, HTML, Office and PDF) into its attachment text index. A file's text status for its current version is <code>pending</code>, <code>indexed</code>, <code>empty</code>, <code>unsupported</code> or <code>failed</code>, and no status means nothing has been queued. Search returns matching files under the caller's scope permissions.
 
 Extraction runs after the upload response. If a file predates it, or that background work is lost, its content stays unindexed until the [durable backfill](https://github.com/markusahlstrand/canopy/issues/66) lands. Semantic search is [separate work](https://github.com/markusahlstrand/canopy/issues/57).
 

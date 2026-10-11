@@ -35,6 +35,8 @@ import {
 import {
   assertAllowed,
   operationsFor,
+  readAttachmentText,
+  searchMatchExpression,
   ulid,
   type ModuleRegistration,
   type OperationContext,
@@ -89,17 +91,24 @@ interface DetailsRow {
   revision: number; updated_at: string; updated_by: string;
 }
 
-interface FileTextRow {
-  id: string;
-  file_id: string;
-  version_id: string;
-  status: string;
-  text: string;
-  chars: number;
-  extracted_at: string;
-  extractor_revision: string;
-  detail: string | null;
-}
+/**
+ * Content search reads the KERNEL's attachment text (#169), because the kernel already
+ * extracts every upload (text, HTML, Office, PDF) and keeps it in this scope's own SQLite.
+ * Its public `ScopeAttachments.search` answers newest-first with no score and no snippet,
+ * and the drive ranks content beside names and metadata, so this reads the same two tables
+ * that search reads (`ATTACHMENT_TEXT_DDL`), read-only, with the kernel's own term grammar.
+ * Only a file's CURRENT version can match: an old version's text is history, not content.
+ * `test/search.test.ts` runs this against the real kernel, so a renamed table fails there.
+ */
+const CONTENT_SEARCH_SQL = `
+  SELECT f.id AS file_id, bm25(_substrat_search__attachments) AS rank
+    FROM _substrat_search__attachments
+    JOIN _substrat_search__attachment_text t ON t.rid = _substrat_search__attachments.rowid
+    JOIN drive_file_versions v ON v.blob_ref = t.attachment_id AND v.source = 'blob'
+    JOIN drive_files f ON f.current_version_id = v.id AND f.state = 'live'
+   WHERE _substrat_search__attachments MATCH ?
+   ORDER BY rank
+   LIMIT ?`;
 
 /**
  * The file row, or a refusal — and a TRASHED file is a refusal.
@@ -138,7 +147,6 @@ interface PersonRow {
 
 const fileRef = (id: string) => ({ entityType: 'file', entityId: id }) as const;
 const versionRef = (id: string) => ({ entityType: 'file_version', entityId: id }) as const;
-const fileTextRef = (id: string) => ({ entityType: 'file_text', entityId: id }) as const;
 
 /** Events that invalidate a mirrored file row. Shares only change write/manage
  * authority, and text extraction is a search concern rather than listing metadata. */
@@ -1038,145 +1046,32 @@ const operations = {
     return { entries, next: rows.length > limit ? entries.at(-1)!.name : null };
   },
 
-  'drive/record-text': async (ctx, input) => {
-    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
-    const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
-    if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
-
-    /**
-     * The text must describe the version the file is AT, or it is not recorded.
-     *
-     * Extraction runs off the request, so two uploads in quick succession race:
-     * a 20 MB PDF uploaded first can still be parsing when a 4 KB one lands
-     * after it, and the slow one finishes last. Without this, the older text
-     * overwrites the newer by `file_id` and both the search index and
-     * `drive/file-text` silently regress to a superseded version — a wrong
-     * answer that looks exactly like a right one.
-     *
-     * `current_version_id` is the comparison rather than "newest id wins",
-     * because the question is which version the file points AT. A rollback to an
-     * earlier version must make that earlier version's text current again, and a
-     * monotonic id comparison would refuse it.
-     *
-     * A CONFLICT rather than a quiet no-op, and rather than a nullable return:
-     * `emits.entityIdFrom` reads a field off this operation's output, so a
-     * nullable output has no fields to resolve and the registry's inference
-     * degrades. It is also the more honest answer — the caller asked to record a
-     * fact about a version this file is not at, and 409 is what that is. The
-     * extraction path treats it as the expected outcome it usually is.
-     *
-     * A file with no current version at all falls here too: there are no bytes
-     * for text to be about.
-     */
-    if (file.current_version_id !== input.versionId) {
-      throw substratError(
-        'conflict',
-        `file ${input.fileId} is at version ${file.current_version_id ?? 'none'}, not ${input.versionId}`,
-      );
-    }
-
-    // Only `indexed` carries text. Taking the caller's word for it would let a
-    // `failed` row sit in the FTS index answering searches, which is the exact
-    // confusion `status` exists to prevent.
-    const text = input.status === 'indexed' ? (input.text ?? '') : '';
-    const existing = ctx.sql.query<FileTextRow>(
-      'SELECT * FROM drive_file_text WHERE file_id = ?',
-      [input.fileId],
-    )[0];
-    if (existing && existing.version_id === input.versionId && existing.status === input.status &&
-        existing.text === text && existing.detail === (input.detail ?? null) &&
-        existing.extractor_revision === input.extractorRevision) return existing;
-
-    const row: FileTextRow = {
-      // The id is STABLE across re-extraction: it is an entity in its own right,
-      // and a grant or a link naming it must not be orphaned by a second run.
-      id: existing?.id ?? ulid(),
-      file_id: input.fileId,
-      version_id: input.versionId,
-      status: input.status,
-      text,
-      chars: text.length,
-      extracted_at: ctx.now(),
-      extractor_revision: input.extractorRevision,
-      detail: input.detail ?? null,
-    };
-
-    if (existing) {
-      ctx.sql.exec(
-        'UPDATE drive_file_text SET version_id = ?, status = ?, text = ?, chars = ?, extracted_at = ?, detail = ?, extractor_revision = ? WHERE file_id = ?',
-        [row.version_id, row.status, row.text, row.chars, row.extracted_at, row.detail, row.extractor_revision, row.file_id],
-      );
-    } else {
-      ctx.sql.exec(
-        'INSERT INTO drive_file_text (id, file_id, version_id, status, text, chars, extracted_at, detail, extractor_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [row.id, row.file_id, row.version_id, row.status, row.text, row.chars, row.extracted_at, row.detail, row.extractor_revision],
-      );
-      // Only on insert: the edge is a fact about this row's identity, and
-      // re-linking an existing one on every re-extraction would be a write with
-      // nothing to say.
-      ctx.link(fileTextRef(row.id), fileRef(row.file_id));
-    }
-
-    ctx.emit({
-      type: 'drive.file-text-recorded',
-      schemaVersion: 1,
-      entity: fileRef(row.file_id),
-      piiClass: 'none',
-      payload: {
-        file_id: row.file_id,
-        version_id: row.version_id,
-        status: row.status,
-        chars: row.chars,
-      },
-    });
-    return row;
-  },
-
   'drive/file-text': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
-    liveFile(ctx, input.fileId);
-    const row = ctx.sql.query<FileTextRow>(
-      'SELECT id, file_id, version_id, status, chars, extracted_at, detail, extractor_revision FROM drive_file_text WHERE file_id = ?',
-      [input.fileId],
-    )[0];
-    // Null is the answer, not the absence of one: it says nobody has looked yet.
-    return row ?? null;
-  },
-
-  'drive/list-extraction-candidates': async (ctx, input) => {
-    assertAllowed(await ctx.check(DRIVE_PERM.read));
-    // A limit on ELIGIBLE rows can still scan the entire scope when few files
-    // need work. Read a fixed window of file ids, then choose at most `limit`
-    // candidates from it. The cursor tracks the last file EXAMINED, even if
-    // none in the window needed extraction.
-    const scanLimit = input.limit * 10;
-    const rows = ctx.sql.query<{
-      id: string; versionId: string | null; name: string; mime: string | null;
-      blobRef: string | null; source: string | null; textId: string | null;
-      textVersionId: string | null; status: string | null; extractorRevision: string | null;
-    }>(
-      `SELECT f.id, v.id AS versionId, f.name, v.mime, v.blob_ref AS blobRef,
-              v.source, t.id AS textId, t.version_id AS textVersionId,
-              t.status, t.extractor_revision AS extractorRevision
-       FROM drive_files f
-       LEFT JOIN drive_file_versions v ON v.id = f.current_version_id AND v.file_id = f.id
-       LEFT JOIN drive_file_text t ON t.file_id = f.id
-       WHERE f.state = 'live' AND f.id > ?
-       ORDER BY f.id LIMIT ?`,
-      [input.after ?? '', scanLimit + 1],
-    );
-    const files: { id: string; versionId: string; name: string; mime: string; blobRef: string }[] = [];
-    let examined = 0;
-    for (const row of rows.slice(0, scanLimit)) {
-      examined += 1;
-      if (row.versionId && row.blobRef && row.mime && row.source === 'blob' &&
-          (!row.textId || row.textVersionId !== row.versionId || row.status === 'failed' ||
-           (row.status === 'unsupported' && row.extractorRevision !== input.extractorRevision))) {
-        files.push({ id: row.id, versionId: row.versionId, name: row.name, mime: row.mime, blobRef: row.blobRef });
-      }
-      if (files.length === input.limit) break;
-    }
-    return { files, next: rows.length > examined ? rows[examined - 1]!.id : null };
+    const file = liveFile(ctx, input.fileId);
+    const version = file.current_version_id
+      ? ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0]
+      : undefined;
+    if (!version?.blob_ref || version.source !== 'blob') return null;
+    // The kernel's own reading of its extraction state, including a run that failed.
+    const state = readAttachmentText(ctx, version.blob_ref);
+    // Null is the answer, not the absence of one: nothing has been queued for this version.
+    if (!state) return null;
+    const chars = state.status === 'indexed'
+      ? (ctx.sql.query<{ chars: number }>(
+          'SELECT length(body) AS chars FROM _substrat_search__attachment_text WHERE attachment_id = ?', [version.blob_ref],
+        )[0]?.chars ?? 0)
+      : 0;
+    return {
+      id: state.attachmentId,
+      file_id: file.id,
+      version_id: version.id,
+      status: state.status,
+      chars,
+      truncated: state.truncated,
+      extracted_at: state.updatedAt,
+      detail: state.detail,
+    };
   },
 
   'drive/share-folder': async (ctx, input) => {
@@ -1406,18 +1301,15 @@ const operations = {
 
     const [byName, byText, byDetails] = await Promise.all([
       !input.via || input.via === 'name' ? ctx.search('file', input.term, { limit: reach }) : [],
-      !input.via || input.via === 'content' ? ctx.search('file_text', input.term, { limit: reach }) : [],
+      !input.via || input.via === 'content'
+        ? ctx.sql.query<{ file_id: string; rank: number }>(CONTENT_SEARCH_SQL, [searchMatchExpression(input.term, 'prefix'), reach])
+        : [],
       !input.via || input.via === 'metadata' ? ctx.search('file_details', input.term, { limit: reach }) : [],
     ]);
 
-    // A file_text hit is an id in ITS table; what the caller wants is the file.
+    // One row per matching file: a file whose current text matched.
     const textFileIds = new Map<string, number>();
-    for (const hit of byText) {
-      const row = ctx.sql.query<FileTextRow>('SELECT file_id FROM drive_file_text WHERE id = ?', [
-        hit.id,
-      ])[0];
-      if (row && !textFileIds.has(row.file_id)) textFileIds.set(row.file_id, hit.rank);
-    }
+    for (const hit of byText) if (!textFileIds.has(hit.file_id)) textFileIds.set(hit.file_id, hit.rank);
 
     // Explicit filters search the requested index directly: a name match does not
     // exclude a file that also matches its contents or metadata.
@@ -1450,11 +1342,14 @@ const operations = {
       if (!file) continue;
       let snippet: string | null = null;
       if (via === 'content') {
-        const text = ctx.sql.query<{ version_id: string; status: string; text: string }>(
-          'SELECT version_id, status, substr(text, 1, ?) AS text FROM drive_file_text WHERE file_id = ?', [SNIPPET_SCAN_LIMIT, fileId],
+        // The text of the version that matched, which is the current one (the query joins on it).
+        const text = ctx.sql.query<{ body: string }>(
+          `SELECT substr(t.body, 1, ?) AS body FROM drive_file_versions v
+             JOIN _substrat_search__attachment_text t ON t.attachment_id = v.blob_ref
+            WHERE v.id = ? AND t.body IS NOT NULL`, [SNIPPET_SCAN_LIMIT, file.current_version_id],
         )[0];
-        if (text?.version_id !== file.current_version_id || text.status !== 'indexed') continue;
-        snippet = searchSnippet(text.text, input.term);
+        if (!text) continue;
+        snippet = searchSnippet(text.body, input.term);
       } else if (via === 'metadata') {
         const details = ctx.sql.query<{ description: string; labels_json: string }>(
           'SELECT description, labels_json FROM drive_file_details WHERE file_id = ?', [fileId],

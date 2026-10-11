@@ -32,24 +32,19 @@ export const driveManifest = moduleManifest.parse({
     },
   }),
   /**
-   * Both halves of "find it": the file's NAME, and what is inside it.
+   * The drive's own search indexes: a file's NAME and its descriptive metadata.
    *
-   * The kernel's index reaches declared FIELDS, never bytes — so the content half
-   * works by an extractor putting the text into a declared field first
-   * (`file_text.text`) and the triggers doing the rest. That indirection IS the
-   * feature: the index stays kernel-owned and trigger-maintained, and the drive
-   * never writes to `_substrat_search_*`.
+   * What is INSIDE a file is the kernel's: every upload's text is extracted into the
+   * kernel's attachment text index, and `drive/search` ranks it beside these (#169).
    *
-   * `substring` on the body, `prefix` on the name. A filename is typed from the
-   * front — people remember what a document is called — but a phrase from inside
-   * a report is remembered from the middle, and a prefix tokenizer would miss it.
-   * It costs a bigger index, which is the honest price of the feature.
+   * `prefix` on the name, `substring` on the metadata. A filename is typed from the front,
+   * because people remember what a document is called; a description or label is
+   * remembered from the middle, and a prefix tokenizer would miss it.
    */
   ...manifestEntities(driveEntities, {
     searchables: [
       { entityType: 'file', fields: ['name'] },
       { entityType: 'file_details', fields: ['description', 'labels_json'], tokenizer: 'substring' },
-      { entityType: 'file_text', fields: ['text'], tokenizer: 'substring' },
     ],
   }),
   /**
