@@ -138,52 +138,6 @@ export const driveEntities = defineEntities({
     parents: ['file'],
   },
 
-  /**
-   * A file's extracted text, and — just as important — the STATE of having tried.
-   *
-   * A separate entity rather than a column on `file` for two reasons. The text is
-   * unbounded and the file row is the hot read, so a `SELECT *` in the folder
-   * listing must not drag a novel through it. And the kernel's FTS index is
-   * maintained by triggers generated over a table's columns (#827), so what is
-   * indexed is exactly this table and nothing on the path of an ordinary read.
-   *
-   * `status` is the half that makes the feature honest. "Indexed and matched
-   * nothing" and "never looked at" are different answers, and a search UI that
-   * conflates them lies to the person reading it:
-   *
-   *   indexed      text was extracted and is in `text`
-   *   empty        the extractor ran and the document genuinely has no text layer
-   *                (a scanned page with no OCR, an empty sheet)
-   *   unsupported  no extractor handles this content type at all
-   *   failed       an extractor ran and threw; `detail` says what
-   *
-   * NO ROW AT ALL is the fifth state and the one that cannot be a column value:
-   * never extracted. Everything uploaded before this landed is in it.
-   *
-   * One row per FILE, not per version: search answers "which file", and keeping
-   * every superseded version's text would grow the index without a reader. The
-   * `version_id` records WHICH version the text came from, so a stale row is
-   * detectable rather than merely old.
-   */
-  file_text: {
-    table: 'drive_file_text',
-    fields: z.object({
-      id: z.string(),
-      file_id: z.string(),
-      version_id: z.string(),
-      status: z.string(),
-      /** Empty for every status but `indexed` — the index has nothing to hold. */
-      text: z.string(),
-      chars: z.number(),
-      extracted_at: z.string(),
-      extractor_revision: z.string(),
-      /** Why, for `failed` and `unsupported`. Null otherwise. */
-      detail: z.string().nullable(),
-    }),
-    key: ['file_id'],
-    parents: ['file'],
-  },
-
   file_comment: {
     table: 'drive_file_comments',
     fields: z.object({
@@ -790,42 +744,6 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
 
   /**
-   * Record what extraction found — including that it found nothing, and why.
-   *
-   * Written by the host's extraction driver rather than by a person, but an
-   * ordinary permission-checked operation all the same: it writes a row in this
-   * scope, so it goes through the same door as every other write. `drive:write`
-   * on the FILE, because that is exactly the authority "supersede this file's
-   * content" already carries, and the text is a fact about the content.
-   *
-   * Idempotent per file: re-extracting replaces the row, so a re-run after a
-   * failure heals rather than accumulating.
-   */
-  'drive/record-text': {
-    summary: 'Record the extracted text of a file, or why there is none',
-    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
-    input: z.object({
-      fileId: z.string(),
-      /** The version the text was read from — a stale row is detectable, not just old. */
-      versionId: z.string(),
-      extractorRevision: z.string().default('pdf-v1'),
-      status: z.enum(['indexed', 'empty', 'unsupported', 'failed']),
-      /** Present for `indexed`; ignored otherwise, because nothing else has text. */
-      text: z.string().optional(),
-      detail: z.string().nullable().optional(),
-    }),
-    output: driveEntities.file_text.fields,
-    emits: {
-      entity: 'file',
-      entityIdFrom: 'file_id',
-      type: 'drive.file-text-recorded',
-      schemaVersion: 1,
-      piiClass: 'none',
-      payload: ['file_id', 'version_id', 'status', 'chars'],
-    },
-  },
-
-  /**
    * What extraction found in a file — or `null`, which is its own answer.
    *
    * This read is what makes the state vocabulary usable rather than merely
@@ -841,26 +759,30 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     summary: 'What extraction found in a file, or null if it was never tried',
     permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
     input: z.object({ fileId: z.string() }),
-    output: driveEntities.file_text.fields.omit({ text: true }).nullable(),
-    http: { method: 'GET', path: '/files/{fileId}/text' },
-  },
-
-  /** Bounded, keyset-paged work for the system extraction job. Each call scans at most 10 × limit file rows. */
-  'drive/list-extraction-candidates': {
-    summary: 'List current blob versions needing text extraction',
-    permission: 'drive:read',
-    input: z.object({ after: z.string().optional(), limit: z.number().int().min(1).max(50), extractorRevision: z.string() }),
+    /**
+     * The kernel's extraction state for the current version (#169). `id` is the
+     * attachment the text belongs to; `pending` means extraction is queued.
+     */
     output: z.object({
-      files: z.array(z.object({ id: z.string(), versionId: z.string(), name: z.string(), mime: z.string(), blobRef: z.string() })),
-      next: z.string().nullable(),
-    }),
+      id: z.string(),
+      file_id: z.string(),
+      version_id: z.string(),
+      status: z.enum(['pending', 'indexed', 'empty', 'unsupported', 'failed']),
+      /** Characters held for search; 0 unless `indexed`. */
+      chars: z.number(),
+      /** The text was cut at the kernel's per-attachment bound. */
+      truncated: z.boolean(),
+      extracted_at: z.string(),
+      detail: z.string().nullable(),
+    }).nullable(),
+    http: { method: 'GET', path: '/files/{fileId}/text' },
   },
 
   /**
    * Find files by NAME or by what is inside them, in one ranked list.
    *
    * Two searchable entities feed this — `file.name` since the drive existed, and
-   * `file_text.text` since extraction — and `SearchHit.rank` exists precisely so
+   * the kernel's attachment text since #169 — and `SearchHit.rank` exists precisely so
    * a caller can merge two entity types into one list. A filename match and a
    * body match are the same question asked by the person typing.
    *
@@ -1000,7 +922,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
    * in the worker — it comes off the session, from the issuer's claims — so the worker is
    * the only caller that can say who somebody is. Exposed as a route, this would let any
    * member write any name and address onto their own row and appear in a share dialog as
-   * somebody else. `drive/record-text` omits its route for a related reason.
+   * somebody else.
    *
    * The identity written is `ctx.principal`, never an input: the fields say what to call
    * the caller, and the context says who the caller is.

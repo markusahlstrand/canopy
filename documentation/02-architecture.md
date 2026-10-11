@@ -33,7 +33,7 @@ A folder listing invokes <code>drive/list-folder</code> and pages scope-local ro
 
 An upload creates or finds the file row, writes bytes through the attachment surface, then records a version naming the attachment. Bytes never pass through <code>invoke</code>. A download resolves the current version through an operation and opens its attachment through the host's permission-gated attachment surface. The browser and API are served from the same origin.
 
-A PDF or UTF-8 text upload can extract text after the response and invoke <code>drive/record-text</code>. The module stores the result beside the file and the kernel indexes declared fields. Search returns name, content, and metadata hits through the kernel checker. A durable job revisits older files and missed extractions.
+Content search uses the kernel's attachment text. Every upload queues extraction for text, Markdown, CSV, HTML, Word, Excel, PowerPoint and PDF files, and the worker runs it right after the response. <code>drive/search</code> ranks those matches beside name and metadata hits, shows snippets, considers only each file's current version, and checks every hit through the kernel checker. The kernel's own backfill job extracts files uploaded before extraction existed.
 
 ## Identity and permissions
 

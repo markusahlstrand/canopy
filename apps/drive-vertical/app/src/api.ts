@@ -572,11 +572,15 @@ export const fileText = (fileId: string) =>
   call<FileTextRow | null>(`/files/${encodeURIComponent(fileId)}/text`);
 
 export interface FileTextRow {
+  /** The attachment whose text this is: the current version's bytes. */
   id: string;
   file_id: string;
   version_id: string;
-  status: 'indexed' | 'empty' | 'unsupported' | 'failed';
+  /** `pending`: queued, and the kernel has not read the file yet. */
+  status: 'pending' | 'indexed' | 'empty' | 'unsupported' | 'failed';
   chars: number;
+  /** The text was cut at the per-file limit; the rest is not searchable. */
+  truncated: boolean;
   extracted_at: string | null;
   detail: string | null;
 }

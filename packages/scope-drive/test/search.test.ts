@@ -19,12 +19,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { platformActorId, principalId, scopeId, tenantId } from '@substrat-run/contracts';
-import { ulid, type ScopeHost } from '@substrat-run/kernel';
+import { ulid } from '@substrat-run/kernel';
+import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
+import { ATTACHMENT_TEXT_FIXTURES } from '@substrat-run/contract-tests';
 import { DRIVE_PERM, ROOT_FOLDER_ID, driveManifest, driveModule } from '../src/index.js';
 import { ROLES } from '../src/provision.js';
 
 let dir: string;
-let host: ScopeHost;
+let host: SqliteScopeHost;
 
 const staff = platformActorId.parse(ulid());
 const tenant = tenantId.parse(ulid());
@@ -58,12 +60,8 @@ interface Hits {
 const as = (who: typeof ada) => host.getScope(who, tenant, scope);
 
 /**
- * A file with bytes behind it — which is what extraction is ever about.
- *
- * `drive/record-text` only accepts text describing the file's CURRENT version, so
- * a test that skipped the version would be recording against nothing and would
- * pass for the wrong reason. `external` rather than `blob`: no attachment store
- * is involved in what these tests assert.
+ * A file with a version but no stored bytes: nothing for extraction to read, which is
+ * what the name and metadata tests want.
  */
 async function fileWithVersion(
   stub: Awaited<ReturnType<typeof as>>,
@@ -78,9 +76,29 @@ async function fileWithVersion(
   return { id: file.id, versionId: written.current_version_id };
 }
 
+/**
+ * Bytes written as a new current version, then the kernel's extraction run, as the
+ * worker does after an upload (#169): content search reads the kernel's attachment text.
+ */
+async function writeVersion(fileId: string, name: string, text: string | Uint8Array, contentType = 'text/plain'): Promise<string> {
+  const attachment = await (await host.attachments(ada, tenant, scope)).upload({
+    entity: { entityType: 'file', entityId: fileId }, filename: name, contentType, visibility: 'internal',
+    body: typeof text === 'string' ? new TextEncoder().encode(text) : text,
+  });
+  const written = await (await as(ada)).invoke<{ current_version_id: string }>('drive/record-version', {
+    fileId, location: { source: 'blob', blobRef: attachment.id },
+  });
+  await host.runDueJobs(tenant, scope);
+  return written.current_version_id;
+}
+async function writeText(folderId: string, name: string, text: string | Uint8Array, contentType?: string): Promise<{ id: string; versionId: string }> {
+  const file = await (await as(ada)).invoke<FileRow>('drive/ensure-file', { folderId, name });
+  return { id: file.id, versionId: await writeVersion(file.id, name, text, contentType) };
+}
+
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'canopy-drive-search-'));
-  host = new SqliteScopeHost({ dir });
+  host = new SqliteScopeHost({ dir, attachmentExtractors: defaultAttachmentExtractors() });
   host.registerModule(driveModule);
 
   await host.admin.createTenant(staff, { id: tenant, slug: 'search', name: 'Search' });
@@ -116,36 +134,16 @@ describe('a file is findable by what is inside it', () => {
     shared = (await stub.invoke<FolderRow>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Shared' })).id;
     secret = (await stub.invoke<FolderRow>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Secret' })).id;
 
-    const q = await fileWithVersion(stub, shared, 'quarterly.pdf');
-    quarterly = q.id;
-    await stub.invoke('drive/record-text', {
-      fileId: quarterly,
-      versionId: q.versionId,
-      status: 'indexed',
-      text: 'Revenue grew by eleven percent across the Nordic region.',
-    });
+    quarterly = (await writeText(shared, 'quarterly.txt', 'Revenue grew by eleven percent across the Nordic region.')).id;
 
     // Same phrase, in a folder Bjorn cannot reach. If a hit leaks, this is what
     // it leaks — the existence of a document, which is the whole of the risk.
-    const hidden = await fileWithVersion(stub, secret, 'board.pdf');
-    await stub.invoke('drive/record-text', {
-      fileId: hidden.id,
-      versionId: hidden.versionId,
-      status: 'indexed',
-      text: 'Revenue grew by eleven percent, and the board was not pleased.',
-    });
+    await writeText(secret, 'board.txt', 'Revenue grew by eleven percent, and the board was not pleased.');
 
-    // Extraction ran and found nothing — a scan with no OCR.
-    const sc = await fileWithVersion(stub, shared, 'scanned.pdf');
-    scanned = sc.id;
-    await stub.invoke('drive/record-text', {
-      fileId: scanned,
-      versionId: sc.versionId,
-      status: 'empty',
-      detail: 'no text layer',
-    });
+    // Extraction ran and found nothing — the shape of a scan with no text layer.
+    scanned = (await writeText(shared, 'scanned.txt', '   \n  ')).id;
 
-    // …and `untouched.pdf` gets NO record-text call at all. That is the fifth state.
+    // …and `untouched.pdf` has no stored version at all, so nothing was ever queued.
     await stub.invoke('drive/ensure-file', { folderId: shared, name: 'untouched.pdf' });
 
     // Cleo holds one folder and no role — the shape a share link or an outside
@@ -177,7 +175,6 @@ describe('a file is findable by what is inside it', () => {
     // Looked at, and there was genuinely nothing there.
     const looked = await stub.invoke<TextRow | null>('drive/file-text', { fileId: scanned });
     expect(looked?.status).toBe('empty');
-    expect(looked?.detail).toBe('no text layer');
     expect(looked?.chars).toBe(0);
 
     // Never looked at. The same "no results" to a naive UI, a different fact.
@@ -219,19 +216,14 @@ describe('a file is findable by what is inside it', () => {
   });
   it('replaces a file\'s text rather than accumulating it', async () => {
     const stub = await as(ada);
-    const written = await stub.invoke<{ current_version_id: string }>('drive/record-version', {
+    // A version with no readable bytes yet: the old text must stop matching at once.
+    await stub.invoke('drive/record-version', {
       fileId: quarterly,
       location: { source: 'external', externalKey: 'q2', mime: 'application/pdf', size: 1 },
     });
-    const v2 = written.current_version_id;
     const whilePending = await stub.invoke<Hits>('drive/search', { term: 'Nordic region' });
     expect(whilePending.hits.map((h) => h.id)).not.toContain(quarterly);
-    await stub.invoke('drive/record-text', {
-      fileId: quarterly,
-      versionId: v2,
-      status: 'indexed',
-      text: 'Revenue fell in the Baltic region.',
-    });
+    const v2 = await writeVersion(quarterly, 'quarterly.txt', 'Revenue fell in the Baltic region.');
 
     const now = await stub.invoke<TextRow & { version_id: string }>('drive/file-text', { fileId: quarterly });
     expect(now.version_id).toBe(v2);
@@ -244,41 +236,24 @@ describe('a file is findable by what is inside it', () => {
     expect(fresh.hits.find((h) => h.id === quarterly)?.via).toBe('content');
   });
 
-  it('refuses text about a version the file has moved off', async () => {
-    // The race the upload path makes real: extraction runs off the request, so a
-    // big file uploaded first can still be parsing when a small one lands after
-    // it. Without the guard the slow, OLDER extraction lands last and silently
-    // replaces the newer text — a wrong answer shaped exactly like a right one.
+  it('never matches an older version, even when its text is extracted after a newer one', async () => {
+    // Extraction runs off the request, so an older upload can finish after a newer one.
+    // Both texts are kept per attachment; search joins on the CURRENT version only.
     const stub = await as(ada);
-    const f = await fileWithVersion(stub, shared, 'raced.pdf');
-    await stub.invoke('drive/record-text', {
-      fileId: f.id,
-      versionId: f.versionId,
-      status: 'indexed',
-      text: 'The second version, which is the one that counts.',
+    const file = await stub.invoke<FileRow>('drive/ensure-file', { folderId: shared, name: 'raced.txt' });
+    const first = await (await host.attachments(ada, tenant, scope)).upload({
+      entity: { entityType: 'file', entityId: file.id }, filename: 'raced.txt', contentType: 'text/plain', visibility: 'internal',
+      body: new TextEncoder().encode('The first version, which arrived late and must not win.'),
     });
+    await stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: first.id } });
+    const current = await writeVersion(file.id, 'raced.txt', 'The second version, which is the one that counts.');
 
-    // A v1 extraction finishing late, after v2 already became current. Refused,
-    // and refused as a CONFLICT — the upload path reads that code and treats it
-    // as the ordinary outcome it is rather than as an extraction failure.
-    await expect(
-      stub.invoke('drive/record-text', {
-        fileId: f.id,
-        versionId: ulid(),
-        status: 'indexed',
-        text: 'The first version, which arrived late and must not win.',
-      }),
-    ).rejects.toThrow();
-
-    const now = await stub.invoke<TextRow & { version_id: string }>('drive/file-text', {
-      fileId: f.id,
-    });
-    expect(now.version_id).toBe(f.versionId);
-
+    const now = await stub.invoke<TextRow & { version_id: string }>('drive/file-text', { fileId: file.id });
+    expect(now.version_id).toBe(current);
     const hits = await stub.invoke<Hits>('drive/search', { term: 'arrived late' });
-    expect(hits.hits.map((h) => h.id)).not.toContain(f.id);
+    expect(hits.hits.map((h) => h.id)).not.toContain(file.id);
     const kept = await stub.invoke<Hits>('drive/search', { term: 'one that counts' });
-    expect(kept.hits.find((h) => h.id === f.id)?.via).toBe('content');
+    expect(kept.hits.find((h) => h.id === file.id)?.via).toBe('content');
   });
 
   /**
@@ -380,8 +355,7 @@ describe('description and label search', () => {
 
   it('deduplicates name/body/metadata hits, excludes trash, and refuses nonmember searches', async () => {
     const writer = await as(ada);
-    const file = await fileWithVersion(writer, ROOT_FOLDER_ID, 'zebracontract.pdf');
-    await writer.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, status: 'indexed', text: 'zebracontract in the document' });
+    const file = await writeText(ROOT_FOLDER_ID, 'zebracontract.txt', 'zebracontract in the document');
     await writer.invoke('drive/update-file-details', { fileId: file.id, description: 'zebracontract description', labels: ['zebracontract'], expectedRevision: 0 });
     const found = await writer.invoke<Hits>('drive/search', { term: 'zebracontract' });
     expect(found.hits.filter(hit => hit.id === file.id)).toHaveLength(1);
@@ -394,9 +368,8 @@ describe('description and label search', () => {
 
 it('returns bounded plain text context for a current authorized extraction', async () => {
   const stub = await as(ada);
-  const file = await fileWithVersion(stub, ROOT_FOLDER_ID, 'snippet.pdf');
   const text = 'x'.repeat(300) + ' Unique context marker <script>plain</script> ' + 'z'.repeat(300);
-  await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, status: 'indexed', text });
+  const file = await writeText(ROOT_FOLDER_ID, 'snippet.txt', text);
   const got = await stub.invoke<Hits>('drive/search', { term: 'context marker' });
   const hit = got.hits.find(hit => hit.id === file.id)!;
   expect(hit.snippet).toContain('context marker');
@@ -406,8 +379,7 @@ it('returns bounded plain text context for a current authorized extraction', asy
 
 it('keeps a content hit beyond the snippet scan window without materializing its context', async () => {
   const stub = await as(ada);
-  const file = await fileWithVersion(stub, ROOT_FOLDER_ID, 'large-extraction.pdf');
-  await stub.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, status: 'indexed', text: 'x'.repeat(SNIPPET_SCAN_LIMIT + 100) + ' farawayneedle' });
+  const file = await writeText(ROOT_FOLDER_ID, 'large-extraction.txt', 'x'.repeat(SNIPPET_SCAN_LIMIT + 100) + ' farawayneedle');
   const got = await stub.invoke<Hits>('drive/search', { term: 'farawayneedle' });
   expect(got.hits.find(hit => hit.id === file.id)).toMatchObject({ via: 'content', snippet: null });
 });
@@ -415,8 +387,7 @@ it('keeps a content hit beyond the snippet scan window without materializing its
 it('searches the selected match field before filling the result limit', async () => {
   const writer = await as(ada);
   for (let i = 0; i < 5; i++) await fileWithVersion(writer, ROOT_FOLDER_ID, `filterprobe-${i}.txt`);
-  const body = await fileWithVersion(writer, ROOT_FOLDER_ID, 'body-only-probe.txt');
-  await writer.invoke('drive/record-text', { fileId: body.id, versionId: body.versionId, status: 'indexed', text: 'filterprobe in the body' });
+  const body = await writeText(ROOT_FOLDER_ID, 'body-only-probe.txt', 'filterprobe in the body');
   const found = await writer.invoke<Hits>('drive/search', { term: 'filterprobe', via: 'content', limit: 1 });
   expect(found.hits.map(hit => hit.id)).toEqual([body.id]); expect(found.hits[0]?.via).toBe('content');
   await expect((await as(cleo)).invoke('drive/search', { term: 'filterprobe', via: 'content' })).rejects.toThrow();
@@ -424,14 +395,35 @@ it('searches the selected match field before filling the result limit', async ()
 
 it('does not starve content matches behind more than the candidate reach of name matches', async () => {
   const writer = await as(ada);
-  for (let i = 0; i < 110; i++) {
-    const file = await fileWithVersion(writer, ROOT_FOLDER_ID, `starve-${i}.txt`);
-    await writer.invoke('drive/record-text', { fileId: file.id, versionId: file.versionId, status: 'indexed', text: 'starve starve starve' });
-  }
-  const body = await fileWithVersion(writer, ROOT_FOLDER_ID, 'quiet-body.txt');
-  await writer.invoke('drive/record-text', { fileId: body.id, versionId: body.versionId, status: 'indexed', text: 'starve' });
+  for (let i = 0; i < 110; i++) await writeText(ROOT_FOLDER_ID, `starve-${i}.txt`, 'starve starve starve');
+  await writeText(ROOT_FOLDER_ID, 'quiet-body.txt', 'starve');
   const found = await writer.invoke<Hits>('drive/search', { term: 'starve', via: 'content', limit: 50 });
   expect(found.hits).toHaveLength(50);
   expect(found.hits.every(hit => hit.via === 'content')).toBe(true);
   expect(found.hits.some(hit => hit.name.startsWith('starve-'))).toBe(true);
+});
+
+describe('content search over the kernel extraction (#169)', () => {
+  const indexed = ATTACHMENT_TEXT_FIXTURES.filter((fixture) => fixture.status === 'indexed' && fixture.finds?.length);
+
+  it('covers Office documents and PDFs, not only plain text', () => {
+    for (const extractor of ['docx', 'xlsx', 'pptx', 'pdf']) expect(indexed.map((fixture) => fixture.extractor)).toContain(extractor);
+  });
+
+  it.each(indexed.map((fixture) => [fixture.name, fixture] as const))('finds %s by its contents, with a snippet', async (_kind, fixture) => {
+    const folder = (await (await as(ada)).invoke<FolderRow>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: `fixture-${fixture.name}` })).id;
+    // The fixture's extension, which is how a file with a generic type is read, behind a
+    // neutral stem, so only the contents can answer.
+    const file = await writeText(folder, `upload-${ulid().slice(-8)}${fixture.filename.slice(fixture.filename.lastIndexOf('.'))}`, fixture.body, fixture.contentType);
+    const phrase = fixture.finds![0]!;
+    const { hits } = await (await as(bjorn)).invoke<Hits>('drive/search', { term: phrase, via: 'content' });
+    const hit = hits.find((h) => h.id === file.id);
+    expect(hit?.via).toBe('content');
+    expect(hit?.snippet?.toLowerCase()).toContain(phrase.split(/\s+/)[0]!.toLowerCase());
+    expect(await (await as(ada)).invoke<TextRow | null>('drive/file-text', { fileId: file.id })).toMatchObject({ status: 'indexed' });
+    if (fixture.hides) {
+      const hidden = await (await as(ada)).invoke<Hits>('drive/search', { term: fixture.hides, via: 'content' });
+      expect(hidden.hits.map((h) => h.id)).not.toContain(file.id);
+    }
+  });
 });

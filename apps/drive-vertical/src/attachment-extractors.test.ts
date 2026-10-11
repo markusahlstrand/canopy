@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 import { assertAttachmentExtractors, chooseAttachmentExtractor, runAttachmentExtractor } from '@substrat-run/kernel';
-import { driveAttachmentExtractors } from './attachment-extractors';
 
 // Exercise the published parsers through Canopy's pinned kernel, not the parser's
 // transitive kernel version. This is the host seam used by attachment jobs.
@@ -12,11 +11,8 @@ describe('published attachment extractors with the drive kernel', () => {
     for (const extension of ['docx', 'xlsx', 'pptx']) {
       expect(chooseAttachmentExtractor(extractors, 'application/octet-stream', `report.${extension}`)?.name).toBe(extension);
     }
-    // 0.2 reads PDFs in the kernel's attachment text too (#1575); the drive leaves PDFs to
-    // its own index, so its set must not include that extractor.
+    // PDF content search is the kernel's extraction since #169.
     expect(chooseAttachmentExtractor(extractors, 'application/pdf', 'report.pdf')?.name).toBe('pdf');
-    expect(chooseAttachmentExtractor(driveAttachmentExtractors(), 'application/pdf', 'report.pdf')).toBeUndefined();
-    expect(chooseAttachmentExtractor(driveAttachmentExtractors(), 'application/octet-stream', 'report.docx')?.name).toBe('docx');
   });
   it.each([
     ['text/plain', 'notes.txt', ' hello   world ', 'hello world', 'text'],
