@@ -11,7 +11,7 @@ vi.mock('@canopy/plugin-sources', () => ({ resolvePlugin: vi.fn(async () => ({
 
 it('resolves an npm tag and returns pinned provenance for review', async () => {
   const result = await importNpmPlugin({ name: '@owner/plugin', version: 'next' }, vi.fn(async () => new Response('export default () => {}')));
-  expect(resolvePlugin).toHaveBeenCalledWith({ type: 'npm', name: '@owner/plugin', version: 'next' }, { fetch: expect.any(Function) });
+  expect(resolvePlugin).toHaveBeenCalledWith({ type: 'npm', name: '@owner/plugin', version: 'next' }, { fetch: expect.any(Function), npmRegistry: undefined });
   expect(result.provenance).toEqual({ kind: 'npm', ref: '@owner/plugin@next', resolved: '2.0.0 sha512-archive' });
   expect(result.source).toContain('export default');
 });

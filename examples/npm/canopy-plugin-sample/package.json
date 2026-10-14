@@ -1,0 +1,20 @@
+{
+  "name": "canopy-plugin-sample",
+  "version": "1.0.0",
+  "description": "Minimal Canopy app plugin distributed as an npm package: the reference for npm imports.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js"],
+  "keywords": ["canopy", "canopy-plugin"],
+  "repository": { "type": "git", "url": "git+https://github.com/markusahlstrand/canopy.git", "directory": "examples/npm/canopy-plugin-sample" },
+  "canopy": {
+    "id": "npm-sample",
+    "name": "npm Sample",
+    "version": "1.0.0",
+    "description": "A tiny full-view app installed from an npm package.",
+    "entry": "index.js",
+    "capabilities": [],
+    "contributes": { "detailView": { "id": "main", "title": "npm Sample" } }
+  }
+}

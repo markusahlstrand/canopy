@@ -23,7 +23,7 @@ describe('npm plugin version resolution', () => {
       expect(resolved.manifest.version).toBe(expected);
       expect('code' in resolved.entry ? resolved.entry.code : undefined).toContain('export default');
       expect(resolved.integrity).toBe('sha512-test');
-      expect(readNpmTarball).toHaveBeenCalledWith(`https://registry.npmjs.org/example/-/example-${expected}.tgz`, 'sha512-test', expect.any(Function));
+      expect(readNpmTarball).toHaveBeenCalledWith(`https://registry.npmjs.org/example/-/example-${expected}.tgz`, 'sha512-test', expect.any(Function), undefined);
       expect(fetcher.mock.calls[0]?.[0]).toBe('https://registry.npmjs.org/@example/plugin');
       expect(fetcher).toHaveBeenCalledWith('https://registry.npmjs.org/@example/plugin', expect.objectContaining({
         headers: expect.objectContaining({Accept: 'application/vnd.npm.install-v1+json'}),
