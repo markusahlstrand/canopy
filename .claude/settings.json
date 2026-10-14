@@ -13,6 +13,9 @@
       "WebSearch",
       "Bash(grep -n \"plugins/:id/test\\\\|connectorSpace\\\\|CONNECTOR_SPACE =\\\\|ensureConnectorSpace\\\\|connectionId\\\\|connector:\\\\${\" apps/api/src/app.ts)"
     ],
-    "additionalDirectories": []
+    "additionalDirectories": [
+      "/tmp",
+      "/private/tmp"
+    ]
   }
 }

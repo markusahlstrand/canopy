@@ -33,8 +33,8 @@ slice** through all three layers, not a single box you drop on one side of a lin
   │  ADAPTER  │ local · r2 ·  │ sql ·         │ libsql-FTS ·     │  swappable
   │           │ github        │ cache-api     │ Vectorize · svc* │  backend
   ├───────────┼───────────────┼───────────────┼──────────────────┤
-  │  PLUGIN   │ drive UI ·    │ (used via the │ search UI ·      │  opinion &
-  │           │ documentation │  kv grant)    │ index:query*     │  presentation
+  │  PLUGIN   │ drive UI ·    │ (used via the │ index:query*     │  opinion &
+  │           │ documentation │  kv grant)    │ (UI is built in) │  presentation
   └───────────┴───────────────┴───────────────┴──────────────────┘
    * planned
 ```
@@ -132,8 +132,11 @@ So it follows the storage pattern exactly:
 - **Feeding it** — trusted, in-process connectors and processors push documents in on change
   (the same place [Document AI](how-plugins-work) already runs). This is the I/O boundary; it
   isn't sandboxed.
-- **Querying it** — plugins request `index:query` and get a scoped `queryIndex()`. A search
-  **UI** (a command palette, a rail panel) is itself a plugin contribution.
+- **Querying it** — plugins request `index:query` and get a scoped `queryIndex()`. The drive's
+  own search **UI** is the exception: the ⌘K palette and the results view are built into the
+  drive, always present, and not removable by disabling plugins. Both go through the same
+  permission-checked search path, so they cannot drift apart. A plugin may add its own search
+  surface through `index:query`, but it does not replace these two.
 
 ```mermaid
 flowchart TD
@@ -159,10 +162,10 @@ and queried through stable contracts, with the backend chosen per deployment.
 > **Status:** the `SearchIndex` interface and a SQLite/D1 **FTS5 adapter** are built — wired into
 > the host per deployment, with a shared contract-test suite the backend passes. The index is fed
 > on every managed-drive change, queried by the host's ACL-scoped `GET /api/search`, and surfaced
-> in a ⌘K command palette. Still pending: feeding it from *connected* spaces via
-> `connector.changes()`, and enforcing the scoped `queryIndex` grant so plugins can query (the
-> palette is host UI today, not yet a plugin contribution). **Vectorize / semantic search** remains
-> a later adapter.
+> in the built-in ⌘K palette and results view (a deliberate product decision, [#22](https://github.com/markusahlstrand/canopy/issues/22),
+> not a gap). Still pending: feeding it from *connected* spaces via `connector.changes()`, and
+> enforcing the scoped `queryIndex` grant so plugins can query. **Vectorize / semantic search**
+> remains a later adapter.
 
 ## Worked example: content types *(mostly buildable today)*
 
