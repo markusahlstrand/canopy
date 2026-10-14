@@ -134,7 +134,9 @@ So it follows the storage pattern exactly:
   isn't sandboxed.
 - **Querying it** — plugins request `index:query` and get a scoped `queryIndex()`. The drive's
   own search **UI** is the exception: the ⌘K palette and the results view are built into the
-  drive, always present, and not removable by disabling plugins. Both go through the same
+  drive and are not plugins, so installing, disabling or removing plugins never removes them
+  (if you disable the plugin you have open, the drive shows a "no longer enabled" notice with a
+  way back, and search stays available). Both go through the same
   permission-checked search path, so they cannot drift apart. A plugin may add its own search
   surface through `index:query`, but it does not replace these two.
 
