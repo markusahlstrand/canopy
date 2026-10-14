@@ -49,6 +49,13 @@ it('rejects a changed archive and a module that still imports dependencies', asy
   await expect(readNpmTarball('https://registry.npmjs.org/sample/-/sample-1.0.0.tgz', valid.integrity, valid.fetcher)).rejects.toThrow('self-contained');
 });
 
+it('accepts tarballs only from the operator-chosen registry origin', async () => {
+  const {integrity, fetcher} = await fixture('export default function render() {}');
+  const registry = 'http://127.0.0.1:8990';
+  await expect(readNpmTarball('http://127.0.0.1:8990/sample/-/sample-1.0.0.tgz', integrity, fetcher, registry)).resolves.toMatchObject({manifest: {id: 'sample'}});
+  await expect(readNpmTarball('https://registry.npmjs.org/sample/-/sample-1.0.0.tgz', integrity, fetcher, registry)).rejects.toThrow('127.0.0.1:8990');
+});
+
 it('rejects non-registry archive URLs before fetching', async () => {
   const fetcher = vi.fn();
   await expect(readNpmTarball('https://example.com/plugin.tgz', 'sha512-test', fetcher)).rejects.toThrow('registry.npmjs.org');

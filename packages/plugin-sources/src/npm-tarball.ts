@@ -54,10 +54,10 @@ function tarFiles(bytes: Uint8Array): Map<string, Uint8Array> {
 }
 
 /** Read only a verified, bounded npm archive and return its self-contained plugin entry. */
-export async function readNpmTarball(url: string, integrity: string, fetcher: typeof fetch): Promise<{ manifest: PluginManifest; source: string }> {
+export async function readNpmTarball(url: string, integrity: string, fetcher: typeof fetch, registry = 'https://registry.npmjs.org'): Promise<{ manifest: PluginManifest; source: string }> {
   const tarball = new URL(url);
-  if (tarball.origin !== 'https://registry.npmjs.org' || tarball.username || tarball.password || tarball.search || tarball.hash) {
-    throw new Error('npm tarball must be hosted by registry.npmjs.org.');
+  if (tarball.origin !== new URL(registry).origin || tarball.username || tarball.password || tarball.search || tarball.hash) {
+    throw new Error(`npm tarball must be hosted by ${new URL(registry).host}.`);
   }
   const expected = /^sha512-([A-Za-z0-9+/]+={0,2})$/.exec(integrity)?.[1];
   if (!expected) throw new Error('npm release has no SHA-512 integrity value.');
