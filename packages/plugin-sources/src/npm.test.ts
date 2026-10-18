@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkUpdate, resolvePlugin } from './index';
 import { readNpmTarball } from './npm-tarball';
 
-vi.mock('./npm-tarball', () => ({ readNpmTarball: vi.fn(async () => ({
+vi.mock('./npm-tarball', async importOriginal => ({ ...await importOriginal<typeof import('./npm-tarball')>(), readNpmTarball: vi.fn(async () => ({
   manifest: { id: 'example', name: 'Example', version: 'ignored' }, source: 'export default () => {}',
 })) }));
 
@@ -68,4 +68,12 @@ it('refuses a disappeared tag instead of replacing its channel with latest', asy
 it('names oversized registry metadata in the error', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', {headers:{'content-length': String(4 * 1024 * 1024 + 1)}})));
   await expect(resolvePlugin({type:'npm',name:'example'})).rejects.toThrow('npm registry metadata exceeds size limit');
+
+});
+
+it('checks updates through the injected fetch and configured registry', async () => {
+  const fetcher = vi.fn(async (_url: string, _options?: RequestInit) => new Response(JSON.stringify({ 'dist-tags': { latest: '2.0.0' }, versions: { '2.0.0': {} } }), { status: 200 }));
+  const update = await checkUpdate({ type: 'npm', name: 'example' }, '1.0.0', { fetch: fetcher as unknown as typeof fetch, npmRegistry: 'https://host.example/npm-proxy/' });
+  expect(update).toEqual({ current: '1.0.0', latest: '2.0.0' });
+  expect(fetcher.mock.calls[0]?.[0]).toBe('https://host.example/npm-proxy/example');
 });

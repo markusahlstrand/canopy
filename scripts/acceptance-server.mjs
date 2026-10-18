@@ -25,14 +25,21 @@ const issuer = serve({ fetch: createDevIssuer({ personas: [...PERSONAS, ...accep
 // successful npm import runs the real tarball/integrity path. Every other package is proxied to
 // registry.npmjs.org with its tarball URL rewritten, keeping the "not a plugin" check on real data.
 const fixtureDir = resolve('examples/npm/canopy-plugin-sample');
-const packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', state], { cwd: fixtureDir, encoding: 'utf8' }))[0];
-const fixtureTarball = await readFile(join(state, packed.filename));
+let packed, fixtureTarball;
+try {
+  packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', state], { cwd: fixtureDir, encoding: 'utf8' }))[0];
+  fixtureTarball = await readFile(join(state, packed.filename));
+} catch (error) {
+  issuer.close();
+  await rm(state, { recursive: true, force: true });
+  throw error;
+}
 const fixturePackage = JSON.parse(await readFile(join(fixtureDir, 'package.json'), 'utf8'));
 const registryPort = 8990, registryOrigin = `http://127.0.0.1:${registryPort}`;
 const fixtureName = fixturePackage.name, fixtureFile = `${fixtureName}-${fixturePackage.version}.tgz`;
 const registry = createServer(async (req, res) => {
-  const path = decodeURIComponent((req.url ?? '/').split('?')[0]).slice(1);
   try {
+    const path = decodeURIComponent((req.url ?? '/').split('?')[0]).slice(1);
     if (path === fixtureName) {
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
         name: fixtureName, 'dist-tags': { latest: fixturePackage.version },
@@ -43,14 +50,17 @@ const registry = createServer(async (req, res) => {
       }));
     } else if (path === `${fixtureName}/-/${fixtureFile}`) {
       res.writeHead(200, { 'content-type': 'application/octet-stream' }).end(fixtureTarball);
+    } else if (!/^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/.test(path)) {
+      res.writeHead(404).end('not found');
     } else {
       const upstream = await fetch(`https://registry.npmjs.org/${path}`, { headers: { accept: req.headers.accept ?? '*/*' } });
       const body = Buffer.from(await upstream.arrayBuffer());
       const text = upstream.headers.get('content-type')?.includes('json') ? body.toString().replaceAll('https://registry.npmjs.org', registryOrigin) : undefined;
       res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream' }).end(text ?? body);
     }
-  } catch (error) { res.writeHead(502).end(String(error)); }
+  } catch (error) { res.headersSent || res.writeHead(error instanceof URIError ? 400 : 502); res.end(String(error)); }
 }).listen(registryPort, '127.0.0.1');
+registry.on('error', async error => { console.error(error); issuer.close(); await rm(state, { recursive: true, force: true }); process.exit(1); });
 const config = join(state, 'wrangler.json');
 await writeFile(config, JSON.stringify({
   name: 'canopy-acceptance', main: resolve('apps/drive-vertical/src/worker.ts'),
