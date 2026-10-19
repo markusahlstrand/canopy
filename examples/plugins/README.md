@@ -9,6 +9,8 @@ Reference plugins for Canopy. Each folder is a real, working plugin you can copy
 | [`markdown-editor`](markdown-editor) | viewer + editor | `item:write`, the save handshake, CDN editor with a plain-text fallback. |
 | [`hello`](hello) | server hook | A tiny `enrichItem` hook (manifest + capability shape). |
 
+An npm-distributed plugin (manifest under `package.json#canopy`) lives in [`../npm/canopy-plugin-sample`](../npm/canopy-plugin-sample).
+
 ## Build your own
 
 The fastest path is the `/new-plugin` Claude Code skill — `/new-plugin "render .gpx tracks on a map"`

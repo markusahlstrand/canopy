@@ -1,7 +1,8 @@
 import type { PluginEntry, PluginManifest, PluginSourceRef, ResolvedPlugin } from "@canopy/core";
 import { strFromU8 } from "fflate";
 import { unpackZip } from "./unpack-zip";
-import { readNpmTarball } from "./npm-tarball";
+import { normalizeNpmRegistry, readNpmTarball } from "./npm-tarball";
+export { normalizeNpmRegistry };
 
 // Source paths are literal module identifiers. Do not normalize aliases that
 // could select code outside the manifest's directory or collide with imports.
@@ -87,12 +88,12 @@ interface NpmMeta {
   versions: Record<string, {dist?: {tarball?: string; integrity?: string}}>;
 }
 
-async function npmRegistryVersion(name: string, version?: string, checkingUpdate = false, fetcher: typeof fetch = fetch) {
+async function npmRegistryVersion(name: string, version?: string, checkingUpdate = false, fetcher: typeof fetch = fetch, registry?: string) {
   // Names are URL path data, never query/fragment syntax or traversal segments.
   if (name.length > 214 || !/^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/.test(name)) {
     throw new Error(`Invalid npm package name: ${name}`);
   }
-  const meta = await fetchJson<NpmMeta>(`https://registry.npmjs.org/${name}`, 4 * 1024 * 1024, {
+  const meta = await fetchJson<NpmMeta>(`${normalizeNpmRegistry(registry)}/${name}`, 4 * 1024 * 1024, {
     headers: {Accept: 'application/vnd.npm.install-v1+json'}, label: 'npm registry metadata', fetcher,
   });
   // Exact pins can discover newer latest releases. Tag installs stay on their
@@ -105,15 +106,15 @@ async function npmRegistryVersion(name: string, version?: string, checkingUpdate
   throw new Error(`${name}: npm version or tag "${requested}" is unavailable`);
 }
 
-async function npmResolveVersion(name: string, version?: string, checkingUpdate = false): Promise<string> {
-  return (await npmRegistryVersion(name, version, checkingUpdate)).version;
+async function npmResolveVersion(name: string, version?: string, checkingUpdate = false, opts: ResolveOptions = {}): Promise<string> {
+  return (await npmRegistryVersion(name, version, checkingUpdate, opts.fetch, opts.npmRegistry)).version;
 }
 
 async function resolveNpm(ref: Extract<PluginSourceRef, { type: "npm" }>, opts: ResolveOptions): Promise<ResolvedPlugin> {
-  const {version, details} = await npmRegistryVersion(ref.name, ref.version, false, opts.fetch);
+  const {version, details} = await npmRegistryVersion(ref.name, ref.version, false, opts.fetch, opts.npmRegistry);
   const {tarball, integrity} = details.dist ?? {};
   if (!tarball || !integrity) throw new Error(`${ref.name}@${version} has no verified npm archive.`);
-  const {manifest, source} = await readNpmTarball(tarball, integrity, opts.fetch ?? fetch);
+  const {manifest, source} = await readNpmTarball(tarball, integrity, opts.fetch ?? fetch, opts.npmRegistry);
   return { manifest: {...manifest, version}, entry: {code: source}, version, integrity, source: ref,
     resolvedSource: {...ref, version} };
 }
@@ -188,6 +189,8 @@ export function resolveZipBytes(bytes: Uint8Array, source: PluginSourceRef, opti
 export interface ResolveOptions {
   /** Injectable fetch for npm archive resolution. */
   fetch?: typeof fetch;
+  /** Operator-chosen registry base URL (https, or loopback http); defaults to https://registry.npmjs.org. Tarballs must live under it. */
+  npmRegistry?: string;
   /** Used only for GitHub API lookups, never forwarded to raw URLs. */
   githubToken?: string;
   /** Required for zip refs. Enforce maxBytes while reading (size check or capped stream),
@@ -217,7 +220,7 @@ export async function checkUpdate(
   opts: ResolveOptions = {},
 ): Promise<{ current: string; latest: string } | null> {
   let latest: string;
-  if (ref.type === "npm") latest = await npmResolveVersion(ref.name, ref.version, true);
+  if (ref.type === "npm") latest = await npmResolveVersion(ref.name, ref.version, true, opts);
   else if (ref.type === "github") latest = await githubCommit(ref, opts);
   else return null; // zip: immutable upload, no remote to check
   return latest === installedVersion ? null : { current: installedVersion, latest };

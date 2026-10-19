@@ -6,6 +6,7 @@ import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type S
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
 import { importGithubPlugin } from './github-plugin-import.js';
 import { importNpmPlugin } from './npm-plugin-import.js';
+import { normalizeNpmRegistry } from '@canopy/plugin-sources';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 /**
@@ -197,6 +198,8 @@ export interface Env {
   PLATFORM_SECRET?: string;
   /** Optional token for GitHub commit lookups during public plugin imports. */
   GITHUB_TOKEN?: string;
+  /** Optional npm registry base URL for plugin imports (https, or loopback http for local acceptance). Default: registry.npmjs.org. */
+  NPM_REGISTRY_URL?: string;
   /** The install's issuer. Absent ⇒ nothing authenticates, which is the honest default. */
   OIDC_ISSUER?: string;
   OIDC_CLIENT_ID?: string;
@@ -734,14 +737,20 @@ app.post('/api/plugin-import/github', async (c) => {
   }
   catch (error) { throw new HTTPException(422, {message:error instanceof Error ? error.message : 'Could not import this plugin.'}); }
 });
+function npmRegistryFor(env: Env) {
+  if (!env.NPM_REGISTRY_URL) return undefined;
+  try { return normalizeNpmRegistry(env.NPM_REGISTRY_URL); }
+  catch (error) { throw new HTTPException(500, { message: `NPM_REGISTRY_URL is invalid: ${error instanceof Error ? error.message : 'unusable'}` }); }
+}
 app.post('/api/plugin-import/npm', async (c) => {
   const principal = await principalFor(c.env, c.req.raw);
   if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
   const input = z.object({name:z.string().min(1).max(214),version:z.string().max(100).optional()}).safeParse(await c.req.json());
   if (!input.success) throw new HTTPException(400, { message: 'Enter an npm package and optional version or tag.' });
+  const registry = npmRegistryFor(c.env);
   reservePluginImport(principal);
   try {
-    const result = await importNpmPlugin(input.data, fetch);
+    const result = await importNpmPlugin(input.data, fetch, registry);
     const node = await nodeFor(c.req.raw, c.env);
     const token = c.env.ROUTER_SECRET ? await signPluginImport(c.env.ROUTER_SECRET, {
       principal, scope: node.scopeId, manifest: result.manifest, source: result.source, ...result.provenance,

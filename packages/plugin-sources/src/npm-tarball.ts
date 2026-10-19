@@ -53,11 +53,26 @@ function tarFiles(bytes: Uint8Array): Map<string, Uint8Array> {
   return files;
 }
 
+export const NPM_REGISTRY = 'https://registry.npmjs.org';
+
+/** Validate an operator-chosen registry (https, or http on loopback) and return its base URL without a trailing slash. */
+export function normalizeNpmRegistry(registry: string = NPM_REGISTRY): string {
+  let url: URL;
+  try { url = new URL(registry); } catch { throw new Error('npm registry must be an absolute URL.'); }
+  const loopback = url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
+  if ((url.protocol !== 'https:' && !loopback) || url.username || url.password || url.search || url.hash) {
+    throw new Error('npm registry must be https, or http on loopback, without credentials, query or fragment.');
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
 /** Read only a verified, bounded npm archive and return its self-contained plugin entry. */
-export async function readNpmTarball(url: string, integrity: string, fetcher: typeof fetch): Promise<{ manifest: PluginManifest; source: string }> {
+export async function readNpmTarball(url: string, integrity: string, fetcher: typeof fetch, registry?: string): Promise<{ manifest: PluginManifest; source: string }> {
+  const base = new URL(normalizeNpmRegistry(registry));
   const tarball = new URL(url);
-  if (tarball.origin !== 'https://registry.npmjs.org' || tarball.username || tarball.password || tarball.search || tarball.hash) {
-    throw new Error('npm tarball must be hosted by registry.npmjs.org.');
+  const prefix = base.pathname === '/' ? '/' : `${base.pathname}/`;
+  if (tarball.origin !== base.origin || !tarball.pathname.startsWith(prefix) || tarball.username || tarball.password || tarball.search || tarball.hash) {
+    throw new Error(`npm tarball must be hosted by ${base.host}${base.pathname === '/' ? '' : base.pathname}.`);
   }
   const expected = /^sha512-([A-Za-z0-9+/]+={0,2})$/.exec(integrity)?.[1];
   if (!expected) throw new Error('npm release has no SHA-512 integrity value.');

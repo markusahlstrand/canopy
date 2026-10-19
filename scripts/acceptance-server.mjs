@@ -1,4 +1,7 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,11 +21,51 @@ const acceptancePersonas = ['desktop', 'mobile'].flatMap(viewport => ['viewer', 
   sub: `acceptance|${viewport}|${role}`, name: `${viewport} ${role}`, email: `${viewport}-${role}@canopy.test`,
 })));
 const issuer = serve({ fetch: createDevIssuer({ personas: [...PERSONAS, ...acceptancePersonas] }).fetch, hostname: '127.0.0.1', port: 8989 });
+// Local npm registry: serves the in-repo fixture package, packed by the real `npm pack`, so the
+// successful npm import runs the real tarball/integrity path. Every other package is proxied to
+// registry.npmjs.org with its tarball URL rewritten, keeping the "not a plugin" check on real data.
+const fixtureDir = resolve('examples/npm/canopy-plugin-sample');
+let packed, fixtureTarball;
+try {
+  packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', state], { cwd: fixtureDir, encoding: 'utf8' }))[0];
+  fixtureTarball = await readFile(join(state, packed.filename));
+} catch (error) {
+  issuer.close();
+  await rm(state, { recursive: true, force: true });
+  throw error;
+}
+const fixturePackage = JSON.parse(await readFile(join(fixtureDir, 'package.json'), 'utf8'));
+const registryPort = 8990, registryOrigin = `http://127.0.0.1:${registryPort}`;
+const fixtureName = fixturePackage.name, fixtureFile = `${fixtureName}-${fixturePackage.version}.tgz`;
+const registry = createServer(async (req, res) => {
+  try {
+    const path = decodeURIComponent((req.url ?? '/').split('?')[0]).slice(1);
+    if (path === fixtureName) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+        name: fixtureName, 'dist-tags': { latest: fixturePackage.version },
+        versions: { [fixturePackage.version]: { name: fixtureName, version: fixturePackage.version, dist: {
+          tarball: `${registryOrigin}/${fixtureName}/-/${fixtureFile}`,
+          integrity: `sha512-${createHash('sha512').update(fixtureTarball).digest('base64')}`,
+        } } },
+      }));
+    } else if (path === `${fixtureName}/-/${fixtureFile}`) {
+      res.writeHead(200, { 'content-type': 'application/octet-stream' }).end(fixtureTarball);
+    } else if (!/^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*(?:\/-\/[a-z0-9~][a-z0-9._~-]*\.tgz)?$/.test(path)) {
+      res.writeHead(404).end('not found');
+    } else {
+      const upstream = await fetch(`https://registry.npmjs.org/${path}`, { headers: { accept: req.headers.accept ?? '*/*' } });
+      const body = Buffer.from(await upstream.arrayBuffer());
+      const text = upstream.headers.get('content-type')?.includes('json') ? body.toString().replaceAll('https://registry.npmjs.org', registryOrigin) : undefined;
+      res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream' }).end(text ?? body);
+    }
+  } catch (error) { res.headersSent || res.writeHead(error instanceof URIError ? 400 : 502); res.end(String(error)); }
+}).listen(registryPort, '127.0.0.1');
+registry.on('error', async error => { console.error(error); issuer.close(); await rm(state, { recursive: true, force: true }); process.exit(1); });
 const config = join(state, 'wrangler.json');
 await writeFile(config, JSON.stringify({
   name: 'canopy-acceptance', main: resolve('apps/drive-vertical/src/worker.ts'),
   compatibility_date: '2026-06-01', compatibility_flags: ['nodejs_compat'],
-  vars: { ALLOW_DEV_NODE: 'true', PLATFORM_SECRET: secret, ROUTER_SECRET: randomBytes(32).toString('hex') },
+  vars: { ALLOW_DEV_NODE: 'true', PLATFORM_SECRET: secret, ROUTER_SECRET: randomBytes(32).toString('hex'), NPM_REGISTRY_URL: registryOrigin },
   assets: { directory: resolve('apps/drive-vertical/app/dist'), binding: 'ASSETS', not_found_handling: 'single-page-application', run_worker_first: ['/api/*', '/internal/*', '/dav', '/dav/*'] },
   r2_buckets: [{ binding: `BLOBS__${node.tenantId}`, bucket_name: 'canopy-acceptance' }],
   durable_objects: { bindings: ['SCOPE', 'AUTH', 'SWEEPER'].map((name, i) => ({ name, class_name: ['ScopeDO', 'IdentityDO', 'SweeperDO'][i] })) },
@@ -38,6 +81,7 @@ async function stop(code = 0) {
   stopping = true;
   clearInterval(drain);
   issuer.close();
+  registry.close();
   try { process.kill(-worker.pid, 'SIGTERM'); } catch { /* already stopped */ }
   await new Promise(done => worker.exitCode !== null ? done() : worker.once('exit', done));
   await rm(state, { recursive: true, force: true });

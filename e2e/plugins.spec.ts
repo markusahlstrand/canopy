@@ -129,6 +129,24 @@ test('public GitHub imports pin provenance and malformed ZIP/npm imports keep in
   await expect(plugins.getByRole('button', { name: 'Install plugin', exact: true })).toBeDisabled();
 });
 
+test('an npm package imports with pinned provenance, installs and runs', async ({ page }) => {
+  // Local evidence: the package is the in-repo examples/npm/canopy-plugin-sample, packed by the real
+  // `npm pack` and served by the harness's loopback registry (see scripts/acceptance-server.mjs).
+  await signIn(page);
+  page.on('dialog', dialog => dialog.accept());
+  const plugins = await openPlugins(page);
+  await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
+  await plugins.getByText('Plugin Studio · import or edit source', { exact: true }).click();
+  await plugins.getByRole('textbox', { name: 'npm package', exact: true }).fill('canopy-plugin-sample');
+  await plugins.getByRole('button', { name: 'Review npm plugin', exact: true }).click();
+  await expect(plugins.getByRole('textbox', { name: 'Plugin source', exact: true })).toHaveValue(/npm sample app is running/);
+  await installReviewed(page);
+  const installed = plugins.locator('section').filter({ has: page.getByRole('heading', { name: 'npm Sample', exact: true }) });
+  await expect(installed.getByText(/Source: npm/)).toBeVisible();
+  await installed.getByRole('button', { name: 'Open app', exact: true }).click();
+  await expect(page.frameLocator('iframe[title="npm Sample"]').getByText('npm sample app is running', { exact: true })).toBeVisible();
+});
+
 test('a ZIP editor retries byte failures and native iframe interaction is blocked until its save finishes', async ({ page }, info) => {
   const name = `Acceptance editor ${info.project.name}`;
   const manifest = { id: `acceptance-editor-${info.project.name}`, name, version: '1.0.0', capabilities: [{ kind: 'item:read' }, { kind: 'item:write' }], contributes: { viewers: [{ id: 'text', title: name, match: ['text/*'] }] } };
