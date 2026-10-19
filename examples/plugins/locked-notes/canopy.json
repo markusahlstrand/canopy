@@ -16,6 +16,16 @@
         "match": [".locked"]
       }
     ],
+    "creators": [
+      {
+        "id": "locked",
+        "label": "Locked note",
+        "icon": "key-round",
+        "defaultName": "Untitled",
+        "extension": ".locked",
+        "template": ""
+      }
+    ],
     "store": {
       "category": "Productivity",
       "tagline": "Encrypt text files with a password, unlocked only in your browser."

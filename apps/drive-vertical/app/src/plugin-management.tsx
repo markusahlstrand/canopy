@@ -144,9 +144,16 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
     setStudioOpen(true);
     requestAnimationFrame(() => studioRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
   };
-  /** A card offers an install only once the list is known, so it never hides an existing one. */
+  /**
+   * A card offers an install only once the list is known, so it never hides an existing one.
+   * A space install already reaches you, so it also retires the personal Install.
+   */
   const canInstallCatalog = (id: string, targetSpace: boolean) => pluginsState === 'loaded' && (!targetSpace || canManage) &&
-    !plugins.some(row => row.plugin_id === id && (row.principal === 'space') === targetSpace);
+    !plugins.some(row => row.plugin_id === id && (targetSpace ? row.principal === 'space' : true));
+  const uninstall = (row: PluginInstall) => {
+    const name = pluginManifest(row).name;
+    if (window.confirm(row.principal === 'space' ? `Uninstall ${name} for everyone in ${spaceName ?? 'this space'}?` : `Uninstall ${name} for you?`)) void change(() => removePlugin(row.id));
+  };
   const installCatalog = (entry: (typeof pluginCatalog)[number], targetSpace: boolean) => void change(async () => {
     const parsed = installedPluginManifest.parse(entry.manifest);
     const previous = plugins.find(row => row.plugin_id === parsed.id && (row.principal === 'space') === targetSpace);
@@ -298,6 +305,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
       <div className="flex flex-wrap gap-2">
         {canInstallCatalog(entry.manifest.id, false) ? <Button disabled={busy} onClick={() => setConfirming({ id: entry.manifest.id, space: false })}>Install</Button> : null}
         {canInstallCatalog(entry.manifest.id, true) ? <Button variant="outline" disabled={busy} onClick={() => setConfirming({ id: entry.manifest.id, space: true })}>Install for everyone in {spaceName ?? 'this space'}</Button> : null}
+        {plugins.filter(row => row.plugin_id === entry.manifest.id && (row.principal !== 'space' || canManage)).map(row => <Button key={row.id} variant="outline" disabled={!canChangeInstall} onClick={() => uninstall(row)}>{row.principal === 'space' ? `Uninstall for everyone in ${spaceName ?? 'this space'}` : 'Uninstall'}</Button>)}
         <Button variant="ghost" aria-label={`View ${entry.manifest.name} source`} disabled={busy} onClick={() => reviewCatalog(entry, false)}>View source</Button></div></>}
     </section>)}</div>
     {showImageViewer ? <section aria-label="Image viewer" className="space-y-2 rounded border p-3">

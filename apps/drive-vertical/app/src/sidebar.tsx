@@ -27,6 +27,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   Icon,
   Input,
@@ -89,6 +90,9 @@ interface SidebarProps {
   onNavigate: (id: NavId) => void;
   onNewFolder: () => void;
   onUpload: () => void;
+  /** "New → …" entries contributed by enabled plugins. */
+  creators?: { key: string; label: string; icon?: string }[];
+  onCreate?: (key: string) => void;
   offline?: boolean;
   writeBlocked?: boolean;
   sites: Site[] | null;
@@ -195,7 +199,7 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = false, writeBlocked = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = [], onCreate, offline = false, writeBlocked = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [spaceQuery, setSpaceQuery] = useState('');
   const narrow = mobile ? false : collapsed;
@@ -233,7 +237,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
           )}
         </div>
 
-        {/* New — a folder, or bytes. Both are operations the scope actually has. */}
+        {/* New — a folder, bytes, or a plugin's starter file. */}
         <div className={cn('shrink-0 px-3 pb-2', narrow && 'px-2')}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -254,6 +258,12 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, offline = f
               <DropdownMenuItem onClick={onUpload}>
                 <Icon name="upload" size={15} /> Upload files
               </DropdownMenuItem>
+              {creators.length > 0 && onCreate ? <>
+                <DropdownMenuSeparator />
+                {creators.map(creator => <DropdownMenuItem key={creator.key} onClick={() => onCreate(creator.key)}>
+                  <Icon name={creator.icon ?? 'file'} size={15} /> {creator.label}
+                </DropdownMenuItem>)}
+              </> : null}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

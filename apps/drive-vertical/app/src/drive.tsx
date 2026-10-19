@@ -40,7 +40,7 @@ import { SpacesDialog } from './spaces-dialog';
 import { PluginManagement } from './plugin-management';
 import { AppPasswordsDialog } from './app-passwords-dialog';
 import { SandboxPlugin } from './sandbox-plugin';
-import { effectivePlugins, pluginManifest, refreshPlugins, useInstalledPlugins } from './installed-plugins';
+import { effectivePlugins, pluginCreators, pluginManifest, refreshPlugins, useInstalledPlugins, type PluginCreator } from './installed-plugins';
 import { PeopleDialog } from './people-dialog';
 import { CurrentFolderShare } from './current-folder-share';
 import { ShareDialog } from './share-dialog';
@@ -58,6 +58,7 @@ import {
   SEARCH_MIN,
   contentUrl,
   peopleAccess,
+  createFile,
   createFolder,
   folderByPath,
   getFolder,
@@ -230,6 +231,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [moving, setMoving] = useState<FileItem[] | null>(null);
   const [creating, setCreating] = useState(false);
+  const [creatingFile, setCreatingFile] = useState<PluginCreator | null>(null);
   const [previewing, changePreview] = useState<string | null>(null);
   const previewId = useRef(previewing);
   previewId.current = previewing;
@@ -259,6 +261,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const installedPlugins = useInstalledPlugins();
   const pluginApps = effectivePlugins(installedPlugins).filter(row => row.enabled === 1 && !!pluginManifest(row).contributes.detailView);
   const activePlugin = pluginApps.find(row => row.id === activePluginId);
+  const creators = pluginCreators(installedPlugins).map(({ row, creator }) => ({ key: `${row.id}:${creator.id}`, label: creator.label, icon: creator.icon, creator }));
+  const startCreate = (key: string) => {
+    const chosen = creators.find(entry => entry.key === key)?.creator;
+    if (chosen) startWrite(() => setCreatingFile(chosen));
+  };
   /** The folder whose sharing is open. Null is closed — one dialog, one folder at a time. */
   const [sharing, setSharing] = useState<{ id: string; name: string } | null>(null);
   /**
@@ -912,6 +919,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onNavigate={navigate}
           onNewFolder={() => startWrite(() => setCreating(true))}
           onUpload={() => startWrite(() => uploadRef.current?.click())}
+          creators={creators}
+          onCreate={startCreate}
           offline={offline}
           writeBlocked={linkPending || linkListingUnavailable}
           sites={siteList.sites}
@@ -938,6 +947,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             onNavigate={(id) => { if (navigate(id)) setMobileNavOpen(false); }}
             onNewFolder={() => { setMobileNavOpen(false); startWrite(() => setCreating(true)); }}
             onUpload={() => { setMobileNavOpen(false); startWrite(() => uploadRef.current?.click()); }}
+            creators={creators}
+            onCreate={key => { setMobileNavOpen(false); startCreate(key); }}
             offline={offline}
             writeBlocked={linkPending || linkListingUnavailable}
             sites={siteList.sites}
@@ -1261,6 +1272,25 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             await createFolder(folderId, name);
             setCreating(false);
             void refreshRef.current().catch(error => onError(error instanceof Error ? error.message : String(error)));
+          }}
+        />
+      ) : null}
+
+      {creatingFile ? (
+        <NameDialog
+          title={`New ${creatingFile.label.toLocaleLowerCase()}`}
+          initial={creatingFile.defaultName}
+          confirm="Create"
+          onCancel={() => setCreatingFile(null)}
+          onConfirm={async (base) => {
+            if (offline) throw new Error(OFFLINE_WRITE);
+            const { extension, template, mime } = creatingFile;
+            const name = base.toLocaleLowerCase().endsWith(extension.toLocaleLowerCase()) ? base : `${base}${extension}`;
+            const created = await createFile(folderId, name, template ?? '', mime);
+            setCreatingFile(null);
+            // Open what was just made, so "New" lands in the plugin's editor.
+            void refreshRef.current().then(() => { setPreviewing(created.id); })
+              .catch(error => onError(error instanceof Error ? error.message : String(error)));
           }}
         />
       ) : null}

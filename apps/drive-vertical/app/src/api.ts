@@ -730,9 +730,9 @@ export const listTrash = () => call<DriveFile[]>('/trash');
  * composes: ensure-file → attachment upload → record-version. The size and type the
  * version records come from the stored bytes, not from anything said here.
  */
-export async function uploadFile(folderId: string, file: File, selectedSite: string | null = currentSite(), signal?: AbortSignal): Promise<DriveFile> {
+export async function uploadFile(folderId: string, file: File, selectedSite: string | null = currentSite(), signal?: AbortSignal, createOnly = false): Promise<DriveFile> {
   const res = await checkedApiFetch(
-    `${API}/folders/${encodeURIComponent(folderId)}/content?name=${encodeURIComponent(file.name)}`,
+    `${API}/folders/${encodeURIComponent(folderId)}/content?name=${encodeURIComponent(file.name)}${createOnly ? '&create=only' : ''}`,
     {
       method: 'POST',
       credentials: 'same-origin',
@@ -752,6 +752,10 @@ export async function uploadFile(folderId: string, file: File, selectedSite: str
   }
   return (await res.json()) as DriveFile;
 }
+
+/** A new file from a plugin's starter template; refused when the name already has content. */
+export const createFile = (folderId: string, name: string, template: string, mime?: string) =>
+  uploadFile(folderId, new File([template], name, { type: mime ?? '' }), currentSite(), undefined, true);
 
 /**
  * Where a file's bytes are, as a URL the browser can follow directly.
