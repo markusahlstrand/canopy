@@ -55,3 +55,15 @@ describe('conditional text content route', () => {
 });
 
 it.each([['notes.ts','video/mp2t'],['main.rs','application/octet-stream'],['script.js','application/javascript']])('saves source files with misleading upload MIME: %s',async(name,mime)=>{const s=setup({...record,file:{...record.file,name},version:{...record.version!,mime}});expect((await s.save()).status).toBe(201);});
+
+describe('.locked files', () => {
+  const locked = (name: string, mime: string) => ({ ...record, file: { id: 'a', name }, version: { id: 'v1', source: 'blob', mime } });
+  it.each(['application/octet-stream', '', 'application/x-empty'])('accepts an encrypted envelope whatever the MIME label (%j)', async (mime) => {
+    const envelope = JSON.stringify({ format: 'canopy-locked', v: 1, cipher: { name: 'AES-GCM', iv: 'aXY=' }, data: 'Y3Q=' });
+    expect((await setup(locked('diary.locked', mime)).save(envelope)).status).toBe(201);
+  });
+  it.each(['plain secrets', '{"format":"canopy-locked"}', ''])('refuses anything but an encrypted envelope (%j)', async (body) => {
+    const s = setup(locked('Diary.LOCKED', 'text/plain'));
+    expect((await s.save(body)).status).toBe(422); expect(s.upload).not.toHaveBeenCalled();
+  });
+});

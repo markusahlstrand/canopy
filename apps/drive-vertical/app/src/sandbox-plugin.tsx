@@ -8,7 +8,7 @@ export function pluginDocument(hosts: string[] = []): string {
   const origins = hosts.filter(host => /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host)).map(host => `https://${host}`).join(' ');
   return `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob: ${origins}; style-src 'unsafe-inline' ${origins}; img-src data: blob: ${origins}; connect-src ${origins || "'none'"}; font-src data: ${origins}; worker-src blob:; base-uri 'none'; form-action 'none'"><div id="root"></div><script type="module">
   const send=(type,data)=>parent.postMessage({canopyPlugin:true,type,data},'*');
-  document.addEventListener('input',()=>send('dirty'),true);
+  document.addEventListener('input',event=>{if(!event.composedPath()[0]?.closest?.('[data-canopy-transient]'))send('dirty');},true);
   let started=false;
   addEventListener('message',async event=>{
     if(event.source!==parent)return;
@@ -44,6 +44,7 @@ function SandboxInstance({plugin,file,onSave,onRetry}:SandboxProps & {onRetry:()
    if(event.data.type==='dirty' && saveRef.current && manifest.capabilities.some(cap=>cap.kind==='item:write'))setDirty(true);
    if(event.data.type==='rendered'){clearTimeout(timer);return;}
    if(event.data.type==='error'){clearTimeout(timer);setError(String(event.data.data).slice(0,500));return;}
+   if(event.data.type==='action' && event.data.data?.action==='clean' && !saving){setDirty(false);return;}
    if(event.data.type==='action' && event.data.data?.action==='save' && !saving){
     if(!saveRef.current || !manifest.capabilities.some(cap=>cap.kind==='item:write')){reply({type:'canopy:save-result',ok:false,error:'This file is read-only.'});return;}
     const text=event.data.data.data?.content;

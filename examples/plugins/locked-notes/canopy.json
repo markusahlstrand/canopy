@@ -1,0 +1,24 @@
+{
+  "$schema": "../../../documentation/canopy-plugin.schema.json",
+  "id": "locked-notes",
+  "name": "Locked Notes",
+  "version": "0.1.0",
+  "description": "Password-protected text files. A .locked file is encrypted in your browser (AES-256-GCM, key derived from your password with PBKDF2) — the drive only ever stores ciphertext and never sees the password.",
+  "icon": "lock",
+  "color": "152 33% 36%",
+  "entry": "index.js",
+  "capabilities": [{ "kind": "item:read" }, { "kind": "item:write" }],
+  "contributes": {
+    "viewers": [
+      {
+        "id": "locked",
+        "title": "Locked note",
+        "match": [".locked"]
+      }
+    ],
+    "store": {
+      "category": "Productivity",
+      "tagline": "Encrypt text files with a password, unlocked only in your browser."
+    }
+  }
+}

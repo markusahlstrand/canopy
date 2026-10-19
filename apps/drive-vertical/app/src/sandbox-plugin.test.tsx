@@ -58,3 +58,14 @@ it('blocks frame input during a pending save, then remounts on the saved version
  expect(screen.queryByRole('status')).toBeNull();
  expect(hasUnsavedDrafts()).toBe(false);
 });
+it('lets a plugin clear its unsaved mark after discarding its own edits',async()=>{
+ const {hasUnsavedDrafts}=await import('./drafts');
+ vi.stubGlobal('fetch',vi.fn(async(url:string)=>new Response(url.includes('/source')?JSON.stringify(row):'content')));
+ render(<SandboxPlugin plugin={row} file={{id:'file',versionId:'v1',name:'notes.txt',mime:'text/plain',size:7}} onSave={vi.fn(async()=>{})}/>);
+ const frame=screen.getByTitle('Editor') as HTMLIFrameElement;
+ const send=(type:string,data?:unknown)=>window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'null',data:{canopyPlugin:true,type,data}}));
+ await act(async()=>{send('dirty');});
+ expect(hasUnsavedDrafts()).toBe(true);
+ await act(async()=>{send('action',{action:'clean'});});
+ expect(hasUnsavedDrafts()).toBe(false);
+});
