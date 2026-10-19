@@ -143,7 +143,7 @@ it('offers to update a catalog install saved before the bundled manifest changed
     if (init?.method && init.method !== 'GET') posts.push(String(init.body));
     return new Response(JSON.stringify(url.endsWith('/people/access') ? { canManage: true } : { plugins: [{
       id: 'ours', principal: 'space', plugin_id: manifest.id, manifest_json: JSON.stringify({ ...manifest, contributes: oldContributes }), source: '',
-      enabled: 1, updated_at: 'revision', source_kind: 'bundled', source_ref: '', resolved: '', source_sha256: '', granted_capabilities: '[]',
+      enabled: 1, updated_at: 'revision', source_kind: 'inline', source_ref: '', resolved: '', source_sha256: '', granted_capabilities: '[]',
     }] }));
   }));
   render(<PluginManagement open onOpenChange={() => {}} spaceName="substrat" />);

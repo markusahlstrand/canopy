@@ -165,8 +165,12 @@ export default function render(ctx) {
     const error = note("", c.bad);
     form.append(error);
     if (action) form.append(action);
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
+    // The host's sandbox has no allow-forms, so a form never fires "submit": the action
+    // button and Enter in a field run the card directly instead.
+    let running = false;
+    const run = async () => {
+      if (running) return;
+      running = true;
       error.textContent = "";
       const buttons = [...form.querySelectorAll("button")];
       for (const b of buttons) b.disabled = true;
@@ -174,8 +178,20 @@ export default function render(ctx) {
         await onSubmit((message) => (error.textContent = message));
       } finally {
         for (const b of buttons) b.disabled = false;
+        running = false;
       }
-    });
+    };
+    if (action) {
+      action.type = "button";
+      action.addEventListener("click", () => void run());
+    }
+    for (const field of fields)
+      field.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && action) {
+          e.preventDefault();
+          void run();
+        }
+      });
     container.append(form);
     fields[0]?.focus();
   }
@@ -183,7 +199,6 @@ export default function render(ctx) {
   function showLocked(envelope) {
     const pw = password("Password", "current-password");
     const unlock = button("Unlock", true);
-    unlock.type = "submit";
     card(file.name, [["This note is encrypted. Enter its password to read it."]], [pw], unlock, async (fail) => {
       unlock.textContent = "Unlocking…";
       try {
@@ -203,7 +218,6 @@ export default function render(ctx) {
     const pw = password("New password", "new-password");
     const again = password("Repeat password", "new-password");
     const go = button(label, true);
-    go.type = "submit";
     const reminder = [`At least ${MIN_PASSWORD} characters. There is no way to recover a forgotten password.`];
     card(title, [...lines, reminder], [pw, again], go, async (fail) => {
       if (pw.value.length < MIN_PASSWORD) return fail(`Use at least ${MIN_PASSWORD} characters.`);

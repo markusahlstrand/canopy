@@ -150,9 +150,21 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
    */
   const canInstallCatalog = (id: string, targetSpace: boolean) => pluginsState === 'loaded' && (!targetSpace || canManage) &&
     !plugins.some(row => row.plugin_id === id && (targetSpace ? row.principal === 'space' : true));
-  /** A catalog install keeps the manifest it was saved with; this one predates the bundled copy. */
+  /**
+   * An install keeps the manifest and source it was saved with, so a catalog plugin installed
+   * before the bundle changed never picks the change up. Catalog installs are not marked as
+   * such (only signed imports record provenance), so this keys on the catalog's plugin ID.
+   */
+  const [bundledDigests, setBundledDigests] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    void Promise.all(pluginCatalog.map(async entry => [entry.manifest.id, [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(entry.source)))].map(byte => byte.toString(16).padStart(2, '0')).join('')] as const))
+      .then(pairs => { if (alive) setBundledDigests(Object.fromEntries(pairs)); }, () => {});
+    return () => { alive = false; };
+  }, []);
   const isOutdated = (row: PluginInstall, entry: (typeof pluginCatalog)[number]) =>
-    row.source_kind === 'bundled' && row.manifest_json !== JSON.stringify(installedPluginManifest.parse(entry.manifest));
+    row.manifest_json !== JSON.stringify(installedPluginManifest.parse(entry.manifest)) ||
+    (!!row.source_sha256 && !!bundledDigests[entry.manifest.id] && row.source_sha256 !== bundledDigests[entry.manifest.id]);
   const updateCatalog = (row: PluginInstall, entry: (typeof pluginCatalog)[number]) => {
     const parsed = installedPluginManifest.parse(entry.manifest);
     if (!window.confirm(`Update ${parsed.name} ${row.principal === 'space' ? `for everyone in ${spaceName ?? 'this space'}` : 'for you'} to the bundled version? It will be able to: ${parsed.capabilities.map(capabilityText).join('; ') || 'nothing'}.`)) return;

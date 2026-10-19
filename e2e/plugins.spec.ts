@@ -23,16 +23,35 @@ async function installReviewed(page: Page) {
   await expect(dialog.getByRole('textbox', { name: 'Plugin source', exact: true })).toHaveValue('');
 }
 
+/** Card installs hide while one exists, and both viewports share one server: start each run from none. */
+async function removeInstalls(page: Page, pluginId: string) {
+  const { plugins } = await (await page.request.get('/api/plugins')).json() as { plugins: { id: string; plugin_id: string }[] };
+  for (const row of plugins.filter(row => row.plugin_id === pluginId)) expect((await page.request.delete(`/api/plugins/${row.id}`)).ok()).toBe(true);
+}
+async function installFromCard(page: Page, name: string, button: string) {
+  const card = page.getByRole('dialog', { name: 'Plugins', exact: true }).getByRole('region', { name, exact: true });
+  await card.getByRole('button', { name: button, exact: true }).click();
+  await card.getByRole('group', { name: `Confirm ${name}` }).getByRole('button', { name: 'Confirm install', exact: true }).click();
+  await expect(card.getByRole('group', { name: `Confirm ${name}` })).toBeHidden();
+}
+
 test('catalog personal and space installs each require approval and retain their separate controls', async ({ page }) => {
   await signIn(page);
-  page.on('dialog', dialog => dialog.accept()); // Replace only synthetic installs from this run.
+  page.on('dialog', dialog => dialog.accept());
+  await removeInstalls(page, 'image-viewer');
+  await page.reload();
   const plugins = await openPlugins(page);
-  await plugins.getByRole('button', { name: 'Review Image Viewer', exact: true }).click();
-  await expect(plugins.getByRole('checkbox', { name: 'Apply to Acceptance Drive', exact: true })).not.toBeChecked();
-  await installReviewed(page);
-  await plugins.getByRole('button', { name: 'Apply Image Viewer to Acceptance Drive', exact: true }).click();
-  await expect(plugins.getByRole('checkbox', { name: 'Apply to Acceptance Drive', exact: true })).toBeChecked();
-  await installReviewed(page);
+  const card = plugins.getByRole('region', { name: 'Image Viewer', exact: true });
+  await card.getByRole('button', { name: 'Install', exact: true }).click();
+  await card.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(card.getByRole('group', { name: 'Confirm Image Viewer' })).toBeHidden();
+  await installFromCard(page, 'Image Viewer', 'Install');
+  await expect(card.getByText('Enabled for you', { exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Install', exact: true })).toHaveCount(0);
+  await installFromCard(page, 'Image Viewer', 'Install for everyone in Acceptance Drive');
+  await expect(card.getByText('Enabled in Acceptance Drive', { exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Uninstall', exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Uninstall for everyone in Acceptance Drive', exact: true })).toBeVisible();
   const images = plugins.locator('section').filter({ has: page.getByRole('heading', { name: 'Image Viewer', exact: true }) });
   await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
   await expect(images.getByRole('button', { name: 'Disable', exact: true })).toHaveCount(1);
