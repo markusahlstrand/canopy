@@ -68,3 +68,15 @@ export async function downloaded(page: Page, name: string, content: string) {
   expect(await readFile((await result.path())!, 'utf8')).toBe(content);
 }
 
+/** Catalog cards hide installs that exist, and both viewports share one server: start from none. */
+export async function removePluginInstalls(page: Page, pluginId: string) {
+  const { plugins } = await (await page.request.get('/api/plugins')).json() as { plugins: { id: string; plugin_id: string }[] };
+  for (const row of plugins.filter(row => row.plugin_id === pluginId)) expect((await page.request.delete(`/api/plugins/${row.id}`)).ok()).toBe(true);
+}
+/** Install a catalog plugin from its card in the open Plugins dialog, through the access confirmation. */
+export async function installFromCard(page: Page, name: string, button = 'Install') {
+  const card = page.getByRole('dialog', { name: 'Plugins', exact: true }).getByRole('region', { name, exact: true });
+  await card.getByRole('button', { name: button, exact: true }).click();
+  await card.getByRole('group', { name: `Confirm ${name}` }).getByRole('button', { name: 'Confirm install', exact: true }).click();
+  await expect(card.getByRole('group', { name: `Confirm ${name}` })).toBeHidden();
+}

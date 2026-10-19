@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signIn, createFolder, action, upload } from './support';
+import { signIn, createFolder, action, upload, removePluginInstalls, installFromCard } from './support';
 import { createSpace, switchSpace, openSpaces, invite } from './spaces';
 import { acceptInvitation } from './recipients';
 
@@ -80,15 +80,13 @@ test('name, extracted contents and metadata match in results and the keyboard pa
   await expect(page.getByText(/Showing 3 of 3 returned matches/)).toBeVisible();
   const spaces = await openSpaces(page);
   await spaces.getByRole('button', { name: 'Close', exact: true }).click();
+  await removePluginInstalls(page, 'image-viewer');
   if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Open navigation' }).click();
   await page.getByRole('button', { name: 'Manage Acceptance Drive', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Space plugins', exact: true }).click();
   const plugins = page.getByRole('dialog', { name: 'Plugins', exact: true });
   await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
-  await plugins.getByRole('button', { name: 'Review Image Viewer', exact: true }).click();
-  await plugins.getByRole('checkbox', { name: /Approve the capabilities/ }).check();
-  page.once('dialog', dialog => dialog.accept());
-  await plugins.getByRole('button', { name: 'Install plugin', exact: true }).click();
+  await installFromCard(page, 'Image Viewer');
   const installed = plugins.locator('section').filter({ has: page.getByRole('heading', { name: 'Image Viewer', exact: true }) }).filter({ hasText: 'Installed for you' });
   const toggle = installed.getByRole('button', { name: /^(Enable|Disable)$/ });
   await expect(toggle).toBeEnabled();

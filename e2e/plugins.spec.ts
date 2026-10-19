@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
-import { signIn, createFolder, action, upload } from './support';
+import { signIn, createFolder, action, upload, removePluginInstalls, installFromCard } from './support';
 
 const { zipSync } = createRequire(new URL('../packages/plugin-sources/package.json', import.meta.url))('fflate') as {
   zipSync: (files: Record<string, Uint8Array>) => Uint8Array;
@@ -25,14 +25,21 @@ async function installReviewed(page: Page) {
 
 test('catalog personal and space installs each require approval and retain their separate controls', async ({ page }) => {
   await signIn(page);
-  page.on('dialog', dialog => dialog.accept()); // Replace only synthetic installs from this run.
+  page.on('dialog', dialog => dialog.accept());
+  await removePluginInstalls(page, 'image-viewer');
+  await page.reload();
   const plugins = await openPlugins(page);
-  await plugins.getByRole('button', { name: 'Review Image Viewer', exact: true }).click();
-  await expect(plugins.getByRole('checkbox', { name: 'Apply to Acceptance Drive', exact: true })).not.toBeChecked();
-  await installReviewed(page);
-  await plugins.getByRole('button', { name: 'Apply Image Viewer to Acceptance Drive', exact: true }).click();
-  await expect(plugins.getByRole('checkbox', { name: 'Apply to Acceptance Drive', exact: true })).toBeChecked();
-  await installReviewed(page);
+  const card = plugins.getByRole('region', { name: 'Image Viewer', exact: true });
+  await card.getByRole('button', { name: 'Install', exact: true }).click();
+  await card.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(card.getByRole('group', { name: 'Confirm Image Viewer' })).toBeHidden();
+  await installFromCard(page, 'Image Viewer', 'Install');
+  await expect(card.getByText('Enabled for you', { exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Install', exact: true })).toHaveCount(0);
+  await installFromCard(page, 'Image Viewer', 'Install for everyone in Acceptance Drive');
+  await expect(card.getByText('Enabled in Acceptance Drive', { exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Uninstall', exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Uninstall for everyone in Acceptance Drive', exact: true })).toBeVisible();
   const images = plugins.locator('section').filter({ has: page.getByRole('heading', { name: 'Image Viewer', exact: true }) });
   await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
   await expect(images.getByRole('button', { name: 'Disable', exact: true })).toHaveCount(1);

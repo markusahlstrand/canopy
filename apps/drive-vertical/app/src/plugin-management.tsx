@@ -150,6 +150,27 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
    */
   const canInstallCatalog = (id: string, targetSpace: boolean) => pluginsState === 'loaded' && (!targetSpace || canManage) &&
     !plugins.some(row => row.plugin_id === id && (targetSpace ? row.principal === 'space' : true));
+  /**
+   * An install keeps the manifest and source it was saved with, so a catalog plugin installed
+   * before the bundle changed never picks the change up. Catalog installs are not marked as
+   * such (only signed imports record provenance), so this keys on the catalog's plugin ID.
+   */
+  const [bundledDigests, setBundledDigests] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    void Promise.all(pluginCatalog.map(async entry => [entry.manifest.id, [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(entry.source)))].map(byte => byte.toString(16).padStart(2, '0')).join('')] as const))
+      .then(pairs => { if (alive) setBundledDigests(Object.fromEntries(pairs)); }, () => {});
+    return () => { alive = false; };
+  }, []);
+  const isOutdated = (row: PluginInstall, entry: (typeof pluginCatalog)[number]) =>
+    row.manifest_json !== JSON.stringify(installedPluginManifest.parse(entry.manifest)) ||
+    (!!row.source_sha256 && !!bundledDigests[entry.manifest.id] && row.source_sha256 !== bundledDigests[entry.manifest.id]);
+  const updateCatalog = (row: PluginInstall, entry: (typeof pluginCatalog)[number]) => {
+    const parsed = installedPluginManifest.parse(entry.manifest);
+    if (!window.confirm(`Update ${parsed.name} ${row.principal === 'space' ? `for everyone in ${spaceName ?? 'this space'}` : 'for you'} to the bundled version? It will be able to: ${parsed.capabilities.map(capabilityText).join('; ') || 'nothing'}.`)) return;
+    void change(() => savePlugin(parsed, entry.source, row.updated_at, row.principal === 'space', parsed.capabilities,
+      { kind: 'bundled', ref: `@canopy/catalog/${parsed.id}`, resolved: parsed.version }));
+  };
   const uninstall = (row: PluginInstall) => {
     const name = pluginManifest(row).name;
     if (window.confirm(row.principal === 'space' ? `Uninstall ${name} for everyone in ${spaceName ?? 'this space'}?` : `Uninstall ${name} for you?`)) void change(() => removePlugin(row.id));
@@ -305,6 +326,7 @@ export function PluginManagement({ open, onOpenChange, onOpenApp, spaceName }: {
       <div className="flex flex-wrap gap-2">
         {canInstallCatalog(entry.manifest.id, false) ? <Button disabled={busy} onClick={() => setConfirming({ id: entry.manifest.id, space: false })}>Install</Button> : null}
         {canInstallCatalog(entry.manifest.id, true) ? <Button variant="outline" disabled={busy} onClick={() => setConfirming({ id: entry.manifest.id, space: true })}>Install for everyone in {spaceName ?? 'this space'}</Button> : null}
+        {plugins.filter(row => row.plugin_id === entry.manifest.id && (row.principal !== 'space' || canManage) && isOutdated(row, entry)).map(row => <Button key={`update:${row.id}`} disabled={!canChangeInstall} onClick={() => updateCatalog(row, entry)}>{row.principal === 'space' ? `Update for everyone in ${spaceName ?? 'this space'}` : 'Update'}</Button>)}
         {plugins.filter(row => row.plugin_id === entry.manifest.id && (row.principal !== 'space' || canManage)).map(row => <Button key={row.id} variant="outline" disabled={!canChangeInstall} onClick={() => uninstall(row)}>{row.principal === 'space' ? `Uninstall for everyone in ${spaceName ?? 'this space'}` : 'Uninstall'}</Button>)}
         <Button variant="ghost" aria-label={`View ${entry.manifest.name} source`} disabled={busy} onClick={() => reviewCatalog(entry, false)}>View source</Button></div></>}
     </section>)}</div>

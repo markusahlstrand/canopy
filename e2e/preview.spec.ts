@@ -1,5 +1,5 @@
 import { test, expect, type Request } from '@playwright/test';
-import { signIn, createFolder, action } from './support';
+import { signIn, createFolder, action, removePluginInstalls, installFromCard } from './support';
 
 function pdf() {
   const objects = [
@@ -98,15 +98,13 @@ test('image, PDF, installed viewer and unsupported fallback stay usable within t
   await expect(panel.getByText(/No preview for application\/octet-stream/)).toBeVisible();
   await expect(panel.getByRole('link', { name: 'Download', exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Close preview' }).click();
+  await removePluginInstalls(page, 'image-viewer');
   if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Open navigation' }).click();
   await page.getByRole('button', { name: 'Manage Acceptance Drive', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Space plugins', exact: true }).click();
   const plugins = page.getByRole('dialog', { name: 'Plugins', exact: true });
   await plugins.getByRole('button', { name: 'Personal installs', exact: true }).click();
-  await plugins.getByRole('button', { name: 'Review Image Viewer', exact: true }).click();
-  await plugins.getByRole('checkbox', { name: /Approve the capabilities/ }).check();
-  page.once('dialog', dialog => dialog.accept()); // Mobile replaces this run's desktop install.
-  await plugins.getByRole('button', { name: 'Install plugin', exact: true }).click();
+  await installFromCard(page, 'Image Viewer');
   await expect(plugins.locator('section').filter({ has: page.getByRole('heading', { name: 'Image Viewer', exact: true }) }).getByRole('button', { name: 'Disable', exact: true })).toBeVisible();
   await plugins.getByRole('button', { name: 'Close', exact: true }).click();
   await action(page, 'acceptance.png', 'Open');
