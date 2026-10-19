@@ -46,6 +46,12 @@ test('viewer/editor invitations and folder access changes take effect in separat
     await createFolder(page, folder);
     await action(page, folder, 'Open');
     await upload(page, name, 'Shared synthetic role contents');
+    // Sharing is folder-only (#296): a file's own menu must not promise a Share action.
+    await revealRow(page, name);
+    await page.getByRole('button', { name: `Actions for ${name}`, exact: true }).click();
+    await expect(page.getByRole('menuitem', { name: 'Open', exact: true })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Share', exact: true })).toBeHidden();
+    await page.keyboard.press('Escape');
     const viewerUrl = await invite(page, `${prefix}-viewer@canopy.test`, 'viewer');
     const editorUrl = await invite(page, `${prefix}-editor@canopy.test`, 'editor');
     const viewer = await viewerContext.newPage();
@@ -100,8 +106,13 @@ test('viewer/editor invitations and folder access changes take effect in separat
     await access.getByRole('button', { name: 'Close', exact: true }).click();
     const people = await openMembers(page);
     await people.getByRole('button', { name: `Remove ${prefix} viewer`, exact: true }).click();
+    // The Remove button also disappears the instant Confirm is pressed (the row swaps to its
+    // confirm state), so "hidden" says nothing about the server having finished. Wait for the
+    // DELETE itself: the content request below must come after the unbind, not race it.
+    const removal = page.waitForResponse(r => r.request().method() === 'DELETE' && /\/api\/people\/[^/]+$/.test(new URL(r.url()).pathname));
     await people.getByRole('button', { name: 'Confirm', exact: true }).click();
-    await expect(people.getByRole('button', { name: `Remove ${prefix} viewer`, exact: true })).toBeHidden();
+    expect((await removal).ok()).toBe(true);
+    await expect(people.getByText(`${prefix} viewer`, { exact: true })).toBeHidden();
     const refused = await viewer.request.get(content!, { headers: { 'x-site': new URL(link).searchParams.get('site')! } });
     expect(refused.status()).toBe(401);
   } finally { await viewerContext.close(); await editorContext.close(); }
