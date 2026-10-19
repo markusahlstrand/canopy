@@ -1,4 +1,4 @@
-const SOURCE_EXTENSIONS = new Set('txt text log js jsx mjs cjs ts tsx json jsonc html htm css scss less py rb go rs java c h cpp cc hpp cs php swift kt kts sh bash zsh sql yaml yml toml xml ini env lua r pl dockerfile vue svelte graphql proto md markdown mdx'.split(' '));
+const SOURCE_EXTENSIONS = new Set('txt text log js jsx mjs cjs ts tsx json jsonc html htm css scss less py rb go rs java c h cpp cc hpp cs php swift kt kts sh bash zsh sql yaml yml toml xml ini env lua r pl dockerfile vue svelte graphql proto md markdown mdx locked'.split(' '));
 /** MIME labels on browser uploads can be empty or misleading for source files. */
 export function editableTextMime(mime: string, name = ''): boolean {
  const type=mime.split(';')[0]!.trim().toLowerCase();

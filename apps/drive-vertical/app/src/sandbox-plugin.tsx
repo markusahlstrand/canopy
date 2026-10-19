@@ -8,7 +8,7 @@ export function pluginDocument(hosts: string[] = []): string {
   const origins = hosts.filter(host => /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host)).map(host => `https://${host}`).join(' ');
   return `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob: ${origins}; style-src 'unsafe-inline' ${origins}; img-src data: blob: ${origins}; connect-src ${origins || "'none'"}; font-src data: ${origins}; worker-src blob:; base-uri 'none'; form-action 'none'"><div id="root"></div><script type="module">
   const send=(type,data)=>parent.postMessage({canopyPlugin:true,type,data},'*');
-  document.addEventListener('input',()=>send('dirty'),true);
+  document.addEventListener('input',event=>{if(event.composedPath()[0]?.type!=='password')send('dirty');},true);
   let started=false;
   addEventListener('message',async event=>{
     if(event.source!==parent)return;
