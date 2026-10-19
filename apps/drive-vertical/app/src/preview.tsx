@@ -1,4 +1,4 @@
-import { editableTextMime } from '../../src/editable-text';
+import { editableTextMime, isLockedName } from '../../src/editable-text';
 import { matchingPlugins, pluginManifest, refreshPlugins, useInstalledPlugins } from './installed-plugins';
 import { SandboxPlugin } from './sandbox-plugin';
 import { FileMetadata } from './file-metadata';
@@ -262,7 +262,16 @@ export function PreviewPanel({
 
   useSyncExternalStore(viewerRegistry.subscribe, viewerRegistry.snapshot);
   const matching = matchingPlugins(plugins, version?.mime ?? '', file?.name ?? '');
-  const selectedPlugin = matching.find(row => row.id === pluginId);
+  // A .locked file is only meaningful through its plugin: open it there, and offer no plain-text editing.
+  const locked = isLockedName(file?.name ?? '');
+  const selectedPlugin = matching.find(row => row.id === pluginId) ?? (locked ? matching[0] : undefined);
+  /**
+   * A plugin's own save yields a new version; remounting on it would throw away the plugin's
+   * state (an unlocked note would lock again). Only a version the plugin didn't write remounts it.
+   */
+  const pluginWrites = useRef(new Set<string>());
+  const pluginVersion = useRef<string | null>(null);
+  if (version && !pluginWrites.current.has(version.id)) pluginVersion.current = version.id;
   const shape = editing ? 'text' : shapeOf(version?.mime, file?.name);
 
   /** Text bodies are fetched, not linked — everything else the browser fetches itself. */
@@ -404,7 +413,8 @@ export function PreviewPanel({
     if (!version || !canWrite || !editableTextMime(version.mime, file?.name)) throw new Error('This file cannot be edited as text.');
     setSavingText(true);
     try {
-      await saveText(fileId, version.id, text);
+      const saved = await saveText(fileId, version.id, text);
+      if (saved.current_version_id) pluginWrites.current.add(saved.current_version_id);
       await reloadText();
     } finally {
       setSavingText(false);
@@ -459,14 +469,14 @@ export function PreviewPanel({
         ))}
       </nav>
 
-      {tab === 'file' && matching.length ? <label className="px-3 py-2 text-sm">Open with <select disabled={savingText} aria-label="Open with" value={selectedPlugin?.id ?? ''} onChange={event => { if (confirmDiscardDrafts()) { setPluginId(event.target.value); setEditing(false); } }}><option value="">Built-in preview</option>{matching.map(row => <option key={row.id} value={row.id}>{pluginManifest(row).name}</option>)}</select></label> : null}
+      {tab === 'file' && matching.length ? <label className="px-3 py-2 text-sm">Open with <select disabled={savingText} aria-label="Open with" value={selectedPlugin?.id ?? ''} onChange={event => { if (confirmDiscardDrafts()) { setPluginId(event.target.value); setEditing(false); } }}>{locked ? null : <option value="">Built-in preview</option>}{matching.map(row => <option key={row.id} value={row.id}>{pluginManifest(row).name}</option>)}</select></label> : null}
       {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {metaError ? <PreviewFailure message={metaError} retry={() => setRetry(value => value + 1)} /> : tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : bodyError && version ? <PreviewFailure message={bodyError} retry={() => readTableBody(version.id)} /> : body ? <Empty>Table preview needs the complete text.</Empty> : <Empty>Loading…</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
           !file ? <Empty>Loading…</Empty> : !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
-          ) : selectedPlugin && file && version.source === 'blob' ? <SandboxPlugin key={`${selectedPlugin.id}:${version.id}`} plugin={selectedPlugin} onSave={canWrite && editableTextMime(version.mime, file.name) ? savePluginText : undefined} file={{id: fileId, versionId: version.id, name: file.name, mime: version.mime, size: version.size}} /> : shape === 'image' || shape === 'viewer' ? (
+          ) : selectedPlugin && file && version.source === 'blob' ? <SandboxPlugin key={`${selectedPlugin.id}:${pluginVersion.current}`} plugin={selectedPlugin} onSave={canWrite && editableTextMime(version.mime, file.name) ? savePluginText : undefined} file={{id: fileId, versionId: pluginVersion.current ?? version.id, name: file.name, mime: version.mime, size: version.size}} /> : shape === 'image' || shape === 'viewer' ? (
             <ImagePreview fileId={fileId} name={file?.name ?? ''} mime={version.mime} />
           ) : shape === 'audio' || shape === 'video' ? (
             version.source === 'blob' ? <MediaPreview key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} name={file?.name ?? ''} shape={shape} />
@@ -483,7 +493,7 @@ export function PreviewPanel({
             body ? (
               editing ? <TextEditor key={`${fileId}:${version.id}`} fileId={fileId} versionId={version.id} text={body.text} wrap={wrapText}
                 onBusyChange={setSavingText} onSaved={reloadText} onReload={reloadText} onCancel={() => setEditing(false)} onConflict={onChanged} /> : <>
-                {canWrite && !body.truncated && version.source === 'blob' ? <Button size="sm" variant="outline" className="mb-3" onClick={() => setEditing(true)}>Edit text</Button> : null}
+                {canWrite && !locked && !body.truncated && version.source === 'blob' ? <Button size="sm" variant="outline" className="mb-3" onClick={() => setEditing(true)}>Edit text</Button> : null}
                 {!body.truncated && (version.mime.split(';')[0]?.trim().toLowerCase() === 'application/json' || version.mime.split(';')[0]?.trim().toLowerCase().endsWith('+json'))
                   ? <JsonPreview key={`${fileId}:${version.id}`} text={body.text} wrap={wrapText} onWrapChange={setWrapText} />
                   : <TextPreview key={`${fileId}:${version.id}`} text={body.text} wrap={wrapText} onWrapChange={setWrapText} truncated={body.truncated} />}

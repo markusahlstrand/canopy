@@ -21,6 +21,7 @@ const ITERATIONS = 600000; // OWASP's PBKDF2-SHA-256 recommendation
 const MIN_ITERATIONS = 100000;
 const MAX_ITERATIONS = 10000000; // a tampered file must not hang the tab
 const MIN_PASSWORD = 8;
+const MAX_SAVE_BYTES = 200000; // the host's text save limit; base64 makes the envelope ~4/3 of the text
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -115,8 +116,15 @@ export default function render(ctx) {
     return;
   }
 
-  // Whatever is on disk right now: the envelope text, refreshed after every save.
-  let stored = dec.decode(new Uint8Array(file.bytes));
+  // Whatever is on disk right now: the envelope text, refreshed after every save. Bytes that
+  // aren't UTF-8 would be mangled by decoding, so such a file is refused rather than encrypted.
+  let stored = "";
+  let undecodable = false;
+  try {
+    stored = new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(file.bytes));
+  } catch {
+    undecodable = true;
+  }
   let session = null; // { key, salt, iterations } while unlocked
   let pending = null; // envelope text sent with the in-flight save
 
@@ -150,6 +158,7 @@ export default function render(ctx) {
   function card(title, lines, fields, action, onSubmit) {
     container.replaceChildren();
     const form = el("form", `max-width:380px;margin:48px auto;display:flex;flex-direction:column;gap:12px`);
+    form.dataset.canopyTransient = ""; // a password typed here is not an edit to the file
     form.append(el("div", "font-size:28px", "🔒"), el("div", "font-weight:600;font-size:16px", title));
     for (const line of lines) form.append(note(line[0], line[1]));
     form.append(...fields);
@@ -159,11 +168,12 @@ export default function render(ctx) {
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       error.textContent = "";
-      if (action) action.disabled = true;
+      const buttons = [...form.querySelectorAll("button")];
+      for (const b of buttons) b.disabled = true;
       try {
         await onSubmit((message) => (error.textContent = message));
       } finally {
-        if (action) action.disabled = false;
+        for (const b of buttons) b.disabled = false;
       }
     });
     container.append(form);
@@ -216,14 +226,12 @@ export default function render(ctx) {
         c.warn,
       ]);
     choosePassword(file.name, lines, "Encrypt", async (pw, fail) => {
-      session = await newSession(pw);
+      const next = await newSession(pw);
       const text = stored;
-      const ok = await save(await seal(session, text));
-      if (ok) showEditor(text);
-      else {
-        session = null;
-        fail("Saving the encrypted file failed.");
-      }
+      const result = await save(await seal(next, text));
+      if (result !== true) return fail(`Saving the encrypted file failed: ${result}`);
+      session = next;
+      showEditor(text);
     });
   }
 
@@ -231,16 +239,20 @@ export default function render(ctx) {
   let settle = null;
   addEventListener("message", (e) => {
     const m = e.data;
-    if (!m || m.type !== "canopy:save-result" || !settle) return;
+    if (e.source !== parent || !m || m.type !== "canopy:save-result" || !settle) return;
     if (m.ok) stored = pending;
     const done = settle;
     settle = null;
     done(m.ok ? true : m.error || "unknown error");
   });
+  /** Resolves `true` once the host has stored the envelope, or the reason it didn't. */
   function save(envelope) {
+    const size = enc.encode(envelope).length;
+    if (size > MAX_SAVE_BYTES)
+      return Promise.resolve(`encrypted, the note is ${Math.ceil(size / 1000)} KB; the limit is ${MAX_SAVE_BYTES / 1000} KB`);
     pending = envelope;
     return new Promise((resolve) => {
-      settle = (result) => resolve(result === true);
+      settle = resolve;
       ctx.emit("save", { content: envelope });
     });
   }
@@ -277,12 +289,12 @@ export default function render(ctx) {
       if (!file.writable || !dirty || settle) return;
       saveBtn.disabled = true;
       setStatus("Encrypting and saving…");
-      const ok = await save(await seal(session, area.value));
+      const result = await save(await seal(session, area.value));
       saveBtn.disabled = false;
-      if (ok) {
+      if (result === true) {
         dirty = false;
         setStatus("Saved, encrypted ✓", c.ok);
-      } else setStatus("Save failed", c.bad);
+      } else setStatus(`Save failed: ${result}`, c.bad);
     }
 
     if (file.writable) {
@@ -291,13 +303,11 @@ export default function render(ctx) {
         if (dirty) return setStatus("Save your changes before changing the password", c.warn);
         const current = area.value;
         choosePassword("Change password", [["The note is re-encrypted with the new password."]], "Change password", async (pw, fail) => {
-          const previous = session;
-          session = await newSession(pw);
-          if (await save(await seal(session, current))) showEditor(current);
-          else {
-            session = previous;
-            fail("Saving with the new password failed — the old password still applies.");
-          }
+          const next = await newSession(pw);
+          const result = await save(await seal(next, current));
+          if (result !== true) return fail(`Saving with the new password failed (${result}) — the old password still applies.`);
+          session = next;
+          showEditor(current);
         });
         const cancel = button("Cancel");
         cancel.type = "button";
@@ -317,6 +327,7 @@ export default function render(ctx) {
         discardArmed = true;
         return setStatus("Unsaved changes — click Lock again to discard them", c.bad);
       }
+      if (dirty) ctx.emit("clean"); // the discarded edits are gone; don't let the host warn about them
       area.value = "";
       session = null;
       start();
@@ -333,6 +344,10 @@ export default function render(ctx) {
   }
 
   function start() {
+    if (undecodable) {
+      card(file.name, [["This file isn't UTF-8 text, so it can't be encrypted here without corrupting it.", c.bad]], [], null, () => {});
+      return;
+    }
     let envelope;
     try {
       envelope = parseEnvelope(stored);

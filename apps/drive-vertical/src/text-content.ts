@@ -4,7 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 export const MAX_EDIT_CHARS = 200_000;
 const MAX_EDIT_BYTES = MAX_EDIT_CHARS * 4;
 export { editableTextMime } from './editable-text.js';
-import { editableTextMime } from './editable-text.js';
+import { editableTextMime, isLockedName, lockedEnvelope } from './editable-text.js';
 export interface TextContentRecord {
   file: { id: string; name: string };
   version: { id: string; source: string; mime: string } | null;
@@ -55,6 +55,7 @@ export function mountTextContent<E extends Env>(app: Hono<E>, resolve: (c: Conte
     try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes); }
     catch { throw new HTTPException(400, { message: 'text must be UTF-8' }); }
     if (text.length > MAX_EDIT_CHARS) throw new HTTPException(413, { message: 'text is too large to edit here' });
+    if (isLockedName(file.name) && !lockedEnvelope(text)) throw new HTTPException(422, { message: 'a .locked file only accepts encrypted content' });
     const attachment = await session.upload(id, file.name, version.mime, bytes);
     // The initial comparison saves work; this one guards concurrent writes during upload.
     const written = await session.record(id, attachment, expected);
