@@ -20,6 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { platformActorId, principalId, scopeId, tenantId } from '@substrat-run/contracts';
 import { ulid, type ScopeHost } from '@substrat-run/kernel';
@@ -293,6 +294,18 @@ it('keeps a plugin\'s New-menu creators through save and list', async () => {
   const listed = await member.invoke<{plugins: {plugin_id: string; manifest_json: string}[]}>('drive/list-plugins', {});
   const row = listed.plugins.find(plugin => plugin.plugin_id === 'locked-notes')!;
   expect(JSON.parse(row.manifest_json).contributes.creators).toEqual([{id: 'locked', label: 'Locked note', icon: 'key-round', defaultName: 'Untitled', extension: '.locked', template: ''}]);
+});
+
+it('fills in the source fingerprint of installs saved before it was recorded', async () => {
+  const owner = await as(ada);
+  const saved = await owner.invoke<{id: string; source_sha256: string}>('drive/save-plugin', {manifest: {id: 'legacy-viewer', name: 'Legacy', version: '1', capabilities: [{kind: 'item:read'}], contributes: {viewers: [{id: 'legacy', match: ['.legacy']}]}}, source: 'legacy code', expectedRevision: null});
+  const db = new DatabaseSync(join(dir, `${tenant}__${scope}.sqlite`));
+  try { db.prepare("UPDATE drive_plugin_installs SET source_sha256 = '' WHERE id = ?").run(saved.id); } finally { db.close(); }
+  const listed = await owner.invoke<{plugins: {id: string; source_sha256: string; source?: string}[]}>('drive/list-plugins', {});
+  const row = listed.plugins.find(plugin => plugin.id === saved.id)!;
+  expect(row.source_sha256).toBe(saved.source_sha256);
+  expect(row).not.toHaveProperty('source');
+  await owner.invoke('drive/remove-plugin', {id: saved.id});
 });
 
 describe('plugin review boundaries',()=>{

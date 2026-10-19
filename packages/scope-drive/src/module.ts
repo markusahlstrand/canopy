@@ -211,7 +211,10 @@ const operations = {
   'drive/list-plugins': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
     const rows = ctx.sql.query<Omit<PluginRow,'source'>>('SELECT id, plugin_id, principal, manifest_json, enabled, updated_at, source_kind, source_ref, resolved, source_sha256, granted_capabilities FROM drive_plugin_installs WHERE principal IN (?, ?) ORDER BY plugin_id LIMIT 100', [ctx.principal, 'space']);
-    return {plugins: rows.filter(row => {try {return installedPluginManifest.safeParse(JSON.parse(row.manifest_json)).success;}catch{return false;}})};
+    const valid = rows.filter(row => {try {return installedPluginManifest.safeParse(JSON.parse(row.manifest_json)).success;}catch{return false;}});
+    // Installs saved before fingerprints were recorded have none; the client compares it with the bundled source.
+    return {plugins: await Promise.all(valid.map(async row => row.source_sha256 ? row : {...row, source_sha256: await sourceDigest(
+      ctx.sql.query<{source: string}>('SELECT source FROM drive_plugin_installs WHERE id = ?', [row.id])[0]?.source ?? '')}))};
   },
   'drive/plugin-source': async (ctx,input) => {
     const row=await pluginForMutation(ctx,input.id,false);

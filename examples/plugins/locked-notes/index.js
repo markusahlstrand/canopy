@@ -187,7 +187,8 @@ export default function render(ctx) {
     }
     for (const field of fields)
       field.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && action) {
+        // Enter that confirms an IME composition is part of typing the password, not a submit.
+        if (e.key === "Enter" && action && !e.isComposing) {
           e.preventDefault();
           void run();
         }
