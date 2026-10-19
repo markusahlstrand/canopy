@@ -45,9 +45,9 @@ it('filters individual viewers within a multi-viewer plugin', async () => {
 it('names the selected space before offering space-wide installs', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/plugins') ? { plugins: [] } : { canManage: true }))));
   render(<PluginManagement open onOpenChange={() => {}} spaceName="Family" />);
-  expect(screen.getByText(/apply them to “Family”/)).toBeTruthy();
-  expect(screen.getByText('Installed for you or applied to Family.')).toBeTruthy();
-  expect(await screen.findByRole('button', { name: 'Apply Markdown to Family' })).toBeTruthy();
+  expect(screen.getByText(/for everyone in “Family”/)).toBeTruthy();
+  expect(screen.getByText('Installed for you or for everyone in Family.')).toBeTruthy();
+  expect((await screen.findAllByRole('button', { name: 'Install for everyone in Family' })).length).toBeGreaterThan(0);
 });
 it('shows disabled and damaged catalog installs with their actual scope', async () => {
   const id = pluginCatalog.find(entry => entry.manifest.name === 'Markdown')!.manifest.id;
@@ -68,7 +68,7 @@ it('names the install being replaced in the confirmation', async () => {
   vi.stubGlobal('fetch', fetcher);
   render(<PluginManagement open onOpenChange={() => {}} />);
   await screen.findByText('Enabled for you');
-  fireEvent.click(screen.getByRole('button', { name: 'Review Markdown' }));
+  fireEvent.click(screen.getByRole('button', { name: 'View Markdown source' }));
   fireEvent.click(screen.getByRole('checkbox', { name: /Approve the capabilities/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Install plugin' }));
   expect(confirm).toHaveBeenCalledWith('Replace Markdown for you and its source?');
@@ -79,10 +79,10 @@ it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
   expect(screen.getAllByText(/Listed hosts serve code that runs with the opened file/)).toHaveLength(3);
   fireEvent.click(screen.getByRole('button', { name: 'Editors' }));
-  expect(screen.getByRole('button', { name: 'Review Markdown' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: /Review PDF/i })).toBeNull();
+  expect(screen.getByRole('button', { name: 'View Markdown source' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /View PDF/i })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'All' }));
-  fireEvent.click(screen.getByRole('button', {name:'Review Markdown'}));
+  fireEvent.click(screen.getByRole('button', {name:'View Markdown source'}));
   expect((screen.getByLabelText('Plugin manifest') as HTMLTextAreaElement).value).toContain('markdown-editor');
   expect((screen.getByLabelText('Plugin source') as HTMLTextAreaElement).value).toContain('export default');
   expect(screen.getByRole('button', {name:'Install plugin'})).toBeTruthy();
@@ -109,23 +109,23 @@ it('finds viewers by file extension and MIME type', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
   const search = screen.getByLabelText('Find a plugin');
   fireEvent.change(search, { target: { value: '.md' } });
-  expect(screen.getByRole('button', { name: 'Review Markdown' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Review PDF Viewer' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'View Markdown source' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'View PDF Viewer source' })).toBeNull();
   fireEvent.change(search, { target: { value: 'application/pdf' } });
-  expect(screen.getByRole('button', { name: 'Review PDF Viewer' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Review Markdown' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'View PDF Viewer source' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'View Markdown source' })).toBeNull();
   fireEvent.change(search, { target: { value: 'image/png' } });
-  expect(screen.getByRole('button', { name: 'Review Image Viewer' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'View Image Viewer source' })).toBeTruthy();
   fireEvent.change(search, { target: { value: 'image/tiff' } });
-  expect(screen.getByRole('button', { name: 'Review Image Viewer' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'View Image Viewer source' })).toBeTruthy();
   fireEvent.change(search, { target: { value: 'text/markdown; charset=utf-8' } });
-  expect(screen.getByRole('button', { name: 'Review Markdown' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'View Markdown source' })).toBeTruthy();
   fireEvent.change(search, { target: { value: 'report.pdf' } });
-  expect(screen.getByRole('button', { name: 'Review PDF Viewer' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'View PDF Viewer source' })).toBeTruthy();
   fireEvent.change(search, { target: { value: '.tex' } });
-  expect(screen.queryByRole('button', { name: 'Review Code Editor' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'View Code Editor source' })).toBeNull();
   fireEvent.change(search, { target: { value: '.m' } });
-  expect(screen.queryByRole('button', { name: 'Review Markdown' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'View Markdown source' })).toBeNull();
 });
 
 it('shows an installed-plugin empty state only after loading succeeds', async () => {
@@ -257,7 +257,7 @@ it('does not send client-claimed provenance for a catalog install', async () => 
   vi.stubGlobal('fetch',fetcher);
   render(<PluginManagement open onOpenChange={() => {}} />);
   await screen.findByText('No plugins installed yet.');
-  fireEvent.click(screen.getByRole('button',{name:'Review Markdown'}));
+  fireEvent.click(screen.getByRole('button',{name:'View Markdown source'}));
   fireEvent.click(screen.getByRole('checkbox',{name:/Approve the capabilities/}));
   fireEvent.click(screen.getByRole('button',{name:'Install plugin'}));
   await waitFor(()=>expect(fetcher.mock.calls.filter(([,init])=>init?.method==='PUT')).toHaveLength(1));
@@ -308,7 +308,7 @@ it('clears an old import error when opening a different Studio source', () => {
   const input = screen.getByLabelText('Choose plugin source file');
   fireEvent.change(input, { target: { files: [new File(['x'.repeat(256_001)], 'large.js')] } });
   expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Review Markdown' }));
+  fireEvent.click(screen.getByRole('button', { name: 'View Markdown source' }));
   expect(screen.queryByText('Plugin source file is too large.')).toBeNull();
   fireEvent.change(input, { target: { files: [new File(['x'.repeat(256_001)], 'large.js')] } });
   expect(screen.getByText('Plugin source file is too large.')).toBeTruthy();
@@ -321,7 +321,7 @@ it('requires fresh approval after a replacement file cannot be read', async () =
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   render(<PluginManagement open onOpenChange={() => {}} />);
   await screen.findByText('No plugins installed yet.');
-  fireEvent.click(screen.getByRole('button', {name:'Review Markdown'}));
+  fireEvent.click(screen.getByRole('button', {name:'View Markdown source'}));
   fireEvent.click(screen.getByRole('checkbox', {name:/Approve the capabilities/}));
   expect((screen.getByRole('button', {name:'Install plugin'}) as HTMLButtonElement).disabled).toBe(false);
   fireEvent.change(screen.getByLabelText('Choose plugin source file'), {target:{files:[new File(['x'.repeat(256_001)], 'too-large.js')]}});
