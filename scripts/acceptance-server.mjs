@@ -50,7 +50,7 @@ const registry = createServer(async (req, res) => {
       }));
     } else if (path === `${fixtureName}/-/${fixtureFile}`) {
       res.writeHead(200, { 'content-type': 'application/octet-stream' }).end(fixtureTarball);
-    } else if (!/^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/.test(path)) {
+    } else if (!/^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*(?:\/-\/[a-z0-9~][a-z0-9._~-]*\.tgz)?$/.test(path)) {
       res.writeHead(404).end('not found');
     } else {
       const upstream = await fetch(`https://registry.npmjs.org/${path}`, { headers: { accept: req.headers.accept ?? '*/*' } });
