@@ -133,3 +133,23 @@ it('swaps a card installed for everyone to Uninstall instead of offering a perso
   fireEvent.click(uninstall);
   await waitFor(() => expect(deletes.some(url => url.includes('/plugins/ours'))).toBe(true));
 });
+
+it('offers to update a catalog install saved before the bundled manifest changed', async () => {
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const manifest = pluginCatalog.find(entry => entry.manifest.id === 'locked-notes')!.manifest;
+  const { creators: _dropped, ...oldContributes } = manifest.contributes as Record<string, unknown>;
+  const posts: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method && init.method !== 'GET') posts.push(String(init.body));
+    return new Response(JSON.stringify(url.endsWith('/people/access') ? { canManage: true } : { plugins: [{
+      id: 'ours', principal: 'space', plugin_id: manifest.id, manifest_json: JSON.stringify({ ...manifest, contributes: oldContributes }), source: '',
+      enabled: 1, updated_at: 'revision', source_kind: 'bundled', source_ref: '', resolved: '', source_sha256: '', granted_capabilities: '[]',
+    }] }));
+  }));
+  render(<PluginManagement open onOpenChange={() => {}} spaceName="substrat" />);
+  const card = await screen.findByRole('region', { name: manifest.name });
+  fireEvent.click(await within(card).findByRole('button', { name: 'Update for everyone in substrat' }));
+  await waitFor(() => expect(posts).toHaveLength(1));
+  expect(posts[0]).toContain('"Locked note"');
+  expect(posts[0]).toContain('"expectedRevision":"revision"');
+});

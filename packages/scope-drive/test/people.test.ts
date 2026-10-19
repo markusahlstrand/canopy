@@ -17,7 +17,7 @@
  * narrowing rule is what prevents it, and this is the test that says canopy depends on it.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
@@ -284,6 +284,15 @@ describe('persistent plugin installations', () => {
       await expect(stub.invoke('drive/save-plugin', {manifest: {...manifest, capabilities}, source: 'code', expectedRevision: null})).rejects.toThrow();
     }
   });
+});
+
+it('keeps a plugin\'s New-menu creators through save and list', async () => {
+  const lockedNotes = JSON.parse(readFileSync(new URL('../../../examples/plugins/locked-notes/canopy.json', import.meta.url), 'utf8'));
+  const owner = await as(ada), member = await as(bjorn);
+  await owner.invoke('drive/save-plugin', {manifest: lockedNotes, source: 'code', forSpace: true, expectedRevision: null});
+  const listed = await member.invoke<{plugins: {plugin_id: string; manifest_json: string}[]}>('drive/list-plugins', {});
+  const row = listed.plugins.find(plugin => plugin.plugin_id === 'locked-notes')!;
+  expect(JSON.parse(row.manifest_json).contributes.creators).toEqual([{id: 'locked', label: 'Locked note', icon: 'key-round', defaultName: 'Untitled', extension: '.locked', template: ''}]);
 });
 
 describe('plugin review boundaries',()=>{
