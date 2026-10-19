@@ -1,11 +1,13 @@
 import { useSyncExternalStore } from 'react';
 import { listPlugins, type PluginInstall } from './api';
 import { isFileTypeQuery, viewerMatchesSearch } from './plugin-search';
+/** A "New → <label>" entry: a starter file the plugin's viewer then opens. */
+export interface PluginCreator { id: string; label: string; icon?: string; defaultName: string; extension: string; mime?: string; template?: string }
 export interface PluginManifest {
   id: string; name: string; version: string; description?: string;
   invalid?: boolean;
   capabilities: { kind: string; hosts?: string[] }[];
-  contributes: { viewers?: { id: string; title?: string; match: string[]; fill?: boolean }[]; detailView?: { id: string; title: string } };
+  contributes: { viewers?: { id: string; title?: string; match: string[]; fill?: boolean }[]; detailView?: { id: string; title: string }; creators?: PluginCreator[] };
 }
 let rows: PluginInstall[] = [];
 const listeners = new Set<() => void>();
@@ -28,7 +30,8 @@ export function pluginManifest(row: PluginInstall): PluginManifest {
           && (cap.hosts === undefined || Array.isArray(cap.hosts) && cap.hosts.every((host: unknown) => typeof host === 'string')))
         && contributes && typeof contributes === 'object' && !Array.isArray(contributes)
         && (!contributes.viewers || Array.isArray(contributes.viewers) && contributes.viewers.every(viewer => viewer && typeof viewer.id === 'string' && (viewer.title === undefined || typeof viewer.title === 'string') && (viewer.fill === undefined || typeof viewer.fill === 'boolean') && Array.isArray(viewer.match) && viewer.match.every((match: unknown) => typeof match === 'string')))
-        && (!contributes.detailView || typeof contributes.detailView === 'object' && !Array.isArray(contributes.detailView) && typeof (contributes.detailView as Record<string, unknown>).id === 'string' && typeof (contributes.detailView as Record<string, unknown>).title === 'string')) {
+        && (!contributes.detailView || typeof contributes.detailView === 'object' && !Array.isArray(contributes.detailView) && typeof (contributes.detailView as Record<string, unknown>).id === 'string' && typeof (contributes.detailView as Record<string, unknown>).title === 'string')
+        && (!contributes.creators || Array.isArray(contributes.creators) && contributes.creators.every(creator => creator && typeof creator.id === 'string' && typeof creator.label === 'string' && typeof creator.defaultName === 'string' && typeof creator.extension === 'string' && (creator.icon === undefined || typeof creator.icon === 'string') && (creator.mime === undefined || typeof creator.mime === 'string') && (creator.template === undefined || typeof creator.template === 'string')))) {
         const parsed = { ...manifest, id: typeof manifest.id === 'string' ? manifest.id : row.plugin_id, version: typeof manifest.version === 'string' ? manifest.version : '' } as PluginManifest;
         manifestCache.set(row, { source: row.manifest_json, value: parsed });
         return parsed;
@@ -82,4 +85,9 @@ export function matchingPlugins(rows: PluginInstall[], mime: string, name: strin
     const pattern = match.toLowerCase(); const type = mime.split(';')[0]!.trim().toLowerCase();
     return pattern.startsWith('.') ? name.toLowerCase().endsWith(pattern) : pattern.endsWith('/*') ? type.startsWith(pattern.slice(0, -1)) : pattern === type;
   })));
+}
+/** New-menu entries from enabled plugins, each tagged with the install that opens what it creates. */
+export function pluginCreators(rows: PluginInstall[]): { row: PluginInstall; creator: PluginCreator }[] {
+  return effectivePlugins(rows).filter(row => row.enabled === 1)
+    .flatMap(row => (pluginManifest(row).contributes.creators ?? []).map(creator => ({ row, creator })));
 }

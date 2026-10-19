@@ -54,6 +54,8 @@ export const installedPluginManifest = z.object({
   contributes: z.object({
     viewers: z.array(z.object({id: z.string().min(1).max(50), title: z.string().max(100).optional(), match: z.array(z.string().min(1).max(100)).min(1).max(100), fill: z.boolean().optional()})).max(10).optional(),
     detailView: z.object({id: z.string().min(1).max(50), title: z.string().min(1).max(100), nav: z.object({section: z.string().max(50)}).optional(), immersive: z.boolean().optional()}).optional(),
+    // "New → <label>" entries; the file they create opens in the plugin's viewer.
+    creators: z.array(z.object({id: z.string().min(1).max(50), label: z.string().trim().min(1).max(100), icon: z.string().max(50).optional(), defaultName: z.string().trim().min(1).max(100), extension: z.string().regex(/^\.[A-Za-z0-9][A-Za-z0-9.-]{0,19}$/), mime: z.string().max(100).optional(), template: z.string().max(100_000).optional()})).max(5).optional(),
   }).refine(value => !!value.viewers?.length || !!value.detailView, 'A plugin needs a viewer or app contribution'),
 });
 export const storedPlugin = z.object({ id: z.string(), plugin_id: z.string(), principal: z.string(), manifest_json: z.string(), source: z.string(), enabled: z.number().int(), updated_at: z.string(), source_kind: z.string(), source_ref: z.string(), resolved: z.string(), source_sha256: z.string(), granted_capabilities: z.string() });

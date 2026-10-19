@@ -113,3 +113,23 @@ it('forgets a pending catalog confirmation when the dialog closes', async () => 
   await within(card()).findByRole('button', { name: 'Install for everyone in this space' });
   expect(within(card()).queryByRole('group', { name: `Confirm ${manifest.name}` })).toBeNull();
 });
+
+it('swaps a card installed for everyone to Uninstall instead of offering a personal install', async () => {
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const manifest = pluginCatalog.find(entry => entry.manifest.id === 'locked-notes')!.manifest;
+  const deletes: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'DELETE') deletes.push(url);
+    return new Response(JSON.stringify(url.endsWith('/people/access') ? { canManage: true } : { plugins: [{
+      id: 'ours', principal: 'space', plugin_id: manifest.id, manifest_json: JSON.stringify(manifest), source: '',
+      enabled: 1, updated_at: 'revision', source_kind: 'bundled', source_ref: '', resolved: '', source_sha256: '', granted_capabilities: '[]',
+    }] }));
+  }));
+  render(<PluginManagement open onOpenChange={() => {}} spaceName="substrat" />);
+  const card = await screen.findByRole('region', { name: manifest.name });
+  const uninstall = await within(card).findByRole('button', { name: 'Uninstall for everyone in substrat' });
+  expect(within(card).queryByRole('button', { name: 'Install' })).toBeNull();
+  expect(within(card).queryByRole('button', { name: 'Install for everyone in substrat' })).toBeNull();
+  fireEvent.click(uninstall);
+  await waitFor(() => expect(deletes.some(url => url.includes('/plugins/ours'))).toBe(true));
+});

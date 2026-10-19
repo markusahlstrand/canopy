@@ -18,6 +18,7 @@ import { DriveScreen } from './drive';
 import { currentSite, selectSite } from './api';
 import { indexedMirror } from './scope-mirror';
 import * as liveUpdates from './live-updates';
+import { pluginCatalog } from './plugin-catalog';
 import { publishPlugins } from './installed-plugins';
 import { useUnsavedDraft } from './drafts';
 import type { PluginInstall } from './api';
@@ -304,6 +305,19 @@ it('retains a failed new-folder name and closes only after the retry succeeds', 
   expect(pending.find(request => request.method === 'POST')?.body).toBe(JSON.stringify({ name: 'Drafts' }));
   await answer('/folders/root/folders', { id: 'new', parent_id: 'root', name: 'Drafts', path: 'Drafts' });
   expect(screen.queryByRole('dialog', { name: 'New folder' })).toBeNull();
+});
+
+it('creates a plugin starter file from New without overwriting a file of that name', async () => {
+  const locked = pluginCatalog.find(entry => entry.manifest.id === 'locked-notes')!.manifest;
+  publishPlugins([{ id: 'locked-install', plugin_id: 'locked-notes', principal: 'space', enabled: 1, updated_at: 'now', source: '', manifest_json: JSON.stringify(locked) }]);
+  await renderDrive();
+  newMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'Locked note' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'New locked note' }), { target: { value: 'Diary' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  const post = pending.find(request => request.method === 'POST');
+  expect(post?.url).toContain('/folders/root/content?name=Diary.locked&create=only');
+  await answer('/folders/root/content', { id: '01N', current_version_id: '01V' });
+  expect(screen.queryByRole('dialog', { name: 'New locked note' })).toBeNull();
 });
 
 it('refuses a new-folder save once a failed refresh has switched the screen offline', async () => {

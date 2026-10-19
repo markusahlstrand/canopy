@@ -986,10 +986,15 @@ app.post('/api/folders/:folderId/content', async (c) => {
   if (!name) throw new HTTPException(400, { message: 'name is required' });
 
   const stub = await hostFor(env).getScope(principal, node.tenantId, node.scopeId);
-  const file = await stub.invoke<{ id: string }>('drive/ensure-file', {
+  const file = await stub.invoke<{ id: string; current_version_id: string | null }>('drive/ensure-file', {
     folderId: c.req.param('folderId'),
     name,
   });
+  // `?create=only` is "New → …": a starter file must never become a version of a
+  // file that already has content under that name.
+  if (c.req.query('create') === 'only' && file.current_version_id) {
+    throw new HTTPException(409, { message: `This folder already has a file named '${name}'.` });
+  }
 
   const contentType = c.req.header('content-type') ?? 'application/octet-stream';
   const body = await readBounded(c.req.raw);
