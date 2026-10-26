@@ -41,7 +41,9 @@ Substrat already has the shape for a source that holds files
   content or delete, keyed by `itemId`) to an operation the vertical declares. The bytes arrive as
   **attachments** on the entity that operation names. So a connected file is an ordinary
   `source: 'blob'` version, and downloads, previews, offline and search work without changes. The
-  501 path is never used.
+  one exception is a file over `FILE_SOURCE_MAX_FILE_BYTES` (50 MB), which lands **without bytes**
+  (`content: 'too-large'`). It becomes a file row with no version and a durable
+  `source_status: 'too-large'` (§4.2), never an `external` version. So the 501 path is never used.
 - **Writes are events.** The vertical emits the provider's write event with a
   `fileSourceWriteRequest` payload (attachments plus `directory` plus a required `conflict`).
 - **Credentials** come from the vertical's own settings screen through the connection relay
@@ -90,9 +92,9 @@ because it's the product's name. So does the write event, `a3doc.files-requested
 | `itemId` (folder) | `c<containerId>` |
 | names | `<Title>.<ext>`, with slashes turned into `-`. **A name, once given to an item, is kept** in connector state (`itemId → name`) and changes only when that document's own title changes. When titles clash, the item that arrives later gets `(<Code>)` appended. Removing a sibling never renames another item, so a path never depends on its neighbours. A document the connector uploaded itself is given the `name` its write request asked for (found through the write ledger), which is what lets the vertical adopt its own upload (§4.3). |
 | `lastModifiedAt` | `DateModified`, read as Europe/Madrid time |
-| change feed | a3doc has none. Read newest-modified first and stop once `DateModified` is **older than the high-water mark minus an overlap window** (2 hours). Compare with `>=` and dedupe by `itemId` + `DateModified`. The window covers the repeated hour at the October DST change and ties on the high-water value, and the landing is idempotent, so re-sent changes are harmless. A full walk runs daily as the backstop. |
+| change feed | a3doc has none. Read newest-modified first and stop once `DateModified` is **older than the high-water mark minus an overlap window** (2 hours). Compare with `>=`. The window covers the repeated hour at the October DST change and ties on the high-water value. a3doc exposes no revision and no offset-bearing instant, so wall-clock `DateModified` is **not** a safe version key on its own. The connector keeps a per-item fingerprint (`DateModified` + `Size` + `Title`) and re-lands an item whenever any part changes. An item whose `DateModified` falls in an ambiguous (repeated) hour is not trusted on its fingerprint: the next daily full walk downloads it and compares its sha256 with the landed attachment's, landing new content on a mismatch. Re-sent changes are harmless because the landing is idempotent (§4.2). |
 | delete | only on an answer about that item. For `<doc>@<c>`, ask `GetDocumentsExtended` scoped to container `c` and filtered to the document's `Code`. If it's there, it's held. If it's gone from `c` but `Download {documentId}` still answers, it's `moved-out`. If `Download` fails as gone, it's `deleted`. A walk's silence is never enough (the RFC's fourth invariant). |
-| write event | `a3doc.files-requested`. `conflict: 'rename'` uploads a new document (a3doc keeps both). `'fail'` checks for the name and then uploads. That is **best-effort**: a3doc has no atomic create-if-absent, so two writers (or a person in a3doc's web app) can both pass the check. `'replace'` is refused at validation. The connector records each upload's returned `documentId` against the request's attachment (the write ledger). |
+| write event | `a3doc.files-requested`. `conflict: 'rename'` uploads a new document (a3doc keeps both). `'fail'` checks for the name and then uploads. That is **best-effort**: a3doc has no atomic create-if-absent, so two writers (or a person in a3doc's web app) can both pass the check. `'replace'` is refused at validation. **The write ledger** keys on the request's attachment. It records `attempted` (with the target container, title and attachment sha256) *before* calling `Upload`, and `documentId` after. `Upload` has no idempotency key, so a retry whose ledger row says `attempted` without a `documentId` (the response was lost) **reconciles before uploading again**. It searches the target container by title (`GetDocumentsExtended` with the title filter the web app uses, `AttributeId: 3`) for documents created since the attempt, downloads each match, and adopts the one whose sha256 equals the attachment's: its `documentId` is recorded and no second upload happens. Only when no match exists does it upload again. A same-titled document a person added with different bytes is never adopted. |
 | upload customer | binding option `customerId`. When absent, the customer the bound documents already carry. |
 
 ### 3.3 What this asks of the platform
@@ -117,19 +119,34 @@ because it's the product's name. So does the write event, `a3doc.files-requested
    don't add new operations.
 2. **The landing operation**, `drive/land-source-change`, receives one `fileSourceChange` per call.
    It is **keyed on `itemId`, never on path**. That needs a new column, `drive_files.source_item_id`,
-   unique within the space:
-   - `upsert` with a known `itemId`: if `path` differs, rename or move that same row. Its id,
-     versions and links survive. With an unknown `itemId`: first try to **adopt** (below), then
-     create a row. When `content: 'follows'` it answers `{ entity }` naming the file.
-   - `content`: insert a `drive_file_versions` row (`source: 'blob'`, `blob_ref` = the landed
-     attachment) and **repoint `drive_files.current_version_id`** to it, the same way a normal new
-     version does, with `expectedCurrentVersion` as the guard. History is the earlier version rows
-     of that file (`file_id`); there is no `replaces` field to set.
-   - `delete` (`deleted` or `moved-out`): **free the name, then trash.** A trashed file keeps its
-     name, because `(folder_id, name)` is unique regardless of state (model.ts). So the row is
-     first renamed to `<stem> (removed <short itemId>).<ext>`, then trashed. A later document with
-     the same title can then land under the plain name. The delete applies to that one file and
-     never cascades through a folder.
+   unique within the space (a trashed row keeps its value):
+   - `upsert` with a known `itemId` on a **live** row: if `path` differs, rename or move that same
+     row. Its id, versions and links survive. With a known `itemId` on a **trashed** row (the
+     document came back into the folder): restore that row, then apply the path. With an unknown
+     `itemId`: first try to **adopt** (§4.3), then create a row. When `content: 'follows'` it
+     answers `{ entity }` naming the file. When `content: 'too-large'` the row gets
+     `source_status: 'too-large'` and no version, and any earlier version stays current (or there
+     is none). The drive then shows "Too large to copy from a3doc (over 50 MB)" in place of
+     download and preview, leaves the file out of offline, and indexes its name only for search. A
+     later upsert whose size is under the cap clears the status and asks for the bytes.
+   - `content`: **guarded by `replaces`.** The landing compares `replaces` with the file's current
+     state. If the file has no current version, `replaces` must be `null`. Otherwise it must equal
+     the current version's `blob_ref`. When it matches, insert a `drive_file_versions` row
+     (`source: 'blob'`, `blob_ref` = the landed attachment) and repoint
+     `drive_files.current_version_id` to it, passing that current version as
+     `expectedCurrentVersion` so a concurrent write fails rather than overwrites. History is the
+     earlier version rows of that file (`file_id`); there is no `replaces` column. When the landed
+     attachment is already the current `blob_ref` (a redelivery), it is a no-op. On any other
+     mismatch the change is **stale** and is rejected: no version is written, and the landing
+     removes the newly landed attachment so nothing points at orphaned bytes. The newer content
+     the file already has is never replaced by an older one.
+   - `delete` (`deleted` or `moved-out`): looks the `itemId` up among **live** rows only. If the
+     row is already trashed, or there is none, the delete is a **no-op**, so a redelivered delete
+     never renames or trashes anything twice. On a live row: **free the name, then trash.** A
+     trashed file keeps its name, because `(folder_id, name)` is unique regardless of state
+     (model.ts). So the row is first renamed to `<stem> (removed <short itemId>).<ext>`, then
+     trashed. A later document with the same title can then land under the plain name. The delete
+     applies to that one file and never cascades through a folder.
 3. **Uploads are adopted, never duplicated.** This is required. An upload into a connected folder
    creates a local `drive_files` row with no `source_item_id`, marked as pending for the
    attachment it carries. It must land under a name free in that folder, or `(folder_id, name)`
@@ -150,7 +167,17 @@ because it's the product's name. So does the write event, `a3doc.files-requested
    can't upload"), so a file is never stored locally that can never reach a3doc. New folders,
    rename, move and delete are always refused, in both the UI and the operations, because a3doc
    can't do them. The refusal says why.
-6. **Leaving.** Unbinding keeps the files (RFC Q4 = keep), and the space becomes an ordinary space.
+6. **Leaving and rebinding.** Unbinding keeps the files (RFC Q4 = keep), and the space becomes an
+   ordinary space. The kept rows **keep their `source_item_id`**, and the space records which
+   account they came from (the connection's `externalAccountRef`, the a3doc company code). A later
+   binding to the **same account** resumes those identities: its first sync finds them by
+   `itemId`, so nothing is landed twice. A file given a new version in Canopy while unbound no longer
+   matches the `replaces` a3doc sends, so a3doc's next content for it is rejected as above. The
+   file is marked `source_status: 'diverged'` and shown as such, and nobody's edit is silently
+   overwritten in either direction. A binding to a **different account** is
+   allowed only after the old identities are cleared. That bind clears every `source_item_id` in
+   the space first, so the old files stay as ordinary files and can never be mistaken for, or
+   overwritten by, the new account's documents.
 
 ## 5. Sequence
 
@@ -158,9 +185,9 @@ Each step is its own PR.
 
 | # | Repo | What |
 |---|---|---|
-| 1 | canopy | `packages/connectors/a3docs`, rebuilt as a Substrat connector: the client from `feat/connector-a3docs`, credential and probe (`canUpload`), bind/list/unbind, sweep to `fileSourceChange` (name map, overlap cursor, per-container delete check), write handler and ledger. It exports a `ConnectorRegistration`, is tested against a fixture provider, and builds to `dist` the way `@canopy/scope-drive` already does (`tsconfig.build.json`, `main: ./dist/src/index.js`). It is the first Canopy package to be **published** (see §6.4). |
+| 1 | canopy | `packages/connectors/a3docs`, rebuilt as a Substrat connector: the client from `feat/connector-a3docs`, credential and probe (`canUpload`), bind/list/unbind, sweep to `fileSourceChange` (name map, overlap cursor, fingerprints with a content check for ambiguous-hour items, per-container delete check), write handler and a ledger that reconciles lost upload responses. It exports a `ConnectorRegistration`, is tested against a fixture provider, and builds to `dist` the way `@canopy/scope-drive` already does (`tsconfig.build.json`, `main: ./dist/src/index.js`). It is the first Canopy package to be **published** (see §6.4). |
 | 2 | substrat | depend on `@canopy/connector-a3docs` and add it to `CONNECTORS` in `apps/control-plane/src/connectors.ts` (inspector, sweeper, binder, dispatch), plus a connector doc page |
-| 3 | canopy | `scope-drive`: `drive:land-source` in `DRIVE_PERMISSIONS`, the `connections` manifest row, `source_item_id` (migration + unique index), `drive/land-source-change` (keyed on `itemId`, adopt, free-then-trash, repoint current version), pending-upload rows, and the write operation that emits the event |
+| 3 | canopy | `scope-drive`: `drive:land-source` in `DRIVE_PERMISSIONS`, the `connections` manifest row, `source_item_id` and `source_status` (`too-large` / `diverged`) with their migration and unique index, `drive/land-source-change` (keyed on `itemId`, adopt, restore-on-return, `replaces`-guarded content with stale-attachment cleanup, idempotent free-then-trash delete), the account recorded per space for rebinding, pending-upload rows, and the write operation that emits the event |
 | 4 | canopy | drive UI: *Source* in the space settings (connect, status, last sync, upload allowed), and connected-space affordances (upload only, and only with `canUpload`) |
 | 5 | both | live check against a real a3doc account, including **one agreed test upload**, since a3doc has no delete |
 
