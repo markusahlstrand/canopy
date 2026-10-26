@@ -67,3 +67,33 @@ describe('response validation', () => {
     }
   });
 });
+
+
+describe('document payload validation', () => {
+  const clientFor = (payload: unknown) => createA3docClient({
+    credentials: { companyCode: 'company', user: 'user', password: 'password' },
+    apiBase: 'https://a3.example/v1',
+    fetch: async (url) => ({ status: 200, text: async () => JSON.stringify(
+      url.endsWith('/signIn') ? { errorCode: 0, token: 'session' } : payload,
+    ) }),
+  });
+  it.each([
+    { errorCode: 0, countAllDocuments: 1 },
+    { errorCode: 0, documents: null },
+    { errorCode: 0, documents: [{}] },
+    { errorCode: 0, documents: [{ Id: 'doc', ContainersId: '21' }] },
+  ])('rejects incomplete listings and searches: %j', async (payload) => {
+    const client = clientFor(payload);
+    await expect(client.listDocuments({ containerId: 1, children: true, pageIndex: 0, pageSize: 100 })).rejects.toThrow('invalid documents');
+    await expect(client.findByTitle({ containerId: 1, children: false, title: 'Invoice' })).rejects.toThrow('invalid documents');
+  });
+  it('requires a listing count and successful download content', async () => {
+    await expect(clientFor({ errorCode: 0, documents: [] }).listDocuments({ containerId: 1, children: true, pageIndex: 0, pageSize: 100 }))
+      .rejects.toThrow('invalid document count');
+    await expect(clientFor({ errorCode: 0 }).download('doc')).rejects.toThrow('missing content');
+    expect(await clientFor({ errorCode: 2 }).download('doc')).toBeNull();
+    expect(await clientFor({ errorCode: 0, content: '' }).download('doc')).toEqual(new Uint8Array());
+    expect(await clientFor({ errorCode: 0, documents: [], countAllDocuments: 0 })
+      .listDocuments({ containerId: 1, children: true, pageIndex: 0, pageSize: 100 })).toEqual({ total: 0, documents: [] });
+  });
+});

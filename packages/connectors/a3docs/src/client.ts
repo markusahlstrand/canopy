@@ -213,7 +213,9 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
     },
 
     async containersTree() {
-      return (await ok<Envelope & { tree?: A3Container[] }>("ContainersTree", {})).tree ?? [];
+      const b = await ok<Envelope & { tree?: A3Container[] }>("ContainersTree", {});
+      if (!Array.isArray(b.tree)) throw new Error("a3doc ContainersTree: missing tree");
+      return b.tree;
     },
 
     async listDocuments({ containerId, children, pageIndex, pageSize }) {
@@ -221,7 +223,11 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
         "GetDocumentsExtended",
         listParams(containerId, children, pageIndex, pageSize),
       );
-      return { total: b.countAllDocuments ?? 0, documents: b.documents ?? [] };
+      validateDocuments(b.documents);
+      if (typeof b.countAllDocuments !== "number" || !Number.isInteger(b.countAllDocuments) || b.countAllDocuments < 0) {
+        throw new Error("a3doc GetDocumentsExtended: invalid document count");
+      }
+      return { total: b.countAllDocuments, documents: b.documents };
     },
 
     async findByTitle({ containerId, children, title }) {
@@ -231,14 +237,16 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
         listParams(containerId, children, 0, 100, filter),
       );
       // The filter is the web app's search, so it may match loosely; the title is checked here.
-      return (b.documents ?? []).filter((d) => (d.Title ?? "").trim() === title.trim());
+      validateDocuments(b.documents);
+      return b.documents.filter((d) => (d.Title ?? "").trim() === title.trim());
     },
 
     async download(documentId) {
       const b = await call<Envelope & { content?: string }>("Download", { documentId });
       if (b.errorCode === TOKEN_INVALID) throw new A3docError(b.errorCode, "Download", b.errorMessage);
       // Any other refusal of a document id is a3doc answering about that document: it has none.
-      if (b.errorCode || b.content == null) return null;
+      if (b.errorCode) return null;
+      if (typeof b.content !== "string") throw new Error("a3doc Download: missing content");
       return base64ToBytes(b.content);
     },
 
@@ -256,6 +264,16 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
       return b.documentId;
     },
   };
+}
+
+/** Reject incomplete listings before they can be interpreted as missing documents. */
+function validateDocuments(value: unknown): asserts value is A3Document[] {
+  if (!Array.isArray(value) || value.some((doc) =>
+    !doc || typeof doc !== "object" || typeof doc.Id !== "string" || !doc.Id ||
+    (doc.Title !== undefined && typeof doc.Title !== "string") ||
+    (doc.ContainersId !== undefined && (!Array.isArray(doc.ContainersId) ||
+      doc.ContainersId.some((id: unknown) => typeof id !== "number" || !Number.isInteger(id))))
+  )) throw new Error("a3doc GetDocumentsExtended: invalid documents");
 }
 
 /**

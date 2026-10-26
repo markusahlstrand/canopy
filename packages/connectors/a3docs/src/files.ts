@@ -557,9 +557,14 @@ export async function syncA3docScope(
     } else {
       const requested = (await host.admin.getConnectorState(connectionId, requestedKey(binding.scopeId, doc.Id))) as { name?: string } | undefined;
       name = requested?.name ?? fileNameOf(doc);
-      const occupants = namesByContainer.get(containerId)?.get(name);
-      const taken = occupants && (occupants.size > 1 || !occupants.has(id));
-      if (taken) name = withSuffix(name, String(doc.Code ?? doc.Id));
+      const baseName = name;
+      let attempt = 0;
+      while (true) {
+        const occupants = namesByContainer.get(containerId)?.get(name);
+        if (!occupants || (occupants.size === 1 && occupants.has(id))) break;
+        const suffix = String(doc.Code ?? doc.Id);
+        name = withSuffix(baseName, attempt++ === 0 ? suffix : `${suffix}-${attempt}`);
+      }
     }
     const path = join(dir, name);
     const tooLarge = (doc.Size ?? 0) * 1024 > FILE_SOURCE_MAX_FILE_BYTES;
@@ -649,9 +654,11 @@ export async function syncA3docScope(
       const placements = (doc.ContainersId ?? [binding.containerId]).filter((c) => folderPath.has(c));
       for (const c of placements) await landDoc(doc, c);
       // A placement held for this document that its own record no longer lists has moved out.
-      for (const id of [...(itemsByDocument.get(doc.Id) ?? [])]) {
-        const e = index.get(id)!;
-        if (!placements.includes(e.parentId)) await landDelete(id, e, 'moved-out');
+      if (doc.ContainersId !== undefined) {
+        for (const id of [...(itemsByDocument.get(doc.Id) ?? [])]) {
+          const e = index.get(id)!;
+          if (!placements.includes(e.parentId)) await landDelete(id, e, 'moved-out');
+        }
       }
     }
     pass.page++;

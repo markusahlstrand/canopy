@@ -208,6 +208,44 @@ describe('sync', () => {
     expect(w.landed.at(-1)).toMatchObject({ change: 'delete', itemId: `${first.Id}@21`, reason: 'deleted' });
   });
 
+  it('checks suffix collisions and keeps the chosen name on later syncs', async () => {
+    const w = await world();
+    w.a3.add([21], 'Tax', 'first');
+    await w.bind();
+    await w.sync();
+    const nextCode = w.a3.docs[0]!.Code + 2;
+    w.a3.add([21], `Tax (${nextCode})`, 'occupied suffix');
+    await w.sync();
+    const doc = w.a3.add([21], 'Tax', 'second');
+    await w.sync();
+    expect(doc.Code).toBe(nextCode);
+    expect(w.mirror().get(`${doc.Id}@21`)).toBe(`Facturas/Recibidas/Tax (${nextCode}-2).pdf`);
+    const paths = pathsOf(w.mirror());
+    expect(new Set(paths).size).toBe(paths.length);
+    const before = w.landed.length;
+    await w.sync();
+    expect(w.landed).toHaveLength(before);
+  });
+
+  it('does not delete child placements when a listing omits placement metadata', async () => {
+    const w = await world();
+    const doc = w.a3.add([21], 'Tax', 'bytes');
+    await w.bind();
+    await w.sync();
+    const fetch = w.options.fetch;
+    w.options.fetch = (async (url, init) => {
+      const response = await fetch(url, init);
+      if (!String(url).endsWith('/GetDocumentsExtended')) return response;
+      const body = await response.json() as { documents: Record<string, unknown>[] };
+      for (const item of body.documents) delete item.ContainersId;
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const before = w.landed.length;
+    await w.sync({ now: w.tomorrow() });
+    expect(w.landed.slice(before).filter((c) => c.change === 'delete')).toEqual([]);
+    expect(w.mirror().has(`${doc.Id}@21`)).toBe(true);
+  });
+
   it('lands an edit as new content that names the content it replaces, and a retitle as a move of the same item', async () => {
     const w = await world();
     const doc = w.a3.add([21], 'Factura', 'v1');
