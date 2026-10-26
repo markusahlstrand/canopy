@@ -1,0 +1,40 @@
+{
+  "name": "@canopy/connector-a3docs",
+  "version": "0.1.0",
+  "description": "Wolters Kluwer a3doc as a Substrat file source: bind a scope to an a3doc folder, sync its documents in through the vertical's own operation, and upload new ones.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./client": {
+      "types": "./dist/src/client.d.ts",
+      "default": "./dist/src/client.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "pnpm build"
+  },
+  "dependencies": {
+    "@substrat-run/contracts": "^0.163.0",
+    "@substrat-run/kernel": "^0.163.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@substrat-run/adapter-sqlite": "^0.163.0",
+    "@substrat-run/contract-tests": "^0.163.0",
+    "@types/node": "^26.6.3",
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.2"
+  },
+  "files": [
+    "dist"
+  ]
+}
