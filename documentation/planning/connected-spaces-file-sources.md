@@ -17,10 +17,21 @@ The immediate need is a3doc, the document box a gestoría shares with its client
 forwarded by email ([#357](https://github.com/markusahlstrand/canopy/issues/357)) end up there,
 and the Qonto → a3doc sync writes into it.
 
-## 2. The decision: use Substrat's file-source shape, not a Canopy one
+## 2. The decision: Substrat's file-source shape, with the connector kept in this repo
 
-A hosted vertical can't run connector code. Its module code may not fetch, and credentials live in
-the platform's connection store, never in the scope. So the connector is **platform code**, and
+The connector **lives in Canopy** (`packages/connectors/a3doc`) and is written against Substrat's
+connector interfaces. Where it **runs** depends on the deployment:
+
+- **Self-hosted drive:** the vertical's host calls `registerConnector` with it directly, and
+  Substrat doesn't change.
+- **Hosted drive** (`substrat push`, how it ships today): a hosted vertical's module code may not
+  fetch, and its connector deliveries and sweeps run in the control plane from the fixed
+  `CONNECTORS` list (control-plane `worker.ts`). There, "the SAME closure a self-host registers
+  runs unchanged". The platform holds the sealed credential and the network access, and it never
+  runs code a vertical hands it at runtime. So Substrat **depends on the published
+  `@canopy/connector-a3doc`** and adds one `ConnectorRegistration` for it. That is a
+  dependency plus a list entry. The connector's code is not copied.
+
 Substrat already has the shape for a source that holds files
 ([connections.md §6.3](https://github.com/substrat-run/substrat/blob/main/docs/architecture/connections.md),
 [rfc/file-bearing-sources.md](https://github.com/substrat-run/substrat/blob/main/docs/rfc/file-bearing-sources.md),
@@ -43,10 +54,10 @@ A drive **space is its own scope**, so "this space is backed by that a3doc accou
 binding.
 
 The `StorageConnector` written for `apps/api` (branch `feat/connector-a3docs`) is not the
-product path. What carries over is its `client.ts`: the dependency-free WebAPI client and the
-quirks verified against a live account (§3.1).
+product path. Its `client.ts` stays as the base of the new package: the dependency-free WebAPI
+client and the quirks verified against a live account (§3.1).
 
-## 3. Substrat: `connectors/a3doc`, file source #2
+## 3. Canopy: `packages/connectors/a3doc`, Substrat file source #2
 
 ### 3.1 What the API gives us
 
@@ -121,8 +132,8 @@ Each step is its own PR.
 
 | # | Repo | What |
 |---|---|---|
-| 1 | substrat | `connectors/a3doc`: client (moved from canopy `feat/connector-a3docs`), credential and probe, bind/list/unbind, sweep to `fileSourceChange`, write handler. Tested against a fixture provider. |
-| 2 | substrat | registration in `apps/control-plane/src/connectors.ts` (inspector, sweeper, binder), plus a connector doc page |
+| 1 | canopy | `packages/connectors/a3doc`: the client from `feat/connector-a3docs`, credential and probe, bind/list/unbind, sweep to `fileSourceChange`, write handler. It exports a `ConnectorRegistration` and is tested against a fixture provider. Published as `@canopy/connector-a3doc` (MIT). |
+| 2 | substrat | depend on `@canopy/connector-a3doc` and add it to `CONNECTORS` in `apps/control-plane/src/connectors.ts` (inspector, sweeper, binder, dispatch), plus a connector doc page |
 | 3 | canopy | `scope-drive`: the `connections` manifest row, `drive/land-source-change`, `itemId` on `drive_files`, and the write operation that emits the event |
 | 4 | canopy | drive UI: *Source* in the space settings (connect, status, last sync), and connected-space affordances (upload only) |
 | 5 | both | live check against a real a3doc account, including **one agreed test upload**, since a3doc has no delete |
@@ -140,6 +151,9 @@ provider, and that is when the shared `FileSource` facet is worth extracting.
 3. **Detecting deletes cheaply.** The RFC forbids inferring a delete from absence. Checking held
    items one `Download` at a time is expensive; filtering `GetDocumentsExtended` by `Code` may be
    cheaper. This needs probing.
-4. **Many spaces, one account.** Binding one a3doc connection into several spaces (say, per
+4. **Publishing.** Canopy's packages are workspace-only today (`main: ./src/index.ts`). Step 1
+   needs a build and an npm publish for this one package, or Substrat vendors a pinned tarball.
+   Which does the control plane's deploy accept?
+5. **Many spaces, one account.** Binding one a3doc connection into several spaces (say, per
    container) needs the binding `folder` option set per scope, not from the manifest. Is that a
    platform change (#2316 binds from a manifest-wide declaration)?
