@@ -395,6 +395,18 @@ describe('probes', () => {
     expect(summary.fields.find((f) => f.key === 'password')).toMatchObject({ masked: true });
   });
 
+  it.each([
+    { status: 502, body: { errorCode: 1 } },
+    { status: 200, body: { message: 'Bad Gateway' } },
+  ])('a non-a3doc response is inconclusive ($status)', async ({ status, body }) => {
+    const options = {
+      apiBase: API,
+      fetch: (async () => new Response(JSON.stringify(body), { status })) as never,
+    };
+    expect(await probeA3docSecret({ companyCode: COMPANY, user: USER, password: PASSWORD }, options))
+      .toMatchObject({ ok: false, refused: false });
+  });
+
   it('an unreachable a3doc is inconclusive, never a refusal', async () => {
     const down = { fetch: (async () => { throw new Error('ECONNREFUSED'); }) as never, addressProvider: ADDRESS, apiBase: API };
     expect(await probeA3docSecret({ companyCode: COMPANY, user: USER, password: PASSWORD }, down)).toMatchObject({ ok: false, refused: false });

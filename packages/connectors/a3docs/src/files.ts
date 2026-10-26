@@ -459,6 +459,32 @@ export async function syncA3docScope(
 
   const prefix = itemPrefix(binding);
   const index = await readItems(host, connectionId, binding);
+  const itemsByDocument = new Map<string, Set<string>>();
+  const namesByContainer = new Map<number, Map<string, Set<string>>>();
+  /** Keep document placements and occupied file names aligned with the held-item index. */
+  const indexFile = (id: string, entry: ItemEntry, add: boolean) => {
+    if (entry.kind !== 'file') return;
+    if (entry.documentId) {
+      let ids = itemsByDocument.get(entry.documentId);
+      if (add && !ids) itemsByDocument.set(entry.documentId, (ids = new Set()));
+      if (add) ids!.add(id);
+      else if (ids) {
+        ids.delete(id);
+        if (!ids.size) itemsByDocument.delete(entry.documentId);
+      }
+    }
+    let names = namesByContainer.get(entry.parentId);
+    if (add && !names) namesByContainer.set(entry.parentId, (names = new Map()));
+    let ids = names?.get(entry.name);
+    if (add && !ids) names!.set(entry.name, (ids = new Set()));
+    if (add) ids!.add(id);
+    else if (ids) {
+      ids.delete(id);
+      if (!ids.size) names!.delete(entry.name);
+      if (!names!.size) namesByContainer.delete(entry.parentId);
+    }
+  };
+  for (const [id, entry] of index) indexFile(id, entry, true);
   const due = !binding.highWater || !binding.lastFull || now.getTime() - Date.parse(binding.lastFull) >= FULL_PASS_EVERY_MS;
   let pass: SyncPass = binding.pass ?? { id: crypto.randomUUID(), full: due, page: 0, startedAt: now.toISOString(), changes: 0 };
 
@@ -467,8 +493,12 @@ export async function syncA3docScope(
   let attachments: Awaited<ReturnType<ScopeHost['getConnectorAttachments']>> | undefined;
   const put = async (id: string, entry: ItemEntry | null) => {
     await host.admin.putConnectorState(connectionId, `${prefix}${id}`, entry);
-    if (entry) index.set(id, entry);
-    else index.delete(id);
+    const prior = index.get(id);
+    if (prior) indexFile(id, prior, false);
+    if (entry) {
+      index.set(id, entry);
+      indexFile(id, entry, true);
+    } else index.delete(id);
   };
   const invoke = (change: FileSourceChange) => scope.invoke(binding.operation, fileSourceChange.parse(change));
   let changes = 0;
@@ -527,7 +557,8 @@ export async function syncA3docScope(
     } else {
       const requested = (await host.admin.getConnectorState(connectionId, requestedKey(binding.scopeId, doc.Id))) as { name?: string } | undefined;
       name = requested?.name ?? fileNameOf(doc);
-      const taken = [...index.entries()].some(([other, e]) => other !== id && e.kind === 'file' && e.parentId === containerId && e.name === name);
+      const occupants = namesByContainer.get(containerId)?.get(name);
+      const taken = occupants && (occupants.size > 1 || !occupants.has(id));
       if (taken) name = withSuffix(name, String(doc.Code ?? doc.Id));
     }
     const path = join(dir, name);
@@ -618,8 +649,9 @@ export async function syncA3docScope(
       const placements = (doc.ContainersId ?? [binding.containerId]).filter((c) => folderPath.has(c));
       for (const c of placements) await landDoc(doc, c);
       // A placement held for this document that its own record no longer lists has moved out.
-      for (const [id, e] of [...index.entries()]) {
-        if (e.kind === 'file' && e.documentId === doc.Id && !placements.includes(e.parentId)) await landDelete(id, e, 'moved-out');
+      for (const id of [...(itemsByDocument.get(doc.Id) ?? [])]) {
+        const e = index.get(id)!;
+        if (!placements.includes(e.parentId)) await landDelete(id, e, 'moved-out');
       }
     }
     pass.page++;

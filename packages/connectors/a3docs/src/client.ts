@@ -5,8 +5,8 @@
  *
  * The API is the one a3doc's own web app (a3doc.wolterskluwer.es) speaks: every call is a JSON
  * `POST <apiBase>/<Method>` whose body carries a session `token`, and every answer is HTTP 200
- * with an `errorCode` (0 = ok). Failures are therefore read from the body, never the status. The
- * token comes from `signIn` (company code + user + password).
+ * with an `errorCode` (0 = ok). API failures are read from the body; transport failures are
+ * checked separately. The token comes from `signIn` (company code + user + password).
  *
  * Methods the web app uses, and so the whole surface there is: `signIn`, `UserInfo`,
  * `ContainersTree`, `RootContainer`, `GetDocumentsExtended`, `Download`, `Upload`,
@@ -129,7 +129,7 @@ export interface A3docClient {
 export const canUploadAs = (role: number) => role !== 1 && role !== 6;
 
 interface Envelope {
-  errorCode?: number;
+  errorCode: number;
   errorMessage?: string;
 }
 
@@ -152,7 +152,7 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
     if (apiBase) return apiBase;
     const provider = (config.addressProvider ?? A3DOC_ADDRESS_PROVIDER).replace(/\/+$/, "");
     const res = await doFetch(`${provider}/v1/Address/${encodeURIComponent(companyCode)}`);
-    const body = await readJson<Envelope & { URL?: string }>(res, "Address");
+    const body = await readJson<{ errorCode?: number; errorMessage?: string; URL?: string }>(res, "Address", true);
     if (!body.URL) throw new A3docError(body.errorCode ?? 0, "Address", body.errorMessage || "unknown company code");
     // The provider answers with the WebAPI root; the web app then calls `<URL>/v1/<Method>`.
     apiBase = `${body.URL.replace(/\/+$/, "")}/v1`;
@@ -263,14 +263,26 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
  * never reached it (a proxy or CDN error page): say so instead of letting a raw `JSON.parse`
  * throw "Unexpected token …".
  */
-async function readJson<T>(res: { status: number; text(): Promise<string> }, what: string): Promise<T> {
+async function readJson<T>(res: { status: number; text(): Promise<string> }, what: string, address = false): Promise<T> {
   const text = await res.text();
+  if (res.status < 200 || res.status >= 300) {
+    const snippet = text.trim().replace(/\s+/g, " ").slice(0, 200);
+    throw new Error(`a3doc ${what}: HTTP ${res.status} "${snippet || "(empty body)"}"`);
+  }
+  let body: unknown;
   try {
-    return JSON.parse(text) as T;
+    body = JSON.parse(text);
   } catch {
     const snippet = text.trim().replace(/\s+/g, " ").slice(0, 200);
     throw new Error(`a3doc ${what}: expected JSON but got HTTP ${res.status} "${snippet || "(empty body)"}"`);
   }
+  // The separate address provider returns { URL } on success, without a WebAPI envelope.
+  const addressSuccess = address && body && typeof body === "object" &&
+    !("errorCode" in body) && "URL" in body && typeof body.URL === "string" && body.URL.length > 0;
+  if (!addressSuccess && (!body || typeof body !== "object" || !("errorCode" in body) || typeof body.errorCode !== "number")) {
+    throw new Error(`a3doc ${what}: answer has no numeric errorCode`);
+  }
+  return body as T;
 }
 
 export function base64ToBytes(b64: string): Uint8Array {
