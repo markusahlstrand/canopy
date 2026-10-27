@@ -21,22 +21,23 @@
     "@canopy/plugin-sources": "workspace:*",
     "@canopy/scope-drive": "workspace:*",
     "@canopy/ui": "workspace:*",
-    "@substrat-run/adapter-cloudflare": "^0.143.0",
-    "@substrat-run/attachment-extractors": "0.2.4",
-    "@substrat-run/contracts": "^0.143.0",
-    "@substrat-run/kernel": "^0.143.0",
-    "@substrat-run/vertical-auth": "^0.22.1",
-    "@substrat-run/vertical-host": "^0.143.0",
+    "@substrat-run/adapter-cloudflare": "^0.164.0",
+    "@substrat-run/attachment-extractors": "0.2.25",
+    "@substrat-run/contracts": "^0.164.0",
+    "@substrat-run/kernel": "^0.164.0",
+    "@substrat-run/vertical-auth": "^0.28.4",
+    "@substrat-run/vertical-host": "^0.164.0",
     "hono": "^4.13.13",
     "idb": "^8.0.3",
     "lucide-react": "^1.48.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "@canopy/connector-a3docs": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260928.1",
-    "@substrat-run/adapter-sqlite": "^0.143.0",
+    "@substrat-run/adapter-sqlite": "^0.164.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
@@ -102,6 +103,12 @@
         }
       ]
     },
-    "tenant": "t-5ra4yxscep"
+    "tenant": "t-5ra4yxscep",
+    "connectors": "src/connectors.ts",
+    "outbound": [
+      "a3asesordoc-serviceaddressprovider.a3software.com",
+      "*.a3software.com",
+      "a3doc.wolterskluwer.es"
+    ]
   }
 }

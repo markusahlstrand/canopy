@@ -39,7 +39,7 @@ import {
   type DomainEvent,
   type FileSourceChange,
 } from '@substrat-run/contracts';
-import { connectorUploadBody, type ConnectorHandler, type ConnectorOptions, type ScopeHost, type SizedByteStream } from '@substrat-run/kernel';
+import { bytesStream, connectorUploadBody, type ConnectorHandler, type ConnectorOptions, type ScopeHost, type SizedByteStream, type ConnectorContext, type ScopedConnectionContext } from '@substrat-run/kernel';
 import {
   A3DOC_ROOT_CONTAINER,
   canUploadAs,
@@ -147,7 +147,10 @@ interface ItemEntry {
 // ── naming ───────────────────────────────────────────────────────────────────
 
 /** A name a path segment can carry: no slashes, never empty. */
-const segment = (name: string | undefined, fallback: string) => (name ?? '').trim().replace(/\//g, '-') || fallback;
+const segment = (name: string | undefined, fallback: string) => {
+  const clean = (name ?? '').trim().replace(/[\/\\]/g, '-');
+  return !clean || clean === '.' || clean === '..' ? fallback : clean;
+};
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 const extOf = (doc: A3Document) => (doc.Type ?? '').replace(/^\.+/, '').trim().toLowerCase();
 const sourceOf = (doc: A3Document) => `${doc.Title ?? ''}${doc.Type ?? ''}`;
@@ -245,12 +248,15 @@ export async function unbindA3docScope(host: ScopeHost, connectionId: Connection
   await host.admin.putConnectorState(connectionId, bindingKey(scopeId), null);
 }
 
-async function readBinding(host: Pick<ScopeHost, 'admin'>, connectionId: string, scopeId: string) {
+/** The storage surface shared by self-hosted and vertical-defined execution. */
+type A3docState = Pick<ScopeHost['admin'], 'getConnectorState' | 'putConnectorState' | 'listConnectorState'>;
+
+async function readBinding(host: { admin: A3docState }, connectionId: string, scopeId: string) {
   const value = await host.admin.getConnectorState(connectionId as ConnectionId, bindingKey(scopeId));
   return value && typeof value === 'object' ? (value as A3docBinding) : undefined;
 }
 
-async function readItems(host: Pick<ScopeHost, 'admin'>, connectionId: string, binding: A3docBinding) {
+async function readItems(host: { admin: A3docState }, connectionId: string, binding: A3docBinding) {
   const prefix = itemPrefix(binding);
   const index = new Map<string, ItemEntry>();
   for (const row of await host.admin.listConnectorState(connectionId as ConnectionId, prefix)) {
@@ -288,7 +294,15 @@ interface WriteLedger {
  * a person in a3doc's web app can add the same name between the check and the upload.
  */
 export function a3docFilesConnector(options: A3docOptions): ConnectorHandler {
-  return async (ctx, event: DomainEvent) => {
+  return (ctx, event) => dispatchFiles(ctx, event, options);
+}
+
+/** Upload engine shared with a vertical-defined connector's fenced capability. */
+async function dispatchFiles(
+  ctx: { scopeId: string; admin: A3docState; connection(provider: string): Promise<Pick<Awaited<ReturnType<ConnectorContext['connection']>>, 'id' | 'secret' | 'fetch' | 'openAttachmentStream'>> },
+  event: DomainEvent,
+  options: A3docOptions,
+): Promise<void> {
     const payload = fileSourceWriteRequest.parse(event.payload);
     if (payload.conflict === 'replace') {
       throw substratError('validation_failed', "a3doc cannot replace a document: write with 'rename' or 'fail'");
@@ -318,7 +332,12 @@ export function a3docFilesConnector(options: A3docOptions): ConnectorHandler {
 
     const key = writeKey(event.id);
     const prior = (await ctx.admin.getConnectorState(conn.id, key)) as WriteLedger | undefined;
-    if (prior?.status === 'done') return;
+    if (prior?.status === 'done') {
+      for (const file of prior.files) if (file.documentId) {
+        await ctx.admin.putConnectorState(conn.id, requestedKey(binding.scopeId, file.documentId), { name: file.name });
+      }
+      return;
+    }
     const ledger: WriteLedger = prior ?? { status: 'pending', startedAt: nowOf(options).toISOString(), files: [] };
     if (!prior) await ctx.admin.putConnectorState(conn.id, key, ledger);
 
@@ -359,7 +378,6 @@ export function a3docFilesConnector(options: A3docOptions): ConnectorHandler {
       await ctx.admin.putConnectorState(conn.id, key, ledger);
     }
     await ctx.admin.putConnectorState(conn.id, key, { ...ledger, status: 'done' });
-  };
 }
 
 /** The document an earlier attempt made, if one in its container has its title and its bytes. */
@@ -431,12 +449,26 @@ export async function syncA3docScope(
   host: ScopeHost,
   connectionId: ConnectionId,
   binding: A3docBinding,
-  options: A3docOptions & { maxPages?: number; maxVerify?: number },
+  options: A3docOptions & { maxPages?: number; maxVerify?: number; pageSize?: number },
 ): Promise<A3docSyncResult> {
-  if (binding.folderMissing) throw folderMissingError();
   const timed = { ...options, timeoutMs: options.timeoutMs ?? SYNC_TIMEOUT_MS };
   const conn = await openA3docConnection(host.admin, timed, { id: connectionId, tenantId: binding.tenantId, vertical: binding.vertical });
-  const client = conn.client;
+  return syncFiles(host, connectionId, binding, options, conn.client);
+}
+
+/** One sync engine for both execution models; it never opens a credential itself. */
+async function syncFiles(
+  host: {
+    admin: A3docState;
+    getConnectorScope(...args: Parameters<ScopeHost['getConnectorScope']>): Promise<Pick<Awaited<ReturnType<ScopeHost['getConnectorScope']>>, 'invoke'>>;
+    getConnectorAttachments(...args: Parameters<ScopeHost['getConnectorAttachments']>): Promise<Pick<Awaited<ReturnType<ScopeHost['getConnectorAttachments']>>, 'upload'>>;
+  },
+  connectionId: ConnectionId,
+  binding: A3docBinding,
+  options: A3docOptions & { maxPages?: number; maxVerify?: number; pageSize?: number },
+  client: A3docClient,
+): Promise<A3docSyncResult> {
+  if (binding.folderMissing) throw folderMissingError();
   const now = nowOf(options);
 
   /** Write the binding back onto what is stored NOW, and only while it is still this binding. */
@@ -490,7 +522,7 @@ export async function syncA3docScope(
 
   const scopeRef = scopeIdSchema.parse(binding.scopeId);
   const scope = await host.getConnectorScope(connectionId, scopeRef);
-  let attachments: Awaited<ReturnType<ScopeHost['getConnectorAttachments']>> | undefined;
+  let attachments: Pick<Awaited<ReturnType<ScopeHost['getConnectorAttachments']>>, 'upload'> | undefined;
   const put = async (id: string, entry: ItemEntry | null) => {
     await host.admin.putConnectorState(connectionId, `${prefix}${id}`, entry);
     const prior = index.get(id);
@@ -567,7 +599,7 @@ export async function syncA3docScope(
       }
     }
     const path = join(dir, name);
-    const tooLarge = (doc.Size ?? 0) * 1024 > FILE_SOURCE_MAX_FILE_BYTES;
+    const tooLarge = doc.Size == null || doc.Size * 1024 > FILE_SOURCE_MAX_FILE_BYTES;
     let bytes: Uint8Array | null = null;
     let contentChanged =
       !prior || prior.dateModified !== doc.DateModified || prior.size !== doc.Size || (!prior.attachmentId && !prior.tooLarge);
@@ -637,11 +669,12 @@ export async function syncA3docScope(
   };
 
   const pageBudget = options.maxPages ?? SYNC_PAGES_PER_CALL;
+  const pageSize = options.pageSize ?? PAGE_SIZE;
   const floor = !pass.full && binding.highWater ? Date.parse(binding.highWater) - OVERLAP_MS : null;
   let pages = 0;
   let listed = pass.verify !== undefined;
   while (!listed && pages < pageBudget) {
-    const { documents } = await client.listDocuments({ containerId: binding.containerId, children: true, pageIndex: pass.page, pageSize: PAGE_SIZE });
+    const { documents } = await client.listDocuments({ containerId: binding.containerId, children: true, pageIndex: pass.page, pageSize });
     pages++;
     let reachedFloor = false;
     for (const doc of documents) {
@@ -662,7 +695,7 @@ export async function syncA3docScope(
       }
     }
     pass.page++;
-    listed = reachedFloor || documents.length < PAGE_SIZE;
+    listed = reachedFloor || documents.length < pageSize;
     if (listed && pass.full) {
       pass.verify = [...index.entries()].filter(([, e]) => e.kind === 'file' && e.seenIn !== pass.id).map(([id]) => id);
     }
@@ -709,6 +742,81 @@ function findContainer(tree: A3Container[], id: number): A3Container | null {
     if (hit) return hit;
   }
   return null;
+}
+
+/**
+ * A hosted dispatch uses a scope operation for its write journal: call-state writes are committed
+ * only on success, but an upload attempt must survive a lost provider answer and a failed call.
+ */
+export async function dispatchA3docContext(ctx: ScopedConnectionContext, event: DomainEvent, options: A3docOptions, journalOperation: string): Promise<void> {
+  const binding = contextBinding(ctx, options);
+  const admin = contextState(ctx);
+  const durable: A3docState = {
+    ...admin,
+    getConnectorState: async (id, key) => key === bindingKey(ctx.scope.scopeId) ? binding : key.startsWith(`${KEY}write:`)
+      ? (await ctx.invoke<{ value: unknown }>(journalOperation, { key })).value : admin.getConnectorState(id, key),
+    putConnectorState: async (id, key, value) => {
+      if (key.startsWith(`${KEY}write:`)) await ctx.invoke(journalOperation, { key, value });
+      else await admin.putConnectorState(id, key, value);
+    },
+  };
+  await dispatchFiles({ scopeId: ctx.scope.scopeId, admin: durable,
+    connection: async () => ({ id: ctx.connection.id, secret: { ...ctx.secret }, fetch: ctx.fetch,
+      openAttachmentStream: async (id) => {
+        const opened = await ctx.attachments.open(id);
+        if (!opened) return null;
+        return { record: opened.record, contentType: opened.contentType, body: bytesStream(opened.body) };
+      },
+    }),
+  }, event, options);
+}
+
+/** Rebuild provider metadata from the platform's binding; no tenant/scope is read from state. */
+function contextBinding(ctx: ScopedConnectionContext, options: A3docOptions): A3docBinding {
+  const containerId = ctx.scope.options.containerId;
+  if (typeof containerId !== 'number' || !Number.isInteger(containerId)) throw new Error('a3doc binding has no resolved container');
+  if (!ctx.scope.operation) throw new Error('a3doc binding has no landing operation');
+  return { scopeId: ctx.scope.scopeId, tenantId: ctx.scope.tenantId, vertical: ctx.connection.vertical,
+    operation: ctx.scope.operation, permission: '', folder: String(ctx.scope.options.folder ?? ''),
+    containerId, boundAt: nowOf(options).toISOString(), canUpload: ctx.scope.options.canUpload === true,
+    ...(typeof ctx.scope.options.customerId === 'string' ? { customerId: ctx.scope.options.customerId } : {}),
+  };
+}
+
+/** Resolve a platform-owned binding, returning only provider options to the platform. */
+export async function bindA3docContext(ctx: ScopedConnectionContext, options: A3docOptions): Promise<Record<string, unknown>> {
+  const client = clientFor(ctx.fetch, a3docSecret.parse(ctx.secret), options);
+  const folder = typeof ctx.scope.options.folder === 'string' ? ctx.scope.options.folder : '';
+  const segments = folder.split('/').map((s) => s.trim()).filter(Boolean);
+  const container = containerAtPath(await client.containersTree(), segments);
+  if (!container) throw substratError('conflict', `no a3doc folder at '${folder}'`);
+  const me = await client.userInfo();
+  const sample = await client.listDocuments({ containerId: container.id, children: true, pageIndex: 0, pageSize: 1 });
+  return { folder: segments.join('/'), containerId: container.id, canUpload: canUploadAs(me.role),
+    ...(sample.documents[0]?.CustomerId ? { customerId: sample.documents[0].CustomerId } : {}) };
+}
+
+/** Adapt a capability scoped by the platform to the shared state and sync engine. */
+export async function syncA3docContext(ctx: ScopedConnectionContext, options: A3docOptions): Promise<A3docSyncResult> {
+  const resolved = contextBinding(ctx, options);
+  const key = bindingKey(ctx.scope.scopeId);
+  const previous = await ctx.state.get(key) as A3docBinding | undefined;
+  const binding = previous?.containerId === resolved.containerId ? { ...previous, ...resolved, boundAt: previous.boundAt } : resolved;
+  await ctx.state.put(key, binding);
+  const admin = contextState(ctx);
+  return syncFiles({ admin,
+    getConnectorScope: async () => ({ invoke: async <O>(operation: string, input?: unknown) => ctx.invoke<O>(operation, input) }),
+    getConnectorAttachments: async () => ({ upload: ctx.attachments.upload }),
+  }, ctx.connection.id, binding, { ...options, maxPages: 1, maxVerify: 5, pageSize: 25 }, clientFor(ctx.fetch, a3docSecret.parse(ctx.secret), options));
+}
+
+/** Connection ids are already fenced by the platform; state keys stay scope-local. */
+function contextState(ctx: ScopedConnectionContext): A3docState {
+  return {
+    getConnectorState: async (_id, key) => ctx.state.get(key),
+    putConnectorState: async (_id, key, value) => ctx.state.put(key, value),
+    listConnectorState: async (_id, prefix) => ctx.state.list(prefix),
+  };
 }
 
 export interface A3docSweepResult {

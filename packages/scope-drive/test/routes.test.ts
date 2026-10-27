@@ -50,6 +50,7 @@ describe('the derived route table', () => {
       'POST /api/files/:fileId/comments',
       'POST /api/files/:fileId/move',
       'POST /api/files/:fileId/restore',
+      'POST /api/files/:fileId/send-to-source',
       'POST /api/files/:fileId/versions',
       'POST /api/files/:fileId/versions/:versionId/restore',
       'POST /api/folders/:folderId/files',

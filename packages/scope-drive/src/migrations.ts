@@ -244,5 +244,13 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
    * upload, so the drive's own copy of the text goes. Dropping the table drops the triggers
    * that fed its search index; nothing reads that index any more.
    */
-  {version: '0011', sql: `DROP TABLE IF EXISTS drive_file_text;`},
+  {version: '0011', sql: `DROP TABLE IF EXISTS drive_file_text;`, discards: { drive_file_text: 'Redundant extracted text cache: drive/search reads the kernel attachment text index; original attachment bytes and file versions are retained.' }},
+  { version: '0012', sql: `CREATE TABLE drive_source_items (
+    connection_id TEXT NOT NULL, item_id TEXT NOT NULL, kind TEXT NOT NULL,
+    entity_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ready',
+    PRIMARY KEY (connection_id, item_id), UNIQUE (kind, entity_id)
+  );
+  CREATE TABLE drive_source_writes (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+  CREATE TABLE drive_source_pending (file_id TEXT PRIMARY KEY NOT NULL REFERENCES drive_files(id), attachment_id TEXT NOT NULL);` },
+
 ];

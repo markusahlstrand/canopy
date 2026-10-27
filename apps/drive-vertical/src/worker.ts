@@ -1,3 +1,5 @@
+import { connectors } from './connectors.js';
+import { declareConnectorEvents } from '@substrat-run/vertical-host/connectors';
 import { mountMemberRemoval } from './member-removal-route.js';
 import { claimSafeInvite, claimSafeInviteByCapability, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
 import { mountInviteSite } from './invite-site-route.js';
@@ -300,6 +302,7 @@ function hostFor(env: Env): CloudflareScopeHost {
     attachmentBuckets: (tid) => env[blobStoreBindingName('BLOBS', tid)] as R2Bucket | undefined,
   });
   for (const m of MODULES) host.registerModule(m);
+  declareConnectorEvents(host, connectors);
   return host;
 }
 
@@ -435,6 +438,7 @@ app.use('/api/*', async (c, next) => {
  * table and which role an installing owner holds.
  */
 mountPlatformSurface<Env>(app, {
+  connectors,
   platformSecret: (env) => env.PLATFORM_SECRET,
   hostFor,
   roles: ROLES,

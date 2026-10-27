@@ -1,3 +1,4 @@
+import { landSourceChange } from './source-landing.js';
 import { searchSnippet, SNIPPET_SCAN_LIMIT } from './search-snippet.js';
 /**
  * The drive's handlers — the first canopy operations written as scope-local code.
@@ -20,6 +21,8 @@ import { searchSnippet, SNIPPET_SCAN_LIMIT } from './search-snippet.js';
  */
 import {
   dataSubjectId,
+  fileSourceChange,
+  fileSourceWriteRequest,
   PROVISION_SIBLING_KIND,
   provisionSiblingPayload,
   isUndecodablePlatformRequest,
@@ -193,6 +196,34 @@ const mySpaceRequests = (ctx: OperationContext): PlatformRequest[] =>
     .filter(request => request.requestedBy === ctx.principal);
 
 const operations = {
+  'drive/send-source-file': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    const file = liveFile(ctx, input.fileId);
+    if (ctx.sql.query('SELECT item_id FROM drive_source_items WHERE kind = ? AND entity_id = ?', ['file', file.id]).length) {
+      throw substratError('conflict', 'a3doc cannot replace a connected file');
+    }
+    const version = ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0];
+    if (!version?.blob_ref) throw substratError('conflict', 'upload the file before sending it to a3doc');
+    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [file.folder_id])[0]!;
+    const payload = fileSourceWriteRequest.parse({ directory: folder.path, files: [{ attachmentId: version.blob_ref, name: file.name, size: version.size }], conflict: 'rename' });
+    const pending = ctx.sql.query('SELECT file_id FROM drive_source_pending WHERE file_id = ?', [file.id]);
+    if (!pending.length) {
+      ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?)', [file.id, version.blob_ref]);
+      ctx.emit({ type: 'a3doc.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
+    }
+    return { id: file.id, ...payload };
+  },
+  'drive/source-write-journal': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.landSource));
+    if (input.value !== undefined) {
+      const value = JSON.stringify(input.value);
+      if (value.length > 64_000) throw substratError('validation_failed', 'source upload journal is too large');
+      ctx.sql.exec('INSERT INTO drive_source_writes (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [input.key, value]);
+    }
+    const row = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [input.key])[0];
+    return { value: row ? JSON.parse(row.value) as unknown : null };
+  },
+  'drive/land-source-change': (ctx, input) => landSourceChange(ctx, fileSourceChange.parse(input)),
   'drive/request-space': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
     const previous = mySpaceRequests(ctx).find(request => provisionSiblingPayload.safeParse(request.payload).data?.slug === input.slug);

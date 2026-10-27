@@ -33,7 +33,8 @@
   "devDependencies": {
     "@hono/node-server": "^2.1.3",
     "@playwright/test": "^1.64.0",
-    "@substrat-run/dev-issuer": "0.2.25",
+    "@substrat-run/cli": "0.50.0",
+    "@substrat-run/dev-issuer": "0.2.46",
     "@types/node": "26.6.3",
     "concurrently": "^10.0.5",
     "typescript": "~7.0.2",
