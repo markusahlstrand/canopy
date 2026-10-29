@@ -44,7 +44,10 @@ export async function landSourceChange(ctx: OperationContext, change: FileSource
     )[0];
     if (!attachment || attachment.entity_id !== file.id) throw substratError('validation_failed', 'source attachment belongs to another file');
     const current = file.current_version_id ? ctx.sql.query<{ blob_ref: string | null }>('SELECT blob_ref FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0] : undefined;
-    if (current?.blob_ref === change.attachment.id) return { ok: true };
+    if (current?.blob_ref === change.attachment.id) {
+      ctx.sql.exec('DELETE FROM drive_source_pending WHERE file_id = ?', [file.id]);
+      return { ok: true };
+    }
     // A connector call can fail after landing bytes, rolling back its cursor. Retrying identical
     // bytes must also be harmless when the attachment upload produced a new id.
     const currentBytes = current?.blob_ref ? ctx.sql.query<{ sha256: string }>('SELECT sha256 FROM _substrat_attachments WHERE id = ?', [current.blob_ref])[0] : undefined;
@@ -82,9 +85,10 @@ export async function landSourceChange(ctx: OperationContext, change: FileSource
     } else if (prior.path !== change.path) {
       if (parent.path === prior.path || parent.path.startsWith(`${prior.path}/`)) throw substratError('conflict', 'source folder cannot move into itself');
       if (prior.parent_id !== parent.id) ctx.relink(ref('folder', id), ref('folder', prior.parent_id), ref('folder', parent.id));
-      for (const child of ctx.sql.query<Folder>('SELECT id, path FROM drive_folders')) {
-        if (child.path.startsWith(`${prior.path}/`)) ctx.sql.exec('UPDATE drive_folders SET path = ? WHERE id = ?', [change.path + child.path.slice(prior.path.length), child.id]);
-      }
+      // One statement for every descendant. SQL `length` on both sides, because JS counts UTF-16
+      // units and SQLite counts characters, and LIKE would read `%` and `_` in a name as wildcards.
+      ctx.sql.exec("UPDATE drive_folders SET path = ? || substr(path, length(?) + 1) WHERE substr(path, 1, length(?) + 1) = ? || '/'",
+        [change.path, prior.path, prior.path, prior.path]);
       ctx.sql.exec('UPDATE drive_folders SET parent_id = ?, path = ?, name = ? WHERE id = ?', [parent.id, change.path, change.name, id]);
       ctx.emit({ type: 'drive.folder-renamed', schemaVersion: 1, entity: ref('folder', id), piiClass: 'none', payload: { id, parent_id: parent.id, path: change.path, name: change.name } });
     }

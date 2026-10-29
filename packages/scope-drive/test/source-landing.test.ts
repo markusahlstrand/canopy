@@ -97,6 +97,20 @@ it('adopts the upload echo without duplicating the local file or its version', a
   expect(after.file.current_version_id).toBe(first.file.current_version_id);
 });
 
+it('moves a renamed folder\'s descendants and leaves look-alike siblings alone', async () => {
+  const w = await world();
+  const top = await w.land(w.upsert('top', 'Año 🧾_%', 'folder'));
+  const child = await w.land(w.upsert('child', 'Año 🧾_%/Q1', 'folder'));
+  const deep = await w.land(w.upsert('deep', 'Año 🧾_%/Q1/Ene', 'folder'));
+  const sibling = await w.land(w.upsert('sibling', 'Año 🧾_%x', 'folder'));
+  await w.land({ ...w.upsert('top', '2026', 'folder'), previousPath: 'Año 🧾_%' });
+  const pathOf = async (folderId: string) => (await w.stub.invoke<{ path: string }>('drive/get-folder', { folderId })).path;
+  expect(await pathOf(top.entity.entityId)).toBe('2026');
+  expect(await pathOf(child.entity.entityId)).toBe('2026/Q1');
+  expect(await pathOf(deep.entity.entityId)).toBe('2026/Q1/Ene');
+  expect(await pathOf(sibling.entity.entityId)).toBe('Año 🧾_%x');
+});
+
 it('refuses to resend a newer version while an earlier send is pending', async () => {
   const w = await world();
   const file = await w.stub.invoke<{ id: string }>('drive/ensure-file', { folderId: 'root', name: 'Draft.txt' });
