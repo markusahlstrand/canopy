@@ -1,0 +1,6 @@
+{
+  "name": "@canopy/example-plugins",
+  "version": "0.0.0",
+  "private": true,
+  "description": "First-party example plugins; the drive's catalog bundles their manifests and sources."
+}

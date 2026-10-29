@@ -3,3 +3,4 @@ packages:
   - "packages/runtimes/*"
   - "packages/connectors/*"
   - "apps/*"
+  - "examples/plugins"

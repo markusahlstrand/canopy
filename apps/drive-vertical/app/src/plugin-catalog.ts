@@ -1,13 +1,13 @@
-import manifest0 from '../../../../examples/plugins/image-viewer/canopy.json?raw';
-import source0 from '../../../../examples/plugins/image-viewer/index.js?raw';
-import manifest1 from '../../../../examples/plugins/markdown-editor/canopy.json?raw';
-import source1 from '../../../../examples/plugins/markdown-editor/index.js?raw';
-import manifest2 from '../../../../examples/plugins/code-editor/canopy.json?raw';
-import source2 from '../../../../examples/plugins/code-editor/index.js?raw';
-import manifest3 from '../../../../examples/plugins/pdf-viewer/canopy.json?raw';
-import source3 from '../../../../examples/plugins/pdf-viewer/index.js?raw';
-import manifest4 from '../../../../examples/plugins/locked-notes/canopy.json?raw';
-import source4 from '../../../../examples/plugins/locked-notes/index.js?raw';
+import manifest0 from '@canopy/example-plugins/image-viewer/canopy.json?raw';
+import source0 from '@canopy/example-plugins/image-viewer/index.js?raw';
+import manifest1 from '@canopy/example-plugins/markdown-editor/canopy.json?raw';
+import source1 from '@canopy/example-plugins/markdown-editor/index.js?raw';
+import manifest2 from '@canopy/example-plugins/code-editor/canopy.json?raw';
+import source2 from '@canopy/example-plugins/code-editor/index.js?raw';
+import manifest3 from '@canopy/example-plugins/pdf-viewer/canopy.json?raw';
+import source3 from '@canopy/example-plugins/pdf-viewer/index.js?raw';
+import manifest4 from '@canopy/example-plugins/locked-notes/canopy.json?raw';
+import source4 from '@canopy/example-plugins/locked-notes/index.js?raw';
 import { isFileTypeQuery, viewerMatchesSearch } from './plugin-search';
 interface CatalogManifest {id:string;name:string;description:string;capabilities:{kind:string;hosts?:string[]}[];contributes?:{viewers?:{match:string[]}[]}}
 function entry(manifest: string, source: string, category: 'Viewers' | 'Editors', icon: string, color: string, hosts: string[] = []) {

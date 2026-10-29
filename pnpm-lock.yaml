@@ -151,6 +151,9 @@ importers:
       '@canopy/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@canopy/example-plugins':
+        specifier: workspace:*
+        version: link:../../examples/plugins
       '@canopy/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -342,6 +345,8 @@ importers:
       vite:
         specifier: ^8.3.1
         version: 8.3.2(@types/node@26.6.3)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
+
+  examples/plugins: {}
 
   packages/connectors/a3docs:
     dependencies:
