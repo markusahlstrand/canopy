@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { platformActorId, principalId, scopeId, tenantId, type FileSourceChange } from '@substrat-run/contracts';
 import { ulid } from '@substrat-run/kernel';
-import { driveModule, DRIVE_PERM } from '../src/index.js';
+import { driveManifest, driveModule, DRIVE_PERM } from '../src/index.js';
 import { ROLES } from '../src/provision.js';
 
 const dirs: string[] = [];
@@ -16,7 +16,7 @@ async function world() {
   const staff = platformActorId.parse(ulid()), t = tenantId.parse(ulid()), s = scopeId.parse(ulid());
   const owner = principalId.parse(ulid()), source = principalId.parse(ulid());
   await host.admin.createTenant(staff, { id: t, slug: 'source', name: 'Source' });
-  await host.admin.grantEntitlement(staff, t, 'drive');
+  await host.admin.grantEntitlement(staff, t, driveManifest.entitlementKey as string);
   await host.provisionScope(staff, { tenantId: t, scopeId: s, vertical: 'drive' });
   await host.admin.activateScope(staff, t, s);
   await host.provisionBlobStore(staff, { tenantId: t, vertical: 'drive', binding: 'BLOBS' });

@@ -70,5 +70,6 @@ export const driveManifest = moduleManifest.parse({
   ],
   lists: listsDeclaredBy(driveOperations, driveEntities),
   connections: [{ provider: 'canopy.a3doc', operation: 'drive/land-source-change', permission: 'drive:land-source' }],
-  entitlementKey: 'drive',
+  // A vertical may declare only its bare slug (substrat#2388); the key matches `substrat.slug`.
+  entitlementKey: 'drive-vertical',
 });

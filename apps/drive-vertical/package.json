@@ -60,7 +60,7 @@
     "name": "Canopy Drive",
     "permissions": "src/provision.ts",
     "entitlements": [
-      "drive"
+      "drive-vertical"
     ],
     "requires": [
       "oidc-issuer"
