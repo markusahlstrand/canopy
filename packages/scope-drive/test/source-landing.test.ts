@@ -96,3 +96,17 @@ it('adopts the upload echo without duplicating the local file or its version', a
   const after = await w.stub.invoke<{file: {current_version_id: string}}>('drive/get-file', {fileId: file.id});
   expect(after.file.current_version_id).toBe(first.file.current_version_id);
 });
+
+it('refuses to resend a newer version while an earlier send is pending', async () => {
+  const w = await world();
+  const file = await w.stub.invoke<{ id: string }>('drive/ensure-file', { folderId: 'root', name: 'Draft.txt' });
+  const entity = { entityType: 'file', entityId: file.id };
+  const upload = (text: string) => w.bytes.upload({ entity, filename: 'Draft.txt', contentType: 'text/plain', visibility: 'internal', body: new TextEncoder().encode(text) });
+  const one = await upload('one');
+  await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: one.id } });
+  await w.stub.invoke('drive/send-source-file', { fileId: file.id });
+  await w.stub.invoke('drive/send-source-file', { fileId: file.id });
+  const two = await upload('two');
+  await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: two.id } });
+  await expect(w.stub.invoke('drive/send-source-file', { fileId: file.id })).rejects.toThrow('still being sent');
+});

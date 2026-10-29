@@ -206,8 +206,12 @@ const operations = {
     if (!version?.blob_ref) throw substratError('conflict', 'upload the file before sending it to a3doc');
     const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [file.folder_id])[0]!;
     const payload = fileSourceWriteRequest.parse({ directory: folder.path, files: [{ attachmentId: version.blob_ref, name: file.name, size: version.size }], conflict: 'rename' });
-    const pending = ctx.sql.query('SELECT file_id FROM drive_source_pending WHERE file_id = ?', [file.id]);
-    if (!pending.length) {
+    const pending = ctx.sql.query<{ attachment_id: string }>('SELECT attachment_id FROM drive_source_pending WHERE file_id = ?', [file.id])[0];
+    // A repeat is harmless; a newer version is not: the earlier request's bytes are what a3doc receives.
+    if (pending && pending.attachment_id !== version.blob_ref) {
+      throw substratError('conflict', 'an earlier version of this file is still being sent to a3doc');
+    }
+    if (!pending) {
       ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?)', [file.id, version.blob_ref]);
       ctx.emit({ type: 'a3doc.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
     }
