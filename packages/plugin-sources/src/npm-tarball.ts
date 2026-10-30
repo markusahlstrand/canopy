@@ -94,6 +94,6 @@ export async function readNpmTarball(url: string, integrity: string, fetcher: ty
   const source = decoder.decode(code);
   if (!source.trim()) throw new Error('npm plugin entry is empty.');
   await init;
-  if (parse(source)[0].some(specifier => specifier.d !== -2)) throw new Error('npm plugin entry must be a self-contained ES module without imports.');
+  if (parse(source)[0].some(specifier => specifier.type !== 'import-meta')) throw new Error('npm plugin entry must be a self-contained ES module without imports.');
   return { manifest: pkg.canopy, source };
 }

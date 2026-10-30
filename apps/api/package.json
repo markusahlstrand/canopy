@@ -20,22 +20,22 @@
     "@canopy/plugin-validator": "workspace:*",
     "@canopy/store": "workspace:*",
     "@cloudflare/containers": "^0.3.7",
-    "@hono/node-server": "^2.1.1",
-    "@modelcontextprotocol/sdk": "^1.31.0",
-    "hono": "^4.13.13",
-    "jose": "^6.2.12",
-    "zod": "^4.6.5"
+    "@hono/node-server": "^2.1.5",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "hono": "^4.13.14",
+    "jose": "^6.2.14",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^26.6.3",
-    "@typespec/compiler": "^1.16.0",
-    "@typespec/http": "^1.16.0",
-    "@typespec/openapi": "^1.16.0",
-    "@typespec/openapi3": "^1.16.0",
+    "@types/node": "^26.6.6",
+    "@typespec/compiler": "^1.17.0",
+    "@typespec/http": "^1.17.0",
+    "@typespec/openapi": "^1.17.0",
+    "@typespec/openapi3": "^1.17.0",
     "ajv": "^8.20.0",
     "tsx": "^4.23.15",
     "typescript": "~7.0.2",
-    "vitest": "^5.0.2",
+    "vitest": "^5.0.5",
     "webdav": "^5.11.0"
   }
 }

@@ -27,7 +27,7 @@ permissions:
 # tooling changes under it reports a break in the platform as a break in your code.
 # Raise this deliberately, after a preview proves the new one works.
 env:
-  SUBSTRAT_CLI: '@substrat-run/cli@0.52.0'
+  SUBSTRAT_CLI: '@substrat-run/cli@0.54.1'
 
 on:
   push:

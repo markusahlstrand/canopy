@@ -16,11 +16,11 @@
     "test": "vitest run --dir src"
   },
   "dependencies": {
-    "unpdf": "^1.8.1",
+    "unpdf": "^2.1.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "typescript": "~7.0.2",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.5"
   }
 }
