@@ -32,7 +32,12 @@ export type { AssistantMessage, AssistantReply, AssistantSource } from './assist
 /** Tool-calling at a conversational answer. `ASSISTANT_MODEL` overrides it. */
 export const DEFAULT_ASSISTANT_MODEL = 'cloudflare:@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
-const MAX_READ_CHARS = 16_000;
+/**
+ * Budgets for one run, against the default model's ~24k-token context: a few documents
+ * read in full plus the conversation must fit with room for the answer.
+ */
+const MAX_READ_CHARS = 8_000;
+const HISTORY_CHAR_BUDGET = 16_000;
 const SEARCH_LIMIT_PER_SPACE = 8;
 const MAX_SEARCH_RESULTS = 15;
 const MAX_FALLBACK_SOURCES = 5;
@@ -142,12 +147,13 @@ export function assistantTools(spaces: AssistantSpace[]) {
       if (!s) return { error: `There is no space "${space}".` };
       // Errors here (not found, not allowed) surface to the model as a tool error, which
       // it is shown and works around; they never widen what it can read.
-      const [{ file }, details, excerpt, extraction] = await Promise.all([
+      const [{ file }, details, excerpt] = await Promise.all([
         s.scope.invoke<{ file: { id: string; name: string } }>('drive/get-file', { fileId }),
         s.scope.invoke<{ description: string; labels: string[] }>('drive/file-details', { fileId }),
         s.scope.invoke<{ text: string; truncated: boolean } | null>('drive/file-text-excerpt', { fileId, maxChars: MAX_READ_CHARS }),
-        s.scope.invoke<{ status: string } | null>('drive/file-text', { fileId }),
       ]);
+      // Only a file with no text needs to say why.
+      const extraction = excerpt ? null : await s.scope.invoke<{ status: string } | null>('drive/file-text', { fileId });
       const source = { space, fileId, name: file.name };
       read.set(key(source), source);
       return {
@@ -167,11 +173,24 @@ export function assistantTools(spaces: AssistantSpace[]) {
   };
 }
 
-/** Why a file has no text to read: "not yet" and "never" are different answers. */
+/** Why a file has no text to read: only extraction's own verdict is a "never". */
 function noTextNote(status: string | undefined): string {
-  return status === 'pending'
-    ? 'This file\'s text is still being extracted. Tell the user to try again in a minute.'
-    : 'No text could be extracted from this file (for example a scan or an image).';
+  if (status === 'pending') return 'This file\'s text is still being extracted. Tell the user to try again in a minute.';
+  if (status === 'empty' || status === 'unsupported' || status === 'failed') return 'No text could be extracted from this file (for example a scan or an image).';
+  return 'This file\'s text is not available right now; it may not have been processed yet.';
+}
+
+/** The latest turns within the budget, starting on a question; the last question always goes. */
+function fitHistory(messages: AssistantMessage[]): AssistantMessage[] {
+  let used = 0;
+  let start = messages.length - 1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    used += messages[i]!.content.length;
+    if (used > HISTORY_CHAR_BUDGET && i < messages.length - 1) break;
+    start = i;
+  }
+  while (messages[start]?.role === 'assistant') start++;
+  return messages.slice(start);
 }
 
 export async function runAssistant(model: AssistantModel, spaces: AssistantSpace[], messages: AssistantMessage[]): Promise<AssistantReply> {
@@ -180,7 +199,7 @@ export async function runAssistant(model: AssistantModel, spaces: AssistantSpace
     spec: model.spec,
     attribution: model.attribution,
     system: system(spaces),
-    messages,
+    messages: fitHistory(messages),
     tools,
     maxSteps: 6,
     maxOutputTokens: 1_200,
@@ -192,22 +211,23 @@ export async function runAssistant(model: AssistantModel, spaces: AssistantSpace
 }
 
 export interface AssistantSession {
+  /** Never empty: a caller with no spaces is refused by the resolver, which has to pick one to charge. */
   spaces: AssistantSpace[];
   model: AssistantModel;
 }
 
 /**
- * `resolve` answers null when this install has no model to run — a 503, decided before
- * the caller's spaces are looked up, since there is nothing to use them for.
+ * `resolve` authenticates (401), then answers null when this install has no model to run
+ * (503) — before the caller's spaces are looked up, since there is nothing to use them for.
+ * It runs before the body is read, so an anonymous caller learns nothing from validation.
  */
 export function mountAssistant<E extends Env>(app: Hono<E>, resolve: (c: Context<E>) => Promise<AssistantSession | null>) {
   app.post('/api/assistant', async c => {
-    const body = messagesSchema.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) throw new HTTPException(400, { message: body.error.issues[0]?.message ?? 'Type a question.' });
     const session = await resolve(c);
     if (!session) throw new HTTPException(503, { message: 'The assistant is not available on this install.' });
+    const body = messagesSchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) throw new HTTPException(400, { message: body.error.issues[0]?.message ?? 'Type a question.' });
     const { spaces, model } = session;
-    if (!spaces.length) throw new HTTPException(403, { message: 'You have no spaces to ask about.' });
     try {
       return c.json(await runAssistant(model, spaces, body.data.messages));
     } catch (error) {

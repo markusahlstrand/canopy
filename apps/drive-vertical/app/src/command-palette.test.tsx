@@ -287,3 +287,35 @@ it('starts a new conversation when asked from search, and continues one only whe
   expect(bodies[1]).toEqual({ messages: [{ role: 'user', content: 'lease end' }] });
   expect(screen.queryByText('Answer 1')).toBeNull();
 });
+it('does not start a model call on a plain Enter when the assistant is all that is highlighted', () => {
+  const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ hits: [] })));
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} onUpload={undefined} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'zzqx' } });
+  const item = screen.getByRole('option', { name: /Ask the assistant: “zzqx”/ });
+  expect(item.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect(fetch.mock.calls.some(([url]) => String(url).includes('/assistant'))).toBe(false);
+  expect(screen.queryByRole('log')).toBeNull();
+});
+it('keeps an over-long question in the box with no retry that cannot succeed', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('option', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'x'.repeat(4_001) } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect(screen.getByRole('alert').textContent).toContain('at most 4,000 characters');
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toHaveLength(4_001);
+  expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+});
+it('does not send on the Safari IME confirm keydown', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('option', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'けいやく' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', keyCode: 229 });
+  expect(fetch).not.toHaveBeenCalled();
+});

@@ -12,7 +12,7 @@ interface AssistantThreadProps {
   turns: AssistantTurn[];
   asking: boolean;
   error: string | null;
-  onRetry: () => void;
+  onRetry?: () => void;
   onOpenSource: (source: AssistantSource) => void;
   /** Slug → name, to say which space a source lives in when it is not this one. */
   spaceNames: Map<string, string>;
@@ -71,7 +71,7 @@ export function AssistantThread({ turns, asking, error, onRetry, onOpenSource, s
         {error ? (
           <div className="flex items-center gap-2">
             <p role="alert" className="flex-1 text-sm">{error}</p>
-            <Button size="sm" variant="outline" onClick={onRetry}><Icon name="refresh" size={14} />Retry</Button>
+            {onRetry ? <Button size="sm" variant="outline" onClick={onRetry}><Icon name="refresh" size={14} />Retry</Button> : null}
           </div>
         ) : null}
       </div>

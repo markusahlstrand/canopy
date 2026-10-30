@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { substratError } from '@substrat-run/contracts';
 import type { ModelHost, ModelRequest } from '@substrat-run/vertical-host/model';
 import { assistantTools, mountAssistant, runAssistant, type AssistantSpace } from './assistant';
@@ -91,6 +92,19 @@ describe('runAssistant', () => {
     await runAssistant(model, [space('family', { new: '' }, { pending: ['new'] })], [{ role: 'user', content: 'what is in new?' }]);
   });
 
+  it('sends the latest history that fits the budget, starting on a question', async () => {
+    const model = scripted(async () => 'ok');
+    const long = 'x'.repeat(7_000);
+    await runAssistant(model, [space('family', {})], [
+      { role: 'user', content: 'q1' }, { role: 'assistant', content: long }, { role: 'user', content: 'q2' },
+      { role: 'assistant', content: long }, { role: 'user', content: 'q3' }, { role: 'assistant', content: long }, { role: 'user', content: 'q4' },
+    ]);
+    const sent = model.run.mock.calls[0]![0].messages!;
+    expect(sent[0]!.role).toBe('user');
+    expect(sent.at(-1)).toEqual({ role: 'user', content: 'q4' });
+    expect(sent.reduce((n, m) => n + m.content.length, 0)).toBeLessThanOrEqual(16_000);
+  });
+
   it('clamps an answer to what the route accepts back as history', async () => {
     const reply = await runAssistant(scripted(async () => 'x'.repeat(20_000)), [space('family', {})], [{ role: 'user', content: 'hi' }]);
     expect(reply.answer.length).toBe(12_000);
@@ -125,20 +139,25 @@ describe('runAssistant', () => {
 describe('POST /api/assistant', () => {
   const ask = (app: Hono, body: unknown) => app.request('/api/assistant', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-  it('refuses a conversation that does not end in a question, before resolving anything', async () => {
-    const resolve = vi.fn();
+  it('refuses a conversation that does not end in a question', async () => {
+    const resolve = vi.fn(async () => ({ spaces: [space('family', {})], model: scripted(async () => 'never') }));
     const app = new Hono();
     mountAssistant(app, resolve);
     expect((await ask(app, { messages: [{ role: 'assistant', content: 'hi' }] })).status).toBe(400);
     const tooLong = await ask(app, { messages: [{ role: 'user', content: 'x'.repeat(4_001) }] });
     expect(tooLong.status).toBe(400);
     expect(await tooLong.text()).toContain('at most 4,000 characters');
-    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('authenticates and checks for a model before reading the body', async () => {
+    const app = new Hono();
+    mountAssistant(app, async () => { throw new HTTPException(401, { message: 'unauthorized' }); });
+    expect((await ask(app, { messages: [] })).status).toBe(401);
   });
 
   it('says what is wrong with a refused conversation', async () => {
     const app = new Hono();
-    mountAssistant(app, vi.fn());
+    mountAssistant(app, async () => ({ spaces: [space('family', {})], model: scripted(async () => 'never') }));
     const said = async (messages: unknown) => (await ask(app, { messages })).text();
     expect(await said([{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }])).toContain('must end with a question');
     expect(await said(Array.from({ length: 21 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'q' })))).toContain('too long. Start a new conversation');

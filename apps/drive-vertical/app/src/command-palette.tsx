@@ -14,7 +14,7 @@ import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from "./file-icon";
 import { SEARCH_MIN, askAssistant, search, type AssistantSource, type PluginInstall, type SearchHit, type Site } from "./api";
 import { AssistantThread, type AssistantTurn } from "./assistant-thread";
-import { historyWindow } from "../../src/assistant-contract";
+import { historyWindow, MAX_QUESTION_CHARS } from "../../src/assistant-contract";
 import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
 import { openSpaceFile, spaceLabel } from './space-navigation';
@@ -51,6 +51,9 @@ interface CommandPaletteProps {
   onShowAllResults?: (query: string) => boolean | void;
   offline?: boolean;
 }
+
+/** A file the palette knows only by id and name — a search hit or an assistant source. */
+const fileStub = (id: string, name: string): FileItem => ({ id, name, kind: kindOf(null, name), modified: '', size: '—', isFolder: false });
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
 export function CommandPalette({
@@ -113,6 +116,12 @@ export function CommandPalette({
     // One question at a time: a follow-up typed while an answer is coming stays in the box.
     // A fresh question retires one still pending; a follow-up waits for it.
     if (!text || (asking && !fresh)) return;
+    // Refused here, with the text still in the box: the worker would refuse it anyway, and
+    // a retry of a turn that can never be accepted is a dead end.
+    if (text.length > MAX_QUESTION_CHARS) {
+      setAskError(`Ask a question of at most ${MAX_QUESTION_CHARS.toLocaleString('en')} characters.`);
+      return;
+    }
     setQuery('');
     setResults([]);
     // A question whose answer failed is replaced by the next one, not left unanswered
@@ -135,7 +144,7 @@ export function CommandPalette({
     // Unknown here is "another space": a page load to the right one is always correct,
     // opening by id in the wrong one never is.
     if (here && source.space === here) {
-      if (onOpenFile({ id: source.fileId, name: source.name, kind: kindOf(null, source.name), modified: '', size: '—', isFolder: false }) !== false) onOpenChange(false);
+      if (onOpenFile(fileStub(source.fileId, source.name)) !== false) onOpenChange(false);
       return;
     }
     // Another space is another page load, behind the same draft guard as switching spaces.
@@ -183,14 +192,24 @@ export function CommandPalette({
         placeholder={assistant ? (turns.length ? "Ask a follow-up…" : "Ask about your documents…") : "Search files, or ask the assistant…"}
         value={query}
         onKeyDown={(event) => {
-          // Enter that confirms an IME candidate is composing, not sending.
-          if (event.key !== 'Enter' || event.nativeEvent.isComposing || offline) return;
+          // Enter that confirms an IME candidate is composing, not sending. Safari reports
+          // that keydown with isComposing false and keyCode 229.
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229 || offline) return;
           // In the assistant, Enter sends. In search, ⌘↵ hands the query to the assistant
           // and a plain Enter still opens the highlighted result.
           if (assistant || event.metaKey || event.ctrlKey) {
             event.preventDefault();
             event.stopPropagation();
             ask(query, !assistant);
+            return;
+          }
+          // A plain Enter is a search: when the only thing highlighted is the assistant —
+          // before hits arrive, or when there are none — it does nothing rather than start
+          // a model call. Clicking the item, or ⌘↵, asks.
+          const highlighted = event.currentTarget.closest('[cmdk-root]')?.querySelector('[cmdk-item][data-selected="true"]');
+          if (highlighted?.getAttribute('data-value')?.startsWith('ask assistant ')) {
+            event.preventDefault();
+            event.stopPropagation();
           }
         }}
         onValueChange={(next) => {
@@ -208,7 +227,8 @@ export function CommandPalette({
           turns={turns}
           asking={asking}
           error={askError}
-          onRetry={() => send(turns)}
+          // Retry resends an unanswered question; an error with nothing to resend has none.
+          onRetry={turns.at(-1)?.role === 'user' ? () => send(turns) : undefined}
           onOpenSource={openSource}
           spaceNames={new Map(sites.map((site) => [site.slug, spaceLabel(site)]))}
           currentSpace={here}
@@ -244,14 +264,7 @@ export function CommandPalette({
                   key={hit.id}
                   value={`hit ${query} ${hit.name}`}
                   onSelect={run(() =>
-                    onOpenFile({
-                      id: hit.id,
-                      name: hit.name,
-                      kind: kindOf(null, hit.name),
-                      modified: '',
-                      size: '—',
-                      isFolder: false,
-                    }),
+                    onOpenFile(fileStub(hit.id, hit.name)),
                   )}
                 >
                   <FileIcon kind={kindOf(null, hit.name)} size={22} />

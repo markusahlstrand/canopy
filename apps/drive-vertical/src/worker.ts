@@ -326,15 +326,14 @@ function hostFor(env: Env): CloudflareScopeHost {
 const DRIVE_MODULE_ID = moduleId.parse(driveManifest.id);
 
 /**
- * A governed model call over this worker's Workers AI binding, or null without one.
+ * A governed model call over this worker's Workers AI binding (`env.AI`, checked by the caller).
  * No ledger of our own yet: each usage line is logged so spend stays visible per space.
  */
-function modelFor(env: Env, o: { spec: string; sent: string; usageEvent: string; operation: string; tenant: TenantId; scope: ScopeId }) {
-  if (!env.AI) return null;
+function modelFor(env: Env, ai: unknown, o: { spec: string; sent: string; usageEvent: string; operation: string; tenant: TenantId; scope: ScopeId }) {
   return {
     host: createModelHost({
       env: env as unknown as Record<string, string | undefined>,
-      aiBinding: env.AI,
+      aiBinding: ai,
       sent: o.sent,
       record: (line) => { console.log(o.usageEvent, line); },
     }),
@@ -349,14 +348,14 @@ function documentAiFor(env: Env, host: CloudflareScopeHost) {
   return autoLabelJob({
     scopeFor: (p) => host.getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
     enabled: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.autoLabel === true,
-    model: (p) => modelFor(env, {
+    model: (p) => env.AI ? modelFor(env, env.AI, {
       spec: env.DOCUMENT_AI_MODEL || DEFAULT_DOCUMENT_AI_MODEL,
       sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
       usageEvent: 'drive.document-ai.usage',
       operation: 'drive/auto-label',
       tenant: tenantId.parse(p.tenantId),
       scope: scopeId.parse(p.scopeId),
-    }),
+    }) : null,
     log: (event, fields) => console.log(event, fields),
   });
 }
@@ -753,25 +752,29 @@ mountSpaceSettings(app, async c => {
  */
 mountAssistant(app, async c => {
   const env = c.env;
+  const base = baseNode(c.req.raw, env);
+  // Who is asking first: an anonymous caller is a 401 whatever this install runs.
+  const subject = await (await providerFor(env, base)).resolve(c.req.raw.headers);
+  if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
+  // Then whether there is a model, before the roster costs a lookup per space.
   if (!env.AI) return null;
-  const sites = await accessibleSites(c.req.raw, env);
+  const sites = await sitesForSubject(env, base, subject.sub);
   const here = (await nodeFor(c.req.raw, env)).scopeId;
   // Spend is attributed to a space the caller is in: the selected one when they can enter
   // it, else their first. Never to whatever an `x-scope` header names.
   const charged = sites.find(site => site.scopeId === here) ?? sites[0];
   if (!charged) throw new HTTPException(403, { message: 'You have no spaces to ask about.' });
-  // Non-null: `env.AI` was checked above.
-  const model = modelFor(env, {
+  const model = modelFor(env, env.AI, {
     spec: env.ASSISTANT_MODEL || DEFAULT_ASSISTANT_MODEL,
     sent: 'Your questions, and the text of the documents the assistant searches and reads to answer them',
     usageEvent: 'drive.assistant.usage',
     operation: 'drive/assistant',
-    tenant: baseNode(c.req.raw, env).tenantId,
+    tenant: base.tenantId,
     scope: scopeId.parse(charged.scopeId),
   });
   return {
     spaces: sites.map(site => ({ slug: site.slug, name: site.name, current: site.scopeId === here, scope: site.scope })),
-    model: model!,
+    model,
   };
 });
 app.post('/api/sites', async (c) => {
