@@ -325,23 +325,38 @@ function hostFor(env: Env): CloudflareScopeHost {
 
 const DRIVE_MODULE_ID = moduleId.parse(driveManifest.id);
 
+/**
+ * A governed model call over this worker's Workers AI binding, or null without one.
+ * No ledger of our own yet: each usage line is logged so spend stays visible per space.
+ */
+function modelFor(env: Env, o: { spec: string; sent: string; usageEvent: string; operation: string; tenant: TenantId; scope: ScopeId }) {
+  if (!env.AI) return null;
+  return {
+    host: createModelHost({
+      env: env as unknown as Record<string, string | undefined>,
+      aiBinding: env.AI,
+      sent: o.sent,
+      record: (line) => { console.log(o.usageEvent, line); },
+    }),
+    spec: o.spec,
+    attribution: { tenant: o.tenant, scope: o.scope, vertical: driveManifest.id, version: driveManifest.version, operation: o.operation },
+  };
+}
+
 /** Document AI's run body, over this worker's bindings and the host driving it. */
 function documentAiFor(env: Env, host: CloudflareScopeHost) {
   const nodeOf = (p: AutoLabelPayload): Node => ({ tenantId: tenantId.parse(p.tenantId), scopeId: scopeId.parse(p.scopeId) });
   return autoLabelJob({
     scopeFor: (p) => host.getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
     enabled: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.autoLabel === true,
-    model: (p) => env.AI ? {
-      host: createModelHost({
-        env: env as unknown as Record<string, string | undefined>,
-        aiBinding: env.AI,
-        sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
-        // No ledger of our own yet: the usage line is logged so spend stays visible per space.
-        record: (line) => { console.log('drive.document-ai.usage', line); },
-      }),
+    model: (p) => modelFor(env, {
       spec: env.DOCUMENT_AI_MODEL || DEFAULT_DOCUMENT_AI_MODEL,
-      attribution: { tenant: tenantId.parse(p.tenantId), scope: scopeId.parse(p.scopeId), vertical: driveManifest.id, version: driveManifest.version, operation: 'drive/auto-label' },
-    } : null,
+      sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
+      usageEvent: 'drive.document-ai.usage',
+      operation: 'drive/auto-label',
+      tenant: tenantId.parse(p.tenantId),
+      scope: scopeId.parse(p.scopeId),
+    }),
     log: (event, fields) => console.log(event, fields),
   });
 }
@@ -738,22 +753,25 @@ mountSpaceSettings(app, async c => {
  */
 mountAssistant(app, async c => {
   const env = c.env;
+  if (!env.AI) return null;
   const sites = await accessibleSites(c.req.raw, env);
   const here = (await nodeFor(c.req.raw, env)).scopeId;
-  const base = baseNode(c.req.raw, env);
-  const spaces = sites.map(site => ({ slug: site.slug, name: site.name, current: site.scopeId === here, scope: site.scope }));
+  // Spend is attributed to a space the caller is in: the selected one when they can enter
+  // it, else their first. Never to whatever an `x-scope` header names.
+  const charged = sites.find(site => site.scopeId === here) ?? sites[0];
+  if (!charged) throw new HTTPException(403, { message: 'You have no spaces to ask about.' });
+  const model = modelFor(env, {
+    spec: env.ASSISTANT_MODEL || DEFAULT_ASSISTANT_MODEL,
+    sent: 'Your questions, and the text of the documents the assistant searches and reads to answer them',
+    usageEvent: 'drive.assistant.usage',
+    operation: 'drive/assistant',
+    tenant: baseNode(c.req.raw, env).tenantId,
+    scope: scopeId.parse(charged.scopeId),
+  });
+  if (!model) return null;
   return {
-    spaces,
-    model: env.AI ? {
-      host: createModelHost({
-        env: env as unknown as Record<string, string | undefined>,
-        aiBinding: env.AI,
-        sent: 'Your questions, and the text of the documents the assistant searches and reads to answer them',
-        record: (line) => { console.log('drive.assistant.usage', line); },
-      }),
-      spec: env.ASSISTANT_MODEL || DEFAULT_ASSISTANT_MODEL,
-      attribution: { tenant: base.tenantId, scope: here, vertical: driveManifest.id, version: driveManifest.version, operation: 'drive/assistant' },
-    } : null,
+    spaces: sites.map(site => ({ slug: site.slug, name: site.name, current: site.scopeId === here, scope: site.scope })),
+    model,
   };
 });
 app.post('/api/sites', async (c) => {

@@ -7,7 +7,7 @@ import { assistantTools, mountAssistant, runAssistant, type AssistantSpace } fro
 const attribution = { tenant: 't', scope: 's', vertical: 'drive', version: '1', operation: 'drive/assistant' } as never;
 
 /** A space whose files are `{id: text}`; reading anything else is `not_found`, as the drive answers. */
-function space(slug: string, files: Record<string, string>, opts: { current?: boolean; searchFails?: boolean } = {}): AssistantSpace & { calls: string[] } {
+function space(slug: string, files: Record<string, string>, opts: { current?: boolean; searchFails?: boolean; searchDown?: boolean } = {}): AssistantSpace & { calls: string[] } {
   const calls: string[] = [];
   return {
     slug, name: slug.toUpperCase(), current: opts.current ?? false, calls,
@@ -16,6 +16,7 @@ function space(slug: string, files: Record<string, string>, opts: { current?: bo
         calls.push(op);
         if (op === 'drive/search') {
           if (opts.searchFails) throw substratError('forbidden', 'not allowed');
+          if (opts.searchDown) throw new Error('D1 storage unavailable');
           const term = String(input.term).toLowerCase();
           return { hits: Object.entries(files).filter(([, text]) => text.toLowerCase().includes(term)).map(([id]) => ({ id, name: `${id}.pdf`, via: 'content', snippet: files[id] })) } as T;
         }
@@ -73,6 +74,20 @@ describe('runAssistant', () => {
     expect(work.calls).toEqual([]);
   });
 
+  it('reports a search outage instead of an empty result', async () => {
+    const family = space('family', { a: 'budget' }, { searchDown: true });
+    const work = space('work', { b: 'budget' });
+    const model = scripted(async tools => {
+      expect(await tools.search_documents.execute({ query: 'budget' })).toMatchObject({
+        results: [{ space: 'work', fileId: 'b' }], unavailable: { spaces: ['family'] },
+      });
+      await expect(tools.search_documents.execute({ query: 'budget', space: 'family' })).rejects.toThrow('Search is unavailable');
+      return 'ok';
+    });
+    await runAssistant(model, [family, work], [{ role: 'user', content: 'budget?' }]);
+    expect(model.run.mock.calls[0]![0].system).toContain('could not search');
+  });
+
   it('falls back to the search hits as sources when it opened nothing', async () => {
     const family = space('family', { a: 'budget 2026', b: 'budget 2025' });
     const model = scripted(async tools => {
@@ -93,15 +108,33 @@ describe('POST /api/assistant', () => {
     const app = new Hono();
     mountAssistant(app, resolve);
     expect((await ask(app, { messages: [{ role: 'assistant', content: 'hi' }] })).status).toBe(400);
-    expect((await ask(app, { messages: [{ role: 'user', content: 'x'.repeat(4_001) }] })).status).toBe(400);
+    const tooLong = await ask(app, { messages: [{ role: 'user', content: 'x'.repeat(4_001) }] });
+    expect(tooLong.status).toBe(400);
+    expect(await tooLong.text()).toContain('at most 4,000 characters');
     expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('says what is wrong with a refused conversation', async () => {
+    const app = new Hono();
+    mountAssistant(app, vi.fn());
+    const said = async (messages: unknown) => (await ask(app, { messages })).text();
+    expect(await said([{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }])).toContain('must end with a question');
+    expect(await said(Array.from({ length: 21 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'q' })))).toContain('too long. Start a new conversation');
+    expect(await said([{ role: 'user', content: '   ' }])).toContain('Type a question');
+  });
+
+  it('accepts a long earlier answer as history, which a question could not be', async () => {
+    const app = new Hono();
+    mountAssistant(app, async () => ({ spaces: [space('family', {})], model: scripted(async () => 'Sure.') }));
+    const res = await ask(app, { messages: [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'a'.repeat(6_000) }, { role: 'user', content: 'more?' }] });
+    expect(res.status).toBe(200);
   });
 
   it('is 503 on an install with no model, and answers when there is one', async () => {
     const family = space('family', { lease: 'Lease' }, { current: true });
     let model: ReturnType<typeof scripted> | null = null;
     const app = new Hono();
-    mountAssistant(app, async () => ({ spaces: [family], model }));
+    mountAssistant(app, async () => (model ? { spaces: [family], model } : null));
     expect((await ask(app, { messages: [{ role: 'user', content: 'hi' }] })).status).toBe(503);
     model = scripted(async () => 'Hello.');
     const res = await ask(app, { messages: [{ role: 'user', content: 'hi' }] });

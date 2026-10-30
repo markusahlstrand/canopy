@@ -225,3 +225,35 @@ it('offers no assistant while offline', () => {
   render(<CommandPalette {...props} offline />);
   expect(screen.queryByRole('option', { name: /Ask the assistant/ })).toBeNull();
 });
+it('replaces a question whose answer failed instead of sending two in a row', async () => {
+  const bodies: { messages: { role: string }[] }[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return bodies.length === 1
+      ? new Response(JSON.stringify({ detail: 'The assistant could not answer just now.' }), { status: 502 })
+      : new Response(JSON.stringify({ answer: 'Answered.', sources: [] }));
+  }));
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('option', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByRole('alert');
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'second' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByText('Answered.');
+  expect(bodies[1]).toEqual({ messages: [{ role: 'user', content: 'second' }] });
+  expect(screen.queryByText('first')).toBeNull();
+});
+it('opens a source by page load when the current space is not known', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ answer: 'See it.', sources: [{ space: 'work', fileId: 'inv', name: 'Invoice.pdf' }] }))));
+  const assign = vi.fn();
+  vi.stubGlobal('location', { ...window.location, href: window.location.href, origin: window.location.origin, assign });
+  const onOpenFile = vi.fn();
+  render(<CommandPalette {...props} onOpenFile={onOpenFile} />);
+  fireEvent.click(screen.getByRole('option', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'invoice' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('button', { name: /Invoice\.pdf/ }));
+  expect(onOpenFile).not.toHaveBeenCalled();
+  expect(assign).toHaveBeenCalledWith(expect.stringContaining('site=work'));
+});

@@ -15,6 +15,7 @@ import { FileIcon } from "./file-icon";
 import { SEARCH_MIN, askAssistant, search, type AssistantSource, type PluginInstall, type SearchHit, type Site } from "./api";
 import { AssistantThread, type AssistantTurn } from "./assistant-thread";
 import { fileLink } from "./file-links";
+import { historyWindow } from "../../src/assistant-contract";
 import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
 import { spaceLabel } from './space-navigation';
@@ -51,9 +52,6 @@ interface CommandPaletteProps {
   onShowAllResults?: (query: string) => boolean | void;
   offline?: boolean;
 }
-
-/** What one request carries: the worker caps a conversation at 20, and an odd count starts on a question. */
-const ASSISTANT_HISTORY = 19;
 
 /** Search and keyboard actions, with visible progress and recoverable failures. */
 export function CommandPalette({
@@ -98,7 +96,7 @@ export function CommandPalette({
     const id = conversation.current;
     setAsking(true);
     setAskError(null);
-    askAssistant(history.slice(-ASSISTANT_HISTORY).map(({ role, content }) => ({ role, content })))
+    askAssistant(historyWindow(history).map(({ role, content }) => ({ role, content })))
       .then((reply) => {
         if (id === conversation.current) setTurns([...history, { role: 'assistant', content: reply.answer, sources: reply.sources }]);
       })
@@ -116,7 +114,10 @@ export function CommandPalette({
     if (!text || asking) return;
     setQuery('');
     setResults([]);
-    const history = [...turns, { role: 'user' as const, content: text }];
+    // A question whose answer failed is replaced by the next one, not left unanswered
+    // above it: two questions in a row is not a conversation a model can read.
+    const settled = turns.at(-1)?.role === 'user' ? turns.slice(0, -1) : turns;
+    const history = [...settled, { role: 'user' as const, content: text }];
     setTurns(history);
     send(history);
   };
@@ -128,7 +129,9 @@ export function CommandPalette({
   };
   const here = sites.find((site) => site.current)?.slug;
   const openSource = (source: AssistantSource) => {
-    if (!here || source.space === here) {
+    // Unknown here is "another space": a page load to the right one is always correct,
+    // opening by id in the wrong one never is.
+    if (here && source.space === here) {
       if (onOpenFile({ id: source.fileId, name: source.name, kind: kindOf(null, source.name), modified: '', size: '—', isFolder: false }) !== false) onOpenChange(false);
       return;
     }

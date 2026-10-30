@@ -1,12 +1,10 @@
 import { Button, Icon } from "@canopy/ui";
 import { FileIcon } from "./file-icon";
 import { kindOf } from "./items";
-import type { AssistantSource } from "./api";
+import type { AssistantMessage, AssistantSource } from "./api";
 
 /** A turn as the palette keeps it: an answer remembers the files it rests on. */
-export interface AssistantTurn {
-  role: "user" | "assistant";
-  content: string;
+export interface AssistantTurn extends AssistantMessage {
   sources?: AssistantSource[];
 }
 

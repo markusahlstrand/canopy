@@ -717,16 +717,14 @@ export const search = (term: string, limit?: number, via?: SearchHit['via']) =>
     `/search?term=${encodeURIComponent(term)}${limit ? `&limit=${limit}` : ''}${via ? `&via=${encodeURIComponent(via)}` : ''}`,
   );
 
-/** One turn of an assistant conversation, as the client keeps it. */
-export interface AssistantMessage { role: 'user' | 'assistant'; content: string }
-export type { AssistantReply, AssistantSource } from '../../src/assistant';
+export type { AssistantMessage, AssistantReply, AssistantSource } from '../../src/assistant-contract';
 
 /**
  * Ask the ⌘K assistant. The whole conversation rides each request — the worker keeps no
  * transcript — and it searches every space this login can enter, not just this one.
  */
-export const askAssistant = (messages: AssistantMessage[]) =>
-  call<import('../../src/assistant').AssistantReply>('/assistant', { method: 'POST', body: JSON.stringify({ messages }) });
+export const askAssistant = (messages: import('../../src/assistant-contract').AssistantMessage[]) =>
+  call<import('../../src/assistant-contract').AssistantReply>('/assistant', { method: 'POST', body: JSON.stringify({ messages }) });
 
 export interface SearchHit extends DriveFile {
   snippet?: string | null;
