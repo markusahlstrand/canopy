@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -140,6 +140,7 @@ export function CommandPalette({
     setAskError(null);
   };
   const here = sites.find((site) => site.current)?.slug;
+  const spaceNames = useMemo(() => new Map(sites.map((site) => [site.slug, spaceLabel(site)])), [sites]);
   const openSource = (source: AssistantSource) => {
     // Unknown here is "another space": a page load to the right one is always correct,
     // opening by id in the wrong one never is.
@@ -153,7 +154,8 @@ export function CommandPalette({
 
   useEffect(() => {
     if (!open) {
-      setMode('search');
+      // A conversation outlives the dialog: ⌘K, Esc, ⌘K comes back to it.
+      setMode(turns.length || asking ? 'assistant' : 'search');
       setQuery("");
       setSettledQuery(null);
       setResults([]);
@@ -230,7 +232,7 @@ export function CommandPalette({
           // Retry resends an unanswered question; an error with nothing to resend has none.
           onRetry={turns.at(-1)?.role === 'user' ? () => send(turns) : undefined}
           onOpenSource={openSource}
-          spaceNames={new Map(sites.map((site) => [site.slug, spaceLabel(site)]))}
+          spaceNames={spaceNames}
           currentSpace={here}
           onBack={() => setMode('search')}
           onReset={resetConversation}

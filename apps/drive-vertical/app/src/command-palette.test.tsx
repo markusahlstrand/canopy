@@ -206,7 +206,8 @@ it('sends the whole conversation with a follow-up, and keeps it across close and
   await screen.findByText('Answer 1');
   view.rerender(<CommandPalette {...props} open={false} />);
   view.rerender(<CommandPalette {...props} />);
-  fireEvent.click(screen.getByRole('option', { name: /Continue the conversation/ }));
+  // Reopening lands on the conversation, not on search.
+  expect(screen.getByText('Answer 1')).toBeTruthy();
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'second' } });
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
   await screen.findByText('Answer 2');
@@ -281,6 +282,7 @@ it('starts a new conversation when asked from search, and continues one only whe
   await screen.findByText('Answer 1');
   view.rerender(<CommandPalette {...props} open={false} />);
   view.rerender(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Search/ }));
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'lease end' } });
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true });
   await screen.findByText('Answer 2');

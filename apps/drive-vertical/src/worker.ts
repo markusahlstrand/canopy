@@ -479,7 +479,7 @@ app.use('*', invocationLog<Env>({
   allowUnsigned: (env) => env.ALLOW_DEV_NODE === 'true',
 }));
 app.use('/api/*', async (c, next) => {
-  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|accept-invite|claim-owner|app-passwords)$/.test(c.req.path);
+  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|accept-invite|claim-owner|app-passwords|assistant)$/.test(c.req.path);
   if (jsonMutation && c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HTTPException(415, {message:'Use application/json for this request.'});
   const origin = c.req.header('origin');
   if (jsonMutation && origin && origin !== new URL(c.req.url).origin) throw new HTTPException(403, {message:'Cross-origin mutations are not allowed.'});
@@ -752,13 +752,11 @@ mountSpaceSettings(app, async c => {
  */
 mountAssistant(app, async c => {
   const env = c.env;
-  const base = baseNode(c.req.raw, env);
   // Who is asking first: an anonymous caller is a 401 whatever this install runs.
-  const subject = await (await providerFor(env, base)).resolve(c.req.raw.headers);
-  if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
+  const { base, sub } = await subjectOf(c.req.raw, env);
   // Then whether there is a model, before the roster costs a lookup per space.
   if (!env.AI) return null;
-  const sites = await sitesForSubject(env, base, subject.sub);
+  const sites = await sitesForSubject(env, base, sub);
   const here = (await nodeFor(c.req.raw, env)).scopeId;
   // Spend is attributed to a space the caller is in: the selected one when they can enter
   // it, else their first. Never to whatever an `x-scope` header names.
@@ -864,6 +862,12 @@ app.put('/api/plugins', async (c) => {
 
 /** The authenticated, reachable space roster shared by the picker and grant discovery. */
 async function accessibleSites(request: Request, env: Env) {
+  const { base, sub } = await subjectOf(request, env);
+  return sitesForSubject(env, base, sub);
+}
+
+/** Who is asking, as a login on this install — 401 when nobody is. */
+async function subjectOf(request: Request, env: Env) {
   const base = baseNode(request, env);
   // The SUBJECT, not a principal: who is asking is a fact about the install, and a
   // principal is a fact about ONE space (K-22 — the same login is a different principal
@@ -872,7 +876,7 @@ async function accessibleSites(request: Request, env: Env) {
   // a fourth got 401 from the very endpoint that would have let them leave it.
   const subject = await (await providerFor(env, base)).resolve(request.headers);
   if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
-  return sitesForSubject(env, base, subject.sub);
+  return { base, sub: subject.sub };
 }
 
 /** The spaces one login can enter, each with its principal and stub there. */

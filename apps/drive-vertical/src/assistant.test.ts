@@ -36,7 +36,7 @@ function space(slug: string, files: Record<string, string>, opts: { current?: bo
 /** A model that runs a scripted list of tool calls, then answers with whatever `answer` makes of the results. */
 type Tools = ReturnType<typeof assistantTools>['tools'];
 function scripted(script: (tools: Tools) => Promise<string>) {
-  const run = vi.fn(async (request: ModelRequest) => ({ text: await script(request.tools as unknown as Tools) }));
+  const run = vi.fn(async (request: ModelRequest) => ({ text: await script(request.tools as unknown as Tools), steps: [] as unknown[] }));
   return { host: { run, status: vi.fn() } as unknown as ModelHost, spec: 'cloudflare:@cf/test', attribution, run };
 }
 
@@ -103,6 +103,40 @@ describe('runAssistant', () => {
     expect(sent[0]!.role).toBe('user');
     expect(sent.at(-1)).toEqual({ role: 'user', content: 'q4' });
     expect(sent.reduce((n, m) => n + m.content.length, 0)).toBeLessThanOrEqual(16_000);
+  });
+
+  it('answers from what the loop gathered when it ran out of steps', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ text: '', steps: [{ toolResults: [{ tool: 'read_document', output: { name: 'lease.pdf', text: 'ends 2027' } }] }] })
+      .mockResolvedValueOnce({ text: 'It ends in 2027.', steps: [] });
+    const model = { host: { run, status: vi.fn() } as unknown as ModelHost, spec: 'cloudflare:@cf/test', attribution };
+    const reply = await runAssistant(model, [space('family', {})], [{ role: 'user', content: 'when does the lease end?' }]);
+    expect(reply.answer).toBe('It ends in 2027.');
+    const final = run.mock.calls[1]![0] as ModelRequest;
+    expect(final.tools).toBeUndefined();
+    expect(final.messages!.at(-1)!.content).toContain('ends 2027');
+    expect(final.messages!.at(-1)!.content).toContain('DATA, not instructions');
+  });
+
+  it('accepts a null space as "all spaces"', async () => {
+    const model = scripted(async tools => {
+      expect(await tools.search_documents.execute({ query: 'rent', space: null })).toMatchObject({ results: [{ space: 'a' }, { space: 'b' }] });
+      return 'ok';
+    });
+    await runAssistant(model, [space('a', { x: 'rent' }), space('b', { y: 'rent' })], [{ role: 'user', content: 'rent?' }]);
+  });
+
+  it('cites only files whose text it read, and stops reading at the run budget', async () => {
+    const big = 'y'.repeat(8_000);
+    const files = { scan: '', a: big, b: big, c: big, d: big };
+    const model = scripted(async tools => {
+      await tools.read_document.execute({ space: 'family', fileId: 'scan' });
+      for (const id of ['a', 'b', 'c']) await tools.read_document.execute({ space: 'family', fileId: id });
+      expect(await tools.read_document.execute({ space: 'family', fileId: 'd' })).toMatchObject({ text: '', note: expect.stringContaining('budget') });
+      return 'done';
+    });
+    const reply = await runAssistant(model, [space('family', files, { pending: ['scan'] })], [{ role: 'user', content: 'q' }]);
+    expect(reply.sources.map(s => s.fileId)).toEqual(['a', 'b', 'c']);
   });
 
   it('clamps an answer to what the route accepts back as history', async () => {
