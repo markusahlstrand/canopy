@@ -14,6 +14,7 @@ import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors
 import { createModelHost } from '@substrat-run/vertical-host/model';
 import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, planRun, type AutoLabelPayload } from './document-ai.js';
 import { isLockedName } from './editable-text.js';
+import { DEFAULT_ASSISTANT_MODEL, mountAssistant } from './assistant.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -209,6 +210,8 @@ export interface Env {
   AI?: unknown;
   /** Document AI's model as `provider:model`. Default: {@link DEFAULT_DOCUMENT_AI_MODEL}. */
   DOCUMENT_AI_MODEL?: string;
+  /** The ⌘K assistant's model as `provider:model`. Default: {@link DEFAULT_ASSISTANT_MODEL}. */
+  ASSISTANT_MODEL?: string;
   /** Optional token for GitHub commit lookups during public plugin imports. */
   GITHUB_TOKEN?: string;
   /** Optional npm registry base URL for plugin imports (https, or loopback http for local acceptance). Default: registry.npmjs.org. */
@@ -728,6 +731,30 @@ mountSpaceSettings(app, async c => {
  await requirePeopleAdmin(c);
  const node=await nodeFor(c.req.raw,c.env);
  return {scope:node.scopeId,directory:identityDo(c.env,node)};
+});
+/**
+ * The ⌘K assistant, over every space this login can enter — each searched and read as the
+ * principal it is there, so the model reaches exactly what the person could.
+ */
+mountAssistant(app, async c => {
+  const env = c.env;
+  const sites = await accessibleSites(c.req.raw, env);
+  const here = (await nodeFor(c.req.raw, env)).scopeId;
+  const base = baseNode(c.req.raw, env);
+  const spaces = sites.map(site => ({ slug: site.slug, name: site.name, current: site.scopeId === here, scope: site.scope }));
+  return {
+    spaces,
+    model: env.AI ? {
+      host: createModelHost({
+        env: env as unknown as Record<string, string | undefined>,
+        aiBinding: env.AI,
+        sent: 'Your questions, and the text of the documents the assistant searches and reads to answer them',
+        record: (line) => { console.log('drive.assistant.usage', line); },
+      }),
+      spec: env.ASSISTANT_MODEL || DEFAULT_ASSISTANT_MODEL,
+      attribution: { tenant: base.tenantId, scope: here, vertical: driveManifest.id, version: driveManifest.version, operation: 'drive/assistant' },
+    } : null,
+  };
 });
 app.post('/api/sites', async (c) => {
   const node = await nodeFor(c.req.raw, c.env);

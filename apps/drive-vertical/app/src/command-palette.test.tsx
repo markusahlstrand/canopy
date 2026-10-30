@@ -170,3 +170,58 @@ it('opens the management dialogs from keyboard actions', () => {
   fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
   expect(onManagePlugins).toHaveBeenCalledOnce();
 });
+it('hands a query to the assistant with ⌘↵ and opens the files it cites', async () => {
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes('/assistant')) {
+      expect(JSON.parse(String(init?.body))).toEqual({ messages: [{ role: 'user', content: 'when does the lease end?' }] });
+      return new Response(JSON.stringify({ answer: 'The lease ends on 31 March 2027.', sources: [{ space: 'family', fileId: 'lease', name: 'Lease.pdf' }] }));
+    }
+    return new Response(JSON.stringify({ hits: [] }));
+  });
+  vi.stubGlobal('fetch', fetch);
+  const onOpenFile = vi.fn();
+  render(<CommandPalette {...props} onOpenFile={onOpenFile} sites={[{ slug: 'family', name: 'Family', current: true } as never]} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'when does the lease end?' } });
+  expect(screen.getByRole('option', { name: /Ask the assistant: “when does the lease end\?”/ })).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true });
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('');
+  expect(screen.getByRole('status').textContent).toBe('Searching your documents…');
+  await screen.findByText('The lease ends on 31 March 2027.');
+  fireEvent.click(screen.getByRole('button', { name: /Lease\.pdf/ }));
+  expect(onOpenFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'lease', name: 'Lease.pdf' }));
+});
+it('sends the whole conversation with a follow-up, and keeps it across close and reopen', async () => {
+  const bodies: unknown[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ answer: `Answer ${bodies.length}`, sources: [] }));
+  }));
+  const view = render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('option', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByText('Answer 1');
+  view.rerender(<CommandPalette {...props} open={false} />);
+  view.rerender(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('option', { name: /Continue the conversation/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'second' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByText('Answer 2');
+  expect(bodies[1]).toEqual({ messages: [{ role: 'user', content: 'first' }, { role: 'assistant', content: 'Answer 1' }, { role: 'user', content: 'second' }] });
+});
+it('shows an assistant failure with a retry instead of a blank answer', async () => {
+  vi.stubGlobal('fetch', vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'The assistant is not available on this install.' }), { status: 503 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ answer: 'Now it works.', sources: [] }))));
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('option', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'hello' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect((await screen.findByRole('alert')).textContent).toBe('The assistant is not available on this install.');
+  fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+  await screen.findByText('Now it works.');
+});
+it('offers no assistant while offline', () => {
+  render(<CommandPalette {...props} offline />);
+  expect(screen.queryByRole('option', { name: /Ask the assistant/ })).toBeNull();
+});

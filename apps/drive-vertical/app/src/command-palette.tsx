@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -12,7 +12,9 @@ import {
 import { Icon } from "@canopy/ui";
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from "./file-icon";
-import { SEARCH_MIN, search, type PluginInstall, type SearchHit, type Site } from "./api";
+import { SEARCH_MIN, askAssistant, search, type AssistantSource, type PluginInstall, type SearchHit, type Site } from "./api";
+import { AssistantThread, type AssistantTurn } from "./assistant-thread";
+import { fileLink } from "./file-links";
 import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
 import { spaceLabel } from './space-navigation';
@@ -50,6 +52,9 @@ interface CommandPaletteProps {
   offline?: boolean;
 }
 
+/** What one request carries: the worker caps a conversation at 20, and an odd count starts on a question. */
+const ASSISTANT_HISTORY = 19;
+
 /** Search and keyboard actions, with visible progress and recoverable failures. */
 export function CommandPalette({
   open,
@@ -79,10 +84,61 @@ export function CommandPalette({
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [settledQuery, setSettledQuery] = useState<string | null>(null);
-  const searching = !offline && query.trim().length >= SEARCH_MIN;
+  // The assistant: its conversation outlives the dialog, so ⌘K, Esc, ⌘K comes back to it.
+  const [mode, setMode] = useState<'search' | 'assistant'>('search');
+  const [turns, setTurns] = useState<AssistantTurn[]>([]);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  // Bumped by "New conversation", so an answer to the old one cannot land in the new one.
+  const conversation = useRef(0);
+  const assistant = mode === 'assistant' && !offline;
+  const searching = !assistant && !offline && query.trim().length >= SEARCH_MIN;
+
+  const send = (history: AssistantTurn[]) => {
+    const id = conversation.current;
+    setAsking(true);
+    setAskError(null);
+    askAssistant(history.slice(-ASSISTANT_HISTORY).map(({ role, content }) => ({ role, content })))
+      .then((reply) => {
+        if (id === conversation.current) setTurns([...history, { role: 'assistant', content: reply.answer, sources: reply.sources }]);
+      })
+      .catch((e: unknown) => {
+        if (id === conversation.current) setAskError(e instanceof Error ? e.message || 'The assistant could not answer.' : String(e));
+      })
+      .finally(() => {
+        if (id === conversation.current) setAsking(false);
+      });
+  };
+  const ask = (question: string) => {
+    const text = question.trim();
+    setMode('assistant');
+    // One question at a time: a follow-up typed while an answer is coming stays in the box.
+    if (!text || asking) return;
+    setQuery('');
+    setResults([]);
+    const history = [...turns, { role: 'user' as const, content: text }];
+    setTurns(history);
+    send(history);
+  };
+  const resetConversation = () => {
+    conversation.current++;
+    setTurns([]);
+    setAsking(false);
+    setAskError(null);
+  };
+  const here = sites.find((site) => site.current)?.slug;
+  const openSource = (source: AssistantSource) => {
+    if (!here || source.space === here) {
+      if (onOpenFile({ id: source.fileId, name: source.name, kind: kindOf(null, source.name), modified: '', size: '—', isFolder: false }) !== false) onOpenChange(false);
+      return;
+    }
+    // Another space is another page load: the selected space is read from the URL.
+    window.location.assign(fileLink(source.fileId, source.space));
+  };
 
   useEffect(() => {
     if (!open) {
+      setMode('search');
       setQuery("");
       setSettledQuery(null);
       setResults([]);
@@ -118,8 +174,18 @@ export function CommandPalette({
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="top-[18%] translate-y-0">
       <CommandInput
-        placeholder="Search files and more…"
+        placeholder={assistant ? (turns.length ? "Ask a follow-up…" : "Ask about your documents…") : "Search files, or ask the assistant…"}
         value={query}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' || offline) return;
+          // In the assistant, Enter sends. In search, ⌘↵ hands the query to the assistant
+          // and a plain Enter still opens the highlighted result.
+          if (assistant || event.metaKey || event.ctrlKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            ask(query);
+          }
+        }}
         onValueChange={(next) => {
           setQuery(next);
           setSettledQuery(null);
@@ -131,6 +197,17 @@ export function CommandPalette({
         }}
       />
       <CommandList className="max-h-[60vh]">
+        {assistant ? <AssistantThread
+          turns={turns}
+          asking={asking}
+          error={askError}
+          onRetry={() => send(turns)}
+          onOpenSource={openSource}
+          spaceNames={new Map(sites.map((site) => [site.slug, spaceLabel(site)]))}
+          currentSpace={here}
+          onBack={() => setMode('search')}
+          onReset={resetConversation}
+        /> : <>
         {offline ? <p role="status" className="p-3 text-sm text-muted-foreground">File search is unavailable while offline. Reconnect to search this space.</p> : null}
         {error ? <>
           <p role="alert" className="p-3 text-sm">{error}</p>
@@ -141,8 +218,12 @@ export function CommandPalette({
         </> : null}
         {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
 
-        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>{offline ? 'File search is unavailable while offline.' : query.trim() && !searching
-          ? `Type at least ${SEARCH_MIN} characters to search files.` : 'No results found.'}</CommandEmpty> : null}
+        {/* Online, "Ask the assistant" matches every query, so cmdk's empty state would never
+            show: say what the FILE search found in so many words instead. */}
+        {offline ? <CommandEmpty>File search is unavailable while offline.</CommandEmpty>
+          : query.trim() && !searching ? <p className="py-6 text-center text-sm">Type at least {SEARCH_MIN} characters to search files.</p>
+          : searching && settledQuery === query && !loading && !error && !results.length ? <p className="py-6 text-center text-sm">No results found.</p>
+          : null}
 
         <CommandGroup heading="Files">
           {searching && onShowAllResults ? <CommandItem value={`show all search results ${query}`} onSelect={run(() => onShowAllResults(query.trim()))}>
@@ -185,6 +266,20 @@ export function CommandPalette({
                 </CommandItem>
               ))}
         </CommandGroup>
+
+        {!offline ? <>
+          <CommandSeparator />
+          <CommandGroup heading="Assistant">
+            {query.trim() ? <CommandItem value={`ask assistant ${query}`} onSelect={() => ask(query)}>
+              <Icon name="sparkles" size={16} />
+              <span className="min-w-0 flex-1 truncate">Ask the assistant: “{query.trim()}”</span>
+              <CommandShortcut>⌘↵</CommandShortcut>
+            </CommandItem> : <CommandItem value="ask the assistant ai" onSelect={() => setMode('assistant')}>
+              <Icon name="sparkles" size={16} />
+              <span className="flex-1">{turns.length ? 'Continue the conversation' : 'Ask the assistant…'}</span>
+            </CommandItem>}
+          </CommandGroup>
+        </> : null}
 
         {onOpenSpace && sites.length ? <>
           <CommandSeparator />
@@ -236,6 +331,7 @@ export function CommandPalette({
             <CommandShortcut>⌘U</CommandShortcut>
           </CommandItem> : null}
         </CommandGroup>
+        </>}
       </CommandList>
     </CommandDialog>
   );
