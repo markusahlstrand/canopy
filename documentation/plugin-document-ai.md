@@ -10,12 +10,14 @@ file's text has been extracted for search, whenever that happens, Canopy asks an
 description yet, writes a one- or two-sentence **description**. Both show in the file's
 **Details** tab and are searchable.
 
-It only fills in what is empty: a description someone wrote is kept, and the AI's label is
-added next to any labels already there. If someone edits the details while the model is
+A description someone wrote is kept, and the AI's label is added next to any labels already
+there. What the AI wrote itself is replaced when the file changes: its old label goes, and its
+old description is updated unless someone edited it. If someone edits the details while the model is
 working, their edit is kept and the AI's additions are merged in. If the file is replaced
 with a new version first, Canopy analyses the new version instead. A file is analysed at
-most once a day however often it is saved; a file without text is tried again only when a
-new version is uploaded.
+most once a day however often it is saved, and the latest version is still analysed when the
+day is up. A file without text is tried again only when a new version is uploaded. Encrypted
+`.locked` files are never sent.
 
 ## Turning it on
 

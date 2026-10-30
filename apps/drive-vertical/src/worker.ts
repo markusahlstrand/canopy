@@ -12,7 +12,8 @@ import { normalizeNpmRegistry } from '@canopy/plugin-sources';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 import { createModelHost } from '@substrat-run/vertical-host/model';
-import { AUTO_LABEL_JOB, autoLabelJob, closesFile, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, type AutoLabelPayload } from './document-ai.js';
+import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, planRun, type AutoLabelPayload } from './document-ai.js';
+import { isLockedName } from './editable-text.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -1011,22 +1012,22 @@ async function indexSoon(
 
 /**
  * Queue Document AI for a write, in a space whose administrator turned it on. One run
- * per file: a live run is joined, and a file a finished run closed for this version
- * (`closesFile`) is left alone, so a client saving every few seconds does not buy a
- * model call per save. Nothing is queued where there is no model to run it. Never
- * throws: a failed queue is a log line, not a failed upload.
+ * per file: a live run is joined; a version already settled is left alone; a file in its
+ * cooldown gets a run that waits it out (`planRun`), so a client saving every few seconds
+ * buys at most a call a day and the last version still gets described. Nothing is queued
+ * where there is no model, or for an encrypted `.locked` file. Never throws: a failed
+ * queue is a log line, not a failed upload.
  */
 async function labelSoon(
-  env: Env, host: CloudflareScopeHost, node: Node, principal: PrincipalId, file: { id: string; versionId: string },
+  env: Env, host: CloudflareScopeHost, node: Node, principal: PrincipalId, file: { id: string; name: string; versionId: string },
 ): Promise<void> {
-  if (!env.AI) return;
+  if (!env.AI || isLockedName(file.name)) return;
   try {
     if (!(await identityDo(env, node).readSpaceSettings(node.scopeId))?.autoLabel) return;
     const key = { moduleId: DRIVE_MODULE_ID, job: AUTO_LABEL_JOB, instance: file.id };
-    const finished = await host.jobRuns(node.tenantId, node.scopeId, { ...key, status: 'done' });
-    const now = Date.now();
-    if (finished.some((run) => closesFile(run, file.versionId, now))) return;
-    const payload: AutoLabelPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, principal };
+    const plan = planRun(await host.jobRuns(node.tenantId, node.scopeId, key), file.versionId, Date.now());
+    if (!plan) return;
+    const payload: AutoLabelPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, principal, ...plan };
     await host.startJobRun(node.tenantId, node.scopeId, { ...key, payload });
   } catch (error) {
     console.error('drive.document-ai.queue-failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) });
@@ -1053,7 +1054,8 @@ app.post('/api/folders/:folderId/content', async (c) => {
   const name = c.req.query('name');
   if (!name) throw new HTTPException(400, { message: 'name is required' });
 
-  const stub = await hostFor(env).getScope(principal, node.tenantId, node.scopeId);
+  const host = hostFor(env);
+  const stub = await host.getScope(principal, node.tenantId, node.scopeId);
   const file = await stub.invoke<{ id: string; current_version_id: string | null }>('drive/ensure-file', {
     folderId: c.req.param('folderId'),
     name,
@@ -1066,7 +1068,7 @@ app.post('/api/folders/:folderId/content', async (c) => {
 
   const contentType = c.req.header('content-type') ?? 'application/octet-stream';
   const body = await readBounded(c.req.raw);
-  const attachments = await hostFor(env).attachments(principal, node.tenantId, node.scopeId);
+  const attachments = await host.attachments(principal, node.tenantId, node.scopeId);
   const attachment = await attachments.upload({
     entity: { entityType: 'file', entityId: file.id },
     filename: name,
@@ -1083,11 +1085,10 @@ app.post('/api/folders/:folderId/content', async (c) => {
   );
 
   if (written.current_version_id) {
-    const host = hostFor(env);
     // A "New → …" starter is empty by definition; its first real save is what to describe.
     const starter = c.req.query('create') === 'only';
     const versionId = written.current_version_id;
-    await indexSoon(c, host, node, starter ? undefined : () => labelSoon(env, host, node, principal, { id: file.id, versionId }));
+    await indexSoon(c, host, node, starter ? undefined : () => labelSoon(env, host, node, principal, { id: file.id, name, versionId }));
   }
 
   return c.json(written, 201);
@@ -1210,7 +1211,7 @@ mountWebdav(app, async (c, password, username) => {
         upload: async (fileId: string, name: string, mime: string, body: Uint8Array) =>
           (await (await attachments()).upload({ entity: { entityType: 'file', entityId: fileId }, filename: name, contentType: mime, visibility: 'internal', body })).id,
         open: async (blobRef: string) => (await attachments()).open(blobRef),
-        afterWrite: (file: { id: string; versionId: string }) => indexSoon(c, host, { tenantId: tenant, scopeId: scope },
+        afterWrite: (file: { id: string; name: string; versionId: string }) => indexSoon(c, host, { tenantId: tenant, scopeId: scope },
           () => labelSoon(env, host, { tenantId: tenant, scopeId: scope }, site.principal, file)),
       },
     };

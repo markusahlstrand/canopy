@@ -195,12 +195,14 @@ a document-type label and, if empty, a description. The write names the version 
 model read and is refused if the file has changed since. The model's answer is a
 memoised step, so a pass the runtime cuts short is resumed by the sweeper without
 paying twice. One run per file: a live run is joined, and a run follows a version that replaces
-the one it read for one more round. Once the model has answered about a file it is
-left alone for that version and for a day, so autosaving costs at most one call a day,
-and a different document saved over it is picked up after that. A file with no text
-layer is not retried until a new version arrives. A run that stopped for another reason
-(extraction missing or failed, access lost), or failed, closes nothing. An empty "New →"
-starter queues nothing; its first real save does. People's own labels and descriptions are never replaced. Files with no text
+the one it read for one more round. A version the model has answered about, or found no
+text in, is settled. Within a day of the file's last model call, a write still queues a
+run, which waits until the day is up and then describes whatever version is current, so
+autosaving costs at most one call a day and the last version is still described. Each
+run replaces what Document AI wrote last time (its label, and its description if nobody
+edited it) rather than adding to it. Encrypted `.locked` files are never sent. A run
+that stopped short of the model (extraction missing or failed, access lost) settles
+nothing. An empty "New →" starter queues nothing; its first real save does. People's own labels and descriptions are never replaced. Files with no text
 layer are skipped. Links and mail addresses are stripped from what the model writes.
 `DOCUMENT_AI_MODEL` overrides the default model. Each run's outcome is in its counters
 and logged as `drive.document-ai.done`; usage lines as `drive.document-ai.usage`.

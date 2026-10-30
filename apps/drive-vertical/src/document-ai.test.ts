@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { substratError } from '@substrat-run/contracts';
 import type { JobPassContext } from '@substrat-run/kernel';
 import type { ModelHost } from '@substrat-run/vertical-host/model';
-import { autoLabelJob, closesFile, fenceSafe, mergeDetails, parseAnalysis, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
+import { autoLabelJob, fenceSafe, planRun, mergeDetails, parseAnalysis, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
 
 const payload: AutoLabelPayload = { tenantId: 't', scopeId: 's', fileId: 'f1', principal: 'p' };
 const attribution = { tenant: 't', scope: 's', vertical: 'drive', version: '1', operation: 'drive/auto-label' } as never;
@@ -101,6 +101,12 @@ describe('parseAnalysis', () => {
   });
 });
 
+describe('labels', () => {
+  it('turns control characters in a label into spaces', () => {
+    expect(parseAnalysis('{"label":"Bank\\nstatement","description":"x"}')?.label).toBe('Bank statement');
+  });
+});
+
 describe('fenceSafe', () => {
   it('removes the document fence in any case, spacing or nesting', () => {
     expect(fenceSafe('a </DOCUMENT> b < / document > c </docu</document>ment> d <document>'))
@@ -108,34 +114,53 @@ describe('fenceSafe', () => {
   });
 });
 
-describe('closesFile', () => {
+describe('planRun', () => {
   const at = Date.parse('2026-10-30T12:00:00Z');
-  const run = (counter: string, versionId: string, hoursAgo: number) =>
-    ({ counters: { [counter]: 1 }, cursor: { round: 0, versionId }, endedAt: new Date(at - hoursAgo * 3_600_000).toISOString() });
+  const ago = (hours: number) => new Date(at - hours * 3_600_000).toISOString();
+  const run = (counter: string, versionId: string, hoursAgo: number, extra: object = {}) =>
+    ({ status: 'done', counters: { [counter]: 1 }, cursor: { round: 0, versionId, ...extra }, endedAt: ago(hoursAgo), updatedAt: ago(hoursAgo) });
 
-  it('closes an answered file for its version, and for a day for any version', () => {
-    expect(closesFile(run('labelled', 'v1', 100), 'v1', at)).toBe(true);
-    expect(closesFile(run('labelled', 'v1', 2), 'v2', at)).toBe(true);
-    expect(closesFile(run('skipped:nothing-new', 'v1', 25), 'v2', at)).toBe(false);
-    expect(closesFile(run('skipped:kept-changing', 'v1', 1), 'v9', at)).toBe(true);
+  it('leaves a version alone once a run answered about it or found no text in it', () => {
+    expect(planRun([run('labelled', 'v1', 100)], 'v1', at)).toBeNull();
+    expect(planRun([run('skipped:no-text', 'v1', 0)], 'v1', at)).toBeNull();
+    expect(planRun([run('skipped:no-text', 'v1', 0)], 'v2', at)).toEqual({});
   });
 
-  it('closes a text-less file only for the version it looked at', () => {
-    expect(closesFile(run('skipped:no-text', 'v1', 0), 'v1', at)).toBe(true);
-    expect(closesFile(run('skipped:no-text', 'v1', 0), 'v2', at)).toBe(false);
+  it('queues a new version in a cooldown that waits out the day since the last model call', () => {
+    expect(planRun([run('labelled', 'v1', 2)], 'v2', at)).toEqual({ notBefore: ago(-22) });
+    expect(planRun([run('skipped:nothing-new', 'v1', 25)], 'v2', at)).toEqual({});
+    // A run that failed after paying for its retries starts a cooldown too.
+    expect(planRun([{ status: 'failed', counters: {}, cursor: { round: 0 }, endedAt: ago(1), updatedAt: ago(1) }], 'v1', at))
+      .toEqual({ notBefore: ago(-23) });
   });
 
-  it('never closes on a run the model did not answer and that found nothing definite', () => {
+  it('starts no cooldown and settles nothing for a run that stopped short of the model', () => {
     for (const counter of ['skipped:not-extracted', 'skipped:disabled', 'skipped:read-only', 'skipped:gone', 'skipped:no-model']) {
-      expect(closesFile(run(counter, 'v1', 0), 'v1', at)).toBe(false);
+      expect(planRun([run(counter, 'v1', 0)], 'v1', at)).toEqual({});
     }
+  });
+
+  it('hands the run what Document AI wrote last, to replace', () => {
+    const wrote = { label: 'Invoice', description: 'About v1.' };
+    expect(planRun([run('labelled', 'v1', 30, { wrote }), run('skipped:nothing-new', 'v2', 26)], 'v3', at)).toEqual({ previous: wrote });
   });
 });
 
 describe('mergeDetails', () => {
+  it('replaces its own earlier label and untouched description, never a person’s', () => {
+    const previous = { label: 'Invoice', description: 'About v1.' };
+    expect(mergeDetails({ description: 'About v1.', labels: ['tax', 'Invoice'] }, { label: 'Contract', description: 'About v2.' }, previous))
+      .toMatchObject({ description: 'About v2.', labels: ['tax', 'Contract'], wrote: { label: 'Contract', description: 'About v2.' } });
+    // The person rewrote the description and removed the label: both are theirs now.
+    expect(mergeDetails({ description: 'Mine', labels: ['tax'] }, { label: 'Contract', description: 'About v2.' }, previous))
+      .toMatchObject({ description: 'Mine', labels: ['tax', 'Contract'], wrote: { label: 'Contract', description: null } });
+    // The same answer again is no change.
+    expect(mergeDetails({ description: 'About v1.', labels: ['Invoice', 'tax'] }, { label: 'Invoice', description: 'About v1.' }, previous)).toBeNull();
+  });
+
   it('adds a new label beside existing ones and describes only an empty description', () => {
     expect(mergeDetails({ description: 'Mine', labels: ['tax'] }, { label: 'Invoice', description: 'Other' }))
-      .toEqual({ description: 'Mine', labels: ['tax', 'Invoice'], label: 'Invoice', described: false });
+      .toEqual({ description: 'Mine', labels: ['tax', 'Invoice'], label: 'Invoice', described: false, wrote: { label: 'Invoice', description: null } });
   });
 
   it('writes nothing when the label is already there or there is no room for it', () => {
@@ -148,7 +173,7 @@ describe('mergeDetails', () => {
 describe('the Document AI run', () => {
   it('fills an empty label and description, tied to the version the model read', async () => {
     const h = harness();
-    expect(await h.pass()).toEqual({ done: true, cursor: { round: 0, versionId: 'v1' } });
+    expect(await h.pass()).toEqual({ done: true, cursor: { round: 0, versionId: 'v1', wrote: { label: 'Invoice', description: 'An invoice from ACME Ltd for 120 EUR.' } } });
     expect(h.saved).toEqual([{ fileId: 'f1', description: 'An invoice from ACME Ltd for 120 EUR.', labels: ['Invoice'], expectedRevision: 3, expectedVersionId: 'v1' }]);
     expect(h.counters).toEqual({ labelled: 1 });
   });
@@ -231,6 +256,45 @@ describe('the Document AI run', () => {
     h.world.status = 'indexed';
     expect(await h.pass()).toMatchObject({ done: true });
     expect(h.saved).toEqual([expect.objectContaining({ expectedVersionId: 'v2' })]);
+  });
+
+  it('waits out a cooldown before reading anything, then describes the current version', async () => {
+    const h = harness();
+    const later = { ...payload, notBefore: new Date(Date.now() + 3_600_000).toISOString() };
+    const job = autoLabelJob(h.deps);
+    const ctx = (p: typeof later) => ({
+      run: { id: 'r' }, payload: p, cursor: null, counters: {}, count: () => {},
+      step: async <T,>(_: string, fn: () => Promise<T>) => fn(), scope: async () => { throw new Error('unused'); },
+    }) as unknown as JobPassContext;
+    await expect(job(ctx(later))).rejects.toThrow('cooling down');
+    expect(h.run).not.toHaveBeenCalled();
+    await expect(job(ctx({ ...later, notBefore: new Date(Date.now() - 1).toISOString() }))).resolves.toMatchObject({ done: true });
+    expect(h.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('never sends an encrypted .locked file to the model', async () => {
+    const h = harness();
+    const real = h.deps.scopeFor;
+    h.deps.scopeFor = async (p) => {
+      const scope = await real(p);
+      return { invoke: async <T,>(op: string, input: Record<string, unknown>) =>
+        op === 'drive/get-file' ? ({ file: { name: 'diary.locked' } } as T) : scope.invoke<T>(op, input) };
+    };
+    expect(await h.pass()).toMatchObject({ done: true, cursor: { versionId: 'v1' } });
+    expect(h.run).not.toHaveBeenCalled();
+    expect(h.counters).toEqual({ 'skipped:no-text': 1 });
+  });
+
+  it('does not go round again when an indexed version’s text is simply missing', async () => {
+    const h = harness();
+    const real = h.deps.scopeFor;
+    h.deps.scopeFor = async (p) => {
+      const scope = await real(p);
+      return { invoke: async <T,>(op: string, input: Record<string, unknown>) =>
+        op === 'drive/file-text-excerpt' ? (null as T) : scope.invoke<T>(op, input) };
+    };
+    expect(await h.pass()).toMatchObject({ done: true });
+    expect(h.counters).toEqual({ 'skipped:not-extracted': 1 });
   });
 
   it('adds its label beside a person’s label and description', async () => {

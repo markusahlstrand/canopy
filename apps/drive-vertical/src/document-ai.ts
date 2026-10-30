@@ -30,6 +30,7 @@
 import { errorCodeOf } from '@substrat-run/contracts';
 import type { ExecutorRetryPolicy, JobHandler } from '@substrat-run/kernel';
 import type { ModelHost, ModelAttribution } from '@substrat-run/vertical-host/model';
+import { isLockedName } from './editable-text.js';
 
 /** The job's name under the drive module; one run per file. */
 export const AUTO_LABEL_JOB = 'auto-label';
@@ -47,6 +48,8 @@ const MAX_LABELS = 20;
 export const TEXT_WAIT_RETRY: ExecutorRetryPolicy = { maxAttempts: 12, baseDelayMs: 15_000, maxDelayMs: 30 * 60_000 };
 /** A model or a write that failed: a few tries, then the run fails with the error on its record. */
 const WORK_RETRY: ExecutorRetryPolicy = { maxAttempts: 4, baseDelayMs: 60_000, maxDelayMs: 15 * 60_000 };
+/** Waiting out a cooldown: checked every half hour to an hour, for well over a day. */
+const COOLDOWN_RETRY: ExecutorRetryPolicy = { maxAttempts: 40, baseDelayMs: 30 * 60_000, maxDelayMs: 60 * 60_000 };
 
 const SYSTEM =
   'You are a document classifier. The user message holds a file name and the text of a document, ' +
@@ -90,7 +93,7 @@ export function parseAnalysis(raw: string): { label: string | null; description:
     return null;
   }
   const label = typeof obj.label === 'string'
-    ? obj.label.replace(LINKISH, '').replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/^["'\s.]+|["'\s.]+$/g, '').slice(0, 40)
+    ? obj.label.replace(LINKISH, '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').replace(/^["'\s.]+|["'\s.]+$/g, '').slice(0, 40)
     : '';
   const description = typeof obj.description === 'string'
     ? obj.description.replace(LINKISH, '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 600)
@@ -110,7 +113,19 @@ export interface AutoLabelScope {
  * What the write hands the run. Ids only — the queue-safety rule for a job payload. The run
  * acts as the person whose write queued it; a later write by someone else joins the run.
  */
-export interface AutoLabelPayload { tenantId: string; scopeId: string; fileId: string; principal: string }
+export interface AutoLabelPayload {
+  tenantId: string;
+  scopeId: string;
+  fileId: string;
+  principal: string;
+  /** Wait until then before reading anything: the file is in its cooldown (`planRun`). */
+  notBefore?: string;
+  /** What Document AI last wrote on this file, so this run replaces it rather than piling up. */
+  previous?: Wrote;
+}
+
+/** The label and description a run left on a file as its own — null where it wrote none. */
+export interface Wrote { label: string | null; description: string | null }
 
 export type AutoLabelOutcome =
   | { status: 'labelled'; label: string | null; described: boolean }
@@ -130,33 +145,41 @@ type SkipReason = Extract<AutoLabelOutcome, { status: 'skipped' }>['reason'];
 
 /** Outcomes where the model answered about the file, or would have had it held still. */
 const ANSWERED = ['labelled', 'skipped:nothing-new', 'skipped:kept-changing'] as const;
-/** How long an answered file stays closed to further writes — what continuous saving can cost: one call a day. */
-export const ANSWERED_CLOSES_FOR_MS = 24 * 60 * 60_000;
+/** The least time between two model calls for one file — what continuous saving can cost: one call a day. */
+export const COOLDOWN_MS = 24 * 60 * 60_000;
 
-/** What a finished run leaves in its cursor: the version its outcome is about. */
-interface Closing { round?: number; versionId?: string }
+/** What a finished run leaves in its cursor: the version its outcome is about, and what it wrote. */
+interface Closing { round?: number; versionId?: string; wrote?: Wrote }
+
+/** The run record fields `planRun` reads — a kernel `JobRun` has them all. */
+export interface PastRun { status: string; counters: Readonly<Record<string, number>>; cursor: unknown; endedAt: string | null; updatedAt: string }
 
 /**
- * Does this finished run close the file to a write that produced `versionId`?
+ * What a write that produced `versionId` should queue, given the file's past runs — or
+ * null when that version is already settled.
  *
- * - An **answered** run closes it for that version, and for a day after it ended for any
- *   version — so autosave buys at most a call a day, and a document replaced by a
- *   different one is picked up by the first write after that.
- * - A **no-text** run closes only the version it looked at: a scan replaced by a PDF with
- *   a text layer is a new version and is tried.
- * - Anything else (the feature off, access lost, extraction missing or failed) closes
- *   nothing, and neither does a run that FAILED, which is not `done` at all.
+ * - **Settled**: a run answered about this exact version, or found it has no text.
+ * - **Cooldown**: the last run that reached the model (answered, or failed after paying
+ *   for its retries) ended under a day ago. The run is queued anyway and waits it out, so
+ *   the version current when it wakes is described without needing another write, while
+ *   a file saved every few seconds still costs at most a day's worth of calls.
+ * - **Previous**: what the latest labelling run wrote, for this run to replace.
+ *
+ * Runs that ended for any other reason (the feature off, access lost, extraction missing)
+ * settle nothing and start no cooldown.
  */
-export function closesFile(
-  run: { counters: Readonly<Record<string, number>>; cursor: unknown; endedAt: string | null },
-  versionId: string,
-  now: number,
-): boolean {
-  const about = (run.cursor as Closing | null)?.versionId;
-  if (ANSWERED.some((c) => run.counters[c])) {
-    return about === versionId || (run.endedAt !== null && now - Date.parse(run.endedAt) < ANSWERED_CLOSES_FOR_MS);
-  }
-  return !!run.counters['skipped:no-text'] && about === versionId;
+export function planRun(runs: readonly PastRun[], versionId: string, now: number): Pick<AutoLabelPayload, 'notBefore' | 'previous'> | null {
+  const cursorOf = (run: PastRun) => (run.cursor ?? {}) as Closing;
+  const answered = (run: PastRun) => run.status === 'done' && ANSWERED.some((c) => run.counters[c]);
+  const settles = (run: PastRun) => cursorOf(run).versionId === versionId && (answered(run) || (run.status === 'done' && !!run.counters['skipped:no-text']));
+  if (runs.some(settles)) return null;
+  const ended = (run: PastRun) => Date.parse(run.endedAt ?? run.updatedAt);
+  const lastModelCall = Math.max(0, ...runs.filter((run) => answered(run) || run.status === 'failed').map(ended));
+  const latestWrote = [...runs].filter((run) => cursorOf(run).wrote).sort((x, y) => ended(y) - ended(x))[0];
+  const plan: Pick<AutoLabelPayload, 'notBefore' | 'previous'> = {};
+  if (lastModelCall + COOLDOWN_MS > now) plan.notBefore = new Date(lastModelCall + COOLDOWN_MS).toISOString();
+  if (latestWrote) plan.previous = cursorOf(latestWrote).wrote;
+  return plan;
 }
 
 /**
@@ -185,11 +208,11 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     const payload = pass.payload as AutoLabelPayload;
     // Which round this is: step names carry it, so a round after a superseded one reads afresh.
     const round = (pass.cursor as { round?: number } | null)?.round ?? 0;
-    /** End the run, leaving in its cursor the version the outcome is about (`closesFile`). */
-    const finish = (outcome: AutoLabelOutcome, versionId?: string) => {
+    /** End the run, leaving in its cursor the version the outcome is about and what it wrote (`planRun`). */
+    const finish = (outcome: AutoLabelOutcome, versionId?: string, wrote?: Wrote) => {
       pass.count(outcome.status === 'labelled' ? 'labelled' : `skipped:${outcome.reason}`);
       deps.log?.('drive.document-ai.done', { fileId: payload.fileId, round, versionId, ...outcome });
-      return { done: true, cursor: { round, versionId } satisfies Closing };
+      return { done: true, cursor: { round, versionId, ...(wrote ? { wrote } : {}) } satisfies Closing };
     };
     /** The version moved under this round: follow it, or stop if it will not hold still. */
     const superseded = (versionId: string) => {
@@ -201,6 +224,15 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     const model = deps.model(payload);
     if (!model) return finish({ status: 'skipped', reason: 'no-model' });
     const scope = await deps.scopeFor(payload);
+
+    // Wait out the file's cooldown first, then describe whatever version is current by then.
+    if (payload.notBefore) {
+      const until = payload.notBefore;
+      await pass.step('cooldown', () => {
+        if (Date.now() < Date.parse(until)) throw new Error(`cooling down until ${until}`);
+        return true;
+      }, COOLDOWN_RETRY);
+    }
 
     // Wait for extraction of the current version. Throwing while it is pending is the
     // retry: the run is due again after its backoff, whoever drives it next.
@@ -231,15 +263,22 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
       try {
         const before = await scope.invoke<Details>('drive/file-details', { fileId: payload.fileId });
         if (!before.canWrite) return { skip: 'read-only' };
+        // The name as it is now, not as it was when the run was queued.
+        const { file } = await scope.invoke<{ file: { name: string } }>('drive/get-file', { fileId: payload.fileId });
+        // Encrypted in the browser: its text is ciphertext, and nothing a model should see.
+        if (isLockedName(file.name)) return { skip: 'no-text' };
+        const name = file.name.replace(/[\p{Cc}\p{Cf}<>]/gu, ' ').slice(0, 200);
         const excerpt = await scope.invoke<{ versionId: string; text: string } | null>(
           'drive/file-text-excerpt', { fileId: payload.fileId, maxChars: MAX_TEXT_CHARS },
         );
-        // Null here, after `ready` saw text, is a newer version not indexed yet.
-        if (!excerpt || excerpt.versionId !== ready.versionId) return { skip: 'superseded' };
+        if (!excerpt) {
+          // Indexed per `ready`, yet nothing to read: a newer version not indexed yet — or
+          // this one's text went missing, which is no reason to go round again.
+          const state = await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId });
+          return state?.version_id === ready.versionId ? { skip: 'not-extracted' } : { skip: 'superseded' };
+        }
+        if (excerpt.versionId !== ready.versionId) return { skip: 'superseded' };
         if (!excerpt.text.trim()) return { skip: 'no-text' };
-        // The name as it is now, not as it was when the run was queued.
-        const { file } = await scope.invoke<{ file: { name: string } }>('drive/get-file', { fileId: payload.fileId });
-        const name = file.name.replace(/[\p{Cc}\p{Cf}<>]/gu, ' ').slice(0, 200);
         const run = await model.host.run({
           spec: model.spec,
           attribution: model.attribution,
@@ -262,7 +301,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     }
 
     // Merge against the details as they are NOW — a person may have typed while the model ran.
-    type Applied = AutoLabelOutcome | { status: 'superseded' };
+    type Applied = Exclude<AutoLabelOutcome, { status: 'labelled' }> | (Extract<AutoLabelOutcome, { status: 'labelled' }> & { wrote: Wrote }) | { status: 'superseded' };
     const outcome = await pass.step(`apply:${round}`, async (): Promise<Applied> => {
       try {
         // A new version since the model read it: this answer describes something else now.
@@ -271,7 +310,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         const text = await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId });
         if (text?.version_id !== analysis.versionId) return { status: 'superseded' };
         const now = await scope.invoke<Details>('drive/file-details', { fileId: payload.fileId });
-        const merged = mergeDetails(now, analysis);
+        const merged = mergeDetails(now, analysis, payload.previous);
         if (!merged) return { status: 'skipped', reason: 'nothing-new' };
         await scope.invoke('drive/update-file-details', {
           fileId: payload.fileId,
@@ -280,7 +319,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
           expectedRevision: now.revision,
           expectedVersionId: analysis.versionId,
         });
-        return { status: 'labelled', label: merged.label, described: merged.described };
+        return { status: 'labelled', label: merged.label, described: merged.described, wrote: merged.wrote };
       } catch (error) {
         const reason = terminal(error);
         if (reason) return { status: 'skipped', reason };
@@ -288,27 +327,45 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         throw error;
       }
     }, WORK_RETRY);
-    return outcome.status === 'superseded' ? superseded(analysis.versionId) : finish(outcome, analysis.versionId);
+    if (outcome.status === 'superseded') return superseded(analysis.versionId);
+    if (outcome.status === 'labelled') {
+      const { wrote, ...labelled } = outcome;
+      return finish(labelled, analysis.versionId, wrote);
+    }
+    return finish(outcome, analysis.versionId);
   };
 }
 
 /**
- * What to write, or null when the model adds nothing: its label beside the existing ones
- * (unless already there, or the file has no room for it), and its description only where
- * there is none.
+ * What to write, or null when the model adds nothing.
+ *
+ * Document AI's own earlier values are its to replace — the label it added last time
+ * (if still there) and its description (if nobody has edited it) — so labels do not pile
+ * up version after version and a replaced document is not left with the old summary.
+ * A person's labels and description are never touched: its label goes beside theirs
+ * (unless already there, or there is no room), and its description only where there is
+ * none of theirs.
  */
 export function mergeDetails(
   now: Pick<Details, 'description' | 'labels'>,
   analysis: { label: string | null; description: string | null },
-): { description: string; labels: string[]; label: string | null; described: boolean } | null {
-  const fresh = analysis.label && !now.labels.some((l) => l.toLowerCase() === analysis.label!.toLowerCase());
-  const label = fresh && now.labels.length < MAX_LABELS ? analysis.label : null;
-  const described = !now.description.trim() && !!analysis.description;
-  if (!label && !described) return null;
+  previous?: Wrote,
+): { description: string; labels: string[]; label: string | null; described: boolean; wrote: Wrote } | null {
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const kept = previous?.label ? now.labels.filter((l) => !same(l, previous.label!)) : now.labels;
+  const ownLabel = analysis.label && !kept.some((l) => same(l, analysis.label!)) && kept.length < MAX_LABELS ? analysis.label : null;
+  const labels = ownLabel ? [...kept, ownLabel] : kept;
+  const ours = !now.description.trim() || (!!previous?.description && now.description === previous.description);
+  const description = ours && analysis.description ? analysis.description : now.description;
+  const described = description !== now.description;
+  // Re-adding its own label is no change; compare as sets, so that is not a write.
+  const key = (ls: readonly string[]) => [...ls].map((l) => l.toLowerCase()).sort().join('\n');
+  if (!described && key(labels) === key(now.labels)) return null;
   return {
-    description: described ? analysis.description! : now.description,
-    labels: label ? [...now.labels, label] : now.labels,
-    label,
+    description,
+    labels,
+    label: ownLabel,
     described,
+    wrote: { label: ownLabel, description: ours && analysis.description ? analysis.description : null },
   };
 }
