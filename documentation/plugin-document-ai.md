@@ -35,6 +35,8 @@ model.
   links and mail addresses are removed from what it writes, but a document can still steer
   the wording of its own description.
 - Labels are free text chosen by the model, not picked from a fixed list.
+- A label typed by a person that happens to match the AI's previous label is treated as the
+  AI's and may be replaced.
 
 ## At a glance
 

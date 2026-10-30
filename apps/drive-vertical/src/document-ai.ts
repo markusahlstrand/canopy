@@ -93,7 +93,7 @@ export function parseAnalysis(raw: string): { label: string | null; description:
     return null;
   }
   const label = typeof obj.label === 'string'
-    ? obj.label.replace(LINKISH, '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').replace(/^["'\s.]+|["'\s.]+$/g, '').slice(0, 40)
+    ? obj.label.replace(LINKISH, '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').slice(0, 40).replace(/^["'\s.]+|["'\s.]+$/g, '')
     : '';
   const description = typeof obj.description === 'string'
     ? obj.description.replace(LINKISH, '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 600)
@@ -148,19 +148,32 @@ const ANSWERED = ['labelled', 'skipped:nothing-new', 'skipped:kept-changing'] as
 /** The least time between two model calls for one file — what continuous saving can cost: one call a day. */
 export const COOLDOWN_MS = 24 * 60 * 60_000;
 
-/** What a finished run leaves in its cursor: the version its outcome is about, and what it wrote. */
-interface Closing { round?: number; versionId?: string; wrote?: Wrote }
+/**
+ * A run's cursor. Between rounds: the round, when it may start, and what the run has
+ * written so far. At the end: the version the outcome is about, and what it wrote.
+ */
+interface Closing { round?: number; notBefore?: string; versionId?: string; wrote?: Wrote }
+
+/** Marks a failure that came from the model, so only those start a cooldown (`planRun`). */
+export const MODEL_FAILURE = 'document-ai/model:';
 
 /** The run record fields `planRun` reads — a kernel `JobRun` has them all. */
-export interface PastRun { status: string; counters: Readonly<Record<string, number>>; cursor: unknown; endedAt: string | null; updatedAt: string }
+export interface PastRun {
+  status: string;
+  counters: Readonly<Record<string, number>>;
+  cursor: unknown;
+  endedAt: string | null;
+  updatedAt: string;
+  lastError: string | null;
+}
 
 /**
  * What a write that produced `versionId` should queue, given the file's past runs — or
  * null when that version is already settled.
  *
  * - **Settled**: a run answered about this exact version, or found it has no text.
- * - **Cooldown**: the last run that reached the model (answered, or failed after paying
- *   for its retries) ended under a day ago. The run is queued anyway and waits it out, so
+ * - **Cooldown**: the last run that reached the model (answered, or failed on the model
+ *   after paying for its retries) ended under a day ago. The run is queued anyway and waits it out, so
  *   the version current when it wakes is described without needing another write, while
  *   a file saved every few seconds still costs at most a day's worth of calls.
  * - **Previous**: what the latest labelling run wrote, for this run to replace.
@@ -174,7 +187,8 @@ export function planRun(runs: readonly PastRun[], versionId: string, now: number
   const settles = (run: PastRun) => cursorOf(run).versionId === versionId && (answered(run) || (run.status === 'done' && !!run.counters['skipped:no-text']));
   if (runs.some(settles)) return null;
   const ended = (run: PastRun) => Date.parse(run.endedAt ?? run.updatedAt);
-  const lastModelCall = Math.max(0, ...runs.filter((run) => answered(run) || run.status === 'failed').map(ended));
+  const failedOnModel = (run: PastRun) => run.status === 'failed' && !!run.lastError?.includes(MODEL_FAILURE);
+  const lastModelCall = Math.max(0, ...runs.filter((run) => answered(run) || failedOnModel(run)).map(ended));
   const latestWrote = [...runs].filter((run) => cursorOf(run).wrote).sort((x, y) => ended(y) - ended(x))[0];
   const plan: Pick<AutoLabelPayload, 'notBefore' | 'previous'> = {};
   if (lastModelCall + COOLDOWN_MS > now) plan.notBefore = new Date(lastModelCall + COOLDOWN_MS).toISOString();
@@ -183,10 +197,13 @@ export function planRun(runs: readonly PastRun[], versionId: string, now: number
 }
 
 /**
- * A newer version can land while a round runs; a run follows it this many times. Two
- * rounds is one model call wasted at most, and caps what continuous editing can spend.
+ * A newer version can land while a round runs, or after it. The run follows it: the
+ * first time at once, after that a cooldown apart — so a file edited all day costs a
+ * call a day, and the version current when editing stops is the one described. A file
+ * still changing after a week of rounds is let go.
  */
-const MAX_ROUNDS = 2;
+const FAST_ROUNDS = 2;
+const MAX_ROUNDS = 7;
 
 /** An error that no retry will cure: the file is gone, or the uploader can no longer write it. */
 function terminal(error: unknown): SkipReason | null {
@@ -206,33 +223,43 @@ export function fenceSafe(text: string): string {
 export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
   return async (pass) => {
     const payload = pass.payload as AutoLabelPayload;
-    // Which round this is: step names carry it, so a round after a superseded one reads afresh.
-    const round = (pass.cursor as { round?: number } | null)?.round ?? 0;
-    /** End the run, leaving in its cursor the version the outcome is about and what it wrote (`planRun`). */
-    const finish = (outcome: AutoLabelOutcome, versionId?: string, wrote?: Wrote) => {
-      pass.count(outcome.status === 'labelled' ? 'labelled' : `skipped:${outcome.reason}`);
-      deps.log?.('drive.document-ai.done', { fileId: payload.fileId, round, versionId, ...outcome });
-      return { done: true, cursor: { round, versionId, ...(wrote ? { wrote } : {}) } satisfies Closing };
-    };
-    /** The version moved under this round: follow it, or stop if it will not hold still. */
-    const superseded = (versionId: string) => {
-      if (round + 1 >= MAX_ROUNDS) return finish({ status: 'skipped', reason: 'kept-changing' }, versionId);
-      deps.log?.('drive.document-ai.superseded', { fileId: payload.fileId, round });
-      return { cursor: { round: round + 1 } };
-    };
-    if (!(await deps.enabled(payload))) return finish({ status: 'skipped', reason: 'disabled' });
-    const model = deps.model(payload);
-    if (!model) return finish({ status: 'skipped', reason: 'no-model' });
-    const scope = await deps.scopeFor(payload);
+    const cursor = (pass.cursor ?? {}) as Closing;
+    // Which round this is: step names carry it, so a later round reads afresh.
+    const round = cursor.round ?? 0;
+    // What Document AI wrote last — this run's own earlier round, else the run before it.
+    const previous = cursor.wrote ?? payload.previous;
 
-    // Wait out the file's cooldown first, then describe whatever version is current by then.
-    if (payload.notBefore) {
-      const until = payload.notBefore;
-      await pass.step('cooldown', () => {
+    // Wait out the cooldown first, before any read: each check is then nothing but a clock.
+    const until = round === 0 ? payload.notBefore : cursor.notBefore;
+    if (until) {
+      await pass.step(`cooldown:${round}`, () => {
         if (Date.now() < Date.parse(until)) throw new Error(`cooling down until ${until}`);
         return true;
       }, COOLDOWN_RETRY);
     }
+
+    /** End the run, leaving in its cursor the version the outcome is about and what it wrote (`planRun`). */
+    const finish = (outcome: AutoLabelOutcome, versionId?: string, wrote?: Wrote) => {
+      pass.count(outcome.status === 'labelled' ? 'labelled' : `skipped:${outcome.reason}`);
+      deps.log?.('drive.document-ai.done', { fileId: payload.fileId, round, versionId, ...outcome });
+      const left = wrote ?? previous;
+      return { done: true, cursor: { round, versionId, ...(left ? { wrote: left } : {}) } satisfies Closing };
+    };
+    /** Go round again for a newer version — at once the first time, then a cooldown apart — or null when out of rounds. */
+    const again = (wrote?: Wrote) => {
+      if (round + 1 >= MAX_ROUNDS) return null;
+      const notBefore = round + 1 >= FAST_ROUNDS ? new Date(Date.now() + COOLDOWN_MS).toISOString() : undefined;
+      const left = wrote ?? previous;
+      deps.log?.('drive.document-ai.again', { fileId: payload.fileId, round, notBefore });
+      return { cursor: { round: round + 1, ...(notBefore ? { notBefore } : {}), ...(left ? { wrote: left } : {}) } satisfies Closing };
+    };
+    /** The version moved under this round: follow it, or stop if it will not hold still. */
+    const superseded = (versionId: string) => again() ?? finish({ status: 'skipped', reason: 'kept-changing' }, versionId);
+
+    if (!(await deps.enabled(payload))) return finish({ status: 'skipped', reason: 'disabled' });
+    const model = deps.model(payload);
+    if (!model) return finish({ status: 'skipped', reason: 'no-model' });
+    const scope = await deps.scopeFor(payload);
 
     // Wait for extraction of the current version. Throwing while it is pending is the
     // retry: the run is due again after its backoff, whoever drives it next.
@@ -279,16 +306,21 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         }
         if (excerpt.versionId !== ready.versionId) return { skip: 'superseded' };
         if (!excerpt.text.trim()) return { skip: 'no-text' };
-        const run = await model.host.run({
-          spec: model.spec,
-          attribution: model.attribution,
-          system: SYSTEM,
-          prompt: `File name: ${name}\n\n<document>\n${fenceSafe(excerpt.text)}\n</document>`,
-          temperature: 0,
-          maxOutputTokens: 400,
-        });
-        const parsed = parseAnalysis(run.text);
-        if (!parsed) throw new Error('the model answered without the JSON object it was asked for');
+        let reply: string;
+        try {
+          reply = (await model.host.run({
+            spec: model.spec,
+            attribution: model.attribution,
+            system: SYSTEM,
+            prompt: `File name: ${name}\n\n<document>\n${fenceSafe(excerpt.text)}\n</document>`,
+            temperature: 0,
+            maxOutputTokens: 400,
+          })).text;
+        } catch (error) {
+          throw new Error(`${MODEL_FAILURE} ${error instanceof Error ? error.message : String(error)}`);
+        }
+        const parsed = parseAnalysis(reply);
+        if (!parsed) throw new Error(`${MODEL_FAILURE} the model answered without the JSON object it was asked for`);
         return { versionId: excerpt.versionId, ...parsed };
       } catch (error) {
         const reason = terminal(error);
@@ -310,7 +342,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         const text = await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId });
         if (text?.version_id !== analysis.versionId) return { status: 'superseded' };
         const now = await scope.invoke<Details>('drive/file-details', { fileId: payload.fileId });
-        const merged = mergeDetails(now, analysis, payload.previous);
+        const merged = mergeDetails(now, analysis, previous);
         if (!merged) return { status: 'skipped', reason: 'nothing-new' };
         await scope.invoke('drive/update-file-details', {
           fileId: payload.fileId,
@@ -328,11 +360,19 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
       }
     }, WORK_RETRY);
     if (outcome.status === 'superseded') return superseded(analysis.versionId);
-    if (outcome.status === 'labelled') {
-      const { wrote, ...labelled } = outcome;
-      return finish(labelled, analysis.versionId, wrote);
+    const { wrote, ...settled } = outcome.status === 'labelled' ? outcome : { ...outcome, wrote: undefined };
+    // Answered about this version — but a write that joined this run may have made a newer
+    // one since, and this run is the only one that will describe it.
+    if (settled.status === 'labelled' || (settled.status === 'skipped' && settled.reason === 'nothing-new')) {
+      const latest = await pass.step(`moved:${round}`, async () =>
+        (await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId }))?.version_id ?? null);
+      if (latest && latest !== analysis.versionId) {
+        pass.count(settled.status === 'labelled' ? 'labelled' : 'skipped:nothing-new');
+        const next = again(wrote);
+        if (next) return next;
+      }
     }
-    return finish(outcome, analysis.versionId);
+    return finish(settled, analysis.versionId, wrote);
   };
 }
 

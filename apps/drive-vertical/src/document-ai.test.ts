@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { substratError } from '@substrat-run/contracts';
 import type { JobPassContext } from '@substrat-run/kernel';
 import type { ModelHost } from '@substrat-run/vertical-host/model';
-import { autoLabelJob, fenceSafe, planRun, mergeDetails, parseAnalysis, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
+import { autoLabelJob, fenceSafe, MODEL_FAILURE, planRun, mergeDetails, parseAnalysis, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
 
 const payload: AutoLabelPayload = { tenantId: 't', scopeId: 's', fileId: 'f1', principal: 'p' };
 const attribution = { tenant: 't', scope: 's', vertical: 'drive', version: '1', operation: 'drive/auto-label' } as never;
@@ -118,7 +118,7 @@ describe('planRun', () => {
   const at = Date.parse('2026-10-30T12:00:00Z');
   const ago = (hours: number) => new Date(at - hours * 3_600_000).toISOString();
   const run = (counter: string, versionId: string, hoursAgo: number, extra: object = {}) =>
-    ({ status: 'done', counters: { [counter]: 1 }, cursor: { round: 0, versionId, ...extra }, endedAt: ago(hoursAgo), updatedAt: ago(hoursAgo) });
+    ({ status: 'done', counters: { [counter]: 1 }, cursor: { round: 0, versionId, ...extra }, endedAt: ago(hoursAgo), updatedAt: ago(hoursAgo), lastError: null });
 
   it('leaves a version alone once a run answered about it or found no text in it', () => {
     expect(planRun([run('labelled', 'v1', 100)], 'v1', at)).toBeNull();
@@ -129,9 +129,12 @@ describe('planRun', () => {
   it('queues a new version in a cooldown that waits out the day since the last model call', () => {
     expect(planRun([run('labelled', 'v1', 2)], 'v2', at)).toEqual({ notBefore: ago(-22) });
     expect(planRun([run('skipped:nothing-new', 'v1', 25)], 'v2', at)).toEqual({});
-    // A run that failed after paying for its retries starts a cooldown too.
-    expect(planRun([{ status: 'failed', counters: {}, cursor: { round: 0 }, endedAt: ago(1), updatedAt: ago(1) }], 'v1', at))
+    // A run that failed on the model, after paying for its retries, starts a cooldown too…
+    const failed = (lastError: string) => ({ status: 'failed', counters: {}, cursor: { round: 0 }, endedAt: ago(1), updatedAt: ago(1), lastError });
+    expect(planRun([failed(`step analyse:0: ${MODEL_FAILURE} the model answered without the JSON object`)], 'v1', at))
       .toEqual({ notBefore: ago(-23) });
+    // …one that failed before reaching it (extraction never finished) does not.
+    expect(planRun([failed('text not indexed yet')], 'v1', at)).toEqual({});
   });
 
   it('starts no cooldown and settles nothing for a run that stopped short of the model', () => {
@@ -219,7 +222,7 @@ describe('the Document AI run', () => {
     expect(h.counters).toEqual({ labelled: 1 });
   });
 
-  it('stops following a file that keeps changing, and closes it, after two rounds', async () => {
+  it('follows a file that keeps changing at once, then a cooldown apart', async () => {
     const h = harness();
     let n = 1;
     // Every version is replaced just after the model read it.
@@ -232,10 +235,31 @@ describe('the Document AI run', () => {
       } };
     };
     expect(await h.pass()).toEqual({ cursor: { round: 1 } });
-    expect(await h.pass()).toMatchObject({ done: true });
-    expect(h.counters).toEqual({ 'skipped:kept-changing': 1 });
+    expect(await h.pass()).toEqual({ cursor: { round: 2, notBefore: expect.any(String) } });
+    // Round 2 waits: no reads, no model, until the day is up.
+    await expect(h.pass()).rejects.toThrow('cooling down');
     expect(h.run).toHaveBeenCalledTimes(2);
     expect(h.saved).toEqual([]);
+  });
+
+  it('goes round again when a write lands after it labelled, and replaces its own label', async () => {
+    const h = harness({}, '{"label":"Invoice","description":"About v1."}');
+    const real = h.deps.scopeFor;
+    h.deps.scopeFor = async (p) => {
+      const scope = await real(p);
+      return { invoke: async <T,>(op: string, input: Record<string, unknown>) => {
+        const r = await scope.invoke<T>(op, input);
+        // The person saves v2 the moment the label lands.
+        if (op === 'drive/update-file-details' && h.world.version === 'v1') h.world.version = 'v2';
+        return r;
+      } };
+    };
+    const first = await h.pass() as { cursor: { round: number; notBefore?: string; wrote?: unknown } };
+    expect(first.cursor).toMatchObject({ round: 1, wrote: { label: 'Invoice', description: 'About v1.' } });
+    expect(first.cursor.notBefore).toBeUndefined();
+    h.run.mockResolvedValueOnce({ text: '{"label":"Contract","description":"About v2."}' });
+    expect(await h.pass()).toMatchObject({ done: true, cursor: { versionId: 'v2', wrote: { label: 'Contract' } } });
+    expect(h.world).toMatchObject({ labels: ['Contract'], description: 'About v2.' });
   });
 
   it('follows a newer version that is still being extracted instead of calling it text-less', async () => {
@@ -334,7 +358,7 @@ describe('the Document AI run', () => {
 
   it('asks again on a reply with no usable JSON, rather than closing the file on it', async () => {
     const h = harness({}, 'no idea');
-    await expect(h.pass()).rejects.toThrow('without the JSON object');
+    await expect(h.pass()).rejects.toThrow(`${MODEL_FAILURE} the model answered without the JSON object`);
     expect(h.saved).toEqual([]);
     expect(h.counters).toEqual({});
   });

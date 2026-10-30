@@ -195,7 +195,8 @@ a document-type label and, if empty, a description. The write names the version 
 model read and is refused if the file has changed since. The model's answer is a
 memoised step, so a pass the runtime cuts short is resumed by the sweeper without
 paying twice. One run per file: a live run is joined, and a run follows a version that replaces
-the one it read for one more round. A version the model has answered about, or found no
+the one it read (or lands after it wrote) at once the first time, then a day apart, for
+up to a week — so the version current when editing stops is the one described. A version the model has answered about, or found no
 text in, is settled. Within a day of the file's last model call, a write still queues a
 run, which waits until the day is up and then describes whatever version is current, so
 autosaving costs at most one call a day and the last version is still described. Each
