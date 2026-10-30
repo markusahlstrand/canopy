@@ -122,16 +122,33 @@ export interface AutoLabelDeps {
   log?(event: string, fields: Record<string, unknown>): void;
 }
 
-/** A thrown `not_found` — the file was trashed or removed while the run waited. */
-const isGone = (error: unknown) => errorCodeOf(error) === 'not_found';
+type SkipReason = Extract<AutoLabelOutcome, { status: 'skipped' }>['reason'];
+
+/**
+ * The counters of a finished run that mean the model has looked at this file. Only these
+ * end Document AI for it: a run that never got that far (no text yet, a version that was
+ * replaced, the feature off) leaves the next upload free to try again.
+ */
+export const ANALYSED_COUNTERS = ['labelled', 'skipped:nothing-new', 'skipped:unparseable', 'skipped:already-described'] as const;
+
+/** A newer version can land while a round runs; a run follows it this many times. */
+const MAX_ROUNDS = 3;
+
+/** An error that no retry will cure: the file is gone, or the uploader can no longer write it. */
+function terminal(error: unknown): SkipReason | null {
+  const code = errorCodeOf(error);
+  return code === 'not_found' ? 'gone' : code === 'forbidden' ? 'read-only' : null;
+}
 
 /** The run's body. Every early end is a reason, counted on the run and logged. */
 export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
   return async (pass) => {
     const payload = pass.payload as AutoLabelPayload;
+    // Which round this is: step names carry it, so a round after a superseded one reads afresh.
+    const round = (pass.cursor as { round?: number } | null)?.round ?? 0;
     const finish = (outcome: AutoLabelOutcome) => {
       pass.count(outcome.status === 'labelled' ? 'labelled' : `skipped:${outcome.reason}`);
-      deps.log?.('drive.document-ai.done', { fileId: payload.fileId, ...outcome });
+      deps.log?.('drive.document-ai.done', { fileId: payload.fileId, round, ...outcome });
       return { done: true };
     };
     if (!(await deps.enabled(payload))) return finish({ status: 'skipped', reason: 'disabled' });
@@ -141,24 +158,24 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
 
     // Wait for extraction. Throwing while it is pending is the retry: the run is due again
     // after its backoff, whoever drives it next.
-    const ready = await pass.step('ready', async () => {
+    const ready = await pass.step(`ready:${round}`, async (): Promise<{ indexed: boolean } | { skip: SkipReason }> => {
       try {
         const state = await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId });
         if (state?.status === 'pending') throw new Error('text not indexed yet');
-        return state?.status === 'indexed' ? { versionId: state.version_id } : { versionId: null };
+        return { indexed: state?.status === 'indexed' };
       } catch (error) {
-        if (isGone(error)) return { versionId: null, gone: true };
+        const reason = terminal(error);
+        if (reason) return { skip: reason };
         throw error;
       }
     }, TEXT_WAIT_RETRY);
-    if ('gone' in ready) return finish({ status: 'skipped', reason: 'gone' });
-    if (!ready.versionId) return finish({ status: 'skipped', reason: 'no-text' });
+    if ('skip' in ready) return finish({ status: 'skipped', reason: ready.skip });
+    if (!ready.indexed) return finish({ status: 'skipped', reason: 'no-text' });
 
     // Read, ask, and keep the answer: a later failure replays this from the memo, so the
-    // model is paid for once per run.
-    type SkipReason = Extract<AutoLabelOutcome, { status: 'skipped' }>['reason'];
+    // model is paid for once per round.
     type Analysis = { skip: SkipReason } | { versionId: string; label: string | null; description: string | null };
-    const analysis = await pass.step('analyse', async (): Promise<Analysis> => {
+    const analysis = await pass.step(`analyse:${round}`, async (): Promise<Analysis> => {
       try {
         const before = await scope.invoke<Details>('drive/file-details', { fileId: payload.fileId });
         if (!before.canWrite) return { skip: 'read-only' };
@@ -179,15 +196,21 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         const parsed = parseAnalysis(run.text);
         return parsed ? { versionId: excerpt.versionId, ...parsed } : { skip: 'unparseable' };
       } catch (error) {
-        if (isGone(error)) return { skip: 'gone' };
+        const reason = terminal(error);
+        if (reason) return { skip: reason };
         throw error;
       }
     }, WORK_RETRY);
     if ('skip' in analysis) return finish({ status: 'skipped', reason: analysis.skip });
 
     // Merge against the details as they are NOW — a person may have typed while the model ran.
-    const outcome = await pass.step('apply', async (): Promise<AutoLabelOutcome> => {
+    const outcome = await pass.step(`apply:${round}`, async (): Promise<AutoLabelOutcome> => {
       try {
+        // A new version since the model read it: this answer describes something else now.
+        // Asked first rather than read off the write's refusal; `expectedVersionId` below still
+        // closes the gap between the two, and a refusal there retries into this check.
+        const text = await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId });
+        if (text?.version_id !== analysis.versionId) return { status: 'skipped', reason: 'superseded' };
         const now = await scope.invoke<Details>('drive/file-details', { fileId: payload.fileId });
         const merged = mergeDetails(now, analysis);
         if (!merged) return { status: 'skipped', reason: 'nothing-new' };
@@ -200,15 +223,17 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         });
         return { status: 'labelled', label: merged.label, described: merged.described };
       } catch (error) {
-        if (isGone(error)) return { status: 'skipped', reason: 'gone' };
-        // A new version since the model read it: this answer describes something else now.
-        if (errorCodeOf(error) === 'conflict' && /older version/.test((error as Error).message)) {
-          return { status: 'skipped', reason: 'superseded' };
-        }
-        // A save in the gap between read and write: retry the step against the new details.
+        const reason = terminal(error);
+        if (reason) return { status: 'skipped', reason };
+        // A save, or a new version, in the gap between read and write: the retry re-reads.
         throw error;
       }
     }, WORK_RETRY);
+    // The upload that replaced the version joined this run, so this run owes it a round.
+    if (outcome.status === 'skipped' && outcome.reason === 'superseded' && round + 1 < MAX_ROUNDS) {
+      deps.log?.('drive.document-ai.superseded', { fileId: payload.fileId, round });
+      return { cursor: { round: round + 1 } };
+    }
     return finish(outcome);
   };
 }

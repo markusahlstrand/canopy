@@ -87,5 +87,18 @@ describe('Document AI on a kernel host', () => {
     expect(await host.jobRuns(tenant, scope, { moduleId: DRIVE, job: AUTO_LABEL_JOB, instance: file.id }))
       .toMatchObject([{ status: 'done', counters: { 'skipped:no-text': 1 } }]);
     expect(run).not.toHaveBeenCalled();
+
+    // A skip before the model saw anything does not close the file: real text later gets a new run.
+    await (await host.getScope(ada, tenant, scope)).invoke('drive/record-version', {
+      fileId: file.id,
+      location: { source: 'blob', blobRef: (await (await host.attachments(ada, tenant, scope)).upload({
+        entity: { entityType: 'file', entityId: file.id }, filename: 'scan.txt', contentType: 'text/plain', visibility: 'internal',
+        body: new TextEncoder().encode('Lease agreement between A and B'),
+      })).id },
+    });
+    const again = await start(file, 'scan.txt');
+    await host.runDueJobs(tenant, scope);
+    expect((await host.jobRuns(tenant, scope, { moduleId: DRIVE, job: AUTO_LABEL_JOB, instance: file.id })).find((r) => r.id === again.id))
+      .toMatchObject({ status: 'done', counters: { labelled: 1 } });
   });
 });

@@ -13,7 +13,8 @@ description yet, writes a one- or two-sentence **description**. Both show in the
 It only fills in what is empty: a description someone wrote is kept, and the AI's label is
 added next to any labels already there. If someone edits the details while the model is
 working, their edit is kept and the AI's additions are merged in. If the file is replaced
-with a new version first, the AI's answer is dropped. Each file is analysed once.
+with a new version first, Canopy analyses the new version instead. Each file is analysed
+once.
 
 ## Turning it on
 
@@ -26,8 +27,7 @@ model.
 - Reads the extracted text, not the file itself. Scans and images without a text layer are
   skipped.
 - Reads the first 12,000 characters.
-- Runs for browser and WebDAV uploads, not for edits made in the text editor or files in
-  connected sources.
+- Runs for browser uploads, WebDAV and the text editor, not for files in connected sources.
 - The document's text is untrusted. The model is told not to follow instructions in it, and
   links and mail addresses are removed from what it writes, but a document can still steer
   the wording of its own description.

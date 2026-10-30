@@ -12,7 +12,7 @@ import { normalizeNpmRegistry } from '@canopy/plugin-sources';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 import { createModelHost } from '@substrat-run/vertical-host/model';
-import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, type AutoLabelPayload } from './document-ai.js';
+import { ANALYSED_COUNTERS, AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, type AutoLabelPayload } from './document-ai.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -315,17 +315,17 @@ function hostFor(env: Env): CloudflareScopeHost {
   declareConnectorEvents(host, connectors);
   // Registered on every host, so whichever drives the scope's jobs — an upload's
   // `runDueJobs` or the sweeper's pass — can run a queued Document AI run.
-  host.registerJob(DRIVE_MODULE_ID, AUTO_LABEL_JOB, documentAiFor(env));
+  host.registerJob(DRIVE_MODULE_ID, AUTO_LABEL_JOB, documentAiFor(env, host));
   return host;
 }
 
 const DRIVE_MODULE_ID = moduleId.parse(driveManifest.id);
 
-/** Document AI's run body, over this worker's bindings. */
-function documentAiFor(env: Env) {
+/** Document AI's run body, over this worker's bindings and the host driving it. */
+function documentAiFor(env: Env, host: CloudflareScopeHost) {
   const nodeOf = (p: AutoLabelPayload): Node => ({ tenantId: tenantId.parse(p.tenantId), scopeId: scopeId.parse(p.scopeId) });
   return autoLabelJob({
-    scopeFor: (p) => hostFor(env).getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
+    scopeFor: (p) => host.getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
     enabled: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.autoLabel === true,
     model: (p) => env.AI ? {
       host: createModelHost({
@@ -999,30 +999,32 @@ mountOwnerClaim<Env, Node>(app, {
  * After the response where the runtime allows it, so a large PDF never delays an upload.
  */
 async function indexSoon(
-  c: Pick<Context, 'executionCtx'>, host: CloudflareScopeHost, node: Node, then?: () => Promise<void>,
+  c: Pick<Context, 'executionCtx'>, host: CloudflareScopeHost, node: Node, queue?: () => Promise<void>,
 ): Promise<void> {
-  const work = host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
+  // `queue` starts any run this write owes first, so the one drive below takes it too —
+  // after the extraction it waits on, which the kernel queued earlier.
+  const work = (queue ? queue() : Promise.resolve()).then(() => host.runDueJobs(node.tenantId, node.scopeId)).catch((error: unknown) => {
     console.error('drive.text-index.run-failed', { error: error instanceof Error ? error.message : String(error) });
-  }).then(then);
+  });
   await defer(c, work);
 }
 
 /**
- * Queue Document AI for an upload, in a space whose administrator turned it on. One run
- * per file: a live run is joined, and a file that already had one is left alone, so a
- * client saving every few seconds does not buy a model call per save. Then drive the
- * scope's jobs once more — extraction has just run, so the new run usually finishes
- * here; if not, it waits for its next attempt and the sweeper takes it from there.
- * Never throws: a failed queue is a log line, not a failed upload.
+ * Queue Document AI for a write, in a space whose administrator turned it on. One run
+ * per file: a live run is joined, and a file the model has already looked at is left
+ * alone, so a client saving every few seconds does not buy a model call per save. A run
+ * that ended before the model saw anything (no text yet, a replaced version) does not
+ * count, and the next write tries again. Never throws: a failed queue is a log line,
+ * not a failed upload.
  */
 async function labelSoon(env: Env, host: CloudflareScopeHost, node: Node, principal: PrincipalId, file: { id: string; name: string }): Promise<void> {
   try {
     if (!(await identityDo(env, node).readSpaceSettings(node.scopeId))?.autoLabel) return;
     const key = { moduleId: DRIVE_MODULE_ID, job: AUTO_LABEL_JOB, instance: file.id };
-    if ((await host.jobRuns(node.tenantId, node.scopeId, { ...key, status: 'done', limit: 1 })).length) return;
+    const finished = await host.jobRuns(node.tenantId, node.scopeId, { ...key, status: 'done' });
+    if (finished.some((run) => ANALYSED_COUNTERS.some((counter) => run.counters[counter]))) return;
     const payload: AutoLabelPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, name: file.name, principal };
     await host.startJobRun(node.tenantId, node.scopeId, { ...key, payload });
-    await host.runDueJobs(node.tenantId, node.scopeId);
   } catch (error) {
     console.error('drive.document-ai.queue-failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) });
   }
@@ -1121,7 +1123,7 @@ mountTextContent(app, async (c) => {
     record: (fileId, blobRef, expectedCurrentVersion) => stub.invoke<{ id: string; current_version_id: string | null }>(
       'drive/record-version', { fileId, expectedCurrentVersion, location: { source: 'blob', blobRef } },
     ),
-    afterWrite: () => indexSoon(c, host, node),
+    afterWrite: (file) => indexSoon(c, host, node, () => labelSoon(c.env, host, node, principal, file)),
   };
 });
 

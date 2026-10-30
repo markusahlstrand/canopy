@@ -185,7 +185,7 @@ FTS triggers update metadata search in the same write. Metadata hits are disting
 in the palette and are filtered through the live file’s read permission.
 
 **Document AI** fills these in for new uploads when a space administrator turns on
-*Label new uploads automatically* in space settings. Each browser or WebDAV upload
+*Label new uploads automatically* in space settings. Each browser, WebDAV or editor write
 starts a kernel job run for that file (`@canopy/scope-drive` / `auto-label`, instance =
 file id). The run waits until the kernel has indexed the file's text, retrying with
 backoff, so it does not matter whether the upload's own `runDueJobs`, a sweep or a
@@ -194,8 +194,9 @@ to a model through `createModelHost` and the platform's Workers AI binding, and 
 a document-type label and, if empty, a description. The write names the version the
 model read and is refused if the file has changed since. The model's answer is a
 memoised step, so a pass the runtime cuts short is resumed by the sweeper without
-paying twice. One run per file: a live run is joined and a file that already had one is
-left alone. People's own labels and descriptions are never replaced. Files with no text
+paying twice. One run per file: a live run is joined, a run follows a version that replaces
+the one it read (up to three rounds), and once the model has analysed a file it is left
+alone. A run that stopped earlier (no text yet, a replaced version) does not count. People's own labels and descriptions are never replaced. Files with no text
 layer are skipped. Links and mail addresses are stripped from what the model writes.
 `DOCUMENT_AI_MODEL` overrides the default model. Each run's outcome is in its counters
 and logged as `drive.document-ai.done`; usage lines as `drive.document-ai.usage`.

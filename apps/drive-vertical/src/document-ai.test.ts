@@ -19,6 +19,8 @@ interface World {
   saveError?: unknown;
   /** Throw `not_found` from every read — the file was trashed. */
   gone?: boolean;
+  /** Throw `forbidden` from every read — the uploader lost access. */
+  forbidden?: boolean;
 }
 
 function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","description":"An invoice from ACME Ltd for 120 EUR."}') {
@@ -29,6 +31,7 @@ function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","descrip
   const saved: Record<string, unknown>[] = [];
   const invoke = async <T,>(op: string, input: Record<string, unknown>): Promise<T> => {
     if (world.gone) throw substratError('not_found', 'file not found');
+    if (world.forbidden) throw substratError('forbidden', 'not allowed');
     switch (op) {
       case 'drive/file-text':
         return (world.status ? { version_id: world.version, status: world.status } : null) as T;
@@ -58,10 +61,11 @@ function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","descrip
   };
   /** One pass with the kernel's step memo: a committed step is not run again by a later pass. */
   const memo = new Map<string, unknown>();
-  const pass = () => {
+  let cursor: unknown = null;
+  const pass = async () => {
     const ctx = {
       run: { id: 'r', moduleId: 'm', job: 'auto-label', instance: 'f1' },
-      payload, cursor: null, counters,
+      payload, cursor, counters,
       count: (name: string, by = 1) => { counters[name] = (counters[name] ?? 0) + by; },
       step: async <T,>(name: string, fn: () => Promise<T>) => {
         if (memo.has(name)) return JSON.parse(JSON.stringify(memo.get(name))) as T;
@@ -71,7 +75,9 @@ function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","descrip
       },
       scope: async () => { throw new Error('not used'); },
     } as unknown as JobPassContext;
-    return autoLabelJob(deps)(ctx);
+    const result = await autoLabelJob(deps)(ctx);
+    if (result && 'cursor' in result) cursor = result.cursor;
+    return result;
   };
   return { world, saved, run, counters, deps, pass };
 }
@@ -141,12 +147,36 @@ describe('the Document AI run', () => {
     expect(h.saved[0]).toMatchObject({ description: 'Paid in March', labels: ['Invoice'], expectedRevision: 4 });
   });
 
-  it('drops an answer about a version that has since been replaced', async () => {
-    const h = harness();
-    h.world.saveError = substratError('conflict', 'file content changed — these details describe an older version');
-    await h.pass();
+  it('follows a version that replaced the one the model read, with a fresh round', async () => {
+    const h = harness({}, '{"label":"Invoice","description":"About v2."}');
+    // The write is refused because v2 landed in the gap; the retry sees it and opens round 1.
+    h.world.saveError = substratError('conflict', 'file content changed');
+    await expect(h.pass()).rejects.toThrow('file content changed');
+    h.world.version = 'v2';
+    expect(await h.pass()).toEqual({ cursor: { round: 1 } });
     expect(h.saved).toEqual([]);
+    expect(await h.pass()).toEqual({ done: true });
+    expect(h.saved).toEqual([expect.objectContaining({ expectedVersionId: 'v2', description: 'About v2.' })]);
+    expect(h.run).toHaveBeenCalledTimes(2);
+    expect(h.counters).toEqual({ labelled: 1 });
+  });
+
+  it('stops following a file that keeps changing after three rounds', async () => {
+    const h = harness();
+    let n = 1;
+    // Every write lands just after the model read: each apply sees a newer version.
+    const real = h.deps.scopeFor;
+    h.deps.scopeFor = async (p) => {
+      const scope = await real(p);
+      return { invoke: async <T,>(op: string, input: Record<string, unknown>) => {
+        if (op === 'drive/file-text-excerpt') { const r = await scope.invoke<{ versionId: string }>(op, input); h.world.version = `v${++n}`; return r as T; }
+        return scope.invoke<T>(op, input);
+      } };
+    };
+    for (let i = 0; i < 2; i++) expect(await h.pass()).toEqual({ cursor: { round: i + 1 } });
+    expect(await h.pass()).toEqual({ done: true });
     expect(h.counters).toEqual({ 'skipped:superseded': 1 });
+    expect(h.saved).toEqual([]);
   });
 
   it('does not call the model when there is nothing it could add or nothing to read', async () => {
@@ -157,6 +187,7 @@ describe('the Document AI run', () => {
       [{ status: null }, 'no-text'],
       [{ text: '   ' }, 'no-text'],
       [{ gone: true }, 'gone'],
+      [{ forbidden: true }, 'read-only'],
     ] as [Partial<World>, string][]) {
       const h = harness(over);
       expect(await h.pass()).toEqual({ done: true });
