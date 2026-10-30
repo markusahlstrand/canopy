@@ -26,7 +26,7 @@
  *   module-owned permission table would be the second enforcement system D-17
  *   exists to prevent.
  */
-import { defineEntities, defineOperations, emitModel, z } from '@substrat-run/contracts';
+import { defineEntities, defineOperations, emitModel, fileSourceChange, fileSourceWriteRequest, z } from '@substrat-run/contracts';
 
 /**
  * One path segment: a folder or file name, never a path.
@@ -187,7 +187,7 @@ export const driveEntities = defineEntities({
  * never held scope-wide, so one member's folders stay unreachable to another
  * unless a grant says otherwise.
  */
-export const DRIVE_PERMISSIONS = ['drive:read', 'drive:write', 'drive:manage'] as const;
+export const DRIVE_PERMISSIONS = ['drive:read', 'drive:write', 'drive:manage', 'drive:land-source'] as const;
 
 /**
  * A person as this drive displays them: a principal, and what to call it.
@@ -215,7 +215,40 @@ export const fileDetails = z.object({
   fileId: z.string(), description: z.string(), labels: z.array(z.string()), revision: z.number().int(), canWrite: z.boolean(),
 });
 
+/** `defineOperations` takes object inputs; retain the file-source union's validation. */
+const sourceChangeInput = z.object({
+  ...fileSourceChange.options[0].partial().shape,
+  ...fileSourceChange.options[1].partial().shape,
+  ...fileSourceChange.options[2].partial().shape,
+  ...fileSourceChange.options[0].pick({ connectionId: true, itemId: true, kind: true, path: true, name: true }).shape,
+  change: z.enum(['upsert', 'content', 'delete']),
+}).superRefine((value, ctx) => {
+  const parsed = fileSourceChange.safeParse(value);
+  if (!parsed.success) for (const issue of parsed.error.issues) {
+    ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
+  }
+});
+
 export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS)({
+  /** Stage one ordinary uploaded file for a3doc; its echo adopts this row. */
+  'drive/send-source-file': {
+    summary: 'Send an uploaded file to a3doc', permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }),
+    output: z.object({ id: z.string(), ...fileSourceWriteRequest.shape }),
+    http: { method: 'POST', path: '/files/{fileId}/send-to-source' },
+    emits: { entity: 'file', entityIdFrom: 'id', type: 'a3doc.files-requested', schemaVersion: 1, piiClass: 'none', payload: ['directory', 'files', 'conflict'] },
+  },
+  /** A provider upload attempt must survive a failed connector call. No credentials live here. */
+  'drive/source-write-journal': {
+    summary: 'Read or persist a connector upload attempt', permission: 'drive:land-source',
+    input: z.object({ key: z.string().startsWith('a3doc:write:').max(200), value: z.unknown().optional() }),
+    output: z.object({ value: z.unknown() }),
+  },
+  /** A connector lands one item at a time; people are never granted this key. */
+  'drive/land-source-change': {
+    summary: 'Land a file-source change by its stable source identity',
+    permission: 'drive:land-source', input: sourceChangeInput, output: z.object({ entity: z.object({ entityType: z.string(), entityId: z.string() }).optional(), ok: z.boolean().optional() }),
+  },
   /**
    * The hot read, and the one S10 converts first.
    *

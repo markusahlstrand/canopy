@@ -1,6 +1,6 @@
 # Connected spaces on Substrat file sources
 
-*Written 2026-10-26. This is a design note and nothing in it is built yet. It covers how the drive
+*Written 2026-10-26; updated 2026-10-27. The provider package and hosted landing path are built. It covers how the drive
 vertical gets connected spaces back, with a3doc (Wolters Kluwer) as the first source. It is also
 Substrat's second file-bearing provider, after Microsoft 365 channel files.*
 
@@ -24,13 +24,33 @@ connector interfaces. Where it **runs** depends on the deployment:
 
 - **Self-hosted drive:** the vertical's host calls `registerConnector` with it directly, and
   Substrat doesn't change.
-- **Hosted drive** (`substrat push`, how it ships today): a hosted vertical's module code may not
-  fetch, and its connector deliveries and sweeps run in the control plane from the fixed
-  `CONNECTORS` list (control-plane `worker.ts`). There, "the SAME closure a self-host registers
-  runs unchanged". The platform holds the sealed credential and the network access, and it never
-  runs code a vertical hands it at runtime. So Substrat **depends on the published
-  `@canopy/connector-a3docs`** and adds one `ConnectorRegistration` for it. That is a
-  dependency plus a list entry. The connector's code is not copied.
+- **Hosted drive** (`substrat push`, how it ships today): Substrat 0.164.0 and CLI 0.50.0
+  support vertical-defined connectors (upstream D-64 / PR #2635). The vertical declares
+  `canopy.a3doc` through `src/connectors.ts` and mounts it on `mountPlatformSurface`.
+  The platform retains the sealed credential, bindings and schedule, and calls the provider
+  code in the vertical's worker with a `ScopedConnectionContext`. Network access uses the
+  vertical's declared `outbound` hosts. No control-plane registration or npm publication is
+  needed: the workspace package is bundled into the vertical.
+
+The shared sync and upload engines still support the original self-hosted interfaces. Hosted
+sweeps use smaller pages (25 documents, one page per call) to stay below the platform's limit
+of 100 recorded outbound uses. Upload attempts are journalled through the connector-only
+`drive/source-write-journal` operation **before** the provider call: ordinary connector-state
+writes are committed only on success and cannot preserve an attempt whose response was lost.
+The journal carries file ids, hashes and document ids, never credentials.
+
+The landing keeps identities in `drive_source_items`, keyed by `(connection_id, item_id)` and
+pointing at ordinary file/folder rows. Local uploads staged by `drive/send-source-file` are
+adopted on their echo. Repeated attachment content is a no-op, including a retry that uploaded
+identical bytes under a different attachment id after losing call-state. Unreferenced duplicate
+or rejected attachments remain eligible for the platform's ordinary orphan sweep; no module
+writes the kernel's attachment tables.
+
+The settings UI, per-space opt-in/folder selection, connected-space mutation restrictions,
+write-failure display, and the live account check remain follow-up work in #358. This is not yet
+an end-to-end user-facing connected-space feature. The manifest's automatic landing currently
+uses the root folder on the platform's primary active install; it does not implement per-space
+folder preferences.
 
 Substrat already has the shape for a source that holds files
 ([connections.md §6.3](https://github.com/substrat-run/substrat/blob/main/docs/architecture/connections.md),
@@ -186,7 +206,7 @@ Each step is its own PR.
 | # | Repo | What |
 |---|---|---|
 | 1 | canopy | `packages/connectors/a3docs`, rebuilt as a Substrat connector: the client from `feat/connector-a3docs`, credential and probe (`canUpload`), bind/list/unbind, sweep to `fileSourceChange` (name map, overlap cursor, fingerprints with a content check for ambiguous-hour items, per-container delete check), write handler and a ledger that reconciles lost upload responses. It exports a `ConnectorRegistration`, is tested against a fixture provider, and builds to `dist` the way `@canopy/scope-drive` already does (`tsconfig.build.json`, `main: ./dist/src/index.js`). It is the first Canopy package to be **published** (see §6.4). |
-| 2 | substrat | depend on `@canopy/connector-a3docs` and add it to `CONNECTORS` in `apps/control-plane/src/connectors.ts` (inspector, sweeper, binder, dispatch), plus a connector doc page |
+| 2 | canopy | Done: use Substrat 0.164.0 / CLI 0.50.0 vertical-defined connectors; declare `canopy.a3doc` and bundle the provider with the worker. No upstream registration is needed. |
 | 3 | canopy | `scope-drive`: `drive:land-source` in `DRIVE_PERMISSIONS`, the `connections` manifest row, `source_item_id` and `source_status` (`too-large` / `diverged`) with their migration and unique index, `drive/land-source-change` (keyed on `itemId`, adopt, restore-on-return, `replaces`-guarded content with stale-attachment cleanup, idempotent free-then-trash delete), the account recorded per space for rebinding, pending-upload rows, and the write operation that emits the event |
 | 4 | canopy | drive UI: *Source* in the space settings (connect, status, last sync, upload allowed), and connected-space affordances (upload only, and only with `canUpload`) |
 | 5 | both | live check against a real a3doc account, including **one agreed test upload**, since a3doc has no delete |
@@ -207,7 +227,7 @@ provider, and that is when the shared `FileSource` facet is worth extracting.
 4. **Publishing.** `@canopy/scope-drive` shows how to build a Canopy package, but it is
    `"private": true`. Nothing in Canopy has been published yet. Is it an npm publish of
    `@canopy/connector-a3docs`, or does Substrat vendor a pinned tarball? It depends on what the
-   control plane's deploy accepts.
+   control plane's deploy accepts. **Resolved:** vertical-defined connectors bundle the workspace package; publishing is optional for reuse.
 5. **Many spaces, one account.** Binding one a3doc connection into several spaces (say, per
    container) needs the binding `folder` option set per scope, not from the manifest. Is that a
    platform change (#2316 binds from a manifest-wide declaration)?

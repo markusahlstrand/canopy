@@ -7,3 +7,4 @@ export * from './client.js';
 export * from './connection.js';
 export * from './probe.js';
 export * from './files.js';
+export * from './vertical.js';

@@ -23,13 +23,14 @@
     "prepare": "pnpm build"
   },
   "dependencies": {
-    "@substrat-run/contracts": "^0.163.0",
-    "@substrat-run/kernel": "^0.163.0",
+    "@substrat-run/contracts": "^0.166.0",
+    "@substrat-run/kernel": "^0.166.0",
+    "@substrat-run/vertical-host": "^0.166.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@substrat-run/adapter-sqlite": "^0.163.0",
-    "@substrat-run/contract-tests": "^0.163.0",
+    "@substrat-run/adapter-sqlite": "^0.166.0",
+    "@substrat-run/contract-tests": "^0.166.0",
     "@types/node": "^26.6.3",
     "typescript": "~7.0.2",
     "vitest": "^5.0.2"

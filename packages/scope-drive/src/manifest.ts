@@ -17,6 +17,7 @@ export const DRIVE_PERM = {
   read: permissionKey.parse('drive:read'),
   write: permissionKey.parse('drive:write'),
   manage: permissionKey.parse('drive:manage'),
+  landSource: permissionKey.parse('drive:land-source'),
 } as const;
 
 export const driveManifest = moduleManifest.parse({
@@ -26,6 +27,7 @@ export const driveManifest = moduleManifest.parse({
   migrations: { journalDir: './migrations', compatibleFrom: '0.1.0' },
   ...manifestOperations(driveOperations, {
     permissions: {
+      'drive:land-source': 'Land connector files and content in this space',
       'drive:read': 'See a folder and the files in it',
       'drive:write': 'Add files and folders, and supersede a file with a new version',
       'drive:manage': 'Share a folder and delete what is in it',
@@ -67,5 +69,7 @@ export const driveManifest = moduleManifest.parse({
     { entityType: 'file', readPermission: DRIVE_PERM.read },
   ],
   lists: listsDeclaredBy(driveOperations, driveEntities),
-  entitlementKey: 'drive',
+  connections: [{ provider: 'canopy.a3doc', operation: 'drive/land-source-change', permission: 'drive:land-source' }],
+  // A vertical may declare only its bare slug (substrat#2388); the key matches `substrat.slug`.
+  entitlementKey: 'drive-vertical',
 });
