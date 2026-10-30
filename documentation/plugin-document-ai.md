@@ -4,15 +4,16 @@ Automatically labels and describes each uploaded document using an AI model.
 
 ## What it does
 
-When a file is uploaded to a space with Document AI turned on, Canopy waits until the file's
-text has been extracted for search, then asks an AI model what kind of document it is
+When a file is uploaded to a space with Document AI turned on, Canopy queues it. Once the
+file's text has been extracted for search, whenever that happens, Canopy asks an AI model what kind of document it is
 (invoice, contract, receipt, …). It adds that type as a **label** and, if the file has no
 description yet, writes a one- or two-sentence **description**. Both show in the file's
 **Details** tab and are searchable.
 
 It only fills in what is empty: a description someone wrote is kept, and the AI's label is
 added next to any labels already there. If someone edits the details while the model is
-working, their edit wins.
+working, their edit is kept and the AI's additions are merged in. If the file is replaced
+with a new version first, the AI's answer is dropped. Each file is analysed once.
 
 ## Turning it on
 
@@ -27,6 +28,9 @@ model.
 - Reads the first 12,000 characters.
 - Runs for browser and WebDAV uploads, not for edits made in the text editor or files in
   connected sources.
+- The document's text is untrusted. The model is told not to follow instructions in it, and
+  links and mail addresses are removed from what it writes, but a document can still steer
+  the wording of its own description.
 - Labels are free text chosen by the model, not picked from a fixed list.
 
 ## At a glance

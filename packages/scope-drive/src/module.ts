@@ -924,7 +924,10 @@ const operations = {
 
   'drive/update-file-details': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
-    liveFile(ctx, input.fileId);
+    const file = liveFile(ctx, input.fileId);
+    if (input.expectedVersionId !== undefined && input.expectedVersionId !== file.current_version_id) {
+      throw substratError('conflict', 'file content changed — these details describe an older version');
+    }
     const row = ctx.sql.query<DetailsRow>('SELECT * FROM drive_file_details WHERE file_id = ?', [input.fileId])[0];
     if ((row?.revision ?? 0) !== input.expectedRevision) {
       throw substratError('conflict', 'details changed — reload before saving');
@@ -1119,14 +1122,16 @@ const operations = {
       ? ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0]
       : undefined;
     if (!version?.blob_ref || version.source !== 'blob') return null;
-    if (readAttachmentText(ctx, version.blob_ref)?.status !== 'indexed') return null;
+    const state = readAttachmentText(ctx, version.blob_ref);
+    if (state?.status !== 'indexed') return null;
     const maxChars = input.maxChars ?? 12_000;
     const row = ctx.sql.query<{ text: string; chars: number }>(
       'SELECT substr(body, 1, ?) AS text, length(body) AS chars FROM _substrat_search__attachment_text WHERE attachment_id = ?',
       [maxChars, version.blob_ref],
     )[0];
     if (!row) return null;
-    return { versionId: version.id, text: row.text, truncated: row.chars > maxChars };
+    // Cut here, or already cut by extraction's own bound: either way not the whole document.
+    return { versionId: version.id, text: row.text, truncated: row.chars > maxChars || state.truncated };
   },
 
   'drive/share-folder': async (ctx, input) => {

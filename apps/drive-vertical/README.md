@@ -185,15 +185,20 @@ FTS triggers update metadata search in the same write. Metadata hits are disting
 in the palette and are filtered through the live file’s read permission.
 
 **Document AI** fills these in for new uploads when a space administrator turns on
-*Label new uploads automatically* in space settings. After an upload's text is indexed
-(browser upload or WebDAV), the worker sends the first 12,000 characters of the
-extracted text and the file name to a model, through the platform's Workers AI binding
-and `createModelHost`. It adds a document-type label and, if the description is empty,
-a one- or two-sentence description. It never replaces what a person wrote, and a save
-made while the model was running wins. Files with no text layer (scans, images) are
-skipped. `DOCUMENT_AI_MODEL` overrides the default model (`provider:model`). Each run
-logs `drive.document-ai.done` with what it did or why it skipped, and the model usage
-line as `drive.document-ai.usage`.
+*Label new uploads automatically* in space settings. Each browser or WebDAV upload
+starts a kernel job run for that file (`@canopy/scope-drive` / `auto-label`, instance =
+file id). The run waits until the kernel has indexed the file's text, retrying with
+backoff, so it does not matter whether the upload's own `runDueJobs`, a sweep or a
+retry does the extraction. It then sends the first 12,000 characters and the file name
+to a model through `createModelHost` and the platform's Workers AI binding, and writes
+a document-type label and, if empty, a description. The write names the version the
+model read and is refused if the file has changed since. The model's answer is a
+memoised step, so a pass the runtime cuts short is resumed by the sweeper without
+paying twice. One run per file: a live run is joined and a file that already had one is
+left alone. People's own labels and descriptions are never replaced. Files with no text
+layer are skipped. Links and mail addresses are stripped from what the model writes.
+`DOCUMENT_AI_MODEL` overrides the default model. Each run's outcome is in its counters
+and logged as `drive.document-ai.done`; usage lines as `drive.document-ai.usage`.
 
 ## Live updates
 

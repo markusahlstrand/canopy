@@ -634,6 +634,8 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       fileId: z.string(), description: z.string().max(10000),
       labels: z.array(z.string().trim().min(1).max(100)).max(20),
       expectedRevision: z.number().int().nonnegative(),
+      /** Refuse with `conflict` unless this is still the current version — for details derived from the content. */
+      expectedVersionId: z.string().optional(),
     }),
     output: fileDetails,
     http: { method: 'PATCH', path: '/files/{fileId}/details' },
