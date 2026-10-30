@@ -46,7 +46,7 @@ import {
   type OperationHandler,
 } from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
-import { driveOperations, installedPluginManifest } from '../spec/model.js';
+import { driveOperations, installedPluginManifest, type DriveSource } from '../spec/model.js';
 import { driveManifest } from './manifest.js';
 import { driveMigrations, ROOT_FOLDER_ID } from './migrations.js';
 
@@ -143,6 +143,19 @@ function currentText(ctx: OperationContext, fileId: string) {
   return state ? { file, version: { ...version, blob_ref: version.blob_ref }, state } : null;
 }
 
+type SourceRow = { provider: string; connection_id: string; account: string; folder: string; can_upload: number; bound_at: string };
+
+/** The source this space is bound to, or null for an ordinary space. */
+function sourceOf(ctx: OperationContext): DriveSource | null {
+  const row = ctx.sql.query<SourceRow>('SELECT * FROM drive_source WHERE id = 1')[0];
+  return row ? { provider: row.provider, connectionId: row.connection_id, account: row.account, folder: row.folder, canUpload: row.can_upload === 1, boundAt: row.bound_at } : null;
+}
+
+/** A connected space mirrors its source's tree, and a3doc can only add documents, so the rest is refused here. */
+function refuseInConnected(ctx: OperationContext, what: string): void {
+  if (sourceOf(ctx)) throw substratError('conflict', `This space mirrors an a3doc folder, and a3doc can't ${what}.`);
+}
+
 /** The entity refs the checks narrow onto. */
 const folderRef = (id: string) => ({ entityType: 'folder', entityId: id }) as const;
 /** A `drive_folder_shares` row joined to the roster, as the dialog reads it. */
@@ -215,6 +228,7 @@ const operations = {
   'drive/send-source-file': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
     const file = liveFile(ctx, input.fileId);
+    if (!sourceOf(ctx)) throw substratError('conflict', 'this space is not connected to a3doc');
     if (ctx.sql.query('SELECT item_id FROM drive_source_items WHERE kind = ? AND entity_id = ?', ['file', file.id]).length) {
       throw substratError('conflict', 'a3doc cannot replace a connected file');
     }
@@ -244,6 +258,34 @@ const operations = {
     return { value: row ? JSON.parse(row.value) as unknown : null };
   },
   'drive/land-source-change': (ctx, input) => landSourceChange(ctx, fileSourceChange.parse(input)),
+  'drive/get-source': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    return { source: sourceOf(ctx) };
+  },
+  'drive/source-access': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.manage));
+    return { principal: ctx.principal, source: sourceOf(ctx) };
+  },
+  'drive/record-source': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.manage));
+    // Another connection's identities would let its documents overwrite, or be mistaken for, the
+    // new account's. They become ordinary files, and their unsent uploads stop waiting for an echo.
+    if (ctx.sql.query('SELECT item_id FROM drive_source_items WHERE connection_id != ? LIMIT 1', [input.connectionId]).length) {
+      ctx.sql.exec('DELETE FROM drive_source_items WHERE connection_id != ?', [input.connectionId]);
+      ctx.sql.exec('DELETE FROM drive_source_pending');
+    }
+    const boundAt = ctx.now();
+    ctx.sql.exec(`INSERT INTO drive_source (id, provider, connection_id, account, folder, can_upload, bound_at) VALUES (1, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, connection_id = excluded.connection_id, account = excluded.account,
+        folder = excluded.folder, can_upload = excluded.can_upload, bound_at = excluded.bound_at`,
+      [input.provider, input.connectionId, input.account, input.folder, input.canUpload ? 1 : 0, boundAt]);
+    return { ...input, boundAt };
+  },
+  'drive/clear-source': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.manage));
+    ctx.sql.exec('DELETE FROM drive_source WHERE id = 1');
+    return { ok: true as const };
+  },
   'drive/request-space': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
     const previous = mySpaceRequests(ctx).find(request => provisionSiblingPayload.safeParse(request.payload).data?.slug === input.slug);
@@ -370,6 +412,7 @@ const operations = {
       input.parentId,
     ])[0];
     if (!parent) throw substratError('not_found', `folder not found: ${input.parentId}`);
+    refuseInConnected(ctx, 'create folders');
 
     // A path is the parent's path plus the name. It stays a derived column rather
     // than the identity: canopy addressed a file BY path, which made a rename a
@@ -432,6 +475,8 @@ const operations = {
       );
     }
     if (existing) return existing;
+    const source = sourceOf(ctx);
+    if (source && !source.canUpload) throw substratError('forbidden', "This space mirrors an a3doc folder, and its a3doc user can't upload.");
 
     const now = ctx.now();
     const row: FileRow = {
@@ -474,6 +519,8 @@ const operations = {
     if (input.expectedCurrentVersion !== undefined && input.expectedCurrentVersion !== file.current_version_id) {
       throw substratError('conflict', 'file changed — reload before saving');
     }
+    // a3doc keeps a document as it was sent, so only a new file's first bytes can go to it.
+    if (file.current_version_id) refuseInConnected(ctx, 'replace a document');
 
     // One location, guaranteed by the declaration's discriminated union: the columns
     // the other source would use stay null because there is nothing to read them
@@ -580,6 +627,7 @@ const operations = {
     // other read of it. `restore-file` stays the only write that reaches through.
     const file = liveFile(ctx, input.fileId);
     if (file.name === input.name) return file;
+    refuseInConnected(ctx, 'rename documents');
 
     const taken = ctx.sql.query<{ id: string }>(
       'SELECT id FROM drive_files WHERE folder_id = ? AND name = ? AND id != ?',
@@ -613,6 +661,7 @@ const operations = {
     if (folder.id === ROOT_FOLDER_ID) {
       throw substratError('validation_failed', 'the root folder has no name to change');
     }
+    refuseInConnected(ctx, 'rename folders');
     if (folder.name === input.name) return folder;
 
     const parent = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [
@@ -668,6 +717,7 @@ const operations = {
     // can only narrow onto one entity. The destination is the declared one because it is
     // the permission a caller is most likely to lack.
     assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(file.folder_id)));
+    refuseInConnected(ctx, 'move documents');
     if (file.folder_id === input.folderId) return file;
 
     if (!ctx.sql.query<FolderRow>('SELECT id FROM drive_folders WHERE id = ?', [input.folderId])[0]) {
@@ -715,6 +765,7 @@ const operations = {
 
   'drive/move-folder': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(input.parentId)));
+    refuseInConnected(ctx, 'move folders');
     const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [
       input.folderId,
     ])[0];
@@ -782,6 +833,7 @@ const operations = {
     const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
     if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
     if (file.state === 'trashed') return file;
+    refuseInConnected(ctx, 'delete documents');
 
     // Both columns, in one statement: `state` is what reads filter on and
     // `deleted_at` is when it happened, and a row where they disagree is a row no
@@ -807,6 +859,8 @@ const operations = {
     const file = ctx.sql.query<FileRow>('SELECT * FROM drive_files WHERE id = ?', [input.fileId])[0];
     if (!file) throw substratError('not_found', `file not found: ${input.fileId}`);
     if (file.state === 'live') return file;
+    // A source's own delete trashed it; bringing it back here would show what a3doc no longer has.
+    refuseInConnected(ctx, 'restore what it removed');
 
     /**
      * No uniqueness check here, and that is a consequence rather than an omission: a

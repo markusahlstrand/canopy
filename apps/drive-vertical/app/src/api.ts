@@ -802,6 +802,14 @@ export const spaceRequests = () => call<{ requests: SpaceRequest[] }>('/site-req
 
 export const getSpaceSettings = () => call<import('../../src/space-settings').SpaceSettings>('/space-settings');
 export const updateSpaceSettings = (settings: import('../../src/space-settings').SpaceSettings) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', {method:'PATCH',body:JSON.stringify(settings)});
+export type DriveSource = import('../../src/source-routes').DriveSource;
+/** The a3doc folder a space mirrors, or null; any member may read it, to know what the space allows. */
+export const getSource = () => call<{ source: DriveSource | null }>('/source').then(result => result.source);
+export interface SourceStatus { source: DriveSource | null; binding: { status: string; lastSyncedAt: string | null; lastError: { at: string; message: string } | null } | null }
+export const getSourceStatus = () => call<SourceStatus>('/source/status');
+export interface SourceLogin { companyCode: string; user: string; password: string; customerId?: string; folder: string }
+export const connectSource = (login: SourceLogin) => call<DriveSource>('/source', { method: 'PUT', body: JSON.stringify(login) });
+export const disconnectSource = () => call<void>('/source', { method: 'DELETE' });
 export interface PluginInstall { id: string; plugin_id: string; principal: string; manifest_json: string; source?: string; source_kind?: string; source_ref?: string; resolved?: string; source_sha256?: string; granted_capabilities?: string; enabled: number; updated_at: string }
 export const listPlugins = () => call<{ plugins: PluginInstall[] }>('/plugins');
 export type PluginProvenance = { kind: 'inline' | 'github' | 'npm' | 'zip' | 'bundled'; ref: string; resolved: string; token?: string };

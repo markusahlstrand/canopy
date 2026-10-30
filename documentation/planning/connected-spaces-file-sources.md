@@ -177,7 +177,7 @@ because it's the product's name. So does the write event, `a3doc.files-requested
    instead of creating a second row, which `(folder_id, name)` would refuse anyway. A pending row
    whose write the connector reports as failed is marked failed and shown, never left looking
    synced.
-4. **Connecting a space.** The space settings get a new *Source* section (or the create-space
+4. **Connecting a space.** (Built for the space settings; the create-space step is not.) The space settings get a new *Source* section (or the create-space
    dialog a *Connect a source* step). It shows the provider's credential fields and posts them
    through a vertical operation that calls the connection relay. It is gated on `drive:manage`.
    The space shows the source, when it last synced (from the binding's `lastSync`), whether
@@ -231,3 +231,10 @@ provider, and that is when the shared `FileSource` facet is worth extracting.
 5. **Many spaces, one account.** Binding one a3doc connection into several spaces (say, per
    container) needs the binding `folder` option set per scope, not from the manifest. Is that a
    platform change (#2316 binds from a manifest-wide declaration)?
+   **Resolved** by substrat#2732 (Substrat 0.170): the landing is `bind: 'on-request'`, so the
+   platform's pass binds nothing for it. Each space upserts its **own** connection
+   (`owner: 'scope'`) and binds it with its own `folder` through the vertical-host clients
+   (`upsertConnection`, `bindConnection`, `unbindConnection`, `listBindings`). Two spaces on one
+   a3doc account hold two connections. Built in `apps/drive-vertical/src/source-routes.ts`
+   (`PUT`/`DELETE /api/source`, `GET /api/source/status`); `drive/source-access` is the
+   `drive:manage` decision, and `drive_source` (migration 0013) records the binding in the space.

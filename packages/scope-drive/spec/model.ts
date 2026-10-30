@@ -216,6 +216,18 @@ export const fileDetails = z.object({
 });
 
 /** `defineOperations` takes object inputs; retain the file-source union's validation. */
+/** One space, one source: a3doc is the only provider so far. */
+export const driveSource = z.object({
+  provider: z.string(),
+  connectionId: z.string(),
+  /** The provider's account (an a3doc company code); a rebind to the same one resumes identities. */
+  account: z.string(),
+  folder: z.string(),
+  canUpload: z.boolean(),
+  boundAt: z.string(),
+});
+export type DriveSource = z.infer<typeof driveSource>;
+
 const sourceChangeInput = z.object({
   ...fileSourceChange.options[0].partial().shape,
   ...fileSourceChange.options[1].partial().shape,
@@ -248,6 +260,30 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   'drive/land-source-change': {
     summary: 'Land a file-source change by its stable source identity',
     permission: 'drive:land-source', input: sourceChangeInput, output: z.object({ entity: z.object({ entityType: z.string(), entityId: z.string() }).optional(), ok: z.boolean().optional() }),
+  },
+  /** The file source this space is connected to, or null; what members need to know what they may do here. */
+  'drive/get-source': {
+    summary: 'The file source this space is connected to', permission: 'drive:read',
+    output: z.object({ source: driveSource.nullable() }),
+    http: { method: 'GET', path: '/source' },
+  },
+  /**
+   * The authorizing act for connecting or disconnecting the space; the worker effects it through
+   * the platform's connection relay. Answers who decided, and what the space is connected to now.
+   */
+  'drive/source-access': {
+    summary: 'Authorize a change to the space\'s file source', permission: 'drive:manage',
+    output: z.object({ principal: z.string(), source: driveSource.nullable() }),
+  },
+  /** Record a binding the relay made. A different connection makes the old identities ordinary files. */
+  'drive/record-source': {
+    summary: 'Record the file source this space is bound to', permission: 'drive:manage',
+    input: driveSource.omit({ boundAt: true }), output: driveSource,
+  },
+  /** Forget the binding; the landed files stay, and keep their identities for a rebind to the same account. */
+  'drive/clear-source': {
+    summary: 'Forget the file source this space was bound to', permission: 'drive:manage',
+    output: z.object({ ok: z.literal(true) }),
   },
   /**
    * The hot read, and the one S10 converts first.

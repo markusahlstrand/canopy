@@ -60,6 +60,8 @@ interface FileTableProps {
   /** Saved file copies may be opened, but mutations are unavailable. */
   readOnly?: boolean;
   trashed?: boolean;
+  /** The space mirrors an a3doc folder, which can't rename, move or delete. */
+  mirrored?: boolean;
   /** The view owns the reason its result is empty and the useful next action. */
   empty?: ReactNode;
 }
@@ -148,8 +150,9 @@ const COLUMNS: { key: SortKey; label: string; className: string }[] = [
  * is the same one the rest of this UI follows: an item that does nothing is worse than an
  * item that is absent.
  */
-export function actionsFor(file: FileItem, readOnly = false, trashed = false): string[] {
+export function actionsFor(file: FileItem, readOnly = false, trashed = false, mirrored = false): string[] {
   if (readOnly) return ['Open'];
+  if (mirrored) return trashed ? [] : file.isFolder ? ['Open', 'Share'] : ['Open', 'Download'];
   if (trashed) return ['Restore'];
   // Share is a FOLDER action and only a folder action: a grant narrows onto a folder and
   // reaches what is under it, so there is no such thing as sharing one file here.
@@ -158,8 +161,8 @@ export function actionsFor(file: FileItem, readOnly = false, trashed = false): s
     : ['Open', 'Download', 'Rename', 'Move', 'Delete'];
 }
 
-function RowActions({ file, onAction, readOnly, trashed }: { file: FileItem; onAction: (action: string, f: FileItem) => void; readOnly: boolean; trashed?: boolean }) {
-  const actions = actionsFor(file, readOnly, trashed);
+function RowActions({ file, onAction, readOnly, trashed, mirrored }: { file: FileItem; onAction: (action: string, f: FileItem) => void; readOnly: boolean; trashed?: boolean; mirrored?: boolean }) {
+  const actions = actionsFor(file, readOnly, trashed, mirrored);
   if (actions.length === 0) return null;
   return (
     <DropdownMenu>
@@ -203,6 +206,7 @@ export function FileTable({
   loading = false,
   readOnly = false,
   trashed = false,
+  mirrored = false,
   empty,
 }: FileTableProps) {
   const lastIndex = useRef<number | null>(null);
@@ -378,7 +382,7 @@ export function FileTable({
                     onSelectionChange(next);
                   }}
                 />
-                <RowActions file={f} onAction={onAction} readOnly={readOnly} trashed={trashed} />
+                <RowActions file={f} onAction={onAction} readOnly={readOnly} trashed={trashed} mirrored={mirrored} />
               </div>
             </div>
             <div className="truncate text-[13.5px] font-medium">{searchQuery ? <SearchHighlight text={f.name} query={searchQuery} mode="prefix" /> : f.name}</div>
@@ -428,7 +432,7 @@ export function FileTable({
           {files.map((f, i) => {
             const selected = selection.has(f.id);
             const pluginItems = readOnly ? [] : pluginMenuItems(f.kind);
-            const actions = actionsFor(f, readOnly, trashed);
+            const actions = actionsFor(f, readOnly, trashed, mirrored);
             return (
               <ContextMenu key={f.id}>
                 <ContextMenuTrigger asChild>
@@ -470,7 +474,7 @@ export function FileTable({
                     </td>
                     <td className="hidden px-3 font-mono text-[12.5px] text-muted-foreground md:table-cell">{f.modified}</td>
                     <td className="px-2">
-                      <RowActions file={f} onAction={onAction} readOnly={readOnly} trashed={trashed} />
+                      <RowActions file={f} onAction={onAction} readOnly={readOnly} trashed={trashed} mirrored={mirrored} />
                     </td>
                   </tr>
                 </ContextMenuTrigger>

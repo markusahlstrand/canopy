@@ -3,6 +3,7 @@ import { Button, Checkbox, Input, Icon, Dialog, DialogContent, DialogDescription
 import { getSpaceSettings, updateSpaceSettings } from './api';
 import { defaultSpaceSettings, type SpaceSettings } from '../../src/space-settings';
 import { SpaceStyleFields } from './space-style-fields';
+import { SourceSettings } from './source-settings';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;onOpenChange:(open:boolean)=>void;onSaved:()=>void}) {
   const [settings,setSettings] = useState<SpaceSettings>(defaultSpaceSettings(''));
@@ -53,7 +54,7 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
               <span><span className="block text-sm font-medium">Label new uploads automatically</span><span className="block text-xs text-muted-foreground">An AI model reads the text of each uploaded document and adds a type label and a short description. Labels and descriptions people wrote are kept.</span></span>
             </label>
           </section>
-          <section className="space-y-2"><h3 className="text-xs font-medium text-muted-foreground">Storage</h3><div className="flex items-center gap-3 rounded-lg border px-3 py-2.5"><Icon name="cloud" size={18} className="text-muted-foreground"/><div><p className="text-sm font-medium">Canopy storage</p><p className="text-xs text-muted-foreground">Files stay in this install’s storage.</p></div></div></section>
+          <SourceSettings disabled={busy} onChanged={onSaved}/>
         </form>}
       </div>
       <DialogFooter className="border-t px-5 py-3"><Button type="button" variant="ghost" disabled={busy} onClick={() => {if(confirmDiscardDrafts())onOpenChange(false);}}>Cancel</Button><Button type="submit" form="space-settings-form" disabled={!loaded || busy || !settings.name.trim()}>{busy?'Saving…':'Save space'}</Button></DialogFooter>
