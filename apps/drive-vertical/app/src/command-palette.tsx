@@ -116,6 +116,8 @@ export function CommandPalette({
     // One question at a time: a follow-up typed while an answer is coming stays in the box.
     // A fresh question retires one still pending; a follow-up waits for it.
     if (!text || (asking && !fresh)) return;
+    // A fresh question leaves the old conversation first, so its errors and Retry go too.
+    if (fresh) resetConversation();
     // Refused here, with the text still in the box: the worker would refuse it anyway, and
     // a retry of a turn that can never be accepted is a dead end.
     if (text.length > MAX_QUESTION_CHARS) {
@@ -126,7 +128,6 @@ export function CommandPalette({
     setResults([]);
     // A question whose answer failed is replaced by the next one, not left unanswered
     // above it: two questions in a row is not a conversation a model can read.
-    if (fresh) conversation.current++;
     const base = fresh ? [] : turns;
     const settled = base.at(-1)?.role === 'user' ? base.slice(0, -1) : base;
     const history = [...settled, { role: 'user' as const, content: text }];
@@ -203,15 +204,6 @@ export function CommandPalette({
             event.preventDefault();
             event.stopPropagation();
             ask(query, !assistant);
-            return;
-          }
-          // A plain Enter is a search: when the only thing highlighted is the assistant —
-          // before hits arrive, or when there are none — it does nothing rather than start
-          // a model call. Clicking the item, or ⌘↵, asks.
-          const highlighted = event.currentTarget.closest('[cmdk-root]')?.querySelector('[cmdk-item][data-selected="true"]');
-          if (highlighted?.getAttribute('data-value')?.startsWith('ask assistant ')) {
-            event.preventDefault();
-            event.stopPropagation();
           }
         }}
         onValueChange={(next) => {
@@ -289,20 +281,6 @@ export function CommandPalette({
               ))}
         </CommandGroup>
 
-        {!offline ? <>
-          <CommandSeparator />
-          <CommandGroup heading="Assistant">
-            {query.trim() ? <CommandItem value={`ask assistant ${query}`} onSelect={() => ask(query, true)}>
-              <Icon name="sparkles" size={16} />
-              <span className="min-w-0 flex-1 truncate">Ask the assistant: “{query.trim()}”</span>
-              <CommandShortcut>⌘↵</CommandShortcut>
-            </CommandItem> : <CommandItem value="ask the assistant ai" onSelect={() => setMode('assistant')}>
-              <Icon name="sparkles" size={16} />
-              <span className="flex-1">{turns.length ? 'Continue the conversation' : 'Ask the assistant…'}</span>
-            </CommandItem>}
-          </CommandGroup>
-        </> : null}
-
         {onOpenSpace && sites.length ? <>
           <CommandSeparator />
           <CommandGroup heading="Spaces">
@@ -355,6 +333,19 @@ export function CommandPalette({
         </CommandGroup>
         </>}
       </CommandList>
+      {/* Not a cmdk item, on purpose: an item matching every query would outrank file hits
+          and take a plain Enter. Asking is ⌘↵, a click, or Tab to this button. */}
+      {!offline && !assistant ? <button
+        type="button"
+        onClick={() => query.trim() ? ask(query, true) : setMode('assistant')}
+        className="flex w-full items-center gap-2 border-t px-4 py-2.5 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      >
+        <Icon name="sparkles" size={16} />
+        <span className="min-w-0 flex-1 truncate">
+          {query.trim() ? <>Ask the assistant: “{query.trim()}”</> : turns.length ? 'Continue the conversation' : 'Ask the assistant…'}
+        </span>
+        {query.trim() ? <CommandShortcut>⌘↵</CommandShortcut> : null}
+      </button> : null}
     </CommandDialog>
   );
 }

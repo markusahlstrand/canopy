@@ -14,6 +14,7 @@
  */
 
 import { offlineSessionEpoch } from './offline-content';
+import type { AssistantMessage, AssistantReply } from '../../src/assistant-contract';
 
 /** Every derived route sits under `/api` — `mountOperations`' default base path. */
 const API = '/api';
@@ -717,7 +718,6 @@ export const search = (term: string, limit?: number, via?: SearchHit['via']) =>
     `/search?term=${encodeURIComponent(term)}${limit ? `&limit=${limit}` : ''}${via ? `&via=${encodeURIComponent(via)}` : ''}`,
   );
 
-import type { AssistantMessage, AssistantReply } from '../../src/assistant-contract';
 export type { AssistantMessage, AssistantReply, AssistantSource } from '../../src/assistant-contract';
 
 /**
