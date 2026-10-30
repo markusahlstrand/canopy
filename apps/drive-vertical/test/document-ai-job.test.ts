@@ -35,9 +35,9 @@ async function upload(name: string, text: string): Promise<{ id: string }> {
   return file;
 }
 
-const start = (file: { id: string }, name: string) => host.startJobRun(tenant, scope, {
+const start = (file: { id: string }, _name?: string) => host.startJobRun(tenant, scope, {
   moduleId: DRIVE, job: AUTO_LABEL_JOB, instance: file.id,
-  payload: { tenantId: tenant, scopeId: scope, fileId: file.id, name, principal: ada } satisfies AutoLabelPayload,
+  payload: { tenantId: tenant, scopeId: scope, fileId: file.id, principal: ada } satisfies AutoLabelPayload,
 });
 
 beforeAll(async () => {

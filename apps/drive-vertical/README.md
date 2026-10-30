@@ -194,9 +194,11 @@ to a model through `createModelHost` and the platform's Workers AI binding, and 
 a document-type label and, if empty, a description. The write names the version the
 model read and is refused if the file has changed since. The model's answer is a
 memoised step, so a pass the runtime cuts short is resumed by the sweeper without
-paying twice. One run per file: a live run is joined, a run follows a version that replaces
-the one it read (up to three rounds), and once the model has analysed a file it is left
-alone. A run that stopped earlier (no text yet, a replaced version) does not count. People's own labels and descriptions are never replaced. Files with no text
+paying twice. One run per file: a live run is joined, and a run follows a version that replaces
+the one it read for one more round. A file is closed once a run labels it, finds
+nothing to add, finds no text, or sees it keep changing; a run that stopped for another
+reason, or failed, leaves the next write free to try. An empty "New →" starter queues
+nothing; its first real save does. People's own labels and descriptions are never replaced. Files with no text
 layer are skipped. Links and mail addresses are stripped from what the model writes.
 `DOCUMENT_AI_MODEL` overrides the default model. Each run's outcome is in its counters
 and logged as `drive.document-ai.done`; usage lines as `drive.document-ai.usage`.

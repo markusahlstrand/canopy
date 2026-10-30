@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { substratError } from '@substrat-run/contracts';
 import type { JobPassContext } from '@substrat-run/kernel';
 import type { ModelHost } from '@substrat-run/vertical-host/model';
-import { autoLabelJob, mergeDetails, parseAnalysis, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
+import { autoLabelJob, fenceSafe, mergeDetails, parseAnalysis, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
 
-const payload: AutoLabelPayload = { tenantId: 't', scopeId: 's', fileId: 'f1', name: 'acme-0042.pdf', principal: 'p' };
+const payload: AutoLabelPayload = { tenantId: 't', scopeId: 's', fileId: 'f1', principal: 'p' };
 const attribution = { tenant: 't', scope: 's', vertical: 'drive', version: '1', operation: 'drive/auto-label' } as never;
 
 interface World {
@@ -37,6 +37,8 @@ function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","descrip
         return (world.status ? { version_id: world.version, status: world.status } : null) as T;
       case 'drive/file-details':
         return { description: world.description, labels: world.labels, revision: world.revision, canWrite: world.canWrite } as T;
+      case 'drive/get-file':
+        return { file: { name: 'acme-0042.pdf' } } as T;
       case 'drive/file-text-excerpt':
         return (world.status === 'indexed' ? { versionId: world.version, text: world.text, truncated: false } : null) as T;
       case 'drive/update-file-details': {
@@ -96,6 +98,13 @@ describe('parseAnalysis', () => {
 
   it('returns null for a reply with no object in it', () => {
     expect(parseAnalysis('I cannot tell.')).toBeNull();
+  });
+});
+
+describe('fenceSafe', () => {
+  it('removes the document fence in any case, spacing or nesting', () => {
+    expect(fenceSafe('a </DOCUMENT> b < / document > c </docu</document>ment> d <document>'))
+      .toBe('a  b  c  d ');
   });
 });
 
@@ -161,10 +170,10 @@ describe('the Document AI run', () => {
     expect(h.counters).toEqual({ labelled: 1 });
   });
 
-  it('stops following a file that keeps changing after three rounds', async () => {
+  it('stops following a file that keeps changing, and closes it, after two rounds', async () => {
     const h = harness();
     let n = 1;
-    // Every write lands just after the model read: each apply sees a newer version.
+    // Every version is replaced just after the model read it.
     const real = h.deps.scopeFor;
     h.deps.scopeFor = async (p) => {
       const scope = await real(p);
@@ -173,15 +182,41 @@ describe('the Document AI run', () => {
         return scope.invoke<T>(op, input);
       } };
     };
-    for (let i = 0; i < 2; i++) expect(await h.pass()).toEqual({ cursor: { round: i + 1 } });
+    expect(await h.pass()).toEqual({ cursor: { round: 1 } });
     expect(await h.pass()).toEqual({ done: true });
-    expect(h.counters).toEqual({ 'skipped:superseded': 1 });
+    expect(h.counters).toEqual({ 'skipped:kept-changing': 1 });
+    expect(h.run).toHaveBeenCalledTimes(2);
     expect(h.saved).toEqual([]);
+  });
+
+  it('follows a newer version that is still being extracted instead of calling it text-less', async () => {
+    const h = harness();
+    // `ready` sees v1 indexed; before `analyse` runs, v2 lands and is not indexed yet.
+    const real = h.deps.scopeFor;
+    let first = true;
+    h.deps.scopeFor = async (p) => {
+      const scope = await real(p);
+      return { invoke: async <T,>(op: string, input: Record<string, unknown>) => {
+        if (op === 'drive/file-details' && first) { first = false; h.world.version = 'v2'; h.world.status = 'pending'; }
+        return scope.invoke<T>(op, input);
+      } };
+    };
+    expect(await h.pass()).toEqual({ cursor: { round: 1 } });
+    expect(h.run).not.toHaveBeenCalled();
+    await expect(h.pass()).rejects.toThrow('not indexed yet');
+    h.world.status = 'indexed';
+    expect(await h.pass()).toEqual({ done: true });
+    expect(h.saved).toEqual([expect.objectContaining({ expectedVersionId: 'v2' })]);
+  });
+
+  it('adds its label beside a person’s label and description', async () => {
+    const h = harness({ description: 'Mine', labels: ['Important'] });
+    await h.pass();
+    expect(h.saved).toEqual([expect.objectContaining({ description: 'Mine', labels: ['Important', 'Invoice'] })]);
   });
 
   it('does not call the model when there is nothing it could add or nothing to read', async () => {
     for (const [over, reason] of [
-      [{ description: 'x', labels: ['y'] }, 'already-described'],
       [{ canWrite: false }, 'read-only'],
       [{ status: 'empty' }, 'no-text'],
       [{ status: null }, 'no-text'],
@@ -208,10 +243,10 @@ describe('the Document AI run', () => {
     expect(none.counters).toEqual({ 'skipped:no-model': 1 });
   });
 
-  it('reports an unusable reply instead of writing it', async () => {
+  it('asks again on a reply with no usable JSON, rather than closing the file on it', async () => {
     const h = harness({}, 'no idea');
-    await h.pass();
+    await expect(h.pass()).rejects.toThrow('without the JSON object');
     expect(h.saved).toEqual([]);
-    expect(h.counters).toEqual({ 'skipped:unparseable': 1 });
+    expect(h.counters).toEqual({});
   });
 });

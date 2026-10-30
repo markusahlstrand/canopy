@@ -36,7 +36,8 @@ export const AUTO_LABEL_JOB = 'auto-label';
 
 /** A capable instruction-follower at a two-field JSON answer. `DOCUMENT_AI_MODEL` overrides it. */
 export const DEFAULT_DOCUMENT_AI_MODEL = 'cloudflare:@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-const MAX_TEXT_CHARS = 12_000;
+/** How much of a document the model reads — and what the model host's disclosure says it is sent. */
+export const MAX_TEXT_CHARS = 12_000;
 const MAX_LABELS = 20;
 
 /**
@@ -105,12 +106,15 @@ export interface AutoLabelScope {
   invoke<T>(operation: string, input: Record<string, unknown>): Promise<T>;
 }
 
-/** What the upload hands the run. Ids only — the queue-safety rule for a job payload. */
-export interface AutoLabelPayload { tenantId: string; scopeId: string; fileId: string; name: string; principal: string }
+/**
+ * What the write hands the run. Ids only — the queue-safety rule for a job payload. The run
+ * acts as the person whose write queued it; a later write by someone else joins the run.
+ */
+export interface AutoLabelPayload { tenantId: string; scopeId: string; fileId: string; principal: string }
 
 export type AutoLabelOutcome =
   | { status: 'labelled'; label: string | null; described: boolean }
-  | { status: 'skipped'; reason: 'disabled' | 'no-model' | 'gone' | 'already-described' | 'read-only' | 'no-text' | 'nothing-new' | 'superseded' | 'unparseable' };
+  | { status: 'skipped'; reason: 'disabled' | 'no-model' | 'gone' | 'read-only' | 'no-text' | 'nothing-new' | 'kept-changing' };
 
 export interface AutoLabelDeps {
   /** The scope as the uploader: the run can write nothing they could not have typed. */
@@ -125,19 +129,32 @@ export interface AutoLabelDeps {
 type SkipReason = Extract<AutoLabelOutcome, { status: 'skipped' }>['reason'];
 
 /**
- * The counters of a finished run that mean the model has looked at this file. Only these
- * end Document AI for it: a run that never got that far (no text yet, a version that was
- * replaced, the feature off) leaves the next upload free to try again.
+ * The counters of a finished run that close a file to Document AI: the model answered
+ * about it, there is no text to give a model, or it would not hold still long enough to
+ * describe. A run that ended for any other reason (the feature off, the uploader lost
+ * access) leaves the next write free to try again, and a run that FAILED — a model that
+ * kept erroring or answering nonsense — is not `done` at all.
  */
-export const ANALYSED_COUNTERS = ['labelled', 'skipped:nothing-new', 'skipped:unparseable', 'skipped:already-described'] as const;
+export const CLOSING_COUNTERS = ['labelled', 'skipped:nothing-new', 'skipped:no-text', 'skipped:kept-changing'] as const;
 
-/** A newer version can land while a round runs; a run follows it this many times. */
-const MAX_ROUNDS = 3;
+/**
+ * A newer version can land while a round runs; a run follows it this many times. Two
+ * rounds is one model call wasted at most, and caps what continuous editing can spend.
+ */
+const MAX_ROUNDS = 2;
 
 /** An error that no retry will cure: the file is gone, or the uploader can no longer write it. */
 function terminal(error: unknown): SkipReason | null {
   const code = errorCodeOf(error);
   return code === 'not_found' ? 'gone' : code === 'forbidden' ? 'read-only' : null;
+}
+
+/** The document fence, in any case or spacing, removed until none is left — text cannot close its own block. */
+export function fenceSafe(text: string): string {
+  const fence = /<\s*\/?\s*document\s*>/gi;
+  let previous: string;
+  do { previous = text; text = text.replace(fence, ''); } while (text !== previous);
+  return text;
 }
 
 /** The run's body. Every early end is a reason, counted on the run and logged. */
@@ -151,18 +168,25 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
       deps.log?.('drive.document-ai.done', { fileId: payload.fileId, round, ...outcome });
       return { done: true };
     };
+    /** The version moved under this round: follow it, or stop if it will not hold still. */
+    const superseded = () => {
+      if (round + 1 >= MAX_ROUNDS) return finish({ status: 'skipped', reason: 'kept-changing' });
+      deps.log?.('drive.document-ai.superseded', { fileId: payload.fileId, round });
+      return { cursor: { round: round + 1 } };
+    };
     if (!(await deps.enabled(payload))) return finish({ status: 'skipped', reason: 'disabled' });
     const model = deps.model(payload);
     if (!model) return finish({ status: 'skipped', reason: 'no-model' });
     const scope = await deps.scopeFor(payload);
 
-    // Wait for extraction. Throwing while it is pending is the retry: the run is due again
-    // after its backoff, whoever drives it next.
-    const ready = await pass.step(`ready:${round}`, async (): Promise<{ indexed: boolean } | { skip: SkipReason }> => {
+    // Wait for extraction of the current version. Throwing while it is pending is the
+    // retry: the run is due again after its backoff, whoever drives it next.
+    type Ready = { versionId: string } | { skip: SkipReason };
+    const ready = await pass.step(`ready:${round}`, async (): Promise<Ready> => {
       try {
         const state = await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId });
         if (state?.status === 'pending') throw new Error('text not indexed yet');
-        return { indexed: state?.status === 'indexed' };
+        return state?.status === 'indexed' ? { versionId: state.version_id } : { skip: 'no-text' };
       } catch (error) {
         const reason = terminal(error);
         if (reason) return { skip: reason };
@@ -170,47 +194,52 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
       }
     }, TEXT_WAIT_RETRY);
     if ('skip' in ready) return finish({ status: 'skipped', reason: ready.skip });
-    if (!ready.indexed) return finish({ status: 'skipped', reason: 'no-text' });
 
-    // Read, ask, and keep the answer: a later failure replays this from the memo, so the
-    // model is paid for once per round.
-    type Analysis = { skip: SkipReason } | { versionId: string; label: string | null; description: string | null };
+    // Read and ask, and keep the answer: a later failure replays this from the memo, so
+    // the model is paid for once per round. A reply with no usable JSON throws, and the
+    // step's retries ask again; when they run out the run fails, which closes nothing.
+    type Analysis = { skip: SkipReason | 'superseded' } | { versionId: string; label: string | null; description: string | null };
     const analysis = await pass.step(`analyse:${round}`, async (): Promise<Analysis> => {
       try {
         const before = await scope.invoke<Details>('drive/file-details', { fileId: payload.fileId });
         if (!before.canWrite) return { skip: 'read-only' };
-        // Both halves already there: nothing to fill, so nothing to pay a model for.
-        if (before.description.trim() && before.labels.length) return { skip: 'already-described' };
         const excerpt = await scope.invoke<{ versionId: string; text: string } | null>(
           'drive/file-text-excerpt', { fileId: payload.fileId, maxChars: MAX_TEXT_CHARS },
         );
-        if (!excerpt?.text.trim()) return { skip: 'no-text' };
+        // Null here, after `ready` saw text, is a newer version not indexed yet.
+        if (!excerpt || excerpt.versionId !== ready.versionId) return { skip: 'superseded' };
+        if (!excerpt.text.trim()) return { skip: 'no-text' };
+        // The name as it is now, not as it was when the run was queued.
+        const { file } = await scope.invoke<{ file: { name: string } }>('drive/get-file', { fileId: payload.fileId });
+        const name = file.name.replace(/[\p{Cc}\p{Cf}<>]/gu, ' ').slice(0, 200);
         const run = await model.host.run({
           spec: model.spec,
           attribution: model.attribution,
           system: SYSTEM,
-          prompt: `File name: ${payload.name}\n\n<document>\n${excerpt.text.replaceAll('</document>', '')}\n</document>`,
+          prompt: `File name: ${name}\n\n<document>\n${fenceSafe(excerpt.text)}\n</document>`,
           temperature: 0,
           maxOutputTokens: 400,
         });
         const parsed = parseAnalysis(run.text);
-        return parsed ? { versionId: excerpt.versionId, ...parsed } : { skip: 'unparseable' };
+        if (!parsed) throw new Error('the model answered without the JSON object it was asked for');
+        return { versionId: excerpt.versionId, ...parsed };
       } catch (error) {
         const reason = terminal(error);
         if (reason) return { skip: reason };
         throw error;
       }
     }, WORK_RETRY);
-    if ('skip' in analysis) return finish({ status: 'skipped', reason: analysis.skip });
+    if ('skip' in analysis) return analysis.skip === 'superseded' ? superseded() : finish({ status: 'skipped', reason: analysis.skip });
 
     // Merge against the details as they are NOW — a person may have typed while the model ran.
-    const outcome = await pass.step(`apply:${round}`, async (): Promise<AutoLabelOutcome> => {
+    type Applied = AutoLabelOutcome | { status: 'superseded' };
+    const outcome = await pass.step(`apply:${round}`, async (): Promise<Applied> => {
       try {
         // A new version since the model read it: this answer describes something else now.
         // Asked first rather than read off the write's refusal; `expectedVersionId` below still
         // closes the gap between the two, and a refusal there retries into this check.
         const text = await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId });
-        if (text?.version_id !== analysis.versionId) return { status: 'skipped', reason: 'superseded' };
+        if (text?.version_id !== analysis.versionId) return { status: 'superseded' };
         const now = await scope.invoke<Details>('drive/file-details', { fileId: payload.fileId });
         const merged = mergeDetails(now, analysis);
         if (!merged) return { status: 'skipped', reason: 'nothing-new' };
@@ -229,12 +258,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         throw error;
       }
     }, WORK_RETRY);
-    // The upload that replaced the version joined this run, so this run owes it a round.
-    if (outcome.status === 'skipped' && outcome.reason === 'superseded' && round + 1 < MAX_ROUNDS) {
-      deps.log?.('drive.document-ai.superseded', { fileId: payload.fileId, round });
-      return { cursor: { round: round + 1 } };
-    }
-    return finish(outcome);
+    return outcome.status === 'superseded' ? superseded() : finish(outcome);
   };
 }
 

@@ -14,7 +14,7 @@ It only fills in what is empty: a description someone wrote is kept, and the AI'
 added next to any labels already there. If someone edits the details while the model is
 working, their edit is kept and the AI's additions are merged in. If the file is replaced
 with a new version first, Canopy analyses the new version instead. Each file is analysed
-once.
+once; a file without text is not tried again.
 
 ## Turning it on
 

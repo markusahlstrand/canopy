@@ -49,7 +49,7 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
           </section>
           <section className="space-y-2"><h3 className="text-xs font-medium text-muted-foreground">Document AI</h3>
             <label htmlFor="settings-auto-label" className="flex items-start gap-3 rounded-lg border px-3 py-2.5">
-              <Checkbox id="settings-auto-label" className="mt-0.5" checked={settings.autoLabel ?? false} disabled={busy} onCheckedChange={checked=>setSettings({...settings,autoLabel:checked===true})}/>
+              <Checkbox id="settings-auto-label" className="mt-0.5" checked={settings.autoLabel ?? false} disabled={busy} onCheckedChange={checked=>setSettings({...settings,autoLabel:checked===true||undefined})}/>
               <span><span className="block text-sm font-medium">Label new uploads automatically</span><span className="block text-xs text-muted-foreground">An AI model reads the text of each uploaded document and adds a type label and a short description. Labels and descriptions people wrote are kept.</span></span>
             </label>
           </section>

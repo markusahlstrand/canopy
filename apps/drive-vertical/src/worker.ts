@@ -12,7 +12,7 @@ import { normalizeNpmRegistry } from '@canopy/plugin-sources';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 import { createModelHost } from '@substrat-run/vertical-host/model';
-import { ANALYSED_COUNTERS, AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, type AutoLabelPayload } from './document-ai.js';
+import { AUTO_LABEL_JOB, autoLabelJob, CLOSING_COUNTERS, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, type AutoLabelPayload } from './document-ai.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -331,7 +331,7 @@ function documentAiFor(env: Env, host: CloudflareScopeHost) {
       host: createModelHost({
         env: env as unknown as Record<string, string | undefined>,
         aiBinding: env.AI,
-        sent: 'The first 12,000 characters of each uploaded document’s extracted text, and its file name',
+        sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
         // No ledger of our own yet: the usage line is logged so spend stays visible per space.
         record: (line) => { console.log('drive.document-ai.usage', line); },
       }),
@@ -1011,19 +1011,19 @@ async function indexSoon(
 
 /**
  * Queue Document AI for a write, in a space whose administrator turned it on. One run
- * per file: a live run is joined, and a file the model has already looked at is left
- * alone, so a client saving every few seconds does not buy a model call per save. A run
- * that ended before the model saw anything (no text yet, a replaced version) does not
- * count, and the next write tries again. Never throws: a failed queue is a log line,
- * not a failed upload.
+ * per file: a live run is joined, and a file a finished run closed (see
+ * `CLOSING_COUNTERS`) is left alone, so a client saving every few seconds does not buy
+ * a model call per save. Nothing is queued where there is no model to run it. Never
+ * throws: a failed queue is a log line, not a failed upload.
  */
-async function labelSoon(env: Env, host: CloudflareScopeHost, node: Node, principal: PrincipalId, file: { id: string; name: string }): Promise<void> {
+async function labelSoon(env: Env, host: CloudflareScopeHost, node: Node, principal: PrincipalId, file: { id: string }): Promise<void> {
+  if (!env.AI) return;
   try {
     if (!(await identityDo(env, node).readSpaceSettings(node.scopeId))?.autoLabel) return;
     const key = { moduleId: DRIVE_MODULE_ID, job: AUTO_LABEL_JOB, instance: file.id };
     const finished = await host.jobRuns(node.tenantId, node.scopeId, { ...key, status: 'done' });
-    if (finished.some((run) => ANALYSED_COUNTERS.some((counter) => run.counters[counter]))) return;
-    const payload: AutoLabelPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, name: file.name, principal };
+    if (finished.some((run) => CLOSING_COUNTERS.some((counter) => run.counters[counter]))) return;
+    const payload: AutoLabelPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, principal };
     await host.startJobRun(node.tenantId, node.scopeId, { ...key, payload });
   } catch (error) {
     console.error('drive.document-ai.queue-failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) });
@@ -1081,7 +1081,9 @@ app.post('/api/folders/:folderId/content', async (c) => {
 
   if (written.current_version_id) {
     const host = hostFor(env);
-    await indexSoon(c, host, node, () => labelSoon(env, host, node, principal, { id: file.id, name }));
+    // A "New → …" starter is empty by definition; its first real save is what to describe.
+    const starter = c.req.query('create') === 'only';
+    await indexSoon(c, host, node, starter ? undefined : () => labelSoon(env, host, node, principal, { id: file.id }));
   }
 
   return c.json(written, 201);
