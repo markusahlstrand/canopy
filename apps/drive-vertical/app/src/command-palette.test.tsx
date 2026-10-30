@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { CommandPalette } from './command-palette';
+import { openSpaceFile } from './space-navigation';
+
+vi.mock('./space-navigation', async (importOriginal) => ({ ...await importOriginal<typeof import('./space-navigation')>(), openSpaceFile: vi.fn(() => true) }));
 import type { PluginInstall } from './api';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -244,16 +247,43 @@ it('replaces a question whose answer failed instead of sending two in a row', as
   expect(bodies[1]).toEqual({ messages: [{ role: 'user', content: 'second' }] });
   expect(screen.queryByText('first')).toBeNull();
 });
-it('opens a source by page load when the current space is not known', async () => {
+it('opens a source in another space through the guarded space switch', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ answer: 'See it.', sources: [{ space: 'work', fileId: 'inv', name: 'Invoice.pdf' }] }))));
-  const assign = vi.fn();
-  vi.stubGlobal('location', { ...window.location, href: window.location.href, origin: window.location.origin, assign });
   const onOpenFile = vi.fn();
   render(<CommandPalette {...props} onOpenFile={onOpenFile} />);
   fireEvent.click(screen.getByRole('option', { name: /Ask the assistant…/ }));
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'invoice' } });
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
   fireEvent.click(await screen.findByRole('button', { name: /Invoice\.pdf/ }));
+  // No current space known: never by id in the wrong space, always by switching.
   expect(onOpenFile).not.toHaveBeenCalled();
-  expect(assign).toHaveBeenCalledWith(expect.stringContaining('site=work'));
+  expect(openSpaceFile).toHaveBeenCalledWith('work', 'inv');
+});
+it('does not send while an IME is composing', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('option', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'けいやく' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', isComposing: true });
+  expect(fetch).not.toHaveBeenCalled();
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('けいやく');
+});
+it('starts a new conversation when asked from search, and continues one only when asked to', async () => {
+  const bodies: unknown[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ answer: `Answer ${bodies.length}`, sources: [] }));
+  }));
+  const view = render(<CommandPalette {...props} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'invoices' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true });
+  await screen.findByText('Answer 1');
+  view.rerender(<CommandPalette {...props} open={false} />);
+  view.rerender(<CommandPalette {...props} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'lease end' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true });
+  await screen.findByText('Answer 2');
+  expect(bodies[1]).toEqual({ messages: [{ role: 'user', content: 'lease end' }] });
+  expect(screen.queryByText('Answer 1')).toBeNull();
 });

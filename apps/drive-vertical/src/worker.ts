@@ -760,6 +760,7 @@ mountAssistant(app, async c => {
   // it, else their first. Never to whatever an `x-scope` header names.
   const charged = sites.find(site => site.scopeId === here) ?? sites[0];
   if (!charged) throw new HTTPException(403, { message: 'You have no spaces to ask about.' });
+  // Non-null: `env.AI` was checked above.
   const model = modelFor(env, {
     spec: env.ASSISTANT_MODEL || DEFAULT_ASSISTANT_MODEL,
     sent: 'Your questions, and the text of the documents the assistant searches and reads to answer them',
@@ -768,10 +769,9 @@ mountAssistant(app, async c => {
     tenant: baseNode(c.req.raw, env).tenantId,
     scope: scopeId.parse(charged.scopeId),
   });
-  if (!model) return null;
   return {
     spaces: sites.map(site => ({ slug: site.slug, name: site.name, current: site.scopeId === here, scope: site.scope })),
-    model,
+    model: model!,
   };
 });
 app.post('/api/sites', async (c) => {

@@ -26,10 +26,19 @@ export function openSpace(slug: string) {
 
 /** Follow a shared-folder grant in another space without losing the folder on reload. */
 export function openSpaceFolder(slug: string, folderId: string) {
+  return openInSpace(slug, 'folder', folderId);
+}
+
+/** Open a file in another space — an assistant source — behind the same draft boundary. */
+export function openSpaceFile(slug: string, fileId: string) {
+  return openInSpace(slug, 'file', fileId);
+}
+
+function openInSpace(slug: string, key: 'folder' | 'file', id: string) {
   if (!confirmNavigation()) return false;
   const url = new URL(window.location.href);
   clearPreviousSpaceLink(url);
-  url.searchParams.set('folder', folderId);
+  url.searchParams.set(key, id);
   if (selectSite(slug)) url.searchParams.delete('site');
   else url.searchParams.set('site', slug);
   window.history.replaceState(null, '', url);

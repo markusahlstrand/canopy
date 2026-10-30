@@ -14,11 +14,10 @@ import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from "./file-icon";
 import { SEARCH_MIN, askAssistant, search, type AssistantSource, type PluginInstall, type SearchHit, type Site } from "./api";
 import { AssistantThread, type AssistantTurn } from "./assistant-thread";
-import { fileLink } from "./file-links";
 import { historyWindow } from "../../src/assistant-contract";
 import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
-import { spaceLabel } from './space-navigation';
+import { openSpaceFile, spaceLabel } from './space-navigation';
 
 /**
  * Where the palette can take you.
@@ -107,16 +106,20 @@ export function CommandPalette({
         if (id === conversation.current) setAsking(false);
       });
   };
-  const ask = (question: string) => {
+  /** `fresh`: asked from search, which reads as a new question — "Continue" is how to go on. */
+  const ask = (question: string, fresh = false) => {
     const text = question.trim();
     setMode('assistant');
     // One question at a time: a follow-up typed while an answer is coming stays in the box.
-    if (!text || asking) return;
+    // A fresh question retires one still pending; a follow-up waits for it.
+    if (!text || (asking && !fresh)) return;
     setQuery('');
     setResults([]);
     // A question whose answer failed is replaced by the next one, not left unanswered
     // above it: two questions in a row is not a conversation a model can read.
-    const settled = turns.at(-1)?.role === 'user' ? turns.slice(0, -1) : turns;
+    if (fresh) conversation.current++;
+    const base = fresh ? [] : turns;
+    const settled = base.at(-1)?.role === 'user' ? base.slice(0, -1) : base;
     const history = [...settled, { role: 'user' as const, content: text }];
     setTurns(history);
     send(history);
@@ -135,8 +138,8 @@ export function CommandPalette({
       if (onOpenFile({ id: source.fileId, name: source.name, kind: kindOf(null, source.name), modified: '', size: '—', isFolder: false }) !== false) onOpenChange(false);
       return;
     }
-    // Another space is another page load: the selected space is read from the URL.
-    window.location.assign(fileLink(source.fileId, source.space));
+    // Another space is another page load, behind the same draft guard as switching spaces.
+    openSpaceFile(source.space, source.fileId);
   };
 
   useEffect(() => {
@@ -180,13 +183,14 @@ export function CommandPalette({
         placeholder={assistant ? (turns.length ? "Ask a follow-up…" : "Ask about your documents…") : "Search files, or ask the assistant…"}
         value={query}
         onKeyDown={(event) => {
-          if (event.key !== 'Enter' || offline) return;
+          // Enter that confirms an IME candidate is composing, not sending.
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing || offline) return;
           // In the assistant, Enter sends. In search, ⌘↵ hands the query to the assistant
           // and a plain Enter still opens the highlighted result.
           if (assistant || event.metaKey || event.ctrlKey) {
             event.preventDefault();
             event.stopPropagation();
-            ask(query);
+            ask(query, !assistant);
           }
         }}
         onValueChange={(next) => {
@@ -273,7 +277,7 @@ export function CommandPalette({
         {!offline ? <>
           <CommandSeparator />
           <CommandGroup heading="Assistant">
-            {query.trim() ? <CommandItem value={`ask assistant ${query}`} onSelect={() => ask(query)}>
+            {query.trim() ? <CommandItem value={`ask assistant ${query}`} onSelect={() => ask(query, true)}>
               <Icon name="sparkles" size={16} />
               <span className="min-w-0 flex-1 truncate">Ask the assistant: “{query.trim()}”</span>
               <CommandShortcut>⌘↵</CommandShortcut>

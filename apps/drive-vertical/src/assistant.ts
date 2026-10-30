@@ -69,7 +69,9 @@ const messagesSchema = z.object({
 });
 
 function system(spaces: AssistantSpace[]): string {
-  const list = spaces.map(s => `- "${s.slug}": ${s.name}${s.current ? ' (the space on screen)' : ''}`).join('\n');
+  // Names are set by space admins: quoted as JSON strings, so a newline in one cannot
+  // start a line of instructions.
+  const list = spaces.map(s => `- ${JSON.stringify(s.slug)}: ${JSON.stringify(s.name)}${s.current ? ' (the space on screen)' : ''}`).join('\n');
   return [
     'You are the assistant in Canopy, a drive where people keep their documents in spaces.',
     'Answer the user\'s question from their documents. Use the tools:',
@@ -140,19 +142,21 @@ export function assistantTools(spaces: AssistantSpace[]) {
       if (!s) return { error: `There is no space "${space}".` };
       // Errors here (not found, not allowed) surface to the model as a tool error, which
       // it is shown and works around; they never widen what it can read.
-      const [{ file }, details, excerpt] = await Promise.all([
+      const [{ file }, details, excerpt, extraction] = await Promise.all([
         s.scope.invoke<{ file: { id: string; name: string } }>('drive/get-file', { fileId }),
         s.scope.invoke<{ description: string; labels: string[] }>('drive/file-details', { fileId }),
         s.scope.invoke<{ text: string; truncated: boolean } | null>('drive/file-text-excerpt', { fileId, maxChars: MAX_READ_CHARS }),
+        s.scope.invoke<{ status: string } | null>('drive/file-text', { fileId }),
       ]);
-      read.set(`${space}/${fileId}`, { space, fileId, name: file.name });
+      const source = { space, fileId, name: file.name };
+      read.set(key(source), source);
       return {
         name: file.name,
         labels: details.labels,
         description: details.description || null,
         text: excerpt?.text ?? null,
         truncated: excerpt?.truncated ?? false,
-        note: excerpt ? undefined : 'No text could be extracted from this file (for example a scan or an image).',
+        note: excerpt ? undefined : noTextNote(extraction?.status),
       };
     },
   };
@@ -161,6 +165,13 @@ export function assistantTools(spaces: AssistantSpace[]) {
     tools: { search_documents: search, read_document: readDocument },
     sources: (): AssistantSource[] => read.size ? [...read.values()] : [...found.values()].slice(0, MAX_FALLBACK_SOURCES),
   };
+}
+
+/** Why a file has no text to read: "not yet" and "never" are different answers. */
+function noTextNote(status: string | undefined): string {
+  return status === 'pending'
+    ? 'This file\'s text is still being extracted. Tell the user to try again in a minute.'
+    : 'No text could be extracted from this file (for example a scan or an image).';
 }
 
 export async function runAssistant(model: AssistantModel, spaces: AssistantSpace[], messages: AssistantMessage[]): Promise<AssistantReply> {
@@ -175,7 +186,8 @@ export async function runAssistant(model: AssistantModel, spaces: AssistantSpace
     maxOutputTokens: 1_200,
     temperature: 0.2,
   });
-  const answer = run.text.trim() || 'I could not put an answer together from your documents. Try asking another way.';
+  // Clamped to what the route accepts back as history, so one answer cannot block a follow-up.
+  const answer = (run.text.trim() || 'I could not put an answer together from your documents. Try asking another way.').slice(0, MAX_ANSWER_CHARS);
   return { answer, sources: sources() };
 }
 
