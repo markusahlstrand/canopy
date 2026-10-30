@@ -199,7 +199,7 @@ the one it read (or lands after it wrote) at once the first time, then a day apa
 up to a week — so the version current when editing stops is the one described. A version the model has answered about, or found no
 text in, is settled. Within a day of the file's last model call, a write still queues a
 run, which waits until the day is up and then describes whatever version is current, so
-autosaving costs at most one call a day and the last version is still described. Each
+autosaving costs two calls and then at most one a day, and the last version is still described. Each
 run replaces what Document AI wrote last time (its label, and its description if nobody
 edited it) rather than adding to it. Encrypted `.locked` files are never sent. A run
 that stopped short of the model (extraction missing or failed, access lost) settles

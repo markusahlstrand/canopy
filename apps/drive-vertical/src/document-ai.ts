@@ -82,7 +82,16 @@ function firstObject(raw: string): string | null {
 /** Links and mail addresses are not a description of a document, and the one thing an injected one is for. */
 const LINKISH = /\b(?:https?:\/\/|www\.)\S+|\b[\w.+-]+@[\w-]+\.[\w.-]+\b/gi;
 
-/** Pull `{ label, description }` out of the model's reply, tolerating fences and chatter around it. */
+/** Model text made safe to store: no links or addresses, no control characters, one line, at most `max` characters (by code point). */
+function clean(text: string, max: number): string {
+  const flat = text.replace(LINKISH, '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ');
+  return [...flat].slice(0, max).join('').trim();
+}
+
+/**
+ * Pull `{ label, description }` out of the model's reply, tolerating fences and chatter
+ * around it — or null when it holds neither, which is no answer at all.
+ */
 export function parseAnalysis(raw: string): { label: string | null; description: string | null } | null {
   const json = firstObject(raw);
   if (!json) return null;
@@ -92,12 +101,9 @@ export function parseAnalysis(raw: string): { label: string | null; description:
   } catch {
     return null;
   }
-  const label = typeof obj.label === 'string'
-    ? obj.label.replace(LINKISH, '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').slice(0, 40).replace(/^["'\s.]+|["'\s.]+$/g, '')
-    : '';
-  const description = typeof obj.description === 'string'
-    ? obj.description.replace(LINKISH, '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 600)
-    : '';
+  const label = typeof obj.label === 'string' ? clean(obj.label, 40).replace(/^["'.\s]+|["'.\s]+$/g, '') : '';
+  const description = typeof obj.description === 'string' ? clean(obj.description, 600) : '';
+  if (!label && !description) return null;
   return { label: label || null, description: description || null };
 }
 
@@ -145,7 +151,11 @@ type SkipReason = Extract<AutoLabelOutcome, { status: 'skipped' }>['reason'];
 
 /** Outcomes where the model answered about the file, or would have had it held still. */
 const ANSWERED: readonly string[] = ['labelled', 'skipped:nothing-new', 'skipped:kept-changing'];
-/** The least time between two model calls for one file — what continuous saving can cost: one call a day. */
+/**
+ * The cooldown between a file's model calls. Continuous saving costs two calls close
+ * together (the first answer, then one follow-up for the version that replaced it) and
+ * then at most one a day.
+ */
 export const COOLDOWN_MS = 24 * 60 * 60_000;
 
 /**
@@ -155,7 +165,7 @@ export const COOLDOWN_MS = 24 * 60 * 60_000;
  */
 interface Closing { round?: number; notBefore?: string; versionId?: string; outcome?: string; wrote?: Wrote }
 
-/** Marks a failure that came from the model, so only those start a cooldown (`planRun`). */
+/** Marks a failure at or after the model call — one that was paid for — so those, and only those, start a cooldown (`planRun`). */
 export const MODEL_FAILURE = 'document-ai/model:';
 
 /** The run record fields `planRun` reads — a kernel `JobRun` has them all. */
@@ -298,10 +308,12 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     type Analysis = { skip: SkipReason | 'superseded' } | { versionId: string; label: string | null; description: string | null };
     const analysis = await pass.step(`analyse:${round}`, async (): Promise<Analysis> => {
       try {
-        const before = await scope.invoke<Details>('drive/file-details', { fileId: payload.fileId });
-        if (!before.canWrite) return { skip: 'read-only' };
         // The name as it is now, not as it was when the run was queued.
-        const { file } = await scope.invoke<{ file: { name: string } }>('drive/get-file', { fileId: payload.fileId });
+        const [before, { file }] = await Promise.all([
+          scope.invoke<Details>('drive/file-details', { fileId: payload.fileId }),
+          scope.invoke<{ file: { name: string } }>('drive/get-file', { fileId: payload.fileId }),
+        ]);
+        if (!before.canWrite) return { skip: 'read-only' };
         // Encrypted in the browser: its text is ciphertext, and nothing a model should see.
         if (isLockedName(file.name)) return { skip: 'no-text' };
         const name = file.name.replace(/[\p{Cc}\p{Cf}<>]/gu, ' ').slice(0, 200);
@@ -343,17 +355,30 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     }
 
     // Merge against the details as they are NOW — a person may have typed while the model ran.
-    type Applied = Exclude<AutoLabelOutcome, { status: 'labelled' }> | (Extract<AutoLabelOutcome, { status: 'labelled' }> & { wrote: Wrote }) | { status: 'superseded' };
+    type Applied = (AutoLabelOutcome & { wrote?: Wrote }) | { status: 'superseded' };
     const outcome = await pass.step(`apply:${round}`, async (): Promise<Applied> => {
       try {
         // A new version since the model read it: this answer describes something else now.
         // Asked first rather than read off the write's refusal; `expectedVersionId` below still
         // closes the gap between the two, and a refusal there retries into this check.
-        const text = await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId });
+        const [text, now] = await Promise.all([
+          scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId }),
+          scope.invoke<Details>('drive/file-details', { fileId: payload.fileId }),
+        ]);
         if (text?.version_id !== analysis.versionId) return { status: 'superseded' };
-        const now = await scope.invoke<Details>('drive/file-details', { fileId: payload.fileId });
         const merged = mergeDetails(now, analysis, previous);
-        if (!merged) return { status: 'skipped', reason: 'nothing-new' };
+        if (!merged) {
+          // Nothing to write — possibly because this step's own write committed and the pass
+          // died before its memo did. What is on the file now that matches this answer is
+          // Document AI's, either way.
+          const has = (label: string | null) => !!label && now.labels.some((l) => l.toLowerCase() === label.toLowerCase());
+          const wrote: Wrote = {
+            label: has(analysis.label) ? analysis.label : has(previous?.label ?? null) ? previous!.label : null,
+            description: now.description && (now.description === analysis.description || now.description === previous?.description)
+              ? now.description : null,
+          };
+          return { status: 'skipped', reason: 'nothing-new', wrote };
+        }
         await scope.invoke('drive/update-file-details', {
           fileId: payload.fileId,
           description: merged.description,
@@ -366,11 +391,12 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         const reason = terminal(error);
         if (reason) return { status: 'skipped', reason };
         // A save, or a new version, in the gap between read and write: the retry re-reads.
-        throw error;
+        // Marked as after the model, so a run that fails here still starts a cooldown.
+        throw new Error(`${MODEL_FAILURE} answered, but the write failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }, WORK_RETRY);
     if (outcome.status === 'superseded') return superseded(analysis.versionId);
-    const { wrote, ...settled } = outcome.status === 'labelled' ? outcome : { ...outcome, wrote: undefined };
+    const { wrote, ...settled } = outcome;
     // Answered about this version — but a write that joined this run may have made a newer
     // one since, and this run is the only one that will describe it.
     if (settled.status === 'labelled' || (settled.status === 'skipped' && settled.reason === 'nothing-new')) {

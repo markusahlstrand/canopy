@@ -1014,7 +1014,7 @@ async function indexSoon(
  * Queue Document AI for a write, in a space whose administrator turned it on. One run
  * per file: a live run is joined; a version already settled is left alone; a file in its
  * cooldown gets a run that waits it out (`planRun`), so a client saving every few seconds
- * buys at most a call a day and the last version still gets described. Nothing is queued
+ * buys two calls and then at most one a day, and the last version still gets described. Nothing is queued
  * where there is no model, or for an encrypted `.locked` file. Never throws: a failed
  * queue is a log line, not a failed upload.
  */

@@ -96,8 +96,16 @@ describe('parseAnalysis', () => {
       .toEqual({ label: 'Letter', description: 'Urgent: re-enter your bank details at or mail now.' });
   });
 
-  it('returns null for a reply with no object in it', () => {
+  it('returns null for a reply with no object in it, or one that says nothing', () => {
     expect(parseAnalysis('I cannot tell.')).toBeNull();
+    expect(parseAnalysis('{}')).toBeNull();
+    expect(parseAnalysis('{"label":"https://x.example","description":""}')).toBeNull();
+  });
+
+  it('cuts by character, never through an emoji', () => {
+    const label = parseAnalysis(`{"label":"${'a'.repeat(39)}📄📄","description":"x"}`)!.label!;
+    expect([...label]).toHaveLength(40);
+    expect(label.endsWith('📄')).toBe(true);
   });
 });
 
@@ -205,6 +213,32 @@ describe('the Document AI run', () => {
     await h.pass();
     expect(h.run).toHaveBeenCalledTimes(1);
     expect(h.saved).toHaveLength(1);
+  });
+
+  it('recognises its own write when the pass died after it committed', async () => {
+    const h = harness();
+    // The write lands, then the pass dies before `apply:0` is memoised.
+    const real = h.deps.scopeFor;
+    let died = false;
+    h.deps.scopeFor = async (p) => {
+      const scope = await real(p);
+      return { invoke: async <T,>(op: string, input: Record<string, unknown>) => {
+        const r = await scope.invoke<T>(op, input);
+        if (op === 'drive/update-file-details' && !died) { died = true; throw new Error('lease lost'); }
+        return r;
+      } };
+    };
+    await expect(h.pass()).rejects.toThrow('lease lost');
+    expect(await h.pass()).toMatchObject({
+      done: true,
+      cursor: { outcome: 'skipped:nothing-new', wrote: { label: 'Invoice', description: 'An invoice from ACME Ltd for 120 EUR.' } },
+    });
+    expect(h.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a failed write after the answer as paid for, so it starts a cooldown', async () => {
+    const h = harness({ saveError: new Error('scope unavailable') });
+    await expect(h.pass()).rejects.toThrow(`${MODEL_FAILURE} answered, but the write failed: scope unavailable`);
   });
 
   it('merges with what a person saved while the model was running', async () => {
