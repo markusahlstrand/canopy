@@ -634,6 +634,8 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       fileId: z.string(), description: z.string().max(10000),
       labels: z.array(z.string().trim().min(1).max(100)).max(20),
       expectedRevision: z.number().int().nonnegative(),
+      /** Refuse with `conflict` unless this is still the current version — for details derived from the content. */
+      expectedVersionId: z.string().optional(),
     }),
     output: fileDetails,
     http: { method: 'PATCH', path: '/files/{fileId}/details' },
@@ -811,6 +813,21 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       detail: z.string().nullable(),
     }).nullable(),
     http: { method: 'GET', path: '/files/{fileId}/text' },
+  },
+
+  /**
+   * The start of what extraction found — the bounded read `file-text` refuses to be.
+   *
+   * For a caller that has to read the document rather than show its status: the
+   * worker's auto-labelling hands this to a model. `null` unless the current version
+   * is `indexed`; `versionId` lets the caller notice the file moved on while it read.
+   */
+  'drive/file-text-excerpt': {
+    summary: 'The first characters of a file’s extracted text, or null if none is indexed',
+    permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    /** `maxChars` defaults to 12 000 — about what a classifier needs to tell a document's kind. */
+    input: z.object({ fileId: z.string(), maxChars: z.number().int().min(1).max(50_000).optional() }),
+    output: z.object({ versionId: z.string(), text: z.string(), truncated: z.boolean() }).nullable(),
   },
 
   /**

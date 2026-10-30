@@ -11,6 +11,9 @@ import { importNpmPlugin } from './npm-plugin-import.js';
 import { normalizeNpmRegistry } from '@canopy/plugin-sources';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
+import { createModelHost } from '@substrat-run/vertical-host/model';
+import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, planRun, type AutoLabelPayload } from './document-ai.js';
+import { isLockedName } from './editable-text.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -41,6 +44,7 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import {
   blobStoreBindingName,
+  moduleId,
   principalId,
   scopeId,
   tenantId,
@@ -198,6 +202,13 @@ export interface Env {
   ALLOW_DEV_NODE?: string;
   ROUTER_SECRET?: string;
   PLATFORM_SECRET?: string;
+  /**
+   * Workers AI. The platform binds it on every pushed vertical (#1054); absent under a
+   * plain `wrangler dev`, where Document AI logs that it has no model and does nothing.
+   */
+  AI?: unknown;
+  /** Document AI's model as `provider:model`. Default: {@link DEFAULT_DOCUMENT_AI_MODEL}. */
+  DOCUMENT_AI_MODEL?: string;
   /** Optional token for GitHub commit lookups during public plugin imports. */
   GITHUB_TOKEN?: string;
   /** Optional npm registry base URL for plugin imports (https, or loopback http for local acceptance). Default: registry.npmjs.org. */
@@ -303,7 +314,33 @@ function hostFor(env: Env): CloudflareScopeHost {
   });
   for (const m of MODULES) host.registerModule(m);
   declareConnectorEvents(host, connectors);
+  // Registered on every host, so whichever drives the scope's jobs — an upload's
+  // `runDueJobs` or the sweeper's pass — can run a queued Document AI run.
+  host.registerJob(DRIVE_MODULE_ID, AUTO_LABEL_JOB, documentAiFor(env, host));
   return host;
+}
+
+const DRIVE_MODULE_ID = moduleId.parse(driveManifest.id);
+
+/** Document AI's run body, over this worker's bindings and the host driving it. */
+function documentAiFor(env: Env, host: CloudflareScopeHost) {
+  const nodeOf = (p: AutoLabelPayload): Node => ({ tenantId: tenantId.parse(p.tenantId), scopeId: scopeId.parse(p.scopeId) });
+  return autoLabelJob({
+    scopeFor: (p) => host.getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
+    enabled: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.autoLabel === true,
+    model: (p) => env.AI ? {
+      host: createModelHost({
+        env: env as unknown as Record<string, string | undefined>,
+        aiBinding: env.AI,
+        sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
+        // No ledger of our own yet: the usage line is logged so spend stays visible per space.
+        record: (line) => { console.log('drive.document-ai.usage', line); },
+      }),
+      spec: env.DOCUMENT_AI_MODEL || DEFAULT_DOCUMENT_AI_MODEL,
+      attribution: { tenant: tenantId.parse(p.tenantId), scope: scopeId.parse(p.scopeId), vertical: driveManifest.id, version: driveManifest.version, operation: 'drive/auto-label' },
+    } : null,
+    log: (event, fields) => console.log(event, fields),
+  });
 }
 
 /**
@@ -962,11 +999,39 @@ mountOwnerClaim<Env, Node>(app, {
  * extracts and indexes it, and also advances the one-off backfill of older attachments.
  * After the response where the runtime allows it, so a large PDF never delays an upload.
  */
-async function indexSoon(c: Pick<Context, 'executionCtx'>, host: CloudflareScopeHost, node: Node): Promise<void> {
-  const work = host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
+async function indexSoon(
+  c: Pick<Context, 'executionCtx'>, host: CloudflareScopeHost, node: Node, queue?: () => Promise<void>,
+): Promise<void> {
+  // `queue` starts any run this write owes first, so the one drive below takes it too —
+  // after the extraction it waits on, which the kernel queued earlier.
+  const work = (queue ? queue() : Promise.resolve()).then(() => host.runDueJobs(node.tenantId, node.scopeId)).catch((error: unknown) => {
     console.error('drive.text-index.run-failed', { error: error instanceof Error ? error.message : String(error) });
   });
   await defer(c, work);
+}
+
+/**
+ * Queue Document AI for a write, in a space whose administrator turned it on. One run
+ * per file: a live run is joined; a version already settled is left alone; a file in its
+ * cooldown gets a run that waits it out (`planRun`), so a client saving every few seconds
+ * buys two calls and then at most one a day, and the last version still gets described. Nothing is queued
+ * where there is no model, or for an encrypted `.locked` file. Never throws: a failed
+ * queue is a log line, not a failed upload.
+ */
+async function labelSoon(
+  env: Env, host: CloudflareScopeHost, node: Node, principal: PrincipalId, file: { id: string; name: string; versionId: string },
+): Promise<void> {
+  if (!env.AI || isLockedName(file.name)) return;
+  try {
+    if (!(await identityDo(env, node).readSpaceSettings(node.scopeId))?.autoLabel) return;
+    const key = { moduleId: DRIVE_MODULE_ID, job: AUTO_LABEL_JOB, instance: file.id };
+    const plan = planRun(await host.jobRuns(node.tenantId, node.scopeId, key), file.versionId, Date.now());
+    if (!plan) return;
+    const payload: AutoLabelPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, principal, ...plan };
+    await host.startJobRun(node.tenantId, node.scopeId, { ...key, payload });
+  } catch (error) {
+    console.error('drive.document-ai.queue-failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 /**
@@ -989,7 +1054,8 @@ app.post('/api/folders/:folderId/content', async (c) => {
   const name = c.req.query('name');
   if (!name) throw new HTTPException(400, { message: 'name is required' });
 
-  const stub = await hostFor(env).getScope(principal, node.tenantId, node.scopeId);
+  const host = hostFor(env);
+  const stub = await host.getScope(principal, node.tenantId, node.scopeId);
   const file = await stub.invoke<{ id: string; current_version_id: string | null }>('drive/ensure-file', {
     folderId: c.req.param('folderId'),
     name,
@@ -1002,7 +1068,7 @@ app.post('/api/folders/:folderId/content', async (c) => {
 
   const contentType = c.req.header('content-type') ?? 'application/octet-stream';
   const body = await readBounded(c.req.raw);
-  const attachments = await hostFor(env).attachments(principal, node.tenantId, node.scopeId);
+  const attachments = await host.attachments(principal, node.tenantId, node.scopeId);
   const attachment = await attachments.upload({
     entity: { entityType: 'file', entityId: file.id },
     filename: name,
@@ -1018,7 +1084,12 @@ app.post('/api/folders/:folderId/content', async (c) => {
     { fileId: file.id, location: { source: 'blob', blobRef: attachment.id } },
   );
 
-  if (written.current_version_id) await indexSoon(c, hostFor(env), node);
+  if (written.current_version_id) {
+    // A "New → …" starter is empty by definition; its first real save is what to describe.
+    const starter = c.req.query('create') === 'only';
+    const versionId = written.current_version_id;
+    await indexSoon(c, host, node, starter ? undefined : () => labelSoon(env, host, node, principal, { id: file.id, name, versionId }));
+  }
 
   return c.json(written, 201);
 });
@@ -1059,7 +1130,7 @@ mountTextContent(app, async (c) => {
     record: (fileId, blobRef, expectedCurrentVersion) => stub.invoke<{ id: string; current_version_id: string | null }>(
       'drive/record-version', { fileId, expectedCurrentVersion, location: { source: 'blob', blobRef } },
     ),
-    afterWrite: () => indexSoon(c, host, node),
+    afterWrite: (file) => indexSoon(c, host, node, () => labelSoon(c.env, host, node, principal, file)),
   };
 });
 
@@ -1140,7 +1211,8 @@ mountWebdav(app, async (c, password, username) => {
         upload: async (fileId: string, name: string, mime: string, body: Uint8Array) =>
           (await (await attachments()).upload({ entity: { entityType: 'file', entityId: fileId }, filename: name, contentType: mime, visibility: 'internal', body })).id,
         open: async (blobRef: string) => (await attachments()).open(blobRef),
-        afterWrite: () => indexSoon(c, host, { tenantId: tenant, scopeId: scope }),
+        afterWrite: (file: { id: string; name: string; versionId: string }) => indexSoon(c, host, { tenantId: tenant, scopeId: scope },
+          () => labelSoon(env, host, { tenantId: tenant, scopeId: scope }, site.principal, file)),
       },
     };
   });

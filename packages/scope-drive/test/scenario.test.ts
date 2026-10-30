@@ -235,6 +235,15 @@ describe('file descriptions and labels', () => {
     expect(await writer.invoke('drive/update-file-details', { fileId: file.id, description: '', labels: [], expectedRevision: 1 })).toMatchObject({ description: '', labels: [], revision: 2 });
   });
 
+  it('refuses details computed from a version that is no longer current', async () => {
+    const first = await write(ada, ROOT_FOLDER_ID, 'details-version.txt', 'one');
+    const writer = await host.getScope(ada, tenant, scope);
+    const input = { fileId: first.id, description: 'About one', labels: [], expectedRevision: 0, expectedVersionId: first.current_version_id! };
+    await write(ada, ROOT_FOLDER_ID, 'details-version.txt', 'two');
+    await expect(writer.invoke('drive/update-file-details', input)).rejects.toThrow('older version');
+    expect(await writer.invoke('drive/file-details', { fileId: first.id })).toMatchObject({ description: '', revision: 0 });
+  });
+
   it('checks write/read authority, bounds metadata, and refuses trash', async () => {
     const file = await write(ada, ROOT_FOLDER_ID, 'details-boundary.txt', 'a');
     const writer = await host.getScope(ada, tenant, scope);

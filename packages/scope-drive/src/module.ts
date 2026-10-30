@@ -127,6 +127,22 @@ function liveFile(ctx: OperationContext, fileId: string): FileRow {
   return file;
 }
 
+/**
+ * A live file's current blob version and the kernel's extraction state for it, or null
+ * when there is none to read: no version, a connected source, or nothing queued yet.
+ * The one place "which text is this file's text" is decided.
+ */
+function currentText(ctx: OperationContext, fileId: string) {
+  const file = liveFile(ctx, fileId);
+  const version = file.current_version_id
+    ? ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0]
+    : undefined;
+  if (!version?.blob_ref || version.source !== 'blob') return null;
+  // The kernel's own reading of its extraction state, including a run that failed.
+  const state = readAttachmentText(ctx, version.blob_ref);
+  return state ? { file, version: { ...version, blob_ref: version.blob_ref }, state } : null;
+}
+
 /** The entity refs the checks narrow onto. */
 const folderRef = (id: string) => ({ entityType: 'folder', entityId: id }) as const;
 /** A `drive_folder_shares` row joined to the roster, as the dialog reads it. */
@@ -924,7 +940,10 @@ const operations = {
 
   'drive/update-file-details': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
-    liveFile(ctx, input.fileId);
+    const file = liveFile(ctx, input.fileId);
+    if (input.expectedVersionId !== undefined && input.expectedVersionId !== file.current_version_id) {
+      throw substratError('conflict', 'file content changed — these details describe an older version');
+    }
     const row = ctx.sql.query<DetailsRow>('SELECT * FROM drive_file_details WHERE file_id = ?', [input.fileId])[0];
     if ((row?.revision ?? 0) !== input.expectedRevision) {
       throw substratError('conflict', 'details changed — reload before saving');
@@ -1086,15 +1105,10 @@ const operations = {
 
   'drive/file-text': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
-    const file = liveFile(ctx, input.fileId);
-    const version = file.current_version_id
-      ? ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0]
-      : undefined;
-    if (!version?.blob_ref || version.source !== 'blob') return null;
-    // The kernel's own reading of its extraction state, including a run that failed.
-    const state = readAttachmentText(ctx, version.blob_ref);
+    const current = currentText(ctx, input.fileId);
     // Null is the answer, not the absence of one: nothing has been queued for this version.
-    if (!state) return null;
+    if (!current) return null;
+    const { file, version, state } = current;
     const chars = state.status === 'indexed'
       ? (ctx.sql.query<{ chars: number }>(
           'SELECT length(body) AS chars FROM _substrat_search__attachment_text WHERE attachment_id = ?', [version.blob_ref],
@@ -1110,6 +1124,21 @@ const operations = {
       extracted_at: state.updatedAt,
       detail: state.detail,
     };
+  },
+
+  'drive/file-text-excerpt': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    const current = currentText(ctx, input.fileId);
+    if (current?.state.status !== 'indexed') return null;
+    const { version, state } = current;
+    const maxChars = input.maxChars ?? 12_000;
+    const row = ctx.sql.query<{ text: string; chars: number }>(
+      'SELECT substr(body, 1, ?) AS text, length(body) AS chars FROM _substrat_search__attachment_text WHERE attachment_id = ?',
+      [maxChars, version.blob_ref],
+    )[0];
+    if (!row) return null;
+    // Cut here, or already cut by extraction's own bound: either way not the whole document.
+    return { versionId: version.id, text: row.text, truncated: row.chars > maxChars || state.truncated };
   },
 
   'drive/share-folder': async (ctx, input) => {

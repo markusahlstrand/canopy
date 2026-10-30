@@ -184,6 +184,30 @@ Search matches names, current extracted text, descriptions and labels; the kerne
 FTS triggers update metadata search in the same write. Metadata hits are distinguished
 in the palette and are filtered through the live file’s read permission.
 
+**Document AI** fills these in for new uploads when a space administrator turns on
+*Label new uploads automatically* in space settings. Each browser, WebDAV or editor write
+starts a kernel job run for that file (`@canopy/scope-drive` / `auto-label`, instance =
+file id). The run waits until the kernel has indexed the file's text, retrying with
+backoff, so it does not matter whether the upload's own `runDueJobs`, a sweep or a
+retry does the extraction. It then sends the first 12,000 characters and the file name
+to a model through `createModelHost` and the platform's Workers AI binding, and writes
+a document-type label and, if empty, a description. The write names the version the
+model read and is refused if the file has changed since. The model's answer is a
+memoised step, so a pass the runtime cuts short is resumed by the sweeper without
+paying twice. One run per file: a live run is joined, and a run follows a version that replaces
+the one it read (or lands after it wrote) at once the first time, then a day apart, for
+up to a week — so the version current when editing stops is the one described. A version the model has answered about, or found no
+text in, is settled. Within a day of the file's last model call, a write still queues a
+run, which waits until the day is up and then describes whatever version is current, so
+autosaving costs two calls and then at most one a day, and the last version is still described. Each
+run replaces what Document AI wrote last time (its label, and its description if nobody
+edited it) rather than adding to it. Encrypted `.locked` files are never sent. A run
+that stopped short of the model (extraction missing or failed, access lost) settles
+nothing. An empty "New →" starter queues nothing; its first real save does. People's own labels and descriptions are never replaced. Files with no text
+layer are skipped. Links and mail addresses are stripped from what the model writes.
+`DOCUMENT_AI_MODEL` overrides the default model. Each run's outcome is in its counters
+and logged as `drive.document-ai.done`; usage lines as `drive.document-ai.usage`.
+
 ## Live updates
 
 `GET /api/live` is Substrat's WebSocket subscription for authenticated pages. The
