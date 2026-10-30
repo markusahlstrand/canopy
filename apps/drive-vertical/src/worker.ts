@@ -11,6 +11,8 @@ import { importNpmPlugin } from './npm-plugin-import.js';
 import { normalizeNpmRegistry } from '@canopy/plugin-sources';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
+import { createModelHost } from '@substrat-run/vertical-host/model';
+import { autoLabel, DEFAULT_DOCUMENT_AI_MODEL, type AutoLabelScope } from './document-ai.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -198,6 +200,13 @@ export interface Env {
   ALLOW_DEV_NODE?: string;
   ROUTER_SECRET?: string;
   PLATFORM_SECRET?: string;
+  /**
+   * Workers AI. The platform binds it on every pushed vertical (#1054); absent under a
+   * plain `wrangler dev`, where Document AI logs that it has no model and does nothing.
+   */
+  AI?: unknown;
+  /** Document AI's model as `provider:model`. Default: {@link DEFAULT_DOCUMENT_AI_MODEL}. */
+  DOCUMENT_AI_MODEL?: string;
   /** Optional token for GitHub commit lookups during public plugin imports. */
   GITHUB_TOKEN?: string;
   /** Optional npm registry base URL for plugin imports (https, or loopback http for local acceptance). Default: registry.npmjs.org. */
@@ -962,11 +971,45 @@ mountOwnerClaim<Env, Node>(app, {
  * extracts and indexes it, and also advances the one-off backfill of older attachments.
  * After the response where the runtime allows it, so a large PDF never delays an upload.
  */
-async function indexSoon(c: Pick<Context, 'executionCtx'>, host: CloudflareScopeHost, node: Node): Promise<void> {
+async function indexSoon(
+  c: Pick<Context, 'executionCtx'>, host: CloudflareScopeHost, node: Node, then?: () => Promise<void>,
+): Promise<void> {
   const work = host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
     console.error('drive.text-index.run-failed', { error: error instanceof Error ? error.message : String(error) });
-  });
+  }).then(then);
   await defer(c, work);
+}
+
+/**
+ * Document AI, once the upload's text is indexed — so it reads what search reads. Only
+ * in a space whose administrator turned it on, and as the uploader, so it can fill in
+ * nothing they could not have typed themselves. Never throws: a failed label is a log
+ * line, not a failed upload.
+ */
+async function labelSoon(env: Env, node: Node, scope: AutoLabelScope, file: { id: string; name: string }): Promise<void> {
+  try {
+    const settings = await identityDo(env, node).readSpaceSettings(node.scopeId);
+    if (!settings?.autoLabel) return;
+    if (!env.AI) {
+      console.warn('drive.document-ai.no-model', { fileId: file.id });
+      return;
+    }
+    const host = createModelHost({
+      env: env as unknown as Record<string, string | undefined>,
+      aiBinding: env.AI,
+      sent: 'The first 12,000 characters of each uploaded document’s extracted text, and its file name',
+      // No ledger of our own yet: the usage line is logged so spend stays visible per space.
+      record: (line) => { console.log('drive.document-ai.usage', line); },
+    });
+    const outcome = await autoLabel(scope, file, {
+      host,
+      spec: env.DOCUMENT_AI_MODEL || DEFAULT_DOCUMENT_AI_MODEL,
+      attribution: { tenant: node.tenantId, scope: node.scopeId, vertical: driveManifest.id, version: driveManifest.version, operation: 'drive/auto-label' },
+    });
+    console.log('drive.document-ai.done', { fileId: file.id, ...outcome });
+  } catch (error) {
+    console.error('drive.document-ai.failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 /**
@@ -1018,7 +1061,7 @@ app.post('/api/folders/:folderId/content', async (c) => {
     { fileId: file.id, location: { source: 'blob', blobRef: attachment.id } },
   );
 
-  if (written.current_version_id) await indexSoon(c, hostFor(env), node);
+  if (written.current_version_id) await indexSoon(c, hostFor(env), node, () => labelSoon(env, node, stub, { id: file.id, name }));
 
   return c.json(written, 201);
 });
@@ -1140,7 +1183,8 @@ mountWebdav(app, async (c, password, username) => {
         upload: async (fileId: string, name: string, mime: string, body: Uint8Array) =>
           (await (await attachments()).upload({ entity: { entityType: 'file', entityId: fileId }, filename: name, contentType: mime, visibility: 'internal', body })).id,
         open: async (blobRef: string) => (await attachments()).open(blobRef),
-        afterWrite: () => indexSoon(c, host, { tenantId: tenant, scopeId: scope }),
+        afterWrite: (file: { id: string; name: string }) => indexSoon(c, host, { tenantId: tenant, scopeId: scope },
+          () => labelSoon(env, { tenantId: tenant, scopeId: scope }, site.scope, file)),
       },
     };
   });

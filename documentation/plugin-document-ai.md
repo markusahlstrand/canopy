@@ -1,26 +1,41 @@
 # Document AI
 
-Automatically labels each document by type using an AI model.
+Automatically labels and describes each uploaded document using an AI model.
 
 ## What it does
 
-Document AI is a **processor**: when a file is added or changes, a server-side hook reads it,
-asks an AI model to classify it (invoice, contract, receipt, …), and writes that type back
-to the file's metadata. Its detail view is an **activity feed** of recent runs across your
-files, and the per-file result also shows in each file's details. It runs on whichever AI
-provider is configured — Gemini Flash, an OpenAI-compatible endpoint, or Cloudflare Workers
-AI — without code changes; add your own key under **Settings → AI models**.
+When a file is uploaded to a space with Document AI turned on, Canopy waits until the file's
+text has been extracted for search, then asks an AI model what kind of document it is
+(invoice, contract, receipt, …). It adds that type as a **label** and, if the file has no
+description yet, writes a one- or two-sentence **description**. Both show in the file's
+**Details** tab and are searchable.
+
+It only fills in what is empty: a description someone wrote is kept, and the AI's label is
+added next to any labels already there. If someone edits the details while the model is
+working, their edit wins.
+
+## Turning it on
+
+Open **Space settings** and tick **Label new uploads automatically**. Only space
+administrators can change this. It is off by default, because it sends document text to a
+model.
+
+## Limits
+
+- Reads the extracted text, not the file itself. Scans and images without a text layer are
+  skipped.
+- Reads the first 12,000 characters.
+- Runs for browser and WebDAV uploads, not for edits made in the text editor or files in
+  connected sources.
+- Labels are free text chosen by the model, not picked from a fixed list.
 
 ## At a glance
 
-- **Type:** App (processor + detail view)
-- **Contributes:** a detail view; a server-side processing hook that enriches items
-- **Capabilities:** `item:read` and `item:write` (the type label), plus `net:fetch`
-  restricted to `generativelanguage.googleapis.com` for Gemini
-- **Availability:** in the store, not installed by default
-- **Category:** Productivity
+- **Where:** built into the drive (`apps/drive-vertical/src/document-ai.ts`), not a separate
+  install.
+- **Model:** Workers AI through the platform's model host; override with `DOCUMENT_AI_MODEL`.
+- **Writes:** `drive/update-file-details`, as the person who uploaded the file.
 
 ## See also
 
-- [How plugins work](how-plugins-work) — processors and the enrich-on-change role.
-- [Storage and files](storage-and-files) — where derived metadata lives.
+- [Storage and files](storage-and-files) — where descriptions and labels live.

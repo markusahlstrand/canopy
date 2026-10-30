@@ -184,6 +184,17 @@ Search matches names, current extracted text, descriptions and labels; the kerne
 FTS triggers update metadata search in the same write. Metadata hits are distinguished
 in the palette and are filtered through the live file’s read permission.
 
+**Document AI** fills these in for new uploads when a space administrator turns on
+*Label new uploads automatically* in space settings. After an upload's text is indexed
+(browser upload or WebDAV), the worker sends the first 12,000 characters of the
+extracted text and the file name to a model, through the platform's Workers AI binding
+and `createModelHost`. It adds a document-type label and, if the description is empty,
+a one- or two-sentence description. It never replaces what a person wrote, and a save
+made while the model was running wins. Files with no text layer (scans, images) are
+skipped. `DOCUMENT_AI_MODEL` overrides the default model (`provider:model`). Each run
+logs `drive.document-ai.done` with what it did or why it skipped, and the model usage
+line as `drive.document-ai.usage`.
+
 ## Live updates
 
 `GET /api/live` is Substrat's WebSocket subscription for authenticated pages. The

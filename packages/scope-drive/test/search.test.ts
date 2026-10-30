@@ -184,6 +184,16 @@ describe('a file is findable by what is inside it', () => {
     expect(await stub.invoke<TextRow | null>('drive/file-text', { fileId: untouched.id })).toBeNull();
   });
 
+  it('reads the start of the extracted text, and nothing for a file without any', async () => {
+    const stub = await as(ada);
+    const excerpt = await stub.invoke<{ text: string; truncated: boolean } | null>(
+      'drive/file-text-excerpt', { fileId: quarterly, maxChars: 20 },
+    );
+    expect(excerpt?.text.length).toBe(20);
+    expect(excerpt?.truncated).toBe(true);
+    expect(await stub.invoke('drive/file-text-excerpt', { fileId: scanned, maxChars: 20 })).toBeNull();
+  });
+
   it('lets a member search the whole space, because membership is the grant', async () => {
     // Not a compromise — the drive's model. `member` holds `drive:read` at the
     // NODE, so a member already reads every file in the space through

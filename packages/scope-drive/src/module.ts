@@ -1112,6 +1112,23 @@ const operations = {
     };
   },
 
+  'drive/file-text-excerpt': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
+    const file = liveFile(ctx, input.fileId);
+    const version = file.current_version_id
+      ? ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0]
+      : undefined;
+    if (!version?.blob_ref || version.source !== 'blob') return null;
+    if (readAttachmentText(ctx, version.blob_ref)?.status !== 'indexed') return null;
+    const maxChars = input.maxChars ?? 12_000;
+    const row = ctx.sql.query<{ text: string; chars: number }>(
+      'SELECT substr(body, 1, ?) AS text, length(body) AS chars FROM _substrat_search__attachment_text WHERE attachment_id = ?',
+      [maxChars, version.blob_ref],
+    )[0];
+    if (!row) return null;
+    return { versionId: version.id, text: row.text, truncated: row.chars > maxChars };
+  },
+
   'drive/share-folder': async (ctx, input) => {
     // Sharing is an owner's act on this folder. Being able to write in it is not enough.
     assertAllowed(await ctx.check(DRIVE_PERM.manage, folderRef(input.folderId)));

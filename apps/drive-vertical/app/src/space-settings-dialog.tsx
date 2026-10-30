@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Input, Icon, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@canopy/ui';
+import { Button, Checkbox, Input, Icon, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@canopy/ui';
 import { getSpaceSettings, updateSpaceSettings } from './api';
 import { defaultSpaceSettings, type SpaceSettings } from '../../src/space-settings';
 import { SpaceStyleFields } from './space-style-fields';
@@ -46,6 +46,12 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
               <span className="grid size-10 shrink-0 place-items-center rounded-lg" style={{color:settings.color,backgroundColor:`${settings.color}1f`}}><Icon name={settings.icon} size={20}/></span>
               <div className="min-w-0"><p className="text-xs text-muted-foreground">Preview in spaces</p><p className="truncate text-sm font-medium">{settings.name.trim() || 'Untitled space'}</p></div>
             </div>
+          </section>
+          <section className="space-y-2"><h3 className="text-xs font-medium text-muted-foreground">Document AI</h3>
+            <label htmlFor="settings-auto-label" className="flex items-start gap-3 rounded-lg border px-3 py-2.5">
+              <Checkbox id="settings-auto-label" className="mt-0.5" checked={settings.autoLabel ?? false} disabled={busy} onCheckedChange={checked=>setSettings({...settings,autoLabel:checked===true})}/>
+              <span><span className="block text-sm font-medium">Label new uploads automatically</span><span className="block text-xs text-muted-foreground">An AI model reads the text of each uploaded document and adds a type label and a short description. Labels and descriptions people wrote are kept.</span></span>
+            </label>
           </section>
           <section className="space-y-2"><h3 className="text-xs font-medium text-muted-foreground">Storage</h3><div className="flex items-center gap-3 rounded-lg border px-3 py-2.5"><Icon name="cloud" size={18} className="text-muted-foreground"/><div><p className="text-sm font-medium">Canopy storage</p><p className="text-xs text-muted-foreground">Files stay in this install’s storage.</p></div></div></section>
         </form>}
