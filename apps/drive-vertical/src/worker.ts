@@ -12,7 +12,7 @@ import { normalizeNpmRegistry } from '@canopy/plugin-sources';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 import { createModelHost } from '@substrat-run/vertical-host/model';
-import { AUTO_LABEL_JOB, autoLabelJob, CLOSING_COUNTERS, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, type AutoLabelPayload } from './document-ai.js';
+import { AUTO_LABEL_JOB, autoLabelJob, closesFile, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, type AutoLabelPayload } from './document-ai.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -1011,18 +1011,21 @@ async function indexSoon(
 
 /**
  * Queue Document AI for a write, in a space whose administrator turned it on. One run
- * per file: a live run is joined, and a file a finished run closed (see
- * `CLOSING_COUNTERS`) is left alone, so a client saving every few seconds does not buy
- * a model call per save. Nothing is queued where there is no model to run it. Never
+ * per file: a live run is joined, and a file a finished run closed for this version
+ * (`closesFile`) is left alone, so a client saving every few seconds does not buy a
+ * model call per save. Nothing is queued where there is no model to run it. Never
  * throws: a failed queue is a log line, not a failed upload.
  */
-async function labelSoon(env: Env, host: CloudflareScopeHost, node: Node, principal: PrincipalId, file: { id: string }): Promise<void> {
+async function labelSoon(
+  env: Env, host: CloudflareScopeHost, node: Node, principal: PrincipalId, file: { id: string; versionId: string },
+): Promise<void> {
   if (!env.AI) return;
   try {
     if (!(await identityDo(env, node).readSpaceSettings(node.scopeId))?.autoLabel) return;
     const key = { moduleId: DRIVE_MODULE_ID, job: AUTO_LABEL_JOB, instance: file.id };
     const finished = await host.jobRuns(node.tenantId, node.scopeId, { ...key, status: 'done' });
-    if (finished.some((run) => CLOSING_COUNTERS.some((counter) => run.counters[counter]))) return;
+    const now = Date.now();
+    if (finished.some((run) => closesFile(run, file.versionId, now))) return;
     const payload: AutoLabelPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, principal };
     await host.startJobRun(node.tenantId, node.scopeId, { ...key, payload });
   } catch (error) {
@@ -1083,7 +1086,8 @@ app.post('/api/folders/:folderId/content', async (c) => {
     const host = hostFor(env);
     // A "New → …" starter is empty by definition; its first real save is what to describe.
     const starter = c.req.query('create') === 'only';
-    await indexSoon(c, host, node, starter ? undefined : () => labelSoon(env, host, node, principal, { id: file.id }));
+    const versionId = written.current_version_id;
+    await indexSoon(c, host, node, starter ? undefined : () => labelSoon(env, host, node, principal, { id: file.id, versionId }));
   }
 
   return c.json(written, 201);
@@ -1206,7 +1210,7 @@ mountWebdav(app, async (c, password, username) => {
         upload: async (fileId: string, name: string, mime: string, body: Uint8Array) =>
           (await (await attachments()).upload({ entity: { entityType: 'file', entityId: fileId }, filename: name, contentType: mime, visibility: 'internal', body })).id,
         open: async (blobRef: string) => (await attachments()).open(blobRef),
-        afterWrite: (file: { id: string; name: string }) => indexSoon(c, host, { tenantId: tenant, scopeId: scope },
+        afterWrite: (file: { id: string; versionId: string }) => indexSoon(c, host, { tenantId: tenant, scopeId: scope },
           () => labelSoon(env, host, { tenantId: tenant, scopeId: scope }, site.principal, file)),
       },
     };

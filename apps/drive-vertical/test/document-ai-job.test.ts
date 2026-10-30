@@ -76,7 +76,7 @@ describe('Document AI on a kernel host', () => {
     const details = await (await host.getScope(ada, tenant, scope)).invoke('drive/file-details', { fileId: file.id });
     expect(details).toMatchObject({ labels: ['Invoice'], description: 'An invoice from ACME Ltd for 120 EUR.' });
     expect(await host.jobRuns(tenant, scope, { moduleId: DRIVE, job: AUTO_LABEL_JOB, instance: file.id }))
-      .toMatchObject([{ id: queued.id, status: 'done', counters: { labelled: 1 } }]);
+      .toMatchObject([{ id: queued.id, status: 'done', counters: { labelled: 1 }, cursor: { round: 0, versionId: expect.any(String) } }]);
     expect(run).toHaveBeenCalledTimes(1);
   });
 

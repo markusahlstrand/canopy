@@ -114,7 +114,7 @@ export interface AutoLabelPayload { tenantId: string; scopeId: string; fileId: s
 
 export type AutoLabelOutcome =
   | { status: 'labelled'; label: string | null; described: boolean }
-  | { status: 'skipped'; reason: 'disabled' | 'no-model' | 'gone' | 'read-only' | 'no-text' | 'nothing-new' | 'kept-changing' };
+  | { status: 'skipped'; reason: 'disabled' | 'no-model' | 'gone' | 'read-only' | 'not-extracted' | 'no-text' | 'nothing-new' | 'kept-changing' };
 
 export interface AutoLabelDeps {
   /** The scope as the uploader: the run can write nothing they could not have typed. */
@@ -128,14 +128,36 @@ export interface AutoLabelDeps {
 
 type SkipReason = Extract<AutoLabelOutcome, { status: 'skipped' }>['reason'];
 
+/** Outcomes where the model answered about the file, or would have had it held still. */
+const ANSWERED = ['labelled', 'skipped:nothing-new', 'skipped:kept-changing'] as const;
+/** How long an answered file stays closed to further writes — what continuous saving can cost: one call a day. */
+export const ANSWERED_CLOSES_FOR_MS = 24 * 60 * 60_000;
+
+/** What a finished run leaves in its cursor: the version its outcome is about. */
+interface Closing { round?: number; versionId?: string }
+
 /**
- * The counters of a finished run that close a file to Document AI: the model answered
- * about it, there is no text to give a model, or it would not hold still long enough to
- * describe. A run that ended for any other reason (the feature off, the uploader lost
- * access) leaves the next write free to try again, and a run that FAILED — a model that
- * kept erroring or answering nonsense — is not `done` at all.
+ * Does this finished run close the file to a write that produced `versionId`?
+ *
+ * - An **answered** run closes it for that version, and for a day after it ended for any
+ *   version — so autosave buys at most a call a day, and a document replaced by a
+ *   different one is picked up by the first write after that.
+ * - A **no-text** run closes only the version it looked at: a scan replaced by a PDF with
+ *   a text layer is a new version and is tried.
+ * - Anything else (the feature off, access lost, extraction missing or failed) closes
+ *   nothing, and neither does a run that FAILED, which is not `done` at all.
  */
-export const CLOSING_COUNTERS = ['labelled', 'skipped:nothing-new', 'skipped:no-text', 'skipped:kept-changing'] as const;
+export function closesFile(
+  run: { counters: Readonly<Record<string, number>>; cursor: unknown; endedAt: string | null },
+  versionId: string,
+  now: number,
+): boolean {
+  const about = (run.cursor as Closing | null)?.versionId;
+  if (ANSWERED.some((c) => run.counters[c])) {
+    return about === versionId || (run.endedAt !== null && now - Date.parse(run.endedAt) < ANSWERED_CLOSES_FOR_MS);
+  }
+  return !!run.counters['skipped:no-text'] && about === versionId;
+}
 
 /**
  * A newer version can land while a round runs; a run follows it this many times. Two
@@ -163,14 +185,15 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     const payload = pass.payload as AutoLabelPayload;
     // Which round this is: step names carry it, so a round after a superseded one reads afresh.
     const round = (pass.cursor as { round?: number } | null)?.round ?? 0;
-    const finish = (outcome: AutoLabelOutcome) => {
+    /** End the run, leaving in its cursor the version the outcome is about (`closesFile`). */
+    const finish = (outcome: AutoLabelOutcome, versionId?: string) => {
       pass.count(outcome.status === 'labelled' ? 'labelled' : `skipped:${outcome.reason}`);
-      deps.log?.('drive.document-ai.done', { fileId: payload.fileId, round, ...outcome });
-      return { done: true };
+      deps.log?.('drive.document-ai.done', { fileId: payload.fileId, round, versionId, ...outcome });
+      return { done: true, cursor: { round, versionId } satisfies Closing };
     };
     /** The version moved under this round: follow it, or stop if it will not hold still. */
-    const superseded = () => {
-      if (round + 1 >= MAX_ROUNDS) return finish({ status: 'skipped', reason: 'kept-changing' });
+    const superseded = (versionId: string) => {
+      if (round + 1 >= MAX_ROUNDS) return finish({ status: 'skipped', reason: 'kept-changing' }, versionId);
       deps.log?.('drive.document-ai.superseded', { fileId: payload.fileId, round });
       return { cursor: { round: round + 1 } };
     };
@@ -181,19 +204,24 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
 
     // Wait for extraction of the current version. Throwing while it is pending is the
     // retry: the run is due again after its backoff, whoever drives it next.
-    type Ready = { versionId: string } | { skip: SkipReason };
+    type Ready = { versionId: string } | { skip: SkipReason; versionId?: string };
     const ready = await pass.step(`ready:${round}`, async (): Promise<Ready> => {
       try {
         const state = await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId });
         if (state?.status === 'pending') throw new Error('text not indexed yet');
-        return state?.status === 'indexed' ? { versionId: state.version_id } : { skip: 'no-text' };
+        if (state?.status === 'indexed') return { versionId: state.version_id };
+        // Looked and found none: a fact about this version. Never queued, or the extractor
+        // failed: not a fact about the document, so it closes nothing.
+        return state && (state.status === 'empty' || state.status === 'unsupported')
+          ? { skip: 'no-text', versionId: state.version_id }
+          : { skip: 'not-extracted' };
       } catch (error) {
         const reason = terminal(error);
         if (reason) return { skip: reason };
         throw error;
       }
     }, TEXT_WAIT_RETRY);
-    if ('skip' in ready) return finish({ status: 'skipped', reason: ready.skip });
+    if ('skip' in ready) return finish({ status: 'skipped', reason: ready.skip }, ready.versionId);
 
     // Read and ask, and keep the answer: a later failure replays this from the memo, so
     // the model is paid for once per round. A reply with no usable JSON throws, and the
@@ -229,7 +257,9 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         throw error;
       }
     }, WORK_RETRY);
-    if ('skip' in analysis) return analysis.skip === 'superseded' ? superseded() : finish({ status: 'skipped', reason: analysis.skip });
+    if ('skip' in analysis) {
+      return analysis.skip === 'superseded' ? superseded(ready.versionId) : finish({ status: 'skipped', reason: analysis.skip }, ready.versionId);
+    }
 
     // Merge against the details as they are NOW — a person may have typed while the model ran.
     type Applied = AutoLabelOutcome | { status: 'superseded' };
@@ -258,7 +288,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         throw error;
       }
     }, WORK_RETRY);
-    return outcome.status === 'superseded' ? superseded() : finish(outcome);
+    return outcome.status === 'superseded' ? superseded(analysis.versionId) : finish(outcome, analysis.versionId);
   };
 }
 

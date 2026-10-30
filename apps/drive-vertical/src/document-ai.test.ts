@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { substratError } from '@substrat-run/contracts';
 import type { JobPassContext } from '@substrat-run/kernel';
 import type { ModelHost } from '@substrat-run/vertical-host/model';
-import { autoLabelJob, fenceSafe, mergeDetails, parseAnalysis, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
+import { autoLabelJob, closesFile, fenceSafe, mergeDetails, parseAnalysis, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
 
 const payload: AutoLabelPayload = { tenantId: 't', scopeId: 's', fileId: 'f1', principal: 'p' };
 const attribution = { tenant: 't', scope: 's', vertical: 'drive', version: '1', operation: 'drive/auto-label' } as never;
@@ -12,7 +12,7 @@ interface World {
   labels: string[];
   revision: number;
   canWrite: boolean;
-  status: 'pending' | 'indexed' | 'empty' | null;
+  status: 'pending' | 'indexed' | 'empty' | 'failed' | null;
   version: string;
   text: string;
   /** Throw this from the next update, once. */
@@ -108,6 +108,30 @@ describe('fenceSafe', () => {
   });
 });
 
+describe('closesFile', () => {
+  const at = Date.parse('2026-10-30T12:00:00Z');
+  const run = (counter: string, versionId: string, hoursAgo: number) =>
+    ({ counters: { [counter]: 1 }, cursor: { round: 0, versionId }, endedAt: new Date(at - hoursAgo * 3_600_000).toISOString() });
+
+  it('closes an answered file for its version, and for a day for any version', () => {
+    expect(closesFile(run('labelled', 'v1', 100), 'v1', at)).toBe(true);
+    expect(closesFile(run('labelled', 'v1', 2), 'v2', at)).toBe(true);
+    expect(closesFile(run('skipped:nothing-new', 'v1', 25), 'v2', at)).toBe(false);
+    expect(closesFile(run('skipped:kept-changing', 'v1', 1), 'v9', at)).toBe(true);
+  });
+
+  it('closes a text-less file only for the version it looked at', () => {
+    expect(closesFile(run('skipped:no-text', 'v1', 0), 'v1', at)).toBe(true);
+    expect(closesFile(run('skipped:no-text', 'v1', 0), 'v2', at)).toBe(false);
+  });
+
+  it('never closes on a run the model did not answer and that found nothing definite', () => {
+    for (const counter of ['skipped:not-extracted', 'skipped:disabled', 'skipped:read-only', 'skipped:gone', 'skipped:no-model']) {
+      expect(closesFile(run(counter, 'v1', 0), 'v1', at)).toBe(false);
+    }
+  });
+});
+
 describe('mergeDetails', () => {
   it('adds a new label beside existing ones and describes only an empty description', () => {
     expect(mergeDetails({ description: 'Mine', labels: ['tax'] }, { label: 'Invoice', description: 'Other' }))
@@ -124,7 +148,7 @@ describe('mergeDetails', () => {
 describe('the Document AI run', () => {
   it('fills an empty label and description, tied to the version the model read', async () => {
     const h = harness();
-    expect(await h.pass()).toEqual({ done: true });
+    expect(await h.pass()).toEqual({ done: true, cursor: { round: 0, versionId: 'v1' } });
     expect(h.saved).toEqual([{ fileId: 'f1', description: 'An invoice from ACME Ltd for 120 EUR.', labels: ['Invoice'], expectedRevision: 3, expectedVersionId: 'v1' }]);
     expect(h.counters).toEqual({ labelled: 1 });
   });
@@ -134,7 +158,7 @@ describe('the Document AI run', () => {
     await expect(h.pass()).rejects.toThrow('not indexed yet');
     expect(h.run).not.toHaveBeenCalled();
     h.world.status = 'indexed';
-    expect(await h.pass()).toEqual({ done: true });
+    expect(await h.pass()).toMatchObject({ done: true });
     expect(h.saved).toHaveLength(1);
   });
 
@@ -164,7 +188,7 @@ describe('the Document AI run', () => {
     h.world.version = 'v2';
     expect(await h.pass()).toEqual({ cursor: { round: 1 } });
     expect(h.saved).toEqual([]);
-    expect(await h.pass()).toEqual({ done: true });
+    expect(await h.pass()).toMatchObject({ done: true });
     expect(h.saved).toEqual([expect.objectContaining({ expectedVersionId: 'v2', description: 'About v2.' })]);
     expect(h.run).toHaveBeenCalledTimes(2);
     expect(h.counters).toEqual({ labelled: 1 });
@@ -183,7 +207,7 @@ describe('the Document AI run', () => {
       } };
     };
     expect(await h.pass()).toEqual({ cursor: { round: 1 } });
-    expect(await h.pass()).toEqual({ done: true });
+    expect(await h.pass()).toMatchObject({ done: true });
     expect(h.counters).toEqual({ 'skipped:kept-changing': 1 });
     expect(h.run).toHaveBeenCalledTimes(2);
     expect(h.saved).toEqual([]);
@@ -205,7 +229,7 @@ describe('the Document AI run', () => {
     expect(h.run).not.toHaveBeenCalled();
     await expect(h.pass()).rejects.toThrow('not indexed yet');
     h.world.status = 'indexed';
-    expect(await h.pass()).toEqual({ done: true });
+    expect(await h.pass()).toMatchObject({ done: true });
     expect(h.saved).toEqual([expect.objectContaining({ expectedVersionId: 'v2' })]);
   });
 
@@ -219,13 +243,14 @@ describe('the Document AI run', () => {
     for (const [over, reason] of [
       [{ canWrite: false }, 'read-only'],
       [{ status: 'empty' }, 'no-text'],
-      [{ status: null }, 'no-text'],
+      [{ status: null }, 'not-extracted'],
+      [{ status: 'failed' as World['status'] }, 'not-extracted'],
       [{ text: '   ' }, 'no-text'],
       [{ gone: true }, 'gone'],
       [{ forbidden: true }, 'read-only'],
     ] as [Partial<World>, string][]) {
       const h = harness(over);
-      expect(await h.pass()).toEqual({ done: true });
+      expect(await h.pass()).toMatchObject({ done: true });
       expect(h.run).not.toHaveBeenCalled();
       expect(h.counters).toEqual({ [`skipped:${reason}`]: 1 });
     }

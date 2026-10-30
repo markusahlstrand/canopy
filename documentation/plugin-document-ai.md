@@ -13,8 +13,9 @@ description yet, writes a one- or two-sentence **description**. Both show in the
 It only fills in what is empty: a description someone wrote is kept, and the AI's label is
 added next to any labels already there. If someone edits the details while the model is
 working, their edit is kept and the AI's additions are merged in. If the file is replaced
-with a new version first, Canopy analyses the new version instead. Each file is analysed
-once; a file without text is not tried again.
+with a new version first, Canopy analyses the new version instead. A file is analysed at
+most once a day however often it is saved; a file without text is tried again only when a
+new version is uploaded.
 
 ## Turning it on
 
