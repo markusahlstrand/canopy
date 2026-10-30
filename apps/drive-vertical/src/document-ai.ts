@@ -144,15 +144,16 @@ export interface AutoLabelDeps {
 type SkipReason = Extract<AutoLabelOutcome, { status: 'skipped' }>['reason'];
 
 /** Outcomes where the model answered about the file, or would have had it held still. */
-const ANSWERED = ['labelled', 'skipped:nothing-new', 'skipped:kept-changing'] as const;
+const ANSWERED: readonly string[] = ['labelled', 'skipped:nothing-new', 'skipped:kept-changing'];
 /** The least time between two model calls for one file — what continuous saving can cost: one call a day. */
 export const COOLDOWN_MS = 24 * 60 * 60_000;
 
 /**
  * A run's cursor. Between rounds: the round, when it may start, and what the run has
- * written so far. At the end: the version the outcome is about, and what it wrote.
+ * written so far. At the end: the outcome, the version it is about, and what it wrote —
+ * the final round's, which is what `planRun` reads (counters add up across rounds).
  */
-interface Closing { round?: number; notBefore?: string; versionId?: string; wrote?: Wrote }
+interface Closing { round?: number; notBefore?: string; versionId?: string; outcome?: string; wrote?: Wrote }
 
 /** Marks a failure that came from the model, so only those start a cooldown (`planRun`). */
 export const MODEL_FAILURE = 'document-ai/model:';
@@ -183,8 +184,9 @@ export interface PastRun {
  */
 export function planRun(runs: readonly PastRun[], versionId: string, now: number): Pick<AutoLabelPayload, 'notBefore' | 'previous'> | null {
   const cursorOf = (run: PastRun) => (run.cursor ?? {}) as Closing;
-  const answered = (run: PastRun) => run.status === 'done' && ANSWERED.some((c) => run.counters[c]);
-  const settles = (run: PastRun) => cursorOf(run).versionId === versionId && (answered(run) || (run.status === 'done' && !!run.counters['skipped:no-text']));
+  const answered = (run: PastRun) => run.status === 'done' && ANSWERED.includes(cursorOf(run).outcome ?? '');
+  const settles = (run: PastRun) => cursorOf(run).versionId === versionId
+    && (answered(run) || (run.status === 'done' && cursorOf(run).outcome === 'skipped:no-text'));
   if (runs.some(settles)) return null;
   const ended = (run: PastRun) => Date.parse(run.endedAt ?? run.updatedAt);
   const failedOnModel = (run: PastRun) => run.status === 'failed' && !!run.lastError?.includes(MODEL_FAILURE);
@@ -240,10 +242,11 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
 
     /** End the run, leaving in its cursor the version the outcome is about and what it wrote (`planRun`). */
     const finish = (outcome: AutoLabelOutcome, versionId?: string, wrote?: Wrote) => {
-      pass.count(outcome.status === 'labelled' ? 'labelled' : `skipped:${outcome.reason}`);
+      const name = outcome.status === 'labelled' ? 'labelled' : `skipped:${outcome.reason}`;
+      pass.count(name);
       deps.log?.('drive.document-ai.done', { fileId: payload.fileId, round, versionId, ...outcome });
       const left = wrote ?? previous;
-      return { done: true, cursor: { round, versionId, ...(left ? { wrote: left } : {}) } satisfies Closing };
+      return { done: true, cursor: { round, versionId, outcome: name, ...(left ? { wrote: left } : {}) } satisfies Closing };
     };
     /** Go round again for a newer version — at once the first time, then a cooldown apart — or null when out of rounds. */
     const again = (wrote?: Wrote) => {
@@ -259,7 +262,14 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     if (!(await deps.enabled(payload))) return finish({ status: 'skipped', reason: 'disabled' });
     const model = deps.model(payload);
     if (!model) return finish({ status: 'skipped', reason: 'no-model' });
-    const scope = await deps.scopeFor(payload);
+    let scope: AutoLabelScope;
+    try {
+      scope = await deps.scopeFor(payload);
+    } catch (error) {
+      const reason = terminal(error);
+      if (reason) return finish({ status: 'skipped', reason });
+      throw error;
+    }
 
     // Wait for extraction of the current version. Throwing while it is pending is the
     // retry: the run is due again after its backoff, whoever drives it next.
@@ -367,9 +377,11 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
       const latest = await pass.step(`moved:${round}`, async () =>
         (await scope.invoke<TextState | null>('drive/file-text', { fileId: payload.fileId }))?.version_id ?? null);
       if (latest && latest !== analysis.versionId) {
-        pass.count(settled.status === 'labelled' ? 'labelled' : 'skipped:nothing-new');
         const next = again(wrote);
-        if (next) return next;
+        if (next) {
+          pass.count(settled.status === 'labelled' ? 'labelled' : 'skipped:nothing-new');
+          return next;
+        }
       }
     }
     return finish(settled, analysis.versionId, wrote);
@@ -406,6 +418,7 @@ export function mergeDetails(
     labels,
     label: ownLabel,
     described,
-    wrote: { label: ownLabel, description: ours && analysis.description ? analysis.description : null },
+    // Still its own when kept: a reply with no description leaves its earlier one in place, and still its to replace.
+    wrote: { label: ownLabel, description: ours ? (analysis.description ?? (now.description.trim() ? previous?.description ?? null : null)) : null },
   };
 }

@@ -118,7 +118,7 @@ describe('planRun', () => {
   const at = Date.parse('2026-10-30T12:00:00Z');
   const ago = (hours: number) => new Date(at - hours * 3_600_000).toISOString();
   const run = (counter: string, versionId: string, hoursAgo: number, extra: object = {}) =>
-    ({ status: 'done', counters: { [counter]: 1 }, cursor: { round: 0, versionId, ...extra }, endedAt: ago(hoursAgo), updatedAt: ago(hoursAgo), lastError: null });
+    ({ status: 'done', counters: { [counter]: 1 }, cursor: { round: 0, versionId, outcome: counter, ...extra }, endedAt: ago(hoursAgo), updatedAt: ago(hoursAgo), lastError: null });
 
   it('leaves a version alone once a run answered about it or found no text in it', () => {
     expect(planRun([run('labelled', 'v1', 100)], 'v1', at)).toBeNull();
@@ -143,6 +143,12 @@ describe('planRun', () => {
     }
   });
 
+  it('reads the final round’s outcome, not counters added up across rounds', () => {
+    // Round 0 labelled v1; round 1 found the uploader had lost access to v2.
+    const multi = { ...run('skipped:read-only', 'v2', 1), counters: { labelled: 1, 'skipped:read-only': 1 } };
+    expect(planRun([multi], 'v2', at)).toEqual({});
+  });
+
   it('hands the run what Document AI wrote last, to replace', () => {
     const wrote = { label: 'Invoice', description: 'About v1.' };
     expect(planRun([run('labelled', 'v1', 30, { wrote }), run('skipped:nothing-new', 'v2', 26)], 'v3', at)).toEqual({ previous: wrote });
@@ -157,6 +163,9 @@ describe('mergeDetails', () => {
     // The person rewrote the description and removed the label: both are theirs now.
     expect(mergeDetails({ description: 'Mine', labels: ['tax'] }, { label: 'Contract', description: 'About v2.' }, previous))
       .toMatchObject({ description: 'Mine', labels: ['tax', 'Contract'], wrote: { label: 'Contract', description: null } });
+    // A reply with no description leaves its own in place — and still its own.
+    expect(mergeDetails({ description: 'About v1.', labels: ['Invoice'] }, { label: 'Contract', description: null }, previous))
+      .toMatchObject({ description: 'About v1.', labels: ['Contract'], wrote: { label: 'Contract', description: 'About v1.' } });
     // The same answer again is no change.
     expect(mergeDetails({ description: 'About v1.', labels: ['Invoice', 'tax'] }, { label: 'Invoice', description: 'About v1.' }, previous)).toBeNull();
   });
@@ -176,7 +185,7 @@ describe('mergeDetails', () => {
 describe('the Document AI run', () => {
   it('fills an empty label and description, tied to the version the model read', async () => {
     const h = harness();
-    expect(await h.pass()).toEqual({ done: true, cursor: { round: 0, versionId: 'v1', wrote: { label: 'Invoice', description: 'An invoice from ACME Ltd for 120 EUR.' } } });
+    expect(await h.pass()).toEqual({ done: true, cursor: { round: 0, versionId: 'v1', outcome: 'labelled', wrote: { label: 'Invoice', description: 'An invoice from ACME Ltd for 120 EUR.' } } });
     expect(h.saved).toEqual([{ fileId: 'f1', description: 'An invoice from ACME Ltd for 120 EUR.', labels: ['Invoice'], expectedRevision: 3, expectedVersionId: 'v1' }]);
     expect(h.counters).toEqual({ labelled: 1 });
   });
@@ -342,6 +351,13 @@ describe('the Document AI run', () => {
       expect(h.run).not.toHaveBeenCalled();
       expect(h.counters).toEqual({ [`skipped:${reason}`]: 1 });
     }
+  });
+
+  it('ends as read-only when the queuing person can no longer open the space', async () => {
+    const h = harness();
+    h.deps.scopeFor = async () => { throw substratError('forbidden', 'not a member'); };
+    expect(await h.pass()).toMatchObject({ done: true });
+    expect(h.counters).toEqual({ 'skipped:read-only': 1 });
   });
 
   it('stops without reading anything when the space turned it off or there is no model', async () => {
