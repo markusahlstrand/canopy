@@ -105,6 +105,7 @@
       ]
     },
     "tenant": "t-5ra4yxscep",
+    "usesModels": true,
     "connectors": "src/connectors.ts",
     "outbound": [
       "a3asesordoc-serviceaddressprovider.a3software.com",
