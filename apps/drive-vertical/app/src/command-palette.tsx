@@ -13,7 +13,7 @@ import { Icon } from "@canopy/ui";
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from "./file-icon";
 import { SEARCH_MIN, askAssistant, search, type AssistantSource, type PluginInstall, type SearchHit, type Site } from "./api";
-import { AssistantThread, type AssistantTurn } from "./assistant-thread";
+import { AssistantThread, keepKeys, type AssistantTurn } from "./assistant-thread";
 import { historyWindow, MAX_QUESTION_CHARS } from "../../src/assistant-contract";
 import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
@@ -229,7 +229,7 @@ export function CommandPalette({
           asking={asking}
           error={askError}
           // Retry resends an unanswered question; an error with nothing to resend has none.
-          onRetry={turns.at(-1)?.role === 'user' ? () => send(turns) : undefined}
+          onRetry={turns.at(-1)?.role === 'user' ? () => { if (!asking) send(turns); } : undefined}
           onOpenSource={openSource}
           spaceNames={spaceNames}
           currentSpace={here}
@@ -341,6 +341,7 @@ export function CommandPalette({
       {!offline && askNotice ? <p role="alert" className="border-t px-4 py-2 text-sm">{askNotice}</p> : null}
       {!offline && !assistant ? <button
         type="button"
+        onKeyDown={keepKeys}
         onClick={() => query.trim() ? ask(query, true) : setMode('assistant')}
         className="flex w-full items-center gap-2 border-t px-4 py-2.5 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
       >

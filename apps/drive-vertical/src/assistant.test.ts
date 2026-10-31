@@ -164,6 +164,34 @@ describe('runAssistant', () => {
     await runAssistant(model, [family], [{ role: 'user', content: 'q' }]);
   });
 
+  it('does not refetch a file with no text, and reads a file whose details fail', async () => {
+    const family = space('family', { scan: '', doc: 'body' }, { pending: ['scan'] });
+    const invoke = family.scope.invoke.bind(family.scope);
+    family.scope.invoke = (async (op: string, input: Record<string, unknown>) => {
+      if (op === 'drive/file-details' && input.fileId === 'doc') throw new Error('details unavailable');
+      return invoke(op, input);
+    }) as typeof family.scope.invoke;
+    const model = scripted(async tools => {
+      await tools.read_document.execute({ space: 'family', fileId: 'scan' });
+      const before = family.calls.length;
+      expect(await tools.read_document.execute({ space: 'family', fileId: 'scan' })).toEqual({ note: expect.stringContaining('already read') });
+      expect(family.calls.length).toBe(before);
+      expect(await tools.read_document.execute({ space: 'family', fileId: 'doc' })).toMatchObject({ text: 'body', labels: [] });
+      return 'ok';
+    });
+    expect((await runAssistant(model, [family], [{ role: 'user', content: 'q' }])).sources.map(s => s.fileId)).toEqual(['doc']);
+  });
+
+  it('charges no search budget for a space that does not exist', async () => {
+    const family = space('family', { a: 'rent' });
+    const model = scripted(async tools => {
+      for (let i = 0; i < 6; i++) await tools.search_documents.execute({ query: 'rent', space: 'Family' });
+      expect(await tools.search_documents.execute({ query: 'rent' })).toMatchObject({ results: [{ fileId: 'a' }] });
+      return 'ok';
+    });
+    await runAssistant(model, [family], [{ role: 'user', content: 'q' }]);
+  });
+
   it('caps the searches one run may make', async () => {
     const family = space('family', { a: 'rent' });
     const model = scripted(async tools => {

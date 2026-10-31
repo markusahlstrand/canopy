@@ -342,3 +342,15 @@ it('refuses an over-long fresh question in search, keeping the conversation it w
   fireEvent.click(screen.getByRole('button', { name: /Continue the conversation/ }));
   expect(screen.getByText('First answer.')).toBeTruthy();
 });
+it('lets Enter reach a focused assistant button instead of cmdk opening the highlighted file', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ hits: [{ id: 'l', name: 'Lease.pdf', via: 'name' }] }))));
+  const onOpenFile = vi.fn();
+  render(<CommandPalette {...props} onOpenFile={onOpenFile} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'lease' } });
+  await screen.findByRole('option', { name: /Lease\.pdf/ });
+  const ask = screen.getByRole('button', { name: /Ask the assistant: “lease”/ });
+  ask.focus();
+  // Not prevented, so the browser's own Enter-to-click runs; and cmdk never sees it.
+  expect(fireEvent.keyDown(ask, { key: 'Enter' })).toBe(true);
+  expect(onOpenFile).not.toHaveBeenCalled();
+});

@@ -1,7 +1,16 @@
+import type React from "react";
 import { Button, Icon } from "@canopy/ui";
 import { FileIcon } from "./file-icon";
 import { kindOf } from "./items";
 import type { AssistantMessage, AssistantSource } from "./api";
+
+/**
+ * For a button inside the cmdk root: cmdk takes Enter on the way up (preventDefault, then
+ * selects its highlighted item), so without this a focused button never sees its click.
+ */
+export const keepKeys = (event: React.KeyboardEvent) => {
+  if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+};
 
 /** A turn as the palette keeps it: an answer remembers the files it rests on. */
 export interface AssistantTurn extends AssistantMessage {
@@ -51,6 +60,7 @@ export function AssistantThread({ turns, asking, error, onRetry, onOpenSource, s
                     <li key={`${source.space}/${source.fileId}`}>
                       <button
                         type="button"
+                        onKeyDown={keepKeys}
                         onClick={() => onOpenSource(source)}
                         className="flex max-w-[260px] items-center gap-1.5 rounded-md border px-2 py-1 text-[12.5px] hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
@@ -71,13 +81,13 @@ export function AssistantThread({ turns, asking, error, onRetry, onOpenSource, s
         {error ? (
           <div className="flex items-center gap-2">
             <p role="alert" className="flex-1 text-sm">{error}</p>
-            {onRetry ? <Button size="sm" variant="outline" onClick={onRetry}><Icon name="refresh" size={14} />Retry</Button> : null}
+            {onRetry ? <Button size="sm" variant="outline" onKeyDown={keepKeys} onClick={onRetry}><Icon name="refresh" size={14} />Retry</Button> : null}
           </div>
         ) : null}
       </div>
       <div className="flex items-center gap-2 border-t pt-2">
-        <Button size="sm" variant="ghost" onClick={onBack}><Icon name="chevron-left" size={14} />Search</Button>
-        {turns.length ? <Button size="sm" variant="ghost" onClick={onReset}><Icon name="plus" size={14} />New conversation</Button> : null}
+        <Button size="sm" variant="ghost" onKeyDown={keepKeys} onClick={onBack}><Icon name="chevron-left" size={14} />Search</Button>
+        {turns.length ? <Button size="sm" variant="ghost" onKeyDown={keepKeys} onClick={onReset}><Icon name="plus" size={14} />New conversation</Button> : null}
         <span className="ml-auto text-[11.5px] text-muted-foreground">AI answers from your documents — check anything important.</span>
       </div>
     </div>

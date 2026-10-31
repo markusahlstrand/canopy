@@ -16,8 +16,8 @@
  *    prompt says never to follow instructions found in it. With no write tool, the worst an
  *    injected instruction can do is a wrong answer — which is why the client renders the
  *    answer as plain text, never markup that could fetch a URL;
- *  - **sources are what it read**: the reply lists the files the run actually opened (or,
- *    when it opened none, what search returned), so an answer can always be checked.
+ *  - **sources are what it read**: the reply lists the files whose text the run read, and
+ *    nothing it only saw in a search result, so a cited file is one the answer can rest on.
  *
  * The model call runs in host code, outside any operation (D-59).
  */
@@ -113,6 +113,8 @@ export function assistantTools(spaces: AssistantSpace[]) {
   const bySlug = new Map(spaces.map(s => [s.slug, s]));
   const read = new Map<string, AssistantSource>();
   let readChars = 0;
+  /** Every file read, with text or without: a second read is never refetched. */
+  const opened = new Set<string>();
   let searches = 0;
   const key = (s: AssistantSource) => `${s.space}/${s.fileId}`;
 
@@ -124,9 +126,10 @@ export function assistantTools(spaces: AssistantSpace[]) {
       space: z.string().nullish().describe('A space slug, to search only that space. Omit to search all spaces.'),
     }),
     execute: async ({ query, space }) => {
-      if (++searches > RUN_SEARCH_BUDGET) return { error: 'The search budget for this question is used up: answer from what you have found.' };
       const targets = space ? [bySlug.get(space)].filter((s): s is AssistantSpace => !!s) : spaces;
       if (space && !targets.length) return { error: `There is no space "${space}".` };
+      // Counted once it is a real search: a mistyped space costs no budget.
+      if (++searches > RUN_SEARCH_BUDGET) return { error: 'The search budget for this question is used up: answer from what you have found.' };
       const unavailable: string[] = [];
       const perSpace = await Promise.all(targets.map(async s => {
         try {
@@ -160,19 +163,23 @@ export function assistantTools(spaces: AssistantSpace[]) {
       if (!s) return { error: `There is no space "${space}".` };
       // Neither fetched nor charged again: a re-read is in the conversation already, and a
       // spent budget is spent whatever the file holds.
-      if (read.has(`${space}/${fileId}`)) return { note: 'You have already read this file above.' };
+      const id = `${space}/${fileId}`;
+      if (opened.has(id)) return { note: 'You have already read this file above.' };
       if (readChars >= RUN_READ_BUDGET) return { note: 'The reading budget for this question is used up: answer from what you have read.' };
       // Errors here (not found, not allowed) surface to the model as a tool error, which
       // it is shown and works around; they never widen what it can read.
       const [{ file }, details, excerpt] = await Promise.all([
         s.scope.invoke<{ file: { id: string; name: string } }>('drive/get-file', { fileId }),
-        s.scope.invoke<{ description: string; labels: string[] }>('drive/file-details', { fileId }),
+        // Labels and a description help, but a file is readable without them.
+        s.scope.invoke<{ description: string; labels: string[] }>('drive/file-details', { fileId })
+          .catch(() => ({ description: '', labels: [] as string[] })),
         s.scope.invoke<{ text: string; truncated: boolean } | null>('drive/file-text-excerpt', { fileId, maxChars: MAX_READ_CHARS }),
       ]);
       // Only a file with no text needs to say why; not knowing why is no reason to fail the read.
       const extraction = excerpt ? null
         : await s.scope.invoke<{ status: string } | null>('drive/file-text', { fileId }).catch(() => null);
       // A source is a file whose text the answer could rest on, not every file opened.
+      opened.add(id);
       const source = { space, fileId, name: file.name };
       const text = excerpt?.text.slice(0, Math.max(0, RUN_READ_BUDGET - readChars)) ?? null;
       if (text) {
