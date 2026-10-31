@@ -29,10 +29,18 @@ export interface AssistantReply {
 }
 
 /**
- * The turns one request carries: the latest that fit, starting on a question. A window
- * that starts on an answer reads as a reply to nothing.
+ * The turns one request carries: the latest that fit — at most {@link MAX_MESSAGES}, and
+ * within `charBudget` characters when given, the last turn always included — starting on
+ * a question. A window that starts on an answer reads as a reply to nothing. The client
+ * trims by count; the worker also by characters, against the model's context.
  */
-export function historyWindow<T extends AssistantMessage>(turns: readonly T[]): T[] {
-  const window = turns.slice(-MAX_MESSAGES);
-  return window[0]?.role === 'assistant' ? window.slice(1) : window;
+export function historyWindow<T extends AssistantMessage>(turns: readonly T[], charBudget = Infinity): T[] {
+  let start = Math.max(0, turns.length - MAX_MESSAGES);
+  let used = 0;
+  for (let i = turns.length - 1; i >= start; i--) {
+    used += turns[i]!.content.length;
+    if (used > charBudget && i < turns.length - 1) { start = i + 1; break; }
+  }
+  while (turns[start]?.role === 'assistant') start++;
+  return turns.slice(start);
 }

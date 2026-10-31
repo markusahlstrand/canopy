@@ -321,18 +321,21 @@ it('does not send on the Safari IME confirm keydown', () => {
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', keyCode: 229 });
   expect(fetch).not.toHaveBeenCalled();
 });
-it('drops the old conversation, and its Retry, when a fresh question is refused', async () => {
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ detail: 'down' }), { status: 502 })));
-  const view = render(<CommandPalette {...props} />);
+it('refuses an over-long fresh question in search, keeping the conversation it would have replaced', async () => {
+  const fetch = vi.fn(async () => new Response(JSON.stringify({ answer: 'First answer.', sources: [] })));
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} />);
   fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
-  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'old question' } });
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
-  await screen.findByRole('button', { name: /Retry/ });
+  await screen.findByText('First answer.');
   fireEvent.click(screen.getByRole('button', { name: /Search/ }));
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'x'.repeat(4_001) } });
+  expect(screen.getByRole('button', { name: /Ask in a new conversation/ })).toBeTruthy();
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true });
   expect(screen.getByRole('alert').textContent).toContain('at most 4,000 characters');
-  expect(screen.queryByText('old question')).toBeNull();
-  expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
-  view.unmount();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } });
+  fireEvent.click(screen.getByRole('button', { name: /Continue the conversation/ }));
+  expect(screen.getByText('First answer.')).toBeTruthy();
 });

@@ -89,6 +89,8 @@ export function CommandPalette({
   const [turns, setTurns] = useState<AssistantTurn[]>([]);
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
+  // A question refused before it was sent, from search: said there, beside the query.
+  const [askNotice, setAskNotice] = useState<string | null>(null);
   // Bumped by "New conversation", so an answer to the old one cannot land in the new one.
   const conversation = useRef(0);
   const assistant = mode === 'assistant' && !offline;
@@ -112,18 +114,22 @@ export function CommandPalette({
   /** `fresh`: asked from search, which reads as a new question — "Continue" is how to go on. */
   const ask = (question: string, fresh = false) => {
     const text = question.trim();
-    setMode('assistant');
     // One question at a time: a follow-up typed while an answer is coming stays in the box.
     // A fresh question retires one still pending; a follow-up waits for it.
-    if (!text || (asking && !fresh)) return;
-    // A fresh question leaves the old conversation first, so its errors and Retry go too.
-    if (fresh) resetConversation();
+    if (!text) { setMode('assistant'); return; }
+    if (asking && !fresh) return;
     // Refused here, with the text still in the box: the worker would refuse it anyway, and
-    // a retry of a turn that can never be accepted is a dead end.
+    // a retry of a turn that can never be accepted is a dead end. Before any reset, so a
+    // refused question costs nothing — the conversation is kept, minus its stale Retry.
     if (text.length > MAX_QUESTION_CHARS) {
-      setAskError(`Ask a question of at most ${MAX_QUESTION_CHARS.toLocaleString('en')} characters.`);
+      const refusal = `Ask a question of at most ${MAX_QUESTION_CHARS.toLocaleString('en')} characters.`;
+      if (fresh) setAskNotice(refusal);
+      else setAskError(refusal);
       return;
     }
+    setMode('assistant');
+    // A fresh question leaves the old conversation, so its errors and Retry go too.
+    if (fresh) resetConversation();
     setQuery('');
     setResults([]);
     // A question whose answer failed is replaced by the next one, not left unanswered
@@ -157,6 +163,7 @@ export function CommandPalette({
     if (!open) {
       // A conversation outlives the dialog: ⌘K, Esc, ⌘K comes back to it.
       setMode(turns.length || asking ? 'assistant' : 'search');
+      setAskNotice(null);
       setQuery("");
       setSettledQuery(null);
       setResults([]);
@@ -208,6 +215,7 @@ export function CommandPalette({
         }}
         onValueChange={(next) => {
           setQuery(next);
+          setAskNotice(null);
           setSettledQuery(null);
           // The previous query's hits are wrong the moment the query changes — and worse
           // than wrong, because cmdk's `value` embeds the new query, so they stay
@@ -335,6 +343,7 @@ export function CommandPalette({
       </CommandList>
       {/* Not a cmdk item, on purpose: an item matching every query would outrank file hits
           and take a plain Enter. Asking is ⌘↵, a click, or Tab to this button. */}
+      {!offline && !assistant && askNotice ? <p role="alert" className="border-t px-4 py-2 text-sm">{askNotice}</p> : null}
       {!offline && !assistant ? <button
         type="button"
         onClick={() => query.trim() ? ask(query, true) : setMode('assistant')}
@@ -342,7 +351,10 @@ export function CommandPalette({
       >
         <Icon name="sparkles" size={16} />
         <span className="min-w-0 flex-1 truncate">
-          {query.trim() ? <>Ask the assistant: “{query.trim()}”</> : turns.length ? 'Continue the conversation' : 'Ask the assistant…'}
+          {query.trim()
+            // Said outright: from here a question starts over, and "Continue" is how to go on.
+            ? <>{turns.length ? 'Ask in a new conversation' : 'Ask the assistant'}: “{query.trim()}”</>
+            : turns.length ? 'Continue the conversation' : 'Ask the assistant…'}
         </span>
         {query.trim() ? <CommandShortcut>⌘↵</CommandShortcut> : null}
       </button> : null}
