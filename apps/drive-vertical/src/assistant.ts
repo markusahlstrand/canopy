@@ -37,6 +37,8 @@ export const DEFAULT_ASSISTANT_MODEL = 'cloudflare:@cf/meta/llama-3.3-70b-instru
  * read in full plus the conversation must fit with room for the answer.
  */
 const MAX_READ_CHARS = 8_000;
+/** Twenty turns at their limits, with room for JSON. */
+const MAX_BODY_BYTES = MAX_MESSAGES * MAX_ANSWER_CHARS * 2;
 const HISTORY_CHAR_BUDGET = 12_000;
 const MAX_STEPS = 6;
 /** What the no-tools final answer is handed when the loop ran out of steps. */
@@ -176,13 +178,19 @@ export function assistantTools(spaces: AssistantSpace[]) {
         s.scope.invoke<{ description: string; labels: string[] }>('drive/file-details', { fileId })
           .catch(() => ({ description: '', labels: [] as string[] })),
         s.scope.invoke<{ text: string; truncated: boolean } | null>('drive/file-text-excerpt', { fileId, maxChars: MAX_READ_CHARS }),
-      ]);
+      ]).catch((error: unknown) => {
+        // A read that failed was not a read: the model may try it again.
+        opened.delete(id);
+        throw error;
+      });
       // Only a file with no text needs to say why; not knowing why is no reason to fail the read.
-      const extraction = excerpt ? null
+      // Indexed-but-blank is extraction's own "nothing here".
+      const blank = !!excerpt && !excerpt.text.trim();
+      const extraction = blank ? { status: 'empty' } : excerpt ? null
         : await s.scope.invoke<{ status: string } | null>('drive/file-text', { fileId }).catch(() => null);
       // A source is a file whose text the answer could rest on, not every file opened.
       const source = { space, fileId, name: file.name };
-      const text = excerpt?.text.slice(0, Math.max(0, RUN_READ_BUDGET - readChars)) ?? null;
+      const text = blank ? null : excerpt?.text.slice(0, Math.max(0, RUN_READ_BUDGET - readChars)) ?? null;
       if (text) {
         readChars += text.length;
         read.set(key(source), source);
@@ -192,8 +200,8 @@ export function assistantTools(spaces: AssistantSpace[]) {
         labels: details.labels,
         description: details.description || null,
         text,
-        truncated: !!excerpt && (excerpt.truncated || text !== excerpt.text),
-        note: !excerpt ? noTextNote(extraction?.status)
+        truncated: !!excerpt && !blank && (excerpt.truncated || text !== excerpt.text),
+        note: !excerpt || blank ? noTextNote(extraction?.status)
           : text !== excerpt.text ? 'The reading budget for this question is used up: answer from what you have read.' : undefined,
       };
     },
@@ -222,6 +230,7 @@ function fitResults(results: string[]): string {
     used += escaped.length;
   }
   const dropped = results.length - kept.length;
+  if (!results.length) return '(no searches or reads completed)';
   return [...(dropped ? [`(${dropped} earlier result${dropped === 1 ? '' : 's'} left out for length)`] : []), ...kept].join('\n');
 }
 
@@ -246,8 +255,9 @@ export async function runAssistant(model: AssistantModel, spaces: AssistantSpace
     ...step.toolResults.map(r => JSON.stringify({ tool: r.tool, output: r.output })),
     ...step.toolErrors.map(e => JSON.stringify({ tool: e.tool, error: e.message })),
   ]);
-  // Ending on tool calls is out of steps, whatever text came with them ("let me search…").
-  if ((!text || run.finishReason === 'tool-calls') && gathered.length) {
+  // Ending on tool calls is out of steps, whatever text came with them ("let me search…"),
+  // and so is ending on nothing. Answered from what was gathered, which may be nothing.
+  if (!text || run.finishReason === 'tool-calls') {
     const question = history.at(-1)!.content;
     const final = await model.host.run({
       ...ask,
@@ -281,8 +291,15 @@ export function mountAssistant<E extends Env>(app: Hono<E>, resolve: (c: Context
   app.post('/api/assistant', async c => {
     const session = await resolve(c);
     if (!session) throw new HTTPException(503, { message: 'The assistant is not available on this install.' });
-    const body = messagesSchema.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) throw new HTTPException(400, { message: body.error.issues[0]?.message ?? 'Type a question.' });
+    // Bounded before parsing: the schema's limits mean nothing once megabytes are buffered.
+    const declared = Number(c.req.header('content-length') ?? 0);
+    if (declared > MAX_BODY_BYTES) throw new HTTPException(413, { message: 'This conversation is too long. Start a new conversation.' });
+    const raw = await c.req.text();
+    if (raw.length > MAX_BODY_BYTES) throw new HTTPException(413, { message: 'This conversation is too long. Start a new conversation.' });
+    const body = messagesSchema.safeParse((() => { try { return JSON.parse(raw); } catch { return null; } })());
+    // An issue at the root is a malformed request, not a question to correct: say the general thing.
+    const issue = body.success ? null : body.error.issues[0];
+    if (!body.success) throw new HTTPException(400, { message: issue?.path.length ? issue.message : 'Type a question.' });
     const { spaces, model } = session;
     try {
       return c.json(await runAssistant(model, spaces, body.data.messages));

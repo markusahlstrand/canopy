@@ -117,7 +117,10 @@ export function CommandPalette({
     // One question at a time: a follow-up typed while an answer is coming stays in the box.
     // A fresh question retires one still pending; a follow-up waits for it.
     if (!text) { setMode('assistant'); return; }
-    if (asking && !fresh) return;
+    if (asking && !fresh) {
+      setAskNotice('Wait for this answer, then send your next question.');
+      return;
+    }
     // Refused here, with the text still in the box: the worker would refuse it anyway, and
     // a retry of a turn that can never be accepted is a dead end. Before any reset, so a
     // refused question costs nothing — the conversation is kept, minus its stale Retry.

@@ -36,7 +36,8 @@ function space(slug: string, files: Record<string, string>, opts: { current?: bo
 /** A model that runs a scripted list of tool calls, then answers with whatever `answer` makes of the results. */
 type Tools = ReturnType<typeof assistantTools>['tools'];
 function scripted(script: (tools: Tools) => Promise<string>) {
-  const run = vi.fn(async (request: ModelRequest) => ({ text: await script(request.tools as unknown as Tools), steps: [] as unknown[] }));
+  // The script is the tool loop; the final no-tools call, when one is made, answers nothing.
+  const run = vi.fn(async (request: ModelRequest) => ({ text: request.tools ? await script(request.tools as unknown as Tools) : '', steps: [] as unknown[] }));
   return { host: { run, status: vi.fn() } as unknown as ModelHost, spec: 'cloudflare:@cf/test', attribution, run };
 }
 
@@ -208,6 +209,40 @@ describe('runAssistant', () => {
     expect(reply.answer).toBe('x'.repeat(11_999));
   });
 
+  it('lets the model retry a read that failed', async () => {
+    const family = space('family', { a: 'body' });
+    const invoke = family.scope.invoke.bind(family.scope);
+    let fail = true;
+    family.scope.invoke = (async (op: string, input: Record<string, unknown>) => {
+      if (op === 'drive/get-file' && fail) { fail = false; throw new Error('DO reset'); }
+      return invoke(op, input);
+    }) as typeof family.scope.invoke;
+    const model = scripted(async tools => {
+      await expect(tools.read_document.execute({ space: 'family', fileId: 'a' })).rejects.toThrow('DO reset');
+      expect(await tools.read_document.execute({ space: 'family', fileId: 'a' })).toMatchObject({ text: 'body' });
+      return 'ok';
+    });
+    await runAssistant(model, [family], [{ role: 'user', content: 'q' }]);
+  });
+
+  it('explains a file whose extracted text is blank', async () => {
+    const model = scripted(async tools => {
+      expect(await tools.read_document.execute({ space: 'family', fileId: 'blank' })).toMatchObject({ note: expect.stringContaining('No text could be extracted') });
+      return 'ok';
+    });
+    const reply = await runAssistant(model, [space('family', { blank: '   ' })], [{ role: 'user', content: 'q' }]);
+    expect(reply.sources).toEqual([]);
+  });
+
+  it('answers from nothing rather than return filler when the loop ended before any tool ran', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ text: 'Let me search…', finishReason: 'tool-calls', steps: [] })
+      .mockResolvedValueOnce({ text: 'I could not search your documents.', steps: [] });
+    const model = { host: { run, status: vi.fn() } as unknown as ModelHost, spec: 'cloudflare:@cf/test', attribution };
+    expect((await runAssistant(model, [space('family', {})], [{ role: 'user', content: 'q' }])).answer).toBe('I could not search your documents.');
+    expect((run.mock.calls[1]![0] as ModelRequest).messages!.at(-1)!.content).toContain('(no searches or reads completed)');
+  });
+
   it('caps the searches one run may make', async () => {
     const family = space('family', { a: 'rent' });
     const model = scripted(async tools => {
@@ -291,6 +326,16 @@ describe('POST /api/assistant', () => {
     const tooLong = await ask(app, { messages: [{ role: 'user', content: 'x'.repeat(4_001) }] });
     expect(tooLong.status).toBe(400);
     expect(await tooLong.text()).toContain('at most 4,000 characters');
+  });
+
+  it('refuses an oversized or malformed body before trusting it', async () => {
+    const app = new Hono();
+    mountAssistant(app, async () => ({ spaces: [space('family', {})], model: scripted(async () => 'never') }));
+    const big = await app.request('/api/assistant', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(600_000) }] }) });
+    expect(big.status).toBe(413);
+    const junk = await app.request('/api/assistant', { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'not json' });
+    expect(junk.status).toBe(400);
+    expect(await junk.text()).toContain('Type a question');
   });
 
   it('authenticates and checks for a model before reading the body', async () => {

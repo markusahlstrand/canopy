@@ -366,3 +366,16 @@ it('keeps a follow-up being written across close and reopen', async () => {
   view.rerender(<CommandPalette {...props} />);
   expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('half a follow-');
 });
+it('says to wait when a follow-up is sent while an answer is coming', async () => {
+  let finish!: (r: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'second' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect(screen.getByRole('alert').textContent).toContain('Wait for this answer');
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('second');
+  await act(async () => { finish(new Response(JSON.stringify({ answer: 'Done.', sources: [] }))); });
+});
