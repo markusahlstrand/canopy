@@ -29,6 +29,7 @@ import {
   permissionKey,
   principalId,
   substratError,
+  type FileSourceConflict,
   type HandlerInput,
   type HandlerOutput,
   type Page,
@@ -211,6 +212,15 @@ const mySpaceRequests = (ctx: OperationContext): PlatformRequest[] =>
     .filter((request: PlatformRequestEntry): request is PlatformRequest => !isUndecodablePlatformRequest(request))
     .filter(request => request.requestedBy === ctx.principal);
 
+/** A live file's current bytes as a write request into its own folder, for any file source. */
+function sourceWrite(ctx: OperationContext, file: { id: string; folder_id: string; name: string; current_version_id: string | null }, conflict: FileSourceConflict, source: string) {
+  const version = ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0];
+  if (!version?.blob_ref) throw substratError('conflict', `upload the file before sending it to ${source}`);
+  const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [file.folder_id])[0]!;
+  const payload = fileSourceWriteRequest.parse({ directory: folder.path, files: [{ attachmentId: version.blob_ref, name: file.name, size: version.size }], conflict });
+  return { payload, attachmentId: version.blob_ref };
+}
+
 const operations = {
   'drive/send-source-file': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
@@ -218,17 +228,14 @@ const operations = {
     if (ctx.sql.query('SELECT item_id FROM drive_source_items WHERE kind = ? AND entity_id = ?', ['file', file.id]).length) {
       throw substratError('conflict', 'a3doc cannot replace a connected file');
     }
-    const version = ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0];
-    if (!version?.blob_ref) throw substratError('conflict', 'upload the file before sending it to a3doc');
-    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [file.folder_id])[0]!;
-    const payload = fileSourceWriteRequest.parse({ directory: folder.path, files: [{ attachmentId: version.blob_ref, name: file.name, size: version.size }], conflict: 'rename' });
+    const { payload, attachmentId } = sourceWrite(ctx, file, 'rename', 'a3doc');
     const pending = ctx.sql.query<{ attachment_id: string }>('SELECT attachment_id FROM drive_source_pending WHERE file_id = ?', [file.id])[0];
     // A repeat is harmless; a newer version is not: the earlier request's bytes are what a3doc receives.
-    if (pending && pending.attachment_id !== version.blob_ref) {
+    if (pending && pending.attachment_id !== attachmentId) {
       throw substratError('conflict', 'an earlier version of this file is still being sent to a3doc');
     }
     if (!pending) {
-      ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?)', [file.id, version.blob_ref]);
+      ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?)', [file.id, attachmentId]);
       ctx.emit({ type: 'a3doc.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
     }
     return { id: file.id, ...payload };
@@ -236,16 +243,12 @@ const operations = {
   'drive/send-s3-file': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
     const file = liveFile(ctx, input.fileId);
-    const version = ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0];
-    if (!version?.blob_ref) throw substratError('conflict', 'upload the file before sending it to the bucket');
-    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [file.folder_id])[0]!;
-    const payload = fileSourceWriteRequest.parse({ directory: folder.path, files: [{ attachmentId: version.blob_ref, name: file.name, size: version.size }], conflict: input.conflict });
-    const pending = ctx.sql.query<{ attachment_id: string }>('SELECT attachment_id FROM drive_source_pending WHERE file_id = ?', [file.id])[0];
-    // Unlike a3doc, a bucket can take a newer version: the pending row follows the newest bytes.
-    if (pending?.attachment_id !== version.blob_ref) {
-      ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?) ON CONFLICT(file_id) DO UPDATE SET attachment_id = excluded.attachment_id', [file.id, version.blob_ref]);
-      ctx.emit({ type: 's3.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
-    }
+    const { payload, attachmentId } = sourceWrite(ctx, file, input.conflict, 'the bucket');
+    // Every call sends: a bucket write is idempotent per event, and a send that failed for good
+    // (a 'fail' that found the name taken) must be retryable without a new version. The pending
+    // row follows the newest bytes, since a bucket can take a newer version.
+    ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?) ON CONFLICT(file_id) DO UPDATE SET attachment_id = excluded.attachment_id', [file.id, attachmentId]);
+    ctx.emit({ type: 's3.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
     return { id: file.id, ...payload };
   },
   'drive/request-s3-change': async (ctx, input) => {

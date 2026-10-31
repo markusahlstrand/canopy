@@ -255,10 +255,10 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     http: { method: 'POST', path: '/folders/{folderId}/s3-change' },
     emits: { entity: 'folder', entityIdFrom: 'id', type: 's3.items-requested', schemaVersion: 1, piiClass: 'none', payload: ['request'] },
   },
-  /** A provider upload attempt (or an S3 move's carried-over ids) must survive a failed connector call. No credentials live here. */
+  /** A provider upload attempt (or the ids an S3 move carries over) must survive a failed connector call. No credentials live here. */
   'drive/source-write-journal': {
     summary: 'Read or persist a connector upload attempt', permission: 'drive:land-source',
-    input: z.object({ key: z.string().regex(/^(a3doc:write:|s3:write:|s3:moves$)/).max(200), value: z.unknown().optional() }),
+    input: z.object({ key: z.string().regex(/^(a3doc:write:|s3:moves$)/).max(200), value: z.unknown().optional() }),
     output: z.object({ value: z.unknown() }),
   },
   /** A connector lands one item at a time; people are never granted this key. */

@@ -80,7 +80,6 @@ const BINDING = 's3:binding';
 const ITEM = 's3:item:';
 /** Durable (through the journal operation): new key → the item id it carries over. */
 const MOVES = 's3:moves';
-const writeKey = (eventId: string) => `s3:write:${eventId}`;
 
 interface Binding {
   prefix: string;
@@ -210,6 +209,11 @@ export async function syncS3Context(
   const binding: Binding = stored && stored.prefix === prefix ? stored : { prefix };
   const pass: Pass = binding.pass ?? { id: crypto.randomUUID(), startedAt: nowOf(config).toISOString(), changes: 0, skipped: 0 };
   const items = await readItems(io);
+  // Bound to another prefix since: a held path is relative to the old one, so the item moves.
+  for (const [key, e] of items) {
+    const path = key.slice(prefix.length).replace(/\/$/, '');
+    if (e.path !== path) items.set(key, { ...e, path, name: baseName(path), previousPath: e.previousPath ?? e.path });
+  }
   /** The ids held when the call began: committed state, which a failed call cannot take back. */
   const committed = new Map([...items].map(([key, e]) => [key, e.itemId]));
   const moves = (await readJournal<Moves>(io, MOVES)) ?? {};
@@ -383,7 +387,7 @@ export async function dispatchS3Context(ctx: ScopedConnectionContext, event: Dom
     const req = s3ItemsPayload.parse(event.payload).request;
     if (req.op === 'delete') return deleteItems(io, req.items);
     if (req.op === 'mkdir') return makeFolder(io, cleanRel(req.path, 'folder'));
-    return req.kind === 'file' ? moveFile(io, cleanRel(req.from, 'source'), cleanRel(req.to, 'target')) : moveFolder(io, event, cleanRel(req.from, 'source'), cleanRel(req.to, 'target'));
+    return req.kind === 'file' ? moveFile(io, cleanRel(req.from, 'source'), cleanRel(req.to, 'target')) : moveFolder(io, cleanRel(req.from, 'source'), cleanRel(req.to, 'target'));
   }
   throw new ConnectorRefusal(`s3 does not handle '${event.type}'`);
 }
@@ -434,6 +438,9 @@ async function writeFiles(io: Io, event: DomainEvent): Promise<void> {
         }
       }
     }
+    // Written under another name ('rename' found the name taken), the object is not the vertical's
+    // file: the sync lands it as a new item from its own bytes, never with this file's attachment.
+    if (name !== wanted) continue;
     const key = `${io.prefix}${join(directory, name)}`;
     const held = (await io.ctx.state.get(itemKey(key))) as ItemEntry | undefined;
     const r = opened.record;
@@ -468,14 +475,27 @@ async function keysUnder(io: Io, keyPrefix: string, limit: number) {
   return { keys: keys.slice(0, limit), more: keys.length > limit || !!token };
 }
 
+/**
+ * Land the delete of a held item and forget it. Without the landing the vertical would keep the
+ * item: the sync's verify step only asks about items it still holds.
+ */
+async function landRemoved(io: Io, key: string) {
+  const held = (await io.ctx.state.get(itemKey(key))) as ItemEntry | undefined;
+  if (!held) return;
+  await io.ctx.land(fileSourceChange.parse({ change: 'delete', connectionId: io.ctx.connection.id, itemId: held.itemId, kind: held.kind, path: held.path, name: held.name, reason: 'deleted' }));
+  await io.ctx.state.put(itemKey(key), null);
+}
+
 async function deleteItems(io: Io, list: { path: string; kind: 'file' | 'folder' }[]): Promise<void> {
   let budget = DELETES_PER_CALL;
   for (const item of list) {
     const path = cleanRel(item.path, item.kind);
+    // What was removed stays removed; the redelivery carries on from what is left.
+    if (budget <= 0) throw new Error(`more items to delete; continuing on the next delivery`);
     if (item.kind === 'file') {
       const key = `${io.prefix}${path}`;
       await io.client.delete(key);
-      await io.ctx.state.put(itemKey(key), null);
+      await landRemoved(io, key);
       budget--;
       continue;
     }
@@ -483,13 +503,13 @@ async function deleteItems(io: Io, list: { path: string; kind: 'file' | 'folder'
     const { keys, more } = await keysUnder(io, folderKey, budget);
     for (const key of keys) {
       await io.client.delete(key);
-      await io.ctx.state.put(itemKey(key), null);
+      await landRemoved(io, key);
     }
     budget -= keys.length;
-    // What was removed stays removed; the redelivery carries on from what is left.
-    if (more || budget <= 0) throw new Error(`folder '${path}' has more objects to delete; continuing on the next delivery`);
-    for (const row of await io.ctx.state.list(itemKey(folderKey))) await io.ctx.state.put(row.key, null);
-    await io.ctx.state.put(itemKey(folderKey), null);
+    if (more) throw new Error(`folder '${path}' has more objects to delete; continuing on the next delivery`);
+    // Folders implied by the keys (and any held item no longer in the bucket) go with it.
+    const held = (await io.ctx.state.list(itemKey(folderKey))).map((row) => row.key.slice(ITEM.length));
+    for (const key of held.sort((a, b) => b.length - a.length)) await landRemoved(io, key);
   }
 }
 
@@ -511,6 +531,11 @@ async function moveEntry(io: Io, from: string, to: string, path: string) {
   await io.ctx.state.put(itemKey(from), null);
 }
 
+/** Did a move this connector began record `key` as the new home of `itemId`? */
+async function movedHere(io: Io, key: string, itemId: string) {
+  return ((await readJournal<Moves>(io, MOVES)) ?? {})[key]?.itemId === itemId;
+}
+
 async function idFor(io: Io, key: string) {
   const held = (await io.ctx.state.get(itemKey(key))) as ItemEntry | undefined;
   return held?.itemId ?? key;
@@ -522,19 +547,24 @@ async function moveFile(io: Io, from: string, to: string): Promise<void> {
   const [there, here] = await Promise.all([io.client.head(src), io.client.head(dst)]);
   if (!there && here) return moveEntry(io, src, dst, to); // done by an earlier delivery whose answer was lost
   if (!there) throw new ConnectorRefusal(`'${from}' is not in the bucket`);
-  if (here) throw new ConnectorRefusal(`'${to}' already exists in the bucket`);
-  await recordMoves(io, [[dst, await idFor(io, src)]]);
-  await io.client.copy(src, dst);
+  const id = await idFor(io, src);
+  // Both there: an earlier delivery copied and then lost the delete, or someone else's object.
+  // The journal, written before the copy, tells which.
+  const resumed = !!here && (await movedHere(io, dst, id));
+  if (here && !resumed) throw new ConnectorRefusal(`'${to}' already exists in the bucket`);
+  if (!resumed) {
+    await recordMoves(io, [[dst, id]]);
+    await io.client.copy(src, dst);
+  }
   await io.client.delete(src);
   await moveEntry(io, src, dst, to);
 }
 
-async function moveFolder(io: Io, event: DomainEvent, from: string, to: string): Promise<void> {
+async function moveFolder(io: Io, from: string, to: string): Promise<void> {
   if (from === to) return;
   if (to.startsWith(`${from}/`)) throw new ConnectorRefusal(`'${from}' cannot move into itself`);
   const srcPrefix = `${io.prefix}${from}/`, dstPrefix = `${io.prefix}${to}/`;
-  const ledger = writeKey(event.id);
-  const started = (await readJournal<{ started: true }>(io, ledger))?.started === true;
+  const started = await movedHere(io, dstPrefix, await idFor(io, srcPrefix));
   const { keys, more } = await keysUnder(io, srcPrefix, MAX_MOVE_OBJECTS);
   if (more) throw new ConnectorRefusal(`'${from}' holds more than ${MAX_MOVE_OBJECTS} objects; move it in the bucket itself`);
   if (!started) {
@@ -550,7 +580,6 @@ async function moveFolder(io: Io, event: DomainEvent, from: string, to: string):
     }
     for (const f of folders) pairs.push([`${dstPrefix}${f}`, await idFor(io, `${srcPrefix}${f}`)]);
     await recordMoves(io, pairs);
-    await writeJournal(io, ledger, { started: true });
   }
   for (const key of keys) {
     const rest = key.slice(srcPrefix.length);

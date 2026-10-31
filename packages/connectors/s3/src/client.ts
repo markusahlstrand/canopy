@@ -129,7 +129,9 @@ export function createS3Client(opts: { config: S3Config; fetch: FetchLike; now?:
   const pathStyle = !!custom || config.bucket.includes('.');
   const origin = custom ?? (pathStyle ? `https://s3.${config.region}.amazonaws.com` : `https://${config.bucket}.s3.${config.region}.amazonaws.com`);
   // `scheme://host[:port]` and whatever path the endpoint itself carries (`URL` is not assumed).
-  const [, scheme = 'https', host = '', endpointPath = ''] = /^(https?):\/\/([^/]+)(\/.*)?$/i.exec(origin) ?? [];
+  const [, scheme = 'https', authority = '', endpointPath = ''] = /^(https?):\/\/([^/]+)(\/.*)?$/i.exec(origin) ?? [];
+  // `fetch` drops a default port from the Host header it sends, so the signed host must too.
+  const host = authority.replace(scheme.toLowerCase() === 'https' ? /:443$/ : /:80$/, '');
   const site = `${scheme}://${host}`;
   /** The bucket's own path prefix on this origin. */
   const base = `${endpointPath.replace(/\/+$/, '')}${pathStyle ? `/${encodeRfc3986(config.bucket)}` : ''}`;

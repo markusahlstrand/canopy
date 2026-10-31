@@ -13,6 +13,10 @@ export class FakeS3 {
   calls: { method: string; key: string | null }[] = [];
   /** Answer 403 to everything: a wrong key. */
   deny = false;
+  /** One-shot faults: the first matching request fails as a lost connection. */
+  faults: ((method: string, key: string | null) => boolean)[] = [];
+  /** Every Host the requests were addressed to. */
+  hosts: string[] = [];
   private n = 0;
 
   put(key: string, content: string | Uint8Array, meta: Record<string, string> = {}) {
@@ -32,6 +36,12 @@ export class FakeS3 {
     const [, bucket, ...rest] = url.pathname.split('/');
     const key = rest.length ? rest.map(decodeURIComponent).join('/') : null;
     this.calls.push({ method, key: key || null });
+    this.hosts.push(url.host);
+    const fault = this.faults.findIndex((f) => f(method, key || null));
+    if (fault >= 0) {
+      this.faults.splice(fault, 1);
+      throw new Error('connection reset');
+    }
     if (!headers.authorization?.includes(`Credential=${ACCESS}/`)) return new Response('<Error><Code>AccessDenied</Code></Error>', { status: 403 });
     if (this.deny) return new Response('<Error><Code>InvalidAccessKeyId</Code><Message>no such key</Message></Error>', { status: 403 });
     if (decodeURIComponent(bucket ?? '') !== BUCKET) return new Response('<Error><Code>NoSuchBucket</Code></Error>', { status: 404 });

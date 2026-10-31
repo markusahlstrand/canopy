@@ -30,7 +30,9 @@ async function world() {
     connectionId: 'connection', itemId, kind, path, name: path.split('/').at(-1)!, change: 'upsert' as const,
     previousPath: null, size: 5, contentType: 'text/plain', lastModifiedAt: null, webUrl: null, content: kind === 'file' ? 'follows' as const : null,
   });
-  return { land, upsert, bytes, stub, human };
+  /** How many events of `type` the scope has emitted. */
+  const emitted = async (type: string) => (await host.admin.queryScope(staff, t, s, { sql: `SELECT COUNT(*) FROM _substrat_outbox WHERE type = '${type}'` })).rows[0]![0];
+  return { land, upsert, bytes, stub, human, emitted };
 }
 
 it('keeps item and version identity on redelivery and appends changed content', async () => {
@@ -162,4 +164,15 @@ it('bounds an S3 change request by the folder it was made in', async () => {
   await expect(w.human.invoke('drive/request-s3-change', { folderId: box.id, request: { ...move, to: 'Elsewhere/b.txt' } })).rejects.toThrow('outside the folder');
   await expect(w.human.invoke('drive/request-s3-change', { folderId: box.id, request: { op: 'delete', items: [{ kind: 'folder', path: 'Boxed' }] } })).rejects.toThrow('outside the folder');
   expect(await w.human.invoke('drive/request-s3-change', { folderId: ROOT_FOLDER_ID, request: { op: 'mkdir', path: 'Anywhere' } })).toMatchObject({ id: ROOT_FOLDER_ID });
+});
+
+it('resends to the bucket after a send that failed for good, without a new version', async () => {
+  const w = await world();
+  const file = await w.stub.invoke<{ id: string }>('drive/ensure-file', { folderId: 'root', name: 'Taken.txt' });
+  const one = await w.bytes.upload({ entity: { entityType: 'file', entityId: file.id }, filename: 'Taken.txt', contentType: 'text/plain', visibility: 'internal', body: new TextEncoder().encode('one') });
+  await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: one.id } });
+  await w.stub.invoke('drive/send-s3-file', { fileId: file.id, conflict: 'fail' });
+  // Say the connector refused that one ('fail' found the name taken): the same version goes again.
+  expect(await w.stub.invoke('drive/send-s3-file', { fileId: file.id, conflict: 'replace' })).toMatchObject({ conflict: 'replace', files: [{ attachmentId: one.id }] });
+  expect(await w.emitted('s3.files-requested')).toBe(2);
 });

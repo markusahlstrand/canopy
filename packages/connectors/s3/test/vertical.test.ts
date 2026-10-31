@@ -5,6 +5,7 @@ import { ulid, type ScopedConnectionContext } from '@substrat-run/kernel';
 import { s3ConnectorDefinition, S3_VERTICAL_PROVIDER } from '../src/vertical.js';
 import { S3_FILES_EVENT, S3_ITEMS_EVENT } from '../src/files.js';
 import { signRequest, EMPTY_SHA256 } from '../src/sigv4.js';
+import { createS3Client } from '../src/client.js';
 import { FakeS3, ENDPOINT, BUCKET, ACCESS, SECRET } from './fake-s3.js';
 
 const JOURNAL = 'drive/source-write-journal';
@@ -41,7 +42,7 @@ function world() {
       if (operation !== JOURNAL) throw new Error(`unexpected ${operation}`);
       const { key, value } = input as { key: string; value?: unknown };
       // The drive's `drive/source-write-journal` input refuses any other key.
-      if (!/^(a3doc:write:|s3:write:|s3:moves$)/.test(key)) throw new Error(`journal key '${key}' is not one the drive accepts`);
+      if (!/^(a3doc:write:|s3:moves$)/.test(key)) throw new Error(`journal key '${key}' is not one the drive accepts`);
       if (value !== undefined) journal.set(key, structuredClone(value));
       return { value: structuredClone(journal.get(key) ?? null) } as O;
     },
@@ -198,4 +199,74 @@ it('moves a file and a folder keeping their item ids, makes folders, and deletes
   await w.dispatch(w.event(S3_ITEMS_EVENT, { request: { op: 'delete', items: [{ kind: 'folder', path: 'b' }] } }));
   expect([...w.s3.objects.keys()]).toEqual(['new/']);
   await expect(w.dispatch(w.event(S3_ITEMS_EVENT, { request: { op: 'move', kind: 'file', from: 'gone.txt', to: 'x.txt' } }))).rejects.toThrow('not in the bucket');
+});
+
+it('a delete made through a write leaves the vertical too, folder contents included', async () => {
+  const w = world();
+  w.s3.put('b/one.txt', '1'); w.s3.put('b/sub/two.txt', '2'); w.s3.put('keep.txt', 'k');
+  await w.bind(); await w.sweepAll();
+  await w.dispatch(w.event(S3_ITEMS_EVENT, { request: { op: 'delete', items: [{ kind: 'folder', path: 'b' }] } }));
+  expect([...w.drive.keys()]).toEqual(['keep.txt']);
+  await w.sweepAll();
+  expect([...w.drive.keys()]).toEqual(['keep.txt']);
+});
+
+it('deletes a folder of exactly one budget in a single delivery', async () => {
+  const w = world();
+  for (let i = 0; i < 80; i++) w.s3.put(`full/${String(i).padStart(2, '0')}.txt`, `${i}`);
+  await w.bind(); await w.sweepAll();
+  await w.dispatch(w.event(S3_ITEMS_EVENT, { request: { op: 'delete', items: [{ kind: 'folder', path: 'full' }] } }));
+  expect(w.s3.objects.size).toBe(0);
+  expect(w.drive.size).toBe(0);
+});
+
+it('a renamed upload lands as its own item from its own bytes, and the sync completes', async () => {
+  const w = world();
+  w.s3.put('Report.pdf', 'theirs');
+  await w.bind(); await w.sweepAll();
+  await w.dispatch(w.event(S3_FILES_EVENT, { conflict: 'rename', files: [{ attachmentId: 'mine', name: 'Report.pdf', size: 'bytes of mine'.length }] }));
+  await w.sweepAll();
+  expect(w.drive.get('Report (1).pdf')?.content).toBe('bytes of mine');
+  expect(w.drive.get('Report.pdf')?.content).toBe('theirs');
+});
+
+it('finishes a file move whose copy landed but whose delete was lost', async () => {
+  const w = world();
+  w.s3.put('a.txt', 'a');
+  await w.bind(); await w.sweepAll();
+  const move = w.event(S3_ITEMS_EVENT, { request: { op: 'move', kind: 'file', from: 'a.txt', to: 'b.txt' } });
+  w.s3.faults.push((method, key) => method === 'DELETE' && key === 'a.txt');
+  await expect(w.dispatch(move)).rejects.toThrow('connection reset');
+  expect([...w.s3.objects.keys()].sort()).toEqual(['a.txt', 'b.txt']);
+  await w.dispatch(move);
+  expect([...w.s3.objects.keys()]).toEqual(['b.txt']);
+  await w.sweepAll();
+  expect([...w.drive]).toEqual([['a.txt', { path: 'b.txt', content: 'a' }]]);
+  // Someone else's object at the target is still refused.
+  w.s3.put('c.txt', 'c');
+  await expect(w.dispatch(w.event(S3_ITEMS_EVENT, { request: { op: 'move', kind: 'file', from: 'b.txt', to: 'c.txt' } }))).rejects.toThrow('already exists');
+});
+
+it('re-lands held items at their new relative path when the binding widens', async () => {
+  const w = world();
+  w.s3.put('a/b/x.txt', 'x');
+  await w.bind('a/b'); await w.sweepAll();
+  expect(w.drive.get('a/b/x.txt')?.path).toBe('x.txt');
+  await w.bind('a'); await w.sweepAll();
+  expect(w.drive.get('a/b/x.txt')?.path).toBe('b/x.txt');
+  expect(w.changes.filter(c => c.change === 'content')).toHaveLength(1);
+});
+
+it('signs the host fetch will send, without a default port', async () => {
+  const now = new Date('2026-11-01T00:00:00Z');
+  const credentials = { accessKeyId: ACCESS, secretAccessKey: SECRET, region: 'auto' };
+  let sent: { url: string; authorization?: string } | undefined;
+  const client = createS3Client({
+    config: { ...credentials, bucket: BUCKET, endpoint: 'https://acct.r2.example:443' }, now: () => now,
+    fetch: (async (url: string, init: { headers?: Record<string, string> }) => { sent = { url, authorization: init.headers?.authorization }; return new Response('<ListBucketResult/>'); }) as never,
+  });
+  await client.list({ maxKeys: 1 });
+  expect(sent!.url.startsWith('https://acct.r2.example/')).toBe(true);
+  const expected = await signRequest({ method: 'GET', host: 'acct.r2.example', path: `/${BUCKET}/`, query: { 'list-type': '2', 'max-keys': '1' }, headers: {}, payloadHash: EMPTY_SHA256, credentials, now });
+  expect(sent!.authorization).toBe(expected.authorization);
 });
