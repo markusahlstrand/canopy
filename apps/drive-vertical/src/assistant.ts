@@ -37,14 +37,14 @@ export const DEFAULT_ASSISTANT_MODEL = 'cloudflare:@cf/meta/llama-3.3-70b-instru
  * read in full plus the conversation must fit with room for the answer.
  */
 const MAX_READ_CHARS = 8_000;
-const HISTORY_CHAR_BUDGET = 16_000;
+const HISTORY_CHAR_BUDGET = 12_000;
 const MAX_STEPS = 6;
 /** What the no-tools final answer is handed when the loop ran out of steps. */
 const FINAL_RESULTS_CHARS = 20_000;
 /** Searches one run may make: each one fans out to every space. */
 const RUN_SEARCH_BUDGET = 6;
 /** All document text one run may read, however many reads it spreads it over. */
-const RUN_READ_BUDGET = 24_000;
+const RUN_READ_BUDGET = 16_000;
 const SEARCH_LIMIT_PER_SPACE = 8;
 const MAX_SEARCH_RESULTS = 15;
 
@@ -164,7 +164,9 @@ export function assistantTools(spaces: AssistantSpace[]) {
       // Neither fetched nor charged again: a re-read is in the conversation already, and a
       // spent budget is spent whatever the file holds.
       const id = `${space}/${fileId}`;
+      // Claimed before the fetch, so two reads of one file in the same step fetch it once.
       if (opened.has(id)) return { note: 'You have already read this file above.' };
+      opened.add(id);
       if (readChars >= RUN_READ_BUDGET) return { note: 'The reading budget for this question is used up: answer from what you have read.' };
       // Errors here (not found, not allowed) surface to the model as a tool error, which
       // it is shown and works around; they never widen what it can read.
@@ -179,7 +181,6 @@ export function assistantTools(spaces: AssistantSpace[]) {
       const extraction = excerpt ? null
         : await s.scope.invoke<{ status: string } | null>('drive/file-text', { fileId }).catch(() => null);
       // A source is a file whose text the answer could rest on, not every file opened.
-      opened.add(id);
       const source = { space, fileId, name: file.name };
       const text = excerpt?.text.slice(0, Math.max(0, RUN_READ_BUDGET - readChars)) ?? null;
       if (text) {
@@ -259,7 +260,9 @@ export async function runAssistant(model: AssistantModel, spaces: AssistantSpace
     text = final.text.trim();
   }
   // Clamped to what the route accepts back as history, so one answer cannot block a follow-up.
-  const answer = (text || 'I could not put an answer together from your documents. Try asking another way.').slice(0, MAX_ANSWER_CHARS);
+  let answer = (text || 'I could not put an answer together from your documents. Try asking another way.').slice(0, MAX_ANSWER_CHARS);
+  // A cut between the halves of a surrogate pair would send a broken character back as history.
+  if (/[\uD800-\uDBFF]$/.test(answer)) answer = answer.slice(0, -1);
   return { answer, sources: sources() };
 }
 

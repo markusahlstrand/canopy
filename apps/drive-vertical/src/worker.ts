@@ -756,8 +756,7 @@ mountAssistant(app, async c => {
   const { base, sub } = await subjectOf(c.req.raw, env);
   // Then whether there is a model, before the roster costs a lookup per space.
   if (!env.AI) return null;
-  const sites = await sitesForSubject(env, base, sub);
-  const here = (await nodeFor(c.req.raw, env)).scopeId;
+  const [sites, { scopeId: here }] = await Promise.all([sitesForSubject(env, base, sub), nodeFor(c.req.raw, env)]);
   // Spend is attributed to a space the caller is in: the selected one when they can enter
   // it, else their first. Never to whatever an `x-scope` header names.
   const charged = sites.find(site => site.scopeId === here) ?? sites[0];

@@ -192,6 +192,22 @@ describe('runAssistant', () => {
     await runAssistant(model, [family], [{ role: 'user', content: 'q' }]);
   });
 
+  it('fetches a file once when two reads of it run in the same step', async () => {
+    const family = space('family', { a: 'body' });
+    const model = scripted(async tools => {
+      const [one, two] = await Promise.all([1, 2].map(() => tools.read_document.execute({ space: 'family', fileId: 'a' })));
+      expect([one, two]).toContainEqual({ note: expect.stringContaining('already read') });
+      return 'ok';
+    });
+    await runAssistant(model, [family], [{ role: 'user', content: 'q' }]);
+    expect(family.calls.filter(op => op === 'drive/get-file')).toHaveLength(1);
+  });
+
+  it('does not end a clamped answer on half a surrogate pair', async () => {
+    const reply = await runAssistant(scripted(async () => 'x'.repeat(11_999) + '😀'), [space('family', {})], [{ role: 'user', content: 'hi' }]);
+    expect(reply.answer).toBe('x'.repeat(11_999));
+  });
+
   it('caps the searches one run may make', async () => {
     const family = space('family', { a: 'rent' });
     const model = scripted(async tools => {
@@ -224,12 +240,12 @@ describe('runAssistant', () => {
     const files = { scan: '', a: big, b: big, c: big, d: big };
     const model = scripted(async tools => {
       await tools.read_document.execute({ space: 'family', fileId: 'scan' });
-      for (const id of ['a', 'b', 'c']) await tools.read_document.execute({ space: 'family', fileId: id });
-      expect(await tools.read_document.execute({ space: 'family', fileId: 'd' })).toEqual({ note: expect.stringContaining('budget') });
+      for (const id of ['a', 'b']) await tools.read_document.execute({ space: 'family', fileId: id });
+      expect(await tools.read_document.execute({ space: 'family', fileId: 'c' })).toEqual({ note: expect.stringContaining('budget') });
       return 'done';
     });
     const reply = await runAssistant(model, [space('family', files, { pending: ['scan'] })], [{ role: 'user', content: 'q' }]);
-    expect(reply.sources.map(s => s.fileId)).toEqual(['a', 'b', 'c']);
+    expect(reply.sources.map(s => s.fileId)).toEqual(['a', 'b']);
   });
 
   it('clamps an answer to what the route accepts back as history', async () => {

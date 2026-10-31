@@ -161,9 +161,11 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) {
       // A conversation outlives the dialog: ⌘K, Esc, ⌘K comes back to it.
-      setMode(turns.length || asking ? 'assistant' : 'search');
+      const keep = turns.length > 0 || asking;
+      setMode(keep ? 'assistant' : 'search');
       setAskNotice(null);
-      setQuery("");
+      // A follow-up being written stays with the conversation it belongs to.
+      if (!keep || mode !== 'assistant') setQuery("");
       setSettledQuery(null);
       setResults([]);
     }

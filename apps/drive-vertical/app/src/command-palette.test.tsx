@@ -354,3 +354,15 @@ it('lets Enter reach a focused assistant button instead of cmdk opening the high
   expect(fireEvent.keyDown(ask, { key: 'Enter' })).toBe(true);
   expect(onOpenFile).not.toHaveBeenCalled();
 });
+it('keeps a follow-up being written across close and reopen', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ answer: 'First answer.', sources: [] }))));
+  const view = render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByText('First answer.');
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'half a follow-' } });
+  view.rerender(<CommandPalette {...props} open={false} />);
+  view.rerender(<CommandPalette {...props} />);
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('half a follow-');
+});
