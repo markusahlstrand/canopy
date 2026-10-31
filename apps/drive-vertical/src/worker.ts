@@ -1022,7 +1022,12 @@ app.get('/api/me', async (c) => {
     );
   }
 
-  return principal ? c.json({ principal: principalId.parse(principal), user: { name: subject?.name, email: subject?.email } }) : c.json({ error: 'unauthorized' }, 401);
+  if (principal) return c.json({ principal: principalId.parse(principal), user: { name: subject?.name, email: subject?.email } });
+  // Signed in, bound to nothing here (#365). A 401 would say "nobody is signed in", and
+  // the client answers that with a Sign in button — which signs them in as the same login
+  // and lands them here again. Who they are is known; that they have no space is the fact.
+  if (subject) return c.json({ principal: null, user: { name: subject.name, email: subject.email } });
+  return c.json({ error: 'unauthorized' }, 401);
 });
 
 /** The claim token rides in the body, so it is never a query string. See the route below. */
