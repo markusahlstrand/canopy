@@ -311,6 +311,9 @@ it('keeps an over-long question in the box with no retry that cannot succeed', (
   expect((screen.getByRole('combobox') as HTMLInputElement).value).toHaveLength(4_001);
   expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
   expect(fetch).not.toHaveBeenCalled();
+  // The notice is about the text in the box, and goes as soon as it is edited.
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'x'.repeat(3_999) } });
+  expect(screen.queryByRole('alert')).toBeNull();
 });
 it('does not send on the Safari IME confirm keydown', () => {
   const fetch = vi.fn();

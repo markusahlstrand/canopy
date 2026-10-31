@@ -89,7 +89,7 @@ export function CommandPalette({
   const [turns, setTurns] = useState<AssistantTurn[]>([]);
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
-  // A question refused before it was sent, from search: said there, beside the query.
+  // A question refused before it was sent: said beside the box, cleared as it is edited.
   const [askNotice, setAskNotice] = useState<string | null>(null);
   // Bumped by "New conversation", so an answer to the old one cannot land in the new one.
   const conversation = useRef(0);
@@ -122,9 +122,8 @@ export function CommandPalette({
     // a retry of a turn that can never be accepted is a dead end. Before any reset, so a
     // refused question costs nothing — the conversation is kept, minus its stale Retry.
     if (text.length > MAX_QUESTION_CHARS) {
-      const refusal = `Ask a question of at most ${MAX_QUESTION_CHARS.toLocaleString('en')} characters.`;
-      if (fresh) setAskNotice(refusal);
-      else setAskError(refusal);
+      // A notice, not the request error: it is about the text in the box, and goes as it is edited.
+      setAskNotice(`Ask a question of at most ${MAX_QUESTION_CHARS.toLocaleString('en')} characters.`);
       return;
     }
     setMode('assistant');
@@ -247,12 +246,8 @@ export function CommandPalette({
         </> : null}
         {searching && loading ? <p role="status" className="p-3 text-sm">Searching…</p> : null}
 
-        {/* Online, "Ask the assistant" matches every query, so cmdk's empty state would never
-            show: say what the FILE search found in so many words instead. */}
-        {offline ? <CommandEmpty>File search is unavailable while offline.</CommandEmpty>
-          : query.trim() && !searching ? <p className="py-6 text-center text-sm">Type at least {SEARCH_MIN} characters to search files.</p>
-          : searching && settledQuery === query && !loading && !error && !results.length ? <p className="py-6 text-center text-sm">No results found.</p>
-          : null}
+        {(!searching || settledQuery === query) && !loading && !error ? <CommandEmpty>{offline ? 'File search is unavailable while offline.' : query.trim() && !searching
+          ? `Type at least ${SEARCH_MIN} characters to search files.` : 'No results found.'}</CommandEmpty> : null}
 
         <CommandGroup heading="Files">
           {searching && onShowAllResults ? <CommandItem value={`show all search results ${query}`} onSelect={run(() => onShowAllResults(query.trim()))}>
@@ -343,7 +338,7 @@ export function CommandPalette({
       </CommandList>
       {/* Not a cmdk item, on purpose: an item matching every query would outrank file hits
           and take a plain Enter. Asking is ⌘↵, a click, or Tab to this button. */}
-      {!offline && !assistant && askNotice ? <p role="alert" className="border-t px-4 py-2 text-sm">{askNotice}</p> : null}
+      {!offline && askNotice ? <p role="alert" className="border-t px-4 py-2 text-sm">{askNotice}</p> : null}
       {!offline && !assistant ? <button
         type="button"
         onClick={() => query.trim() ? ask(query, true) : setMode('assistant')}

@@ -41,6 +41,8 @@ const HISTORY_CHAR_BUDGET = 16_000;
 const MAX_STEPS = 6;
 /** What the no-tools final answer is handed when the loop ran out of steps. */
 const FINAL_RESULTS_CHARS = 20_000;
+/** Searches one run may make: each one fans out to every space. */
+const RUN_SEARCH_BUDGET = 6;
 /** All document text one run may read, however many reads it spreads it over. */
 const RUN_READ_BUDGET = 24_000;
 const SEARCH_LIMIT_PER_SPACE = 8;
@@ -111,6 +113,7 @@ export function assistantTools(spaces: AssistantSpace[]) {
   const bySlug = new Map(spaces.map(s => [s.slug, s]));
   const read = new Map<string, AssistantSource>();
   let readChars = 0;
+  let searches = 0;
   const key = (s: AssistantSource) => `${s.space}/${s.fileId}`;
 
   const search: ModelTool<{ query: string; space?: string | null }> = {
@@ -121,6 +124,7 @@ export function assistantTools(spaces: AssistantSpace[]) {
       space: z.string().nullish().describe('A space slug, to search only that space. Omit to search all spaces.'),
     }),
     execute: async ({ query, space }) => {
+      if (++searches > RUN_SEARCH_BUDGET) return { error: 'The search budget for this question is used up: answer from what you have found.' };
       const targets = space ? [bySlug.get(space)].filter((s): s is AssistantSpace => !!s) : spaces;
       if (space && !targets.length) return { error: `There is no space "${space}".` };
       const unavailable: string[] = [];
@@ -154,6 +158,10 @@ export function assistantTools(spaces: AssistantSpace[]) {
     execute: async ({ space, fileId }) => {
       const s = bySlug.get(space);
       if (!s) return { error: `There is no space "${space}".` };
+      // Neither fetched nor charged again: a re-read is in the conversation already, and a
+      // spent budget is spent whatever the file holds.
+      if (read.has(`${space}/${fileId}`)) return { note: 'You have already read this file above.' };
+      if (readChars >= RUN_READ_BUDGET) return { note: 'The reading budget for this question is used up: answer from what you have read.' };
       // Errors here (not found, not allowed) surface to the model as a tool error, which
       // it is shown and works around; they never widen what it can read.
       const [{ file }, details, excerpt] = await Promise.all([
@@ -198,10 +206,12 @@ function fitResults(results: string[]): string {
   const kept: string[] = [];
   let used = 0;
   for (const result of [...results].reverse()) {
-    if (used + result.length > FINAL_RESULTS_CHARS) break;
     // Escaped, not stripped: one pass of removal rebuilds the tag from `</res</results>ults>`.
-    kept.unshift(result.replaceAll('<', '\\u003c'));
-    used += result.length;
+    // Measured after escaping, which is what the prompt carries.
+    const escaped = result.replaceAll('<', '\\u003c');
+    if (used + escaped.length > FINAL_RESULTS_CHARS) break;
+    kept.unshift(escaped);
+    used += escaped.length;
   }
   const dropped = results.length - kept.length;
   return [...(dropped ? [`(${dropped} earlier result${dropped === 1 ? '' : 's'} left out for length)`] : []), ...kept].join('\n');
@@ -228,7 +238,8 @@ export async function runAssistant(model: AssistantModel, spaces: AssistantSpace
     ...step.toolResults.map(r => JSON.stringify({ tool: r.tool, output: r.output })),
     ...step.toolErrors.map(e => JSON.stringify({ tool: e.tool, error: e.message })),
   ]);
-  if (!text && gathered.length) {
+  // Ending on tool calls is out of steps, whatever text came with them ("let me search…").
+  if ((!text || run.finishReason === 'tool-calls') && gathered.length) {
     const question = history.at(-1)!.content;
     const final = await model.host.run({
       ...ask,

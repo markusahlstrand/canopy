@@ -152,6 +152,37 @@ describe('runAssistant', () => {
     expect(final.system).not.toContain('search_documents');
   });
 
+  it('neither refetches nor recharges a file it already read', async () => {
+    const family = space('family', { a: 'y'.repeat(8_000) });
+    const model = scripted(async tools => {
+      await tools.read_document.execute({ space: 'family', fileId: 'a' });
+      const before = family.calls.length;
+      expect(await tools.read_document.execute({ space: 'family', fileId: 'a' })).toEqual({ note: expect.stringContaining('already read') });
+      expect(family.calls.length).toBe(before);
+      return 'ok';
+    });
+    await runAssistant(model, [family], [{ role: 'user', content: 'q' }]);
+  });
+
+  it('caps the searches one run may make', async () => {
+    const family = space('family', { a: 'rent' });
+    const model = scripted(async tools => {
+      for (let i = 0; i < 6; i++) await tools.search_documents.execute({ query: 'rent' });
+      expect(await tools.search_documents.execute({ query: 'rent' })).toEqual({ error: expect.stringContaining('search budget') });
+      return 'ok';
+    });
+    await runAssistant(model, [family], [{ role: 'user', content: 'q' }]);
+    expect(family.calls.filter(op => op === 'drive/search')).toHaveLength(6);
+  });
+
+  it('answers again when the loop ran out of steps mid-sentence', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ text: 'Let me look in Home next.', finishReason: 'tool-calls', steps: [{ toolResults: [{ tool: 'read_document', output: { text: 'ends 2027' } }], toolErrors: [] }] })
+      .mockResolvedValueOnce({ text: 'It ends in 2027.', steps: [] });
+    const model = { host: { run, status: vi.fn() } as unknown as ModelHost, spec: 'cloudflare:@cf/test', attribution };
+    expect((await runAssistant(model, [space('family', {})], [{ role: 'user', content: 'q' }])).answer).toBe('It ends in 2027.');
+  });
+
   it('accepts a null space as "all spaces"', async () => {
     const model = scripted(async tools => {
       expect(await tools.search_documents.execute({ query: 'rent', space: null })).toMatchObject({ results: [{ space: 'a' }, { space: 'b' }] });
@@ -166,7 +197,7 @@ describe('runAssistant', () => {
     const model = scripted(async tools => {
       await tools.read_document.execute({ space: 'family', fileId: 'scan' });
       for (const id of ['a', 'b', 'c']) await tools.read_document.execute({ space: 'family', fileId: id });
-      expect(await tools.read_document.execute({ space: 'family', fileId: 'd' })).toMatchObject({ text: '', note: expect.stringContaining('budget') });
+      expect(await tools.read_document.execute({ space: 'family', fileId: 'd' })).toEqual({ note: expect.stringContaining('budget') });
       return 'done';
     });
     const reply = await runAssistant(model, [space('family', files, { pending: ['scan'] })], [{ role: 'user', content: 'q' }]);
