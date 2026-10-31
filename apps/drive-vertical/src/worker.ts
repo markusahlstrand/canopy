@@ -356,6 +356,7 @@ function documentAiFor(env: Env, host: CloudflareScopeHost) {
       tenant: tenantId.parse(p.tenantId),
       scope: scopeId.parse(p.scopeId),
     }) : null,
+    now: () => Date.now(),
     log: (event, fields) => console.log(event, fields),
   });
 }

@@ -6,6 +6,8 @@ import { autoLabelJob, fenceSafe, MODEL_FAILURE, planRun, mergeDetails, parseAna
 
 const payload: AutoLabelPayload = { tenantId: 't', scopeId: 's', fileId: 'f1', principal: 'p' };
 const attribution = { tenant: 't', scope: 's', vertical: 'drive', version: '1', operation: 'drive/auto-label' } as never;
+/** The test clock: a job reads time only through `deps.now`. */
+const NOW = Date.parse('2026-06-01T12:00:00Z');
 
 interface World {
   description: string;
@@ -59,6 +61,7 @@ function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","descrip
   const deps: AutoLabelDeps = {
     scopeFor: async () => ({ invoke }),
     enabled: async () => true,
+    now: () => NOW,
     model: () => ({ host: { run, status: vi.fn() } as unknown as ModelHost, spec: 'cloudflare:@cf/test', attribution }),
   };
   /** One pass with the kernel's step memo: a committed step is not run again by a later pass. */
@@ -327,7 +330,7 @@ describe('the Document AI run', () => {
 
   it('waits out a cooldown before reading anything, then describes the current version', async () => {
     const h = harness();
-    const later = { ...payload, notBefore: new Date(Date.now() + 3_600_000).toISOString() };
+    const later = { ...payload, notBefore: new Date(NOW + 3_600_000).toISOString() };
     const job = autoLabelJob(h.deps);
     const ctx = (p: typeof later) => ({
       run: { id: 'r' }, payload: p, cursor: null, counters: {}, count: () => {},
@@ -335,7 +338,7 @@ describe('the Document AI run', () => {
     }) as unknown as JobPassContext;
     await expect(job(ctx(later))).rejects.toThrow('cooling down');
     expect(h.run).not.toHaveBeenCalled();
-    await expect(job(ctx({ ...later, notBefore: new Date(Date.now() - 1).toISOString() }))).resolves.toMatchObject({ done: true });
+    await expect(job(ctx({ ...later, notBefore: new Date(NOW - 1).toISOString() }))).resolves.toMatchObject({ done: true });
     expect(h.run).toHaveBeenCalledTimes(1);
   });
 
