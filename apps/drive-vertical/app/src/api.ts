@@ -277,8 +277,13 @@ export interface Me {
   principal?: string;
 }
 
-/** Who am I — the first call the app makes, and the one that decides which shell renders. */
-export const whoami = () => call<{ principal: string; user?: NonNullable<Me['user']> }>('/me');
+/**
+ * Who am I — the first call the app makes, and the one that decides which shell renders.
+ *
+ * `principal` is null for a login that is signed in but bound to no space here (#365):
+ * the worker answers 401 only when nobody is signed in at all.
+ */
+export const whoami = () => call<{ principal: string | null; user?: NonNullable<Me['user']> }>('/me');
 
 /**
  * Redeem an owner-claim link. The token arrives in the URL as `?claim=` (the platform

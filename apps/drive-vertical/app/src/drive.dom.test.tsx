@@ -1309,6 +1309,52 @@ describe('a selection that has gone stale does not lock the install', () => {
   });
 });
 
+describe('a signed-in login with no space here (#365)', () => {
+  it('says who they are instead of offering Sign in again', async () => {
+    render(<App />);
+    await flush();
+    await answer('/api/me', { principal: null, user: { email: 'new@example.com' } });
+    await flush();
+
+    expect(screen.getByText('No space here yet')).toBeTruthy();
+    expect(screen.getByText('new@example.com')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Use another account' })).toBeTruthy();
+    expect(screen.queryByText(/Sign in to this space/)).toBeNull();
+  });
+
+  it('treats a null principal in the selected space as a stale selection', async () => {
+    selectSite('family');
+    window.history.replaceState(null, '', '/?site=family&folder=foreign-folder');
+
+    render(<App />);
+    await flush();
+    await answer('/api/me', { principal: null, user: { email: 'ada@example.com' } });
+    await answer('/api/me', { principal: '01ADA' });
+    await flush();
+
+    expect(currentSite()).toBeNull();
+    expect(window.location.search).not.toContain('site=');
+    expect(window.location.search).not.toContain('folder=');
+    await answer('/api/sites', [{ slug: 'home', name: 'Home', current: true }]);
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.getByRole('complementary')).toBeTruthy();
+  });
+
+  it('keeps the selection when the login holds no space anywhere', async () => {
+    selectSite('family');
+
+    render(<App />);
+    await flush();
+    await answer('/api/me', { principal: null, user: { email: 'new@example.com' } });
+    await answer('/api/me', { principal: null, user: { email: 'new@example.com' } });
+    await flush();
+
+    expect(currentSite()).toBe('family');
+    expect(screen.getByText('No space here yet')).toBeTruthy();
+  });
+});
+
 describe('a write goes where the person is looking', () => {
   it('creates in My Drive rather than invisibly behind the trash', async () => {
     await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);

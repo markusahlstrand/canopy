@@ -28,8 +28,17 @@ import { folderLoginUrl } from './folder-links';
 import { DriveScreen } from './drive';
 import { clearMirror, offlineIdentity, onMirrorLogout, rememberOfflineIdentity, resumeMirror } from './scope-mirror';
 
-/** Nobody is signed in yet, somebody is, or we have not asked. */
-type Session = { state: 'loading' } | { state: 'out' } | { state: 'in'; principal: string; user?: { name?: string; email?: string } };
+type User = { name?: string; email?: string };
+
+/**
+ * Nobody is signed in yet, somebody is, or we have not asked — and `none`: somebody is
+ * signed in and holds no space here (#365), which is neither of the first two.
+ */
+type Session =
+  | { state: 'loading' }
+  | { state: 'out' }
+  | { state: 'none'; user?: User }
+  | { state: 'in'; principal: string; user?: User };
 
 /** The last verified principal is an offline hint for this routed site only. */
 const offlineSiteKey = () => JSON.stringify([window.location.origin, currentSite()]);
@@ -149,40 +158,53 @@ function pendingLink(): { kind: LinkKind; token: string; fromUrl: boolean } | nu
  * too, or a reload would restore the state we just escaped. If the second answer is also
  * 401 then nobody is signed in and the selection was never the problem — put it back, so
  * signing in returns to the space they chose.
+ *
+ * A signed-in login bound nowhere in the selected space answers `principal: null` rather
+ * than 401 (#365), and is the same stale selection — so it is retried the same way. If the
+ * retry finds no principal either, the login holds no space here at all and the selection
+ * goes back, as it does for the 401.
  */
 const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
+  const selected = currentSite();
   try {
-    return await whoami();
+    const me = await whoami();
+    if (me.principal || !selected) return me;
   } catch (e: unknown) {
-    const selected = currentSite();
     if (!selected || !(e instanceof ApiError) || e.status !== 401) throw e;
+  }
 
-    selectSite(null);
-    const url = new URL(window.location.href);
-    if (url.searchParams.has('site')) {
-      url.searchParams.delete('site');
+  selectSite(null);
+  const url = new URL(window.location.href);
+  if (url.searchParams.has('site')) {
+    url.searchParams.delete('site');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+  // Put the selection back — and if storage refuses to hold it, put it back where it
+  // came from. In a private window the URL is the ONLY carrier (the rail's own rule),
+  // and this path has just deleted it, so restoring memory alone restores nothing: the
+  // sign-in that follows is a full navigation, and module memory does not survive it.
+  const restore = () => {
+    if (!selectSite(selected)) {
+      url.searchParams.set('site', selected);
       window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
     }
+  };
 
-    try {
-      const me = await whoami();
-      // A fallback changed the target space: neither path nor ID can follow it.
-      url.searchParams.delete('path');
-      url.searchParams.delete('folder');
-      url.searchParams.delete('file');
-      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  try {
+    const me = await whoami();
+    if (!me.principal) {
+      restore();
       return me;
-    } catch (retry: unknown) {
-      // Put the selection back — and if storage refuses to hold it, put it back where it
-      // came from. In a private window the URL is the ONLY carrier (the rail's own rule),
-      // and this path has just deleted it, so restoring memory alone restores nothing: the
-      // sign-in that follows is a full navigation, and module memory does not survive it.
-      if (!selectSite(selected)) {
-        url.searchParams.set('site', selected);
-        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
-      }
-      throw retry;
     }
+    // A fallback changed the target space: neither path nor ID can follow it.
+    url.searchParams.delete('path');
+    url.searchParams.delete('folder');
+    url.searchParams.delete('file');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    return me;
+  } catch (retry: unknown) {
+    restore();
+    throw retry;
   }
 };
 
@@ -251,12 +273,20 @@ export default function App() {
 
     boot()
       .then((me) => {
-        if (me) {
-          void resumeMirror(me.principal)
-            .then(() => rememberOfflineIdentity(offlineSiteKey(), me.principal))
+        if (!me) return;
+        const { principal, user } = me;
+        if (!principal) {
+          // An answer, as a 401 is: no offline identity may outlive it. Set the state
+          // after, because clearing announces a logout and this tab hears it too.
+          void clearMirror()
             .catch(() => {})
-            .finally(() => setSession({ state: 'in', principal: me.principal, user: me.user }));
+            .finally(() => setSession({ state: 'none', user }));
+          return;
         }
+        void resumeMirror(principal)
+          .then(() => rememberOfflineIdentity(offlineSiteKey(), principal))
+          .catch(() => {})
+          .finally(() => setSession({ state: 'in', principal, user }));
       })
       // A 401 is the logged-out state, not a failure — anything else is.
       .catch(async (e: unknown) => {
@@ -313,6 +343,10 @@ export default function App() {
         <main className="mx-auto w-full max-w-4xl px-4 py-8">
           <SignedOut />
         </main>
+      ) : session.state === 'none' ? (
+        <main className="mx-auto w-full max-w-4xl px-4 py-8">
+          <NoSpace user={session.user} />
+        </main>
       ) : (
         <DriveScreen
           onError={setError}
@@ -346,6 +380,37 @@ function SignedOut() {
       </p>
       <Button asChild>
         <a href={folderLoginUrl()}>Sign in</a>
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Signed in, and no space here (#365). Not the signed-out shell: its Sign in button signs
+ * them in as the same login and brings them straight back. What helps is saying who they
+ * are, and offering another account — an invitation or claim link, once followed, binds
+ * this login without any of this.
+ */
+function NoSpace({ user }: { user?: User }) {
+  const who = user?.email ?? user?.name;
+  return (
+    <div className="rounded-lg border border-border p-8 text-center">
+      <Icon name="users" className="mx-auto mb-3 size-6 text-muted-foreground" />
+      <h2 className="mb-1 text-lg font-medium">No space here yet</h2>
+      <p className="mx-auto mb-5 max-w-sm text-sm text-muted-foreground">
+        {who ? <>You're signed in as <span className="font-medium text-foreground">{who}</span>, but</> : 'You are signed in, but'}{' '}
+        this account isn't a member of any space on this drive. Ask a space owner to invite
+        you, or sign in with another account.
+      </p>
+      <Button
+        variant="outline"
+        onClick={() => {
+          void clearMirror()
+            .catch(() => {})
+            .finally(() => { window.location.href = LOGOUT_URL; });
+        }}
+      >
+        Use another account
       </Button>
     </div>
   );
