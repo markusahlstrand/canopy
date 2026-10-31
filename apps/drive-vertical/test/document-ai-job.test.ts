@@ -47,6 +47,7 @@ beforeAll(async () => {
   host.registerJob(DRIVE, AUTO_LABEL_JOB, autoLabelJob({
     scopeFor: (p) => host.getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
     enabled: async () => true,
+    now: () => Date.now(),
     model: () => ({ host: { run, status: vi.fn() } as unknown as ModelHost, spec: 'cloudflare:@cf/test', attribution: {} as never }),
   }));
   await host.admin.createTenant(staff, { id: tenant, slug: 'docai', name: 'Document AI' });

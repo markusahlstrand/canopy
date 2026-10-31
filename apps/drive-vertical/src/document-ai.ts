@@ -144,6 +144,8 @@ export interface AutoLabelDeps {
   enabled(payload: AutoLabelPayload): Promise<boolean>;
   /** The model and its attribution, or null where the runtime has none. */
   model(payload: AutoLabelPayload): { host: ModelHost; spec: string; attribution: ModelAttribution } | null;
+  /** The wall clock, in ms. A job pass has no `ctx.now()`, so the worker hands one in. */
+  now(): number;
   log?(event: string, fields: Record<string, unknown>): void;
 }
 
@@ -245,7 +247,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     const until = round === 0 ? payload.notBefore : cursor.notBefore;
     if (until) {
       await pass.step(`cooldown:${round}`, () => {
-        if (Date.now() < Date.parse(until)) throw new Error(`cooling down until ${until}`);
+        if (deps.now() < Date.parse(until)) throw new Error(`cooling down until ${until}`);
         return true;
       }, COOLDOWN_RETRY);
     }
@@ -261,7 +263,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     /** Go round again for a newer version — at once the first time, then a cooldown apart — or null when out of rounds. */
     const again = (wrote?: Wrote) => {
       if (round + 1 >= MAX_ROUNDS) return null;
-      const notBefore = round + 1 >= FAST_ROUNDS ? new Date(Date.now() + COOLDOWN_MS).toISOString() : undefined;
+      const notBefore = round + 1 >= FAST_ROUNDS ? new Date(deps.now() + COOLDOWN_MS).toISOString() : undefined;
       const left = wrote ?? previous;
       deps.log?.('drive.document-ai.again', { fileId: payload.fileId, round, notBefore });
       return { cursor: { round: round + 1, ...(notBefore ? { notBefore } : {}), ...(left ? { wrote: left } : {}) } satisfies Closing };
