@@ -26,6 +26,7 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { errorCodeOf } from '@substrat-run/contracts';
 import type { ModelAttribution, ModelHost, ModelTool } from '@substrat-run/vertical-host/model';
+import { readBounded } from './upload-limit.js';
 import { historyWindow, MAX_ANSWER_CHARS, MAX_MESSAGES, MAX_QUESTION_CHARS, type AssistantMessage, type AssistantReply, type AssistantSource } from './assistant-contract.js';
 export type { AssistantMessage, AssistantReply, AssistantSource } from './assistant-contract.js';
 
@@ -189,7 +190,8 @@ export function assistantTools(spaces: AssistantSpace[]) {
       const extraction = blank ? { status: 'empty' } : excerpt ? null
         : await s.scope.invoke<{ status: string } | null>('drive/file-text', { fileId }).catch(() => null);
       // A source is a file whose text the answer could rest on, not every file opened.
-      const source = { space, fileId, name: file.name };
+      // The drive's id for the file, not the string the model wrote.
+      const source = { space, fileId: file.id, name: file.name };
       const text = blank ? null : excerpt?.text.slice(0, Math.max(0, RUN_READ_BUDGET - readChars)) ?? null;
       if (text) {
         readChars += text.length;
@@ -229,8 +231,9 @@ function fitResults(results: string[]): string {
     kept.unshift(escaped);
     used += escaped.length;
   }
-  const dropped = results.length - kept.length;
   if (!results.length) return '(no searches or reads completed)';
+  const dropped = results.length - kept.length;
+  if (!kept.length) return `(${dropped} result${dropped === 1 ? ' was' : 's were'} found, but too long to include here)`;
   return [...(dropped ? [`(${dropped} earlier result${dropped === 1 ? '' : 's'} left out for length)`] : []), ...kept].join('\n');
 }
 
@@ -291,11 +294,9 @@ export function mountAssistant<E extends Env>(app: Hono<E>, resolve: (c: Context
   app.post('/api/assistant', async c => {
     const session = await resolve(c);
     if (!session) throw new HTTPException(503, { message: 'The assistant is not available on this install.' });
-    // Bounded before parsing: the schema's limits mean nothing once megabytes are buffered.
-    const declared = Number(c.req.header('content-length') ?? 0);
-    if (declared > MAX_BODY_BYTES) throw new HTTPException(413, { message: 'This conversation is too long. Start a new conversation.' });
-    const raw = await c.req.text();
-    if (raw.length > MAX_BODY_BYTES) throw new HTTPException(413, { message: 'This conversation is too long. Start a new conversation.' });
+    // Bounded while reading, chunked or not: the schema's limits mean nothing once megabytes
+    // are buffered.
+    const raw = new TextDecoder().decode(await readBounded(c.req.raw, MAX_BODY_BYTES, 'This conversation is too long. Start a new conversation.'));
     const body = messagesSchema.safeParse((() => { try { return JSON.parse(raw); } catch { return null; } })());
     // An issue at the root is a malformed request, not a question to correct: say the general thing.
     const issue = body.success ? null : body.error.issues[0];

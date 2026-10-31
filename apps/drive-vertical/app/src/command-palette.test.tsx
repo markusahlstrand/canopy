@@ -379,3 +379,13 @@ it('says to wait when a follow-up is sent while an answer is coming', async () =
   expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('second');
   await act(async () => { finish(new Response(JSON.stringify({ answer: 'Done.', sources: [] }))); });
 });
+it('keeps a first question being written across close and reopen', () => {
+  vi.stubGlobal('fetch', vi.fn());
+  const view = render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'a long first quest' } });
+  view.rerender(<CommandPalette {...props} open={false} />);
+  view.rerender(<CommandPalette {...props} />);
+  expect(screen.getByRole('log')).toBeTruthy();
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('a long first quest');
+});

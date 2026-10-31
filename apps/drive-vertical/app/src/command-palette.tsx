@@ -164,11 +164,12 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) {
       // A conversation outlives the dialog: ⌘K, Esc, ⌘K comes back to it.
-      const keep = turns.length > 0 || asking;
+      // A conversation, or a first question being written, is still there on ⌘K.
+      const keep = turns.length > 0 || asking || mode === 'assistant';
       setMode(keep ? 'assistant' : 'search');
       setAskNotice(null);
-      // A follow-up being written stays with the conversation it belongs to.
-      if (!keep || mode !== 'assistant') setQuery("");
+      // A question being written stays with the conversation it belongs to.
+      if (mode !== 'assistant') setQuery("");
       setSettledQuery(null);
       setResults([]);
     }
