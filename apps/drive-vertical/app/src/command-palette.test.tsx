@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { CommandPalette } from './command-palette';
+import { openSpaceFile } from './space-navigation';
+
+vi.mock('./space-navigation', async (importOriginal) => ({ ...await importOriginal<typeof import('./space-navigation')>(), openSpaceFile: vi.fn(() => true) }));
 import type { PluginInstall } from './api';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -169,4 +172,220 @@ it('opens the management dialogs from keyboard actions', () => {
   expect(option.getAttribute('aria-selected')).toBe('true');
   fireEvent.keyDown(screen.getByRole('combobox'), {key:'Enter'});
   expect(onManagePlugins).toHaveBeenCalledOnce();
+});
+it('hands a query to the assistant with ⌘↵ and opens the files it cites', async () => {
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes('/assistant')) {
+      expect(JSON.parse(String(init?.body))).toEqual({ messages: [{ role: 'user', content: 'when does the lease end?' }] });
+      return new Response(JSON.stringify({ answer: 'The lease ends on 31 March 2027.', sources: [{ space: 'family', fileId: 'lease', name: 'Lease.pdf' }] }));
+    }
+    return new Response(JSON.stringify({ hits: [] }));
+  });
+  vi.stubGlobal('fetch', fetch);
+  const onOpenFile = vi.fn();
+  render(<CommandPalette {...props} onOpenFile={onOpenFile} sites={[{ slug: 'family', name: 'Family', current: true } as never]} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'when does the lease end?' } });
+  expect(screen.getByRole('button', { name: /Ask the assistant: “when does the lease end\?”/ })).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true });
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('');
+  expect(screen.getByRole('status').textContent).toBe('Searching your documents…');
+  await screen.findByText('The lease ends on 31 March 2027.');
+  fireEvent.click(screen.getByRole('button', { name: /Lease\.pdf/ }));
+  expect(onOpenFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'lease', name: 'Lease.pdf' }));
+});
+it('sends the whole conversation with a follow-up, and keeps it across close and reopen', async () => {
+  const bodies: unknown[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ answer: `Answer ${bodies.length}`, sources: [] }));
+  }));
+  const view = render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByText('Answer 1');
+  view.rerender(<CommandPalette {...props} open={false} />);
+  view.rerender(<CommandPalette {...props} />);
+  // Reopening lands on the conversation, not on search.
+  expect(screen.getByText('Answer 1')).toBeTruthy();
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'second' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByText('Answer 2');
+  expect(bodies[1]).toEqual({ messages: [{ role: 'user', content: 'first' }, { role: 'assistant', content: 'Answer 1' }, { role: 'user', content: 'second' }] });
+});
+it('shows an assistant failure with a retry instead of a blank answer', async () => {
+  vi.stubGlobal('fetch', vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'The assistant is not available on this install.' }), { status: 503 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ answer: 'Now it works.', sources: [] }))));
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'hello' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect((await screen.findByRole('alert')).textContent).toBe('The assistant is not available on this install.');
+  fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+  await screen.findByText('Now it works.');
+});
+it('offers no assistant while offline', () => {
+  render(<CommandPalette {...props} offline />);
+  expect(screen.queryByRole('button', { name: /Ask the assistant/ })).toBeNull();
+});
+it('replaces a question whose answer failed instead of sending two in a row', async () => {
+  const bodies: { messages: { role: string }[] }[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return bodies.length === 1
+      ? new Response(JSON.stringify({ detail: 'The assistant could not answer just now.' }), { status: 502 })
+      : new Response(JSON.stringify({ answer: 'Answered.', sources: [] }));
+  }));
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByRole('alert');
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'second' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByText('Answered.');
+  expect(bodies[1]).toEqual({ messages: [{ role: 'user', content: 'second' }] });
+  expect(screen.queryByText('first')).toBeNull();
+});
+it('opens a source in another space through the guarded space switch', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ answer: 'See it.', sources: [{ space: 'work', fileId: 'inv', name: 'Invoice.pdf' }] }))));
+  const onOpenFile = vi.fn();
+  render(<CommandPalette {...props} onOpenFile={onOpenFile} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'invoice' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('button', { name: /Invoice\.pdf/ }));
+  // No current space known: never by id in the wrong space, always by switching.
+  expect(onOpenFile).not.toHaveBeenCalled();
+  expect(openSpaceFile).toHaveBeenCalledWith('work', 'inv');
+});
+it('does not send while an IME is composing', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'けいやく' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', isComposing: true });
+  expect(fetch).not.toHaveBeenCalled();
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('けいやく');
+});
+it('starts a new conversation when asked from search, and continues one only when asked to', async () => {
+  const bodies: unknown[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ answer: `Answer ${bodies.length}`, sources: [] }));
+  }));
+  const view = render(<CommandPalette {...props} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'invoices' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true });
+  await screen.findByText('Answer 1');
+  view.rerender(<CommandPalette {...props} open={false} />);
+  view.rerender(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Search/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'lease end' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true });
+  await screen.findByText('Answer 2');
+  expect(bodies[1]).toEqual({ messages: [{ role: 'user', content: 'lease end' }] });
+  expect(screen.queryByText('Answer 1')).toBeNull();
+});
+it('leaves plain Enter to search: the assistant is never a highlighted option', () => {
+  const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ hits: [] })));
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} onUpload={undefined} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'zzqx' } });
+  expect(screen.queryByRole('option', { name: /Ask the assistant/ })).toBeNull();
+  expect(screen.getByRole('button', { name: /Ask the assistant: “zzqx”/ })).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect(fetch.mock.calls.some(([url]) => String(url).includes('/assistant'))).toBe(false);
+  expect(screen.queryByRole('log')).toBeNull();
+});
+it('keeps an over-long question in the box with no retry that cannot succeed', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'x'.repeat(4_001) } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect(screen.getByRole('alert').textContent).toContain('at most 4,000 characters');
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toHaveLength(4_001);
+  expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+  // The notice is about the text in the box, and goes as soon as it is edited.
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'x'.repeat(3_999) } });
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+it('does not send on the Safari IME confirm keydown', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'けいやく' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', keyCode: 229 });
+  expect(fetch).not.toHaveBeenCalled();
+});
+it('refuses an over-long fresh question in search, keeping the conversation it would have replaced', async () => {
+  const fetch = vi.fn(async () => new Response(JSON.stringify({ answer: 'First answer.', sources: [] })));
+  vi.stubGlobal('fetch', fetch);
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByText('First answer.');
+  fireEvent.click(screen.getByRole('button', { name: /Search/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'x'.repeat(4_001) } });
+  expect(screen.getByRole('button', { name: /Ask in a new conversation/ })).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true });
+  expect(screen.getByRole('alert').textContent).toContain('at most 4,000 characters');
+  expect(fetch).toHaveBeenCalledTimes(1);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } });
+  fireEvent.click(screen.getByRole('button', { name: /Continue the conversation/ }));
+  expect(screen.getByText('First answer.')).toBeTruthy();
+});
+it('lets Enter reach a focused assistant button instead of cmdk opening the highlighted file', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ hits: [{ id: 'l', name: 'Lease.pdf', via: 'name' }] }))));
+  const onOpenFile = vi.fn();
+  render(<CommandPalette {...props} onOpenFile={onOpenFile} />);
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'lease' } });
+  await screen.findByRole('option', { name: /Lease\.pdf/ });
+  const ask = screen.getByRole('button', { name: /Ask the assistant: “lease”/ });
+  ask.focus();
+  // Not prevented, so the browser's own Enter-to-click runs; and cmdk never sees it.
+  expect(fireEvent.keyDown(ask, { key: 'Enter' })).toBe(true);
+  expect(onOpenFile).not.toHaveBeenCalled();
+});
+it('keeps a follow-up being written across close and reopen', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ answer: 'First answer.', sources: [] }))));
+  const view = render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  await screen.findByText('First answer.');
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'half a follow-' } });
+  view.rerender(<CommandPalette {...props} open={false} />);
+  view.rerender(<CommandPalette {...props} />);
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('half a follow-');
+});
+it('says to wait when a follow-up is sent while an answer is coming', async () => {
+  let finish!: (r: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+  render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'first' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'second' } });
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+  expect(screen.getByRole('alert').textContent).toContain('Wait for this answer');
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('second');
+  await act(async () => { finish(new Response(JSON.stringify({ answer: 'Done.', sources: [] }))); });
+});
+it('keeps a first question being written across close and reopen', () => {
+  vi.stubGlobal('fetch', vi.fn());
+  const view = render(<CommandPalette {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Ask the assistant…/ }));
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'a long first quest' } });
+  view.rerender(<CommandPalette {...props} open={false} />);
+  view.rerender(<CommandPalette {...props} />);
+  expect(screen.getByRole('log')).toBeTruthy();
+  expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('a long first quest');
 });

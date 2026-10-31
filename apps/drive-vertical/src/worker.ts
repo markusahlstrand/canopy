@@ -14,6 +14,7 @@ import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors
 import { createModelHost } from '@substrat-run/vertical-host/model';
 import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, planRun, type AutoLabelPayload } from './document-ai.js';
 import { isLockedName } from './editable-text.js';
+import { DEFAULT_ASSISTANT_MODEL, mountAssistant } from './assistant.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
  * the shape `substrat push` deploys into the platform's dispatch namespace.
@@ -209,6 +210,8 @@ export interface Env {
   AI?: unknown;
   /** Document AI's model as `provider:model`. Default: {@link DEFAULT_DOCUMENT_AI_MODEL}. */
   DOCUMENT_AI_MODEL?: string;
+  /** The ⌘K assistant's model as `provider:model`. Default: {@link DEFAULT_ASSISTANT_MODEL}. */
+  ASSISTANT_MODEL?: string;
   /** Optional token for GitHub commit lookups during public plugin imports. */
   GITHUB_TOKEN?: string;
   /** Optional npm registry base URL for plugin imports (https, or loopback http for local acceptance). Default: registry.npmjs.org. */
@@ -322,23 +325,37 @@ function hostFor(env: Env): CloudflareScopeHost {
 
 const DRIVE_MODULE_ID = moduleId.parse(driveManifest.id);
 
+/**
+ * A governed model call over this worker's Workers AI binding (`env.AI`, checked by the caller).
+ * No ledger of our own yet: each usage line is logged so spend stays visible per space.
+ */
+function modelFor(env: Env, ai: unknown, o: { spec: string; sent: string; usageEvent: string; operation: string; tenant: TenantId; scope: ScopeId }) {
+  return {
+    host: createModelHost({
+      env: env as unknown as Record<string, string | undefined>,
+      aiBinding: ai,
+      sent: o.sent,
+      record: (line) => { console.log(o.usageEvent, line); },
+    }),
+    spec: o.spec,
+    attribution: { tenant: o.tenant, scope: o.scope, vertical: driveManifest.id, version: driveManifest.version, operation: o.operation },
+  };
+}
+
 /** Document AI's run body, over this worker's bindings and the host driving it. */
 function documentAiFor(env: Env, host: CloudflareScopeHost) {
   const nodeOf = (p: AutoLabelPayload): Node => ({ tenantId: tenantId.parse(p.tenantId), scopeId: scopeId.parse(p.scopeId) });
   return autoLabelJob({
     scopeFor: (p) => host.getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
     enabled: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.autoLabel === true,
-    model: (p) => env.AI ? {
-      host: createModelHost({
-        env: env as unknown as Record<string, string | undefined>,
-        aiBinding: env.AI,
-        sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
-        // No ledger of our own yet: the usage line is logged so spend stays visible per space.
-        record: (line) => { console.log('drive.document-ai.usage', line); },
-      }),
+    model: (p) => env.AI ? modelFor(env, env.AI, {
       spec: env.DOCUMENT_AI_MODEL || DEFAULT_DOCUMENT_AI_MODEL,
-      attribution: { tenant: tenantId.parse(p.tenantId), scope: scopeId.parse(p.scopeId), vertical: driveManifest.id, version: driveManifest.version, operation: 'drive/auto-label' },
-    } : null,
+      sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
+      usageEvent: 'drive.document-ai.usage',
+      operation: 'drive/auto-label',
+      tenant: tenantId.parse(p.tenantId),
+      scope: scopeId.parse(p.scopeId),
+    }) : null,
     log: (event, fields) => console.log(event, fields),
   });
 }
@@ -462,7 +479,7 @@ app.use('*', invocationLog<Env>({
   allowUnsigned: (env) => env.ALLOW_DEV_NODE === 'true',
 }));
 app.use('/api/*', async (c, next) => {
-  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|accept-invite|claim-owner|app-passwords)$/.test(c.req.path);
+  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|accept-invite|claim-owner|app-passwords|assistant)$/.test(c.req.path);
   if (jsonMutation && c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HTTPException(415, {message:'Use application/json for this request.'});
   const origin = c.req.header('origin');
   if (jsonMutation && origin && origin !== new URL(c.req.url).origin) throw new HTTPException(403, {message:'Cross-origin mutations are not allowed.'});
@@ -729,6 +746,34 @@ mountSpaceSettings(app, async c => {
  const node=await nodeFor(c.req.raw,c.env);
  return {scope:node.scopeId,directory:identityDo(c.env,node)};
 });
+/**
+ * The ⌘K assistant, over every space this login can enter — each searched and read as the
+ * principal it is there, so the model reaches exactly what the person could.
+ */
+mountAssistant(app, async c => {
+  const env = c.env;
+  // Who is asking first: an anonymous caller is a 401 whatever this install runs.
+  const { base, sub } = await subjectOf(c.req.raw, env);
+  // Then whether there is a model, before the roster costs a lookup per space.
+  if (!env.AI) return null;
+  const [sites, { scopeId: here }] = await Promise.all([sitesForSubject(env, base, sub), nodeFor(c.req.raw, env)]);
+  // Spend is attributed to a space the caller is in: the selected one when they can enter
+  // it, else their first. Never to whatever an `x-scope` header names.
+  const charged = sites.find(site => site.scopeId === here) ?? sites[0];
+  if (!charged) throw new HTTPException(403, { message: 'You have no spaces to ask about.' });
+  const model = modelFor(env, env.AI, {
+    spec: env.ASSISTANT_MODEL || DEFAULT_ASSISTANT_MODEL,
+    sent: 'Your questions, and the text of the documents the assistant searches and reads to answer them',
+    usageEvent: 'drive.assistant.usage',
+    operation: 'drive/assistant',
+    tenant: base.tenantId,
+    scope: scopeId.parse(charged.scopeId),
+  });
+  return {
+    spaces: sites.map(site => ({ slug: site.slug, name: site.name, current: site.scopeId === here, scope: site.scope })),
+    model,
+  };
+});
 app.post('/api/sites', async (c) => {
   const node = await nodeFor(c.req.raw, c.env);
   const principal = await requirePeopleAdmin(c);
@@ -816,6 +861,12 @@ app.put('/api/plugins', async (c) => {
 
 /** The authenticated, reachable space roster shared by the picker and grant discovery. */
 async function accessibleSites(request: Request, env: Env) {
+  const { base, sub } = await subjectOf(request, env);
+  return sitesForSubject(env, base, sub);
+}
+
+/** Who is asking, as a login on this install — 401 when nobody is. */
+async function subjectOf(request: Request, env: Env) {
   const base = baseNode(request, env);
   // The SUBJECT, not a principal: who is asking is a fact about the install, and a
   // principal is a fact about ONE space (K-22 — the same login is a different principal
@@ -824,7 +875,7 @@ async function accessibleSites(request: Request, env: Env) {
   // a fourth got 401 from the very endpoint that would have let them leave it.
   const subject = await (await providerFor(env, base)).resolve(request.headers);
   if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
-  return sitesForSubject(env, base, subject.sub);
+  return { base, sub: subject.sub };
 }
 
 /** The spaces one login can enter, each with its principal and stub there. */

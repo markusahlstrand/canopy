@@ -21,10 +21,10 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
  * lie, and a cap that a lying header defeats is not a cap. So the read is bounded too,
  * and stops the moment the accumulated length passes the limit rather than after.
  */
-export async function readBounded(req: Request): Promise<Uint8Array> {
+export async function readBounded(req: Request, limit = MAX_UPLOAD_BYTES, refusal = `upload exceeds ${limit} bytes`): Promise<Uint8Array> {
   const declared = Number(req.headers.get('content-length') ?? '');
-  if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) {
-    throw new HTTPException(413, { message: `upload exceeds ${MAX_UPLOAD_BYTES} bytes` });
+  if (Number.isFinite(declared) && declared > limit) {
+    throw new HTTPException(413, { message: refusal });
   }
   if (!req.body) return new Uint8Array();
 
@@ -35,9 +35,9 @@ export async function readBounded(req: Request): Promise<Uint8Array> {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > MAX_UPLOAD_BYTES) {
+    if (total > limit) {
       await reader.cancel();
-      throw new HTTPException(413, { message: `upload exceeds ${MAX_UPLOAD_BYTES} bytes` });
+      throw new HTTPException(413, { message: refusal });
     }
     chunks.push(value);
   }

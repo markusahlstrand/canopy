@@ -208,6 +208,21 @@ layer are skipped. Links and mail addresses are stripped from what the model wri
 `DOCUMENT_AI_MODEL` overrides the default model. Each run's outcome is in its counters
 and logged as `drive.document-ai.done`; usage lines as `drive.document-ai.usage`.
 
+## Assistant
+
+⌘K answers questions as well as finding files: type a question and pick *Ask the
+assistant* (or press ⌘↵). `POST /api/assistant` takes the conversation (the worker keeps
+no transcript) and runs a tool loop through `createModelHost` with two read-only tools,
+`search_documents` and `read_document`. Both are the drive's own operations
+(`drive/search`, `drive/get-file`, `drive/file-details`, `drive/file-text-excerpt`)
+invoked through each space's stub for the principal the caller is THERE, across every
+space the login can enter. So the model reaches exactly what the person could, and it
+cannot write. The reply names the files the run read, and the palette opens them,
+in another space by a page load. Answers render as plain text, since document text is
+untrusted input to the model. Nothing is sent until someone asks. No `AI` binding
+means a 503. `ASSISTANT_MODEL` overrides the default model; usage lines are logged as
+`drive.assistant.usage`.
+
 ## Live updates
 
 `GET /api/live` is Substrat's WebSocket subscription for authenticated pages. The

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -12,10 +12,12 @@ import {
 import { Icon } from "@canopy/ui";
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from "./file-icon";
-import { SEARCH_MIN, search, type PluginInstall, type SearchHit, type Site } from "./api";
+import { SEARCH_MIN, askAssistant, search, type AssistantSource, type PluginInstall, type SearchHit, type Site } from "./api";
+import { AssistantThread, keepKeys, type AssistantTurn } from "./assistant-thread";
+import { historyWindow, MAX_QUESTION_CHARS } from "../../src/assistant-contract";
 import { pluginManifest } from './installed-plugins';
 import { kindOf, type FileItem } from "./items";
-import { spaceLabel } from './space-navigation';
+import { openSpaceFile, spaceLabel } from './space-navigation';
 
 /**
  * Where the palette can take you.
@@ -50,6 +52,9 @@ interface CommandPaletteProps {
   offline?: boolean;
 }
 
+/** A file the palette knows only by id and name — a search hit or an assistant source. */
+const fileStub = (id: string, name: string): FileItem => ({ id, name, kind: kindOf(null, name), modified: '', size: '—', isFolder: false });
+
 /** Search and keyboard actions, with visible progress and recoverable failures. */
 export function CommandPalette({
   open,
@@ -79,11 +84,92 @@ export function CommandPalette({
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [settledQuery, setSettledQuery] = useState<string | null>(null);
-  const searching = !offline && query.trim().length >= SEARCH_MIN;
+  // The assistant: its conversation outlives the dialog, so ⌘K, Esc, ⌘K comes back to it.
+  const [mode, setMode] = useState<'search' | 'assistant'>('search');
+  const [turns, setTurns] = useState<AssistantTurn[]>([]);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  // A question refused before it was sent: said beside the box, cleared as it is edited.
+  const [askNotice, setAskNotice] = useState<string | null>(null);
+  // Bumped by "New conversation", so an answer to the old one cannot land in the new one.
+  const conversation = useRef(0);
+  const assistant = mode === 'assistant' && !offline;
+  const searching = !assistant && !offline && query.trim().length >= SEARCH_MIN;
+
+  const send = (history: AssistantTurn[]) => {
+    const id = conversation.current;
+    setAsking(true);
+    setAskError(null);
+    askAssistant(historyWindow(history).map(({ role, content }) => ({ role, content })))
+      .then((reply) => {
+        if (id === conversation.current) setTurns([...history, { role: 'assistant', content: reply.answer, sources: reply.sources }]);
+      })
+      .catch((e: unknown) => {
+        if (id === conversation.current) setAskError(e instanceof Error ? e.message || 'The assistant could not answer.' : String(e));
+      })
+      .finally(() => {
+        if (id === conversation.current) setAsking(false);
+      });
+  };
+  /** `fresh`: asked from search, which reads as a new question — "Continue" is how to go on. */
+  const ask = (question: string, fresh = false) => {
+    const text = question.trim();
+    // One question at a time: a follow-up typed while an answer is coming stays in the box.
+    // A fresh question retires one still pending; a follow-up waits for it.
+    if (!text) { setMode('assistant'); return; }
+    if (asking && !fresh) {
+      setAskNotice('Wait for this answer, then send your next question.');
+      return;
+    }
+    // Refused here, with the text still in the box: the worker would refuse it anyway, and
+    // a retry of a turn that can never be accepted is a dead end. Before any reset, so a
+    // refused question costs nothing — the conversation is kept, minus its stale Retry.
+    if (text.length > MAX_QUESTION_CHARS) {
+      // A notice, not the request error: it is about the text in the box, and goes as it is edited.
+      setAskNotice(`Ask a question of at most ${MAX_QUESTION_CHARS.toLocaleString('en')} characters.`);
+      return;
+    }
+    setMode('assistant');
+    // A fresh question leaves the old conversation, so its errors and Retry go too.
+    if (fresh) resetConversation();
+    setQuery('');
+    setResults([]);
+    // A question whose answer failed is replaced by the next one, not left unanswered
+    // above it: two questions in a row is not a conversation a model can read.
+    const base = fresh ? [] : turns;
+    const settled = base.at(-1)?.role === 'user' ? base.slice(0, -1) : base;
+    const history = [...settled, { role: 'user' as const, content: text }];
+    setTurns(history);
+    send(history);
+  };
+  const resetConversation = () => {
+    conversation.current++;
+    setTurns([]);
+    setAsking(false);
+    setAskError(null);
+  };
+  const here = sites.find((site) => site.current)?.slug;
+  const spaceNames = useMemo(() => new Map(sites.map((site) => [site.slug, spaceLabel(site)])), [sites]);
+  const openSource = (source: AssistantSource) => {
+    // Unknown here is "another space": a page load to the right one is always correct,
+    // opening by id in the wrong one never is.
+    if (here && source.space === here) {
+      if (onOpenFile(fileStub(source.fileId, source.name)) !== false) onOpenChange(false);
+      return;
+    }
+    // Another space is another page load, behind the same draft guard as switching spaces.
+    openSpaceFile(source.space, source.fileId);
+  };
 
   useEffect(() => {
     if (!open) {
-      setQuery("");
+      // A conversation outlives the dialog: ⌘K, Esc, ⌘K comes back to it.
+      // A conversation, or a first question being written, is still there on ⌘K.
+      const keep = turns.length > 0 || asking || mode === 'assistant';
+      setMode(keep ? 'assistant' : 'search');
+      setAskNotice(null);
+      // A question being written stays with the conversation it belongs to.
+      if (mode !== 'assistant') setQuery("");
       setSettledQuery(null);
       setResults([]);
     }
@@ -118,10 +204,23 @@ export function CommandPalette({
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="top-[18%] translate-y-0">
       <CommandInput
-        placeholder="Search files and more…"
+        placeholder={assistant ? (turns.length ? "Ask a follow-up…" : "Ask about your documents…") : "Search files, or ask the assistant…"}
         value={query}
+        onKeyDown={(event) => {
+          // Enter that confirms an IME candidate is composing, not sending. Safari reports
+          // that keydown with isComposing false and keyCode 229.
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229 || offline) return;
+          // In the assistant, Enter sends. In search, ⌘↵ hands the query to the assistant
+          // and a plain Enter still opens the highlighted result.
+          if (assistant || event.metaKey || event.ctrlKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            ask(query, !assistant);
+          }
+        }}
         onValueChange={(next) => {
           setQuery(next);
+          setAskNotice(null);
           setSettledQuery(null);
           // The previous query's hits are wrong the moment the query changes — and worse
           // than wrong, because cmdk's `value` embeds the new query, so they stay
@@ -131,6 +230,18 @@ export function CommandPalette({
         }}
       />
       <CommandList className="max-h-[60vh]">
+        {assistant ? <AssistantThread
+          turns={turns}
+          asking={asking}
+          error={askError}
+          // Retry resends an unanswered question; an error with nothing to resend has none.
+          onRetry={turns.at(-1)?.role === 'user' ? () => { if (!asking) send(turns); } : undefined}
+          onOpenSource={openSource}
+          spaceNames={spaceNames}
+          currentSpace={here}
+          onBack={() => setMode('search')}
+          onReset={resetConversation}
+        /> : <>
         {offline ? <p role="status" className="p-3 text-sm text-muted-foreground">File search is unavailable while offline. Reconnect to search this space.</p> : null}
         {error ? <>
           <p role="alert" className="p-3 text-sm">{error}</p>
@@ -156,14 +267,7 @@ export function CommandPalette({
                   key={hit.id}
                   value={`hit ${query} ${hit.name}`}
                   onSelect={run(() =>
-                    onOpenFile({
-                      id: hit.id,
-                      name: hit.name,
-                      kind: kindOf(null, hit.name),
-                      modified: '',
-                      size: '—',
-                      isFolder: false,
-                    }),
+                    onOpenFile(fileStub(hit.id, hit.name)),
                   )}
                 >
                   <FileIcon kind={kindOf(null, hit.name)} size={22} />
@@ -236,7 +340,26 @@ export function CommandPalette({
             <CommandShortcut>⌘U</CommandShortcut>
           </CommandItem> : null}
         </CommandGroup>
+        </>}
       </CommandList>
+      {/* Not a cmdk item, on purpose: an item matching every query would outrank file hits
+          and take a plain Enter. Asking is ⌘↵, a click, or Tab to this button. */}
+      {!offline && askNotice ? <p role="alert" className="border-t px-4 py-2 text-sm">{askNotice}</p> : null}
+      {!offline && !assistant ? <button
+        type="button"
+        onKeyDown={keepKeys}
+        onClick={() => query.trim() ? ask(query, true) : setMode('assistant')}
+        className="flex w-full items-center gap-2 border-t px-4 py-2.5 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      >
+        <Icon name="sparkles" size={16} />
+        <span className="min-w-0 flex-1 truncate">
+          {query.trim()
+            // Said outright: from here a question starts over, and "Continue" is how to go on.
+            ? <>{turns.length ? 'Ask in a new conversation' : 'Ask the assistant'}: “{query.trim()}”</>
+            : turns.length ? 'Continue the conversation' : 'Ask the assistant…'}
+        </span>
+        {query.trim() ? <CommandShortcut>⌘↵</CommandShortcut> : null}
+      </button> : null}
     </CommandDialog>
   );
 }
