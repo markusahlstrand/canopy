@@ -4,6 +4,7 @@ import { mountMemberRemoval } from './member-removal-route.js';
 import { claimSafeInvite, claimSafeInviteByCapability, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
 import { mountInviteSite } from './invite-site-route.js';
 import { mountSpaceSettings } from './space-settings-routes.js';
+import { mountSource, type DriveSource } from './source-routes.js';
 import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
 import { importGithubPlugin } from './github-plugin-import.js';
@@ -203,6 +204,8 @@ export interface Env {
   ALLOW_DEV_NODE?: string;
   ROUTER_SECRET?: string;
   PLATFORM_SECRET?: string;
+  /** The control plane's origin, injected on every pushed vertical; the connection relay lives there. */
+  CONTROL_PLANE_URL?: string;
   /**
    * Workers AI. The platform binds it on every pushed vertical (#1054); absent under a
    * plain `wrangler dev`, where Document AI logs that it has no model and does nothing.
@@ -480,7 +483,7 @@ app.use('*', invocationLog<Env>({
   allowUnsigned: (env) => env.ALLOW_DEV_NODE === 'true',
 }));
 app.use('/api/*', async (c, next) => {
-  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|accept-invite|claim-owner|app-passwords|assistant)$/.test(c.req.path);
+  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|source|accept-invite|claim-owner|app-passwords|assistant)$/.test(c.req.path);
   if (jsonMutation && c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HTTPException(415, {message:'Use application/json for this request.'});
   const origin = c.req.header('origin');
   if (jsonMutation && origin && origin !== new URL(c.req.url).origin) throw new HTTPException(403, {message:'Cross-origin mutations are not allowed.'});
@@ -773,6 +776,18 @@ mountAssistant(app, async c => {
   return {
     spaces: sites.map(site => ({ slug: site.slug, name: site.name, current: site.scopeId === here, scope: site.scope })),
     model,
+  };
+});
+mountSource(app, async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, c.env);
+  return {
+    scope: await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId),
+    relay: () => {
+      if (!c.env.CONTROL_PLANE_URL || !c.env.PLATFORM_SECRET) throw new HTTPException(503, { message: 'Connecting a source needs the hosted platform.' });
+      return { controlPlaneUrl: c.env.CONTROL_PLANE_URL, platformSecret: c.env.PLATFORM_SECRET, tenantId: node.tenantId, scopeId: node.scopeId };
+    },
   };
 });
 app.post('/api/sites', async (c) => {
@@ -1140,6 +1155,10 @@ app.post('/api/folders/:folderId/content', async (c) => {
     'drive/record-version',
     { fileId: file.id, location: { source: 'blob', blobRef: attachment.id } },
   );
+
+  // In a connected space an upload goes on to a3doc; its echo adopts this row (#358).
+  const { source } = await stub.invoke<{ source: DriveSource | null }>('drive/get-source');
+  if (source) await stub.invoke('drive/send-source-file', { fileId: file.id });
 
   if (written.current_version_id) {
     // A "New → …" starter is empty by definition; its first real save is what to describe.

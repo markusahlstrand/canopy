@@ -252,5 +252,10 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
   );
   CREATE TABLE drive_source_writes (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
   CREATE TABLE drive_source_pending (file_id TEXT PRIMARY KEY NOT NULL REFERENCES drive_files(id), attachment_id TEXT NOT NULL);` },
+  /** #358: the one source a space is bound to, recorded by the worker after the platform bound it. */
+  { version: '0013', sql: `CREATE TABLE drive_source (
+    id INTEGER PRIMARY KEY CHECK (id = 1), provider TEXT NOT NULL, connection_id TEXT NOT NULL,
+    account TEXT NOT NULL, folder TEXT NOT NULL, can_upload INTEGER NOT NULL, bound_at TEXT NOT NULL
+  );` },
 
 ];

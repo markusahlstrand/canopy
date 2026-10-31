@@ -14,7 +14,7 @@ async function world() {
   const dir = mkdtempSync(join(tmpdir(), 'source-landing-')); dirs.push(dir);
   const host = new SqliteScopeHost({ dir }); host.registerModule(driveModule);
   const staff = platformActorId.parse(ulid()), t = tenantId.parse(ulid()), s = scopeId.parse(ulid());
-  const owner = principalId.parse(ulid()), source = principalId.parse(ulid());
+  const owner = principalId.parse(ulid()), source = principalId.parse(ulid()), editor = principalId.parse(ulid());
   await host.admin.createTenant(staff, { id: t, slug: 'source', name: 'Source' });
   await host.admin.grantEntitlement(staff, t, driveManifest.entitlementKey as string);
   await host.provisionScope(staff, { tenantId: t, scopeId: s, vertical: 'drive' });
@@ -22,15 +22,18 @@ async function world() {
   await host.provisionBlobStore(staff, { tenantId: t, vertical: 'drive', binding: 'BLOBS' });
   for (const role of ROLES) await host.admin.defineRole(staff, t, role);
   for (const p of [owner, source]) await host.admin.assignRole(staff, { principalId: p, roleKey: 'owner', node: { tenantId: t, scopeId: s } });
+  await host.admin.assignRole(staff, { principalId: editor, roleKey: 'editor', node: { tenantId: t, scopeId: s } });
   await host.admin.grant(staff, { principalId: source, permission: DRIVE_PERM.landSource, node: { tenantId: t, scopeId: s }, grantedBy: source });
-  const stub = await host.getScope(source, t, s), human = await host.getScope(owner, t, s);
+  const stub = await host.getScope(source, t, s), human = await host.getScope(owner, t, s), member = await host.getScope(editor, t, s);
   const land = <O = { entity: { entityType: string; entityId: string } }>(input: FileSourceChange) => stub.invoke<O>('drive/land-source-change', input);
   const bytes = await host.attachments(source, t, s);
+  const connect = (canUpload = true, connectionId = 'connection') =>
+    human.invoke('drive/record-source', { provider: 'canopy.a3doc', connectionId, account: 'ACME', folder: 'Facturas', canUpload });
   const upsert = (itemId: string, path: string, kind: 'file' | 'folder' = 'file') => ({
     connectionId: 'connection', itemId, kind, path, name: path.split('/').at(-1)!, change: 'upsert' as const,
     previousPath: null, size: 5, contentType: 'text/plain', lastModifiedAt: null, webUrl: null, content: kind === 'file' ? 'follows' as const : null,
   });
-  return { land, upsert, bytes, stub, human };
+  return { land, upsert, bytes, stub, human, member, connect };
 }
 
 it('keeps item and version identity on redelivery and appends changed content', async () => {
@@ -88,6 +91,7 @@ it('adopts the upload echo without duplicating the local file or its version', a
   const attachment = await w.bytes.upload({ entity: { entityType: 'file', entityId: file.id }, filename: 'Upload.txt', contentType: 'text/plain', visibility: 'internal', body: new TextEncoder().encode('upload') });
   await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: attachment.id } });
   const first = await w.stub.invoke<{file: {current_version_id: string}}>('drive/get-file', {fileId: file.id});
+  await w.connect();
   await w.stub.invoke('drive/send-source-file', { fileId: file.id });
   const echoed = await w.land(w.upsert('uploaded-doc', 'Upload.txt'));
   expect(echoed.entity.entityId).toBe(file.id);
@@ -111,16 +115,62 @@ it('moves a renamed folder\'s descendants and leaves look-alike siblings alone',
   expect(await pathOf(sibling.entity.entityId)).toBe('Año 🧾_%x');
 });
 
-it('refuses to resend a newer version while an earlier send is pending', async () => {
+it('sends a connected upload once and refuses to replace it', async () => {
   const w = await world();
   const file = await w.stub.invoke<{ id: string }>('drive/ensure-file', { folderId: 'root', name: 'Draft.txt' });
   const entity = { entityType: 'file', entityId: file.id };
   const upload = (text: string) => w.bytes.upload({ entity, filename: 'Draft.txt', contentType: 'text/plain', visibility: 'internal', body: new TextEncoder().encode(text) });
   const one = await upload('one');
   await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: one.id } });
+  await expect(w.stub.invoke('drive/send-source-file', { fileId: file.id })).rejects.toThrow('not connected');
+  await w.connect();
   await w.stub.invoke('drive/send-source-file', { fileId: file.id });
   await w.stub.invoke('drive/send-source-file', { fileId: file.id });
   const two = await upload('two');
-  await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: two.id } });
-  await expect(w.stub.invoke('drive/send-source-file', { fileId: file.id })).rejects.toThrow('still being sent');
+  await expect(w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: two.id } })).rejects.toThrow("can't replace a document");
+});
+
+it('refuses tree changes in a connected space and uploads its a3doc user may not make', async () => {
+  const w = await world();
+  const folder = await w.stub.invoke<{ id: string }>('drive/create-folder', { parentId: 'root', name: 'Local' });
+  const file = await w.stub.invoke<{ id: string }>('drive/ensure-file', { folderId: 'root', name: 'Local.txt' });
+  await w.connect(false);
+  expect((await w.human.invoke<{ source: { canUpload: boolean } }>('drive/get-source')).source.canUpload).toBe(false);
+  const refused = [
+    ['drive/create-folder', { parentId: 'root', name: 'New' }, 'create folders'],
+    ['drive/rename-folder', { folderId: folder.id, name: 'Renamed' }, 'rename folders'],
+    ['drive/move-folder', { folderId: folder.id, parentId: 'root' }, 'move folders'],
+    ['drive/rename-file', { fileId: file.id, name: 'Renamed.txt' }, 'rename documents'],
+    ['drive/move-file', { fileId: file.id, folderId: folder.id }, 'move documents'],
+    ['drive/trash-file', { fileId: file.id }, 'delete documents'],
+    ['drive/ensure-file', { folderId: 'root', name: 'Upload.txt' }, "can't upload"],
+  ] as const;
+  for (const [operation, input, reason] of refused) await expect(w.human.invoke(operation, input), operation).rejects.toThrow(reason);
+  // The existing file is still found by name, so an upload of the same name reaches the replace refusal.
+  expect((await w.human.invoke<{ id: string }>('drive/ensure-file', { folderId: 'root', name: 'Local.txt' })).id).toBe(file.id);
+  await w.human.invoke('drive/clear-source');
+  expect(await w.human.invoke('drive/get-source')).toEqual({ source: null });
+  await w.human.invoke('drive/rename-file', { fileId: file.id, name: 'Renamed.txt' });
+});
+
+it('keeps identities for the same connection and releases them for another', async () => {
+  const w = await world();
+  await w.connect();
+  const first = await w.land(w.upsert('doc', 'Tax.txt'));
+  await w.human.invoke('drive/clear-source');
+  await w.connect();
+  expect(await w.land(w.upsert('doc', 'Tax.txt'))).toEqual(first);
+  await w.connect(true, 'other-connection');
+  // The old file is an ordinary file now, so the new account's document of that name cannot take it over.
+  await expect(w.land({ ...w.upsert('doc', 'Tax.txt'), connectionId: 'other-connection' })).rejects.toThrow('occupied');
+  expect(await w.stub.invoke('drive/get-file', { fileId: first.entity.entityId })).toBeTruthy();
+});
+
+it('lets only a manager connect a space, and any member read what it is connected to', async () => {
+  const w = await world();
+  expect(await w.human.invoke('drive/source-access')).toMatchObject({ source: null });
+  for (const operation of ['drive/source-access', 'drive/clear-source'] as const) await expect(w.member.invoke(operation), operation).rejects.toThrow();
+  await expect(w.member.invoke('drive/record-source', { provider: 'canopy.a3doc', connectionId: 'c', account: 'A', folder: '', canUpload: true })).rejects.toThrow();
+  await w.connect();
+  expect(await w.member.invoke('drive/get-source')).toMatchObject({ source: { account: 'ACME', folder: 'Facturas', canUpload: true } });
 });
