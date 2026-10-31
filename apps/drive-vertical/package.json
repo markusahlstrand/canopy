@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@canopy/connector-a3docs": "workspace:*",
+    "@canopy/connector-s3": "workspace:*",
     "@canopy/core": "workspace:*",
     "@canopy/example-plugins": "workspace:*",
     "@canopy/plugin-sdk": "workspace:*",

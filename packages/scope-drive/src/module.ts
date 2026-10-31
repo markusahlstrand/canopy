@@ -233,6 +233,33 @@ const operations = {
     }
     return { id: file.id, ...payload };
   },
+  'drive/send-s3-file': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    const file = liveFile(ctx, input.fileId);
+    const version = ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0];
+    if (!version?.blob_ref) throw substratError('conflict', 'upload the file before sending it to the bucket');
+    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [file.folder_id])[0]!;
+    const payload = fileSourceWriteRequest.parse({ directory: folder.path, files: [{ attachmentId: version.blob_ref, name: file.name, size: version.size }], conflict: input.conflict });
+    const pending = ctx.sql.query<{ attachment_id: string }>('SELECT attachment_id FROM drive_source_pending WHERE file_id = ?', [file.id])[0];
+    // Unlike a3doc, a bucket can take a newer version: the pending row follows the newest bytes.
+    if (pending?.attachment_id !== version.blob_ref) {
+      ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?) ON CONFLICT(file_id) DO UPDATE SET attachment_id = excluded.attachment_id', [file.id, version.blob_ref]);
+      ctx.emit({ type: 's3.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
+    }
+    return { id: file.id, ...payload };
+  },
+  'drive/request-s3-change': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(input.folderId)));
+    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [input.folderId])[0];
+    if (!folder) throw substratError('not_found', `folder not found: ${input.folderId}`);
+    // The folder the permission was checked on bounds every path the request names.
+    const within = (path: string) => !folder.path || path === folder.path || path.startsWith(`${folder.path}/`);
+    const { request } = input;
+    const paths = request.op === 'delete' ? request.items.map((i) => i.path) : request.op === 'move' ? [request.from, request.to] : [request.path];
+    if (!paths.every(within)) throw substratError('forbidden', 'the request names a path outside the folder it was made in');
+    ctx.emit({ type: 's3.items-requested', schemaVersion: 1, entity: folderRef(folder.id), piiClass: 'none', payload: { request } });
+    return { id: folder.id, request };
+  },
   'drive/source-write-journal': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.landSource));
     if (input.value !== undefined) {

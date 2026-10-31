@@ -26,7 +26,8 @@
  *   module-owned permission table would be the second enforcement system D-17
  *   exists to prevent.
  */
-import { defineEntities, defineOperations, emitModel, fileSourceChange, fileSourceWriteRequest, z } from '@substrat-run/contracts';
+import { defineEntities, defineOperations, emitModel, fileSourceChange, fileSourceConflict, fileSourceWriteRequest, z } from '@substrat-run/contracts';
+import { s3ItemsRequest } from '@canopy/connector-s3';
 
 /**
  * One path segment: a folder or file name, never a path.
@@ -238,10 +239,26 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     http: { method: 'POST', path: '/files/{fileId}/send-to-source' },
     emits: { entity: 'file', entityIdFrom: 'id', type: 'a3doc.files-requested', schemaVersion: 1, piiClass: 'none', payload: ['directory', 'files', 'conflict'] },
   },
-  /** A provider upload attempt must survive a failed connector call. No credentials live here. */
+  /** Send one uploaded file to the space's S3 bucket; its echo adopts this row. */
+  'drive/send-s3-file': {
+    summary: 'Send a file to the S3 bucket', permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string(), conflict: fileSourceConflict.default('replace') }),
+    output: z.object({ id: z.string(), ...fileSourceWriteRequest.shape }),
+    http: { method: 'POST', path: '/files/{fileId}/send-to-s3' },
+    emits: { entity: 'file', entityIdFrom: 'id', type: 's3.files-requested', schemaVersion: 1, piiClass: 'none', payload: ['directory', 'files', 'conflict'] },
+  },
+  /** Ask the space's S3 bucket to delete, move or create items under a folder the caller may write. */
+  'drive/request-s3-change': {
+    summary: 'Delete, move or create items in the S3 bucket', permission: { key: 'drive:write', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({ folderId: z.string(), request: s3ItemsRequest }),
+    output: z.object({ id: z.string(), request: s3ItemsRequest }),
+    http: { method: 'POST', path: '/folders/{folderId}/s3-change' },
+    emits: { entity: 'folder', entityIdFrom: 'id', type: 's3.items-requested', schemaVersion: 1, piiClass: 'none', payload: ['request'] },
+  },
+  /** A provider upload attempt (or an S3 move's carried-over ids) must survive a failed connector call. No credentials live here. */
   'drive/source-write-journal': {
     summary: 'Read or persist a connector upload attempt', permission: 'drive:land-source',
-    input: z.object({ key: z.string().startsWith('a3doc:write:').max(200), value: z.unknown().optional() }),
+    input: z.object({ key: z.string().regex(/^(a3doc:write:|s3:write:|s3:moves$)/).max(200), value: z.unknown().optional() }),
     output: z.object({ value: z.unknown() }),
   },
   /** A connector lands one item at a time; people are never granted this key. */

@@ -214,6 +214,26 @@ Each step is its own PR.
 Synology and GitHub come back the same way afterwards. They are steps 1–2 again for each
 provider, and that is when the shared `FileSource` facet is worth extracting.
 
+### 5.1 S3 (second file source, built)
+
+`packages/connectors/s3` (`canopy.s3`) is the second provider on this path, and the first
+read-write one. Where it differs from a3doc:
+
+- **Item ids are object keys** (folders: the key with a trailing `/`), so a retried sweep never
+  mints a second identity. A move made from Canopy keeps its ids through a `s3:moves` entry in
+  `drive/source-write-journal`, written before the copy.
+- **Reads** list the prefix in key order (`start-after` cursor), compare ETags, and are cut into
+  calls by a download budget. Deletes land only after a `HEAD` (file) or one-key listing (folder).
+- **Writes** cover all three conflict modes (create-only PUTs with `If-None-Match: *`, and an
+  `x-amz-meta-canopy-write` tag so a retry recognises its own object) plus delete, move and mkdir
+  through a second event, `s3.items-requested`, because `fileSourceWriteRequest` only adds files.
+  That event's vocabulary is the candidate to lift into Substrat's contract once Synology needs it.
+- **No echo:** a file sent from Canopy is landed with its own attachment, not downloaded back.
+
+Still open for S3: the drive UI (the *Source* section, step 4) and routing the drive's own
+rename / move / trash / create-folder in a bound space through `drive/request-s3-change`.
+A provider that ignores `If-None-Match` (older MinIO, some B2 setups) turns `fail` into overwrite.
+
 ## 6. Open questions
 
 1. **The extension format on `Upload`.** The web app sends `entireExtension.toLowerCase()`, so

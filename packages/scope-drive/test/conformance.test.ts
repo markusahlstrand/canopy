@@ -160,6 +160,7 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
     'drive/update-file-details': { description: 'test', labels: ['contract'], expectedRevision: 0 },
     'drive/keep-version': { versionId: 'fixture-created-in-invoke', keep: true },
     'drive/create-folder': { name: 'conformance' },
+    'drive/request-s3-change': { request: { op: 'mkdir', path: 'conformance' } },
     'drive/ensure-file': { name: 'conformance' },
     // The `external` branch on purpose: a `blob` version names an attachment the
     // handler verifies, so driving that branch would mean uploading bytes to set
