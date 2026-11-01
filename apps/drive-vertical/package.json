@@ -110,7 +110,7 @@
     "outbound": [
       "a3asesordoc-serviceaddressprovider.a3software.com",
       "*.a3software.com",
-      "a3doc.wolterskluwer.es"
+      "*.wolterskluwer.es"
     ]
   }
 }
