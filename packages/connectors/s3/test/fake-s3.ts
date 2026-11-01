@@ -50,6 +50,7 @@ export class FakeS3 {
     const obj = this.objects.get(key);
     if (method === 'HEAD' || method === 'GET') {
       if (!obj) return new Response(method === 'GET' ? '<Error><Code>NoSuchKey</Code></Error>' : null, { status: 404 });
+      if (headers['if-match'] && headers['if-match'] !== `"${obj.etag}"`) return new Response(null, { status: 412 });
       const h: Record<string, string> = { etag: `"${obj.etag}"`, 'content-length': String(obj.body.length), 'last-modified': new Date(obj.modified).toUTCString(), 'content-type': obj.contentType };
       for (const [k, v] of Object.entries(obj.meta)) h[`x-amz-meta-${k}`] = v;
       return new Response(method === 'GET' ? obj.body : null, { status: 200, headers: h });
@@ -64,7 +65,8 @@ export class FakeS3 {
         const from = source.split('/').slice(2).map(decodeURIComponent).join('/');
         const src = this.objects.get(from);
         if (!src) return new Response('<Error><Code>NoSuchKey</Code></Error>', { status: 404 });
-        this.objects.set(key, { ...src, etag: `etag-${++this.n}` });
+        // A single-part object keeps its ETag (its MD5) through a copy.
+        this.objects.set(key, { ...src });
         return new Response('<CopyObjectResult/>', { status: 200 });
       }
       if (headers['if-none-match'] === '*' && obj) return new Response('<Error><Code>PreconditionFailed</Code></Error>', { status: 412 });

@@ -270,3 +270,70 @@ it('signs the host fetch will send, without a default port', async () => {
   const expected = await signRequest({ method: 'GET', host: 'acct.r2.example', path: `/${BUCKET}/`, query: { 'list-type': '2', 'max-keys': '1' }, headers: {}, payloadHash: EMPTY_SHA256, credentials, now });
   expect(sent!.authorization).toBe(expected.authorization);
 });
+
+it('downloads only the object the listing sized, never one that changed since', async () => {
+  const w = world();
+  w.s3.put('a.txt', 'small');
+  await w.bind();
+  const listed = w.s3.objects.get('a.txt')!.etag;
+  // The object is rewritten once, between the listing and the download.
+  let rewritten = false;
+  w.s3.faults.push((method, key) => {
+    if (!rewritten && method === 'GET' && key === 'a.txt') { rewritten = true; w.s3.put('a.txt', 'much bigger now'); }
+    return false;
+  });
+  await w.def.sweep!(w.ctx);
+  expect(w.s3.objects.get('a.txt')!.etag).not.toBe(listed);
+  expect(w.changes.find(c => c.change === 'content')).toBeUndefined();
+  await w.sweepAll();
+  expect(w.drive.get('a.txt')?.content).toBe('much bigger now');
+});
+
+it('refuses an endpoint with a query or fragment', async () => {
+  const w = world();
+  for (const endpoint of ['https://host.example?mode=1', 'https://host.example/base#x']) {
+    expect(await w.def.probeCandidate({ ...w.ctx.secret, endpoint }, { fetch: w.s3.fetch as never })).toMatchObject({ ok: false, refused: true });
+  }
+  expect(await w.def.probeCandidate({ ...w.ctx.secret, endpoint: `${ENDPOINT}/` }, { fetch: w.s3.fetch as never })).toMatchObject({ ok: true });
+});
+
+it('does not write a replace again over its own object when redelivered', async () => {
+  const w = world();
+  await w.bind();
+  const replace = w.event(S3_FILES_EVENT, { conflict: 'replace', files: [{ attachmentId: 'att', name: 'R.pdf', size: 'bytes of att'.length }] });
+  await w.dispatch(replace);
+  await w.dispatch(replace);
+  expect(w.s3.calls.filter(c => c.method === 'PUT' && c.key === 'R.pdf')).toHaveLength(1);
+});
+
+it('a resumed move keeps the source when the target changed, and resumes after the journal was pruned', async () => {
+  const w = world();
+  w.s3.put('a.txt', 'a'); w.s3.put('c.txt', 'c');
+  await w.bind(); await w.sweepAll();
+  const lostDelete = (key: string) => w.s3.faults.push((method, k) => method === 'DELETE' && k === key);
+
+  const move = w.event(S3_ITEMS_EVENT, { request: { op: 'move', kind: 'file', from: 'a.txt', to: 'b.txt' } });
+  lostDelete('a.txt');
+  await expect(w.dispatch(move)).rejects.toThrow('connection reset');
+  w.s3.put('b.txt', 'overwritten by someone');
+  await expect(w.dispatch(move)).rejects.toThrow('changed in the bucket');
+  expect(w.s3.text('a.txt')).toBe('a');
+
+  const later = w.event(S3_ITEMS_EVENT, { request: { op: 'move', kind: 'file', from: 'c.txt', to: 'd.txt' } });
+  lostDelete('c.txt');
+  await expect(w.dispatch(later)).rejects.toThrow('connection reset');
+  await w.sweepAll(); // lands d.txt under c.txt's id
+  await w.sweepAll(); // starts with d.txt committed, so prunes its journal entry
+  expect(w.journal.get('s3:moves')).not.toHaveProperty('d.txt');
+  await w.dispatch(later);
+  expect(w.s3.objects.has('c.txt')).toBe(false);
+});
+
+it('never carries a held entry onto someone else\'s object when the source is gone', async () => {
+  const w = world();
+  w.s3.put('a.txt', 'a');
+  await w.bind(); await w.sweepAll();
+  w.s3.objects.delete('a.txt');
+  w.s3.put('b.txt', 'theirs');
+  await expect(w.dispatch(w.event(S3_ITEMS_EVENT, { request: { op: 'move', kind: 'file', from: 'a.txt', to: 'b.txt' } }))).rejects.toThrow('not in the bucket');
+});

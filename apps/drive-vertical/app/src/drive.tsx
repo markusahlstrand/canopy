@@ -60,6 +60,8 @@ import {
   peopleAccess,
   createFile,
   createFolder,
+  getSource,
+  type DriveSource,
   folderByPath,
   getFolder,
   getFile,
@@ -278,6 +280,18 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [canManagePeople, setCanManagePeople] = useState(false);
   const siteList = useSites();
   const liveSpace = siteList.sites?.find(site => site.current)?.slug ?? null;
+  // A space mirroring an a3doc folder follows a3doc's tree (#358): no new folders, renames, moves
+  // or deletes, and uploads only when its a3doc user may make them. The operations refuse the
+  // rest; this hides what would only be refused.
+  const [source, setSource] = useState<DriveSource | null>(null);
+  const [sourceTick, setSourceTick] = useState(0);
+  useEffect(() => {
+    let current = true;
+    setSource(null);
+    getSource().then(next => { if (current) setSource(next ?? null); }).catch(() => {});
+    return () => { current = false; };
+  }, [liveSpace, sourceTick]);
+  const mirrored = source !== null, canUpload = !source || source.canUpload;
   const [savedSpace, setSavedSpace] = useState<string | null>(null);
   const cacheSpace = liveSpace ?? savedSpace ?? currentSite();
   const [offlinePins, setOfflinePins] = useState<FolderPin[]>([]);
@@ -903,10 +917,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     <EmptyList
       icon="folder"
       title={folderId === ROOT_FOLDER_ID ? activeSpaceName ? `${activeSpaceName} is empty` : 'Your drive is empty' : 'This folder is empty'}
-      description="Create a folder or upload files to get started."
+      description={mirrored ? "Documents added to this a3doc folder appear here." : "Create a folder or upload files to get started."}
       actions={[
-        { label: 'New folder', onClick: () => setCreating(true) },
-        { label: 'Upload files', onClick: () => uploadRef.current?.click() },
+        ...(mirrored ? [] : [{ label: 'New folder', onClick: () => setCreating(true) }]),
+        ...(canUpload ? [{ label: 'Upload files', onClick: () => uploadRef.current?.click() }] : []),
       ]}
     />
   );
@@ -917,9 +931,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         <Sidebar
           active={activePluginId ? null : view}
           onNavigate={navigate}
-          onNewFolder={() => startWrite(() => setCreating(true))}
-          onUpload={() => startWrite(() => uploadRef.current?.click())}
-          creators={creators}
+          onNewFolder={mirrored ? undefined : () => startWrite(() => setCreating(true))}
+          onUpload={canUpload ? () => startWrite(() => uploadRef.current?.click()) : undefined}
+          creators={mirrored ? [] : creators}
           onCreate={startCreate}
           offline={offline}
           writeBlocked={linkPending || linkListingUnavailable}
@@ -945,9 +959,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             mobile
             active={activePluginId ? null : view}
             onNavigate={(id) => { if (navigate(id)) setMobileNavOpen(false); }}
-            onNewFolder={() => { setMobileNavOpen(false); startWrite(() => setCreating(true)); }}
-            onUpload={() => { setMobileNavOpen(false); startWrite(() => uploadRef.current?.click()); }}
-            creators={creators}
+            onNewFolder={mirrored ? undefined : () => { setMobileNavOpen(false); startWrite(() => setCreating(true)); }}
+            onUpload={canUpload ? () => { setMobileNavOpen(false); startWrite(() => uploadRef.current?.click()); } : undefined}
+            creators={mirrored ? [] : creators}
             onCreate={key => { setMobileNavOpen(false); startCreate(key); }}
             offline={offline}
             writeBlocked={linkPending || linkListingUnavailable}
@@ -976,7 +990,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onCrumbClick={view === 'drive' ? (index) => upTo(index - 1) : undefined}
         onOpenMenu={() => setMobileNavOpen(true)}
         onOpenCmd={() => setCmdOpen(true)}
-        onUpload={() => startWrite(() => uploadRef.current?.click())}
+        onUpload={canUpload ? () => startWrite(() => uploadRef.current?.click()) : undefined}
         onRefresh={() => void refresh(true)}
         syncing={busy}
         onOpenViewers={() => setViewersOpen(true)}
@@ -1060,7 +1074,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             changePreview(item.id);
           } else return setPreviewing(item.id);
         }}
-        onUpload={offline || linkPending || linkListingUnavailable ? undefined : () => startWrite(() => uploadRef.current?.click())}
+        onUpload={offline || linkPending || linkListingUnavailable || !canUpload ? undefined : () => startWrite(() => uploadRef.current?.click())}
       />
 
       {/* The one scrolling region: the rail and the topbar stay put. */}
@@ -1133,17 +1147,17 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <div data-selection-bar className={`mb-3 flex h-10 items-center gap-2 overflow-x-auto whitespace-nowrap rounded border px-2 text-sm ${selection.size ? 'border-border' : 'border-transparent'}`}>
         <SelectionSummary selection={selection} items={view === 'search' ? previewFiles.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file))]} onClear={() => setSelection(new Set())} />
         <span ref={setBulkTrigger} className="contents" />
-        {(view === 'drive' || view === 'search') && previewFiles.some(file => selection.has(file.id)) ? <Button variant="outline" size="sm" disabled={offline || busy} onClick={() => {
+        {(view === 'drive' || view === 'search') && !mirrored && previewFiles.some(file => selection.has(file.id)) ? <Button variant="outline" size="sm" disabled={offline || busy} onClick={() => {
           setMoving(previewFiles.filter(file => selection.has(file.id)).map(file => fileItem(file)));
         }}>Move selected files…</Button> : null}
       </div>
 
-      <BulkTrash trigger={bulkTrigger} contextKey={`${view}:${folderId}:${term}`} beforeTrash={ids => !previewId.current || !ids.includes(previewId.current) || setPreviewing(null)} visible={view === 'drive' || view === 'search'} files={(view === 'search' ? visibleHits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
+      <BulkTrash trigger={bulkTrigger} contextKey={`${view}:${folderId}:${term}`} beforeTrash={ids => !previewId.current || !ids.includes(previewId.current) || setPreviewing(null)} visible={(view === 'drive' || view === 'search') && !mirrored} files={(view === 'search' ? visibleHits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
         unselect(ids);
         await refreshRef.current();
       }} />
 
-      <BulkRestore trigger={bulkTrigger} visible={view === 'trash'} files={trash.filter(file => selection.has(file.id))} disabled={offline || busy} onRestored={async ids => {
+      <BulkRestore trigger={bulkTrigger} visible={view === 'trash' && !mirrored} files={trash.filter(file => selection.has(file.id))} disabled={offline || busy} onRestored={async ids => {
         unselect(ids);
         await refreshRef.current();
       }} />
@@ -1160,6 +1174,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onSort={onSort}
           view={layout}
           onAction={onAction}
+          mirrored={mirrored}
           pluginMenuItems={() => []}
           loading={busy}
           empty={empty}
@@ -1176,6 +1191,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onSort={onSort}
           view={layout}
           onAction={onAction}
+          mirrored={mirrored}
           pluginMenuItems={() => []}
           loading={busy}
           empty={empty}
@@ -1194,8 +1210,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onSort={onSort}
           view={layout}
           onAction={onAction}
+          mirrored={mirrored}
           // Drag a file onto a folder: the move the platform's relink makes safe (#75).
-          onMove={offline || view !== 'drive' ? undefined : (item, folder) => void act(async () => {
+          onMove={offline || view !== 'drive' || mirrored ? undefined : (item, folder) => void act(async () => {
             await (item.isFolder ? moveFolder(item.id, folder.id) : moveFile(item.id, folder.id));
             unselect([item.id]);
           })}
@@ -1245,7 +1262,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
 
-      <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={siteList.retry} />
+      <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={() => { siteList.retry(); setSourceTick(tick => tick + 1); }} />
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
       <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
       <AppPasswordsDialog open={appPasswordsOpen && !offline} onOpenChange={setAppPasswordsOpen} />

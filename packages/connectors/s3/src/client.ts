@@ -79,7 +79,11 @@ export interface S3Client {
   list(input: ListInput): Promise<ListResult>;
   /** `metaKeys`: the `x-amz-meta-*` names to read back (a response's headers can only be asked by name). */
   head(key: string, metaKeys?: string[]): Promise<S3Head | null>;
-  get(key: string): Promise<Uint8Array | null>;
+  /**
+   * `ifMatch`: only the object with this ETag. Changed since (412) reads as `null`, as gone does: an
+   * object that grew after its listing is never buffered past the size the listing was checked at.
+   */
+  get(key: string, ifMatch?: string): Promise<Uint8Array | null>;
   /** `ifNoneMatch` makes it create-only; a taken key throws an {@link S3Error} with status 412. */
   put(key: string, body: Uint8Array, opts?: { contentType?: string; ifNoneMatch?: boolean; meta?: Record<string, string> }): Promise<{ etag: string | null }>;
   copy(from: string, to: string): Promise<void>;
@@ -180,9 +184,9 @@ export function createS3Client(opts: { config: S3Config; fetch: FetchLike; now?:
       };
     },
 
-    async get(key) {
-      const res = await send('GET', key);
-      if (res.status === 404) return null;
+    async get(key, ifMatch) {
+      const res = await send('GET', key, ifMatch ? { headers: { 'if-match': `"${ifMatch}"` } } : {});
+      if (res.status === 404 || res.status === 412) return null;
       if (!res.ok) throw await errorOf(res.status, await res.text());
       return new Uint8Array(await res.arrayBuffer());
     },

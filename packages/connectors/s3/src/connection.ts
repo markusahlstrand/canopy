@@ -21,7 +21,7 @@ export const s3Secret = z.object({
     .max(512)
     .optional()
     .transform((e) => e || undefined)
-    .refine((e) => e === undefined || /^https?:\/\/[^/\s]+/i.test(e), 'endpoint must be an http(s) URL'),
+    .refine((e) => e === undefined || /^https?:\/\/[^/\s?#]+(\/[^\s?#]*)?$/i.test(e), 'endpoint must be an http(s) URL without a query or fragment'),
 });
 export type S3Secret = z.infer<typeof s3Secret>;
 

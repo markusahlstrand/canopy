@@ -181,7 +181,9 @@ export async function bindS3Context(ctx: ScopedConnectionContext, options: S3Opt
   if (prefix && !validPath(prefix.slice(0, -1))) throw new ConnectorRefusal(`'${folder}' is not a valid folder`);
   // A prefix with nothing under it yet is fine (an empty space to fill); a key that cannot list is not.
   await clientFor(ctx.fetch, s3Secret.parse({ ...ctx.secret }), options).list({ prefix, maxKeys: 1 });
-  return { folder: prefix.replace(/\/$/, ''), prefix };
+  // `canUpload`: the drive gates uploads on it (a3doc's role may forbid them). S3 has no such role
+  // to read; a key without write access is refused per write instead.
+  return { folder: prefix.replace(/\/$/, ''), prefix, canUpload: true };
 }
 
 function prefixOf(ctx: ScopedConnectionContext): string {
@@ -288,8 +290,8 @@ export async function syncS3Context(
       let attachment: AttachmentPick | null = echo ?? null;
       if (!attachment) {
         downloads++;
-        const bytes = await io.client.get(obj.key);
-        // Gone between the listing and the download: the verify step answers about it.
+        const bytes = await io.client.get(obj.key, obj.etag);
+        // Gone or changed since the listing: the verify step, or the next pass, answers about it.
         if (bytes) {
           const record = await ctx.attachments.upload({
             entity: target.data.entity, filename: name, contentType: contentType ?? 'application/octet-stream', visibility: 'internal', body: connectorUploadBody(bytes),
@@ -417,7 +419,10 @@ async function writeFiles(io: Io, event: DomainEvent): Promise<void> {
     let name = wanted;
     let etag: string | null = null;
     if (payload.conflict === 'replace') {
-      etag = (await put(`${io.prefix}${join(directory, name)}`, false)).etag;
+      const key = `${io.prefix}${join(directory, name)}`;
+      // Redelivered after it succeeded (a lost answer, or a later file of the event failed): the
+      // object is already this write's, so it is not written again.
+      etag = (await ownObject(io, key, tag))?.etag ?? (await put(key, false)).etag;
     } else {
       for (let n = 0; ; n++) {
         if (n > 0 && (payload.conflict === 'fail' || n > MAX_RENAME)) {
@@ -536,6 +541,17 @@ async function movedHere(io: Io, key: string, itemId: string) {
   return ((await readJournal<Moves>(io, MOVES)) ?? {})[key]?.itemId === itemId;
 }
 
+/**
+ * Is the object at `key` this connector's own copy of `itemId`? The journal says so until it is
+ * pruned (after a day, or once a sync settles the key); from then on the held state does, since
+ * the sync gave the copied key the id the journal carried over.
+ */
+async function isOwnMove(io: Io, key: string, itemId: string) {
+  if (await movedHere(io, key, itemId)) return true;
+  const held = (await io.ctx.state.get(itemKey(key))) as ItemEntry | undefined;
+  return held?.itemId === itemId;
+}
+
 async function idFor(io: Io, key: string) {
   const held = (await io.ctx.state.get(itemKey(key))) as ItemEntry | undefined;
   return held?.itemId ?? key;
@@ -545,13 +561,23 @@ async function moveFile(io: Io, from: string, to: string): Promise<void> {
   if (from === to) return;
   const src = `${io.prefix}${from}`, dst = `${io.prefix}${to}`;
   const [there, here] = await Promise.all([io.client.head(src), io.client.head(dst)]);
-  if (!there && here) return moveEntry(io, src, dst, to); // done by an earlier delivery whose answer was lost
-  if (!there) throw new ConnectorRefusal(`'${from}' is not in the bucket`);
   const id = await idFor(io, src);
+  if (!there && here) {
+    const held = (await io.ctx.state.get(itemKey(src))) as ItemEntry | undefined;
+    // Done by an earlier delivery, and the sync has carried the entry over already.
+    if (!held) return;
+    // Done by an earlier delivery whose answer was lost, or the source went and someone else's
+    // object is at the target: only this move's own record may carry the held entry there.
+    if (!(await isOwnMove(io, dst, id))) throw new ConnectorRefusal(`'${from}' is not in the bucket`);
+    return moveEntry(io, src, dst, to);
+  }
+  if (!there) throw new ConnectorRefusal(`'${from}' is not in the bucket`);
   // Both there: an earlier delivery copied and then lost the delete, or someone else's object.
-  // The journal, written before the copy, tells which.
-  const resumed = !!here && (await movedHere(io, dst, id));
+  const resumed = !!here && (await isOwnMove(io, dst, id));
   if (here && !resumed) throw new ConnectorRefusal(`'${to}' already exists in the bucket`);
+  // The copy keeps the source's ETag; a different one means the target was written since, and
+  // deleting the source would lose its content.
+  if (resumed && here.etag !== there.etag) throw new ConnectorRefusal(`'${to}' changed in the bucket after the move copied it; '${from}' is kept`);
   if (!resumed) {
     await recordMoves(io, [[dst, id]]);
     await io.client.copy(src, dst);

@@ -49,7 +49,8 @@ interface TopbarProps {
   onCrumbClick?: (index: number) => void;
   onOpenMenu: () => void;
   onOpenCmd: () => void;
-  onUpload: () => void;
+  /** Absent where nothing can be uploaded (a read-only a3doc space). */
+  onUpload?: () => void;
   auth: Me;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -206,9 +207,9 @@ export function Topbar({
         </button>
       )}
 
-      {/* Upload. The portal hid this in a read-only connected space; every space here is
-          writable by whoever holds drive:write, and the operation refuses the rest. */}
-      <Button
+      {/* Upload, absent in a space whose a3doc user can only read; for the rest, whoever holds
+          drive:write may upload and the operation refuses everyone else. */}
+      {onUpload ? <Button
         onClick={onUpload}
         size="icon"
         disabled={offline || writeBlocked}
@@ -218,7 +219,7 @@ export function Topbar({
       >
         <Icon name="upload" size={16} />
         <span className="hidden sm:inline">Upload</span>
-      </Button>
+      </Button> : null}
 
       {/* Account: square login button when logged out, avatar menu otherwise */}
       {loggedOut ? (

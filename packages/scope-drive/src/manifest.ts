@@ -69,9 +69,11 @@ export const driveManifest = moduleManifest.parse({
     { entityType: 'file', readPermission: DRIVE_PERM.read },
   ],
   lists: listsDeclaredBy(driveOperations, driveEntities),
+  // Each space binds its own connection to its own folder (#358, substrat#2732), so the
+  // platform's pass binds nothing for either source.
   connections: [
-    { provider: 'canopy.a3doc', operation: 'drive/land-source-change', permission: 'drive:land-source' },
-    { provider: 'canopy.s3', operation: 'drive/land-source-change', permission: 'drive:land-source' },
+    { provider: 'canopy.a3doc', operation: 'drive/land-source-change', permission: 'drive:land-source', bind: 'on-request' },
+    { provider: 'canopy.s3', operation: 'drive/land-source-change', permission: 'drive:land-source', bind: 'on-request' },
   ],
   // A vertical may declare only its bare slug (substrat#2388); the key matches `substrat.slug`.
   entitlementKey: 'drive-vertical',

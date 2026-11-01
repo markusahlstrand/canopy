@@ -88,8 +88,10 @@ interface SidebarProps {
   /** Which view the screen is showing, so the matching row reads as active. */
   active: NavId | null;
   onNavigate: (id: NavId) => void;
-  onNewFolder: () => void;
-  onUpload: () => void;
+  /** Absent where folders can't be made here (a space mirroring a3doc). */
+  onNewFolder?: () => void;
+  /** Absent where nothing can be uploaded here. */
+  onUpload?: () => void;
   /** "New → …" entries contributed by enabled plugins. */
   creators?: { key: string; label: string; icon?: string }[];
   onCreate?: (key: string) => void;
@@ -241,7 +243,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = 
         <div className={cn('shrink-0 px-3 pb-2', narrow && 'px-2')}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button disabled={offline || writeBlocked} className="w-full justify-center gap-1.5" size={narrow ? 'icon' : 'default'}>
+              <Button disabled={offline || writeBlocked || (!onNewFolder && !onUpload && !(creators.length > 0 && onCreate))} className="w-full justify-center gap-1.5" size={narrow ? 'icon' : 'default'}>
                 <Icon name="plus" size={16} strokeWidth={2.25} />
                 {!narrow && (
                   <>
@@ -252,14 +254,14 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = 
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-48">
-              <DropdownMenuItem onClick={onNewFolder}>
+              {onNewFolder ? <DropdownMenuItem onClick={onNewFolder}>
                 <Icon name="folder" size={15} /> New folder
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={onUpload}>
+              </DropdownMenuItem> : null}
+              {onUpload ? <DropdownMenuItem onClick={onUpload}>
                 <Icon name="upload" size={15} /> Upload files
-              </DropdownMenuItem>
+              </DropdownMenuItem> : null}
               {creators.length > 0 && onCreate ? <>
-                <DropdownMenuSeparator />
+                {onNewFolder || onUpload ? <DropdownMenuSeparator /> : null}
                 {creators.map(creator => <DropdownMenuItem key={creator.key} onClick={() => onCreate(creator.key)}>
                   <Icon name={creator.icon ?? 'file'} size={15} /> {creator.label}
                 </DropdownMenuItem>)}

@@ -33,16 +33,16 @@
   },
   "dependencies": {
     "@canopy/connector-s3": "workspace:*",
-    "@substrat-run/contracts": "^0.170.0",
-    "@substrat-run/kernel": "^0.170.0",
-    "@substrat-run/vertical-host": "^0.170.0",
+    "@substrat-run/contracts": "^0.172.0",
+    "@substrat-run/kernel": "^0.172.0",
+    "@substrat-run/vertical-host": "^0.172.0",
     "hono": "^4.13.14",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@substrat-run/adapter-sqlite": "^0.170.0",
-    "@substrat-run/attachment-extractors": "^0.2.31",
-    "@substrat-run/contract-tests": "^0.170.0",
+    "@substrat-run/adapter-sqlite": "^0.172.0",
+    "@substrat-run/attachment-extractors": "^0.2.33",
+    "@substrat-run/contract-tests": "^0.172.0",
     "@types/node": "^26.6.6",
     "typescript": "~7.0.2",
     "vitest": "^5.0.5"
