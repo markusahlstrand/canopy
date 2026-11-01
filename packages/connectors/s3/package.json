@@ -1,0 +1,39 @@
+{
+  "name": "@canopy/connector-s3",
+  "version": "0.1.0",
+  "description": "An S3-compatible bucket (AWS S3, Cloudflare R2, MinIO, …) as a Substrat file source: bind a scope to a bucket prefix, sync its objects in through the vertical's own operation, and write back uploads, deletes, moves and folders.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./client": {
+      "types": "./dist/src/client.d.ts",
+      "default": "./dist/src/client.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "pnpm build"
+  },
+  "dependencies": {
+    "@substrat-run/contracts": "^0.172.0",
+    "@substrat-run/kernel": "^0.172.0",
+    "@substrat-run/vertical-host": "^0.172.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "files": [
+    "dist"
+  ]
+}

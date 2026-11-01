@@ -29,6 +29,7 @@ import {
   permissionKey,
   principalId,
   substratError,
+  type FileSourceConflict,
   type HandlerInput,
   type HandlerOutput,
   type Page,
@@ -151,9 +152,28 @@ function sourceOf(ctx: OperationContext): DriveSource | null {
   return row ? { provider: row.provider, connectionId: row.connection_id, account: row.account, folder: row.folder, canUpload: row.can_upload === 1, boundAt: row.bound_at } : null;
 }
 
-/** A connected space mirrors its source's tree, and a3doc can only add documents, so the rest is refused here. */
+/** What a provider is called in a refusal. */
+const SOURCE_NAMES: Record<string, string> = { 'canopy.a3doc': 'a3doc', 'canopy.s3': 'S3 bucket' };
+const sourceName = (provider: string) => SOURCE_NAMES[provider] ?? provider;
+
+/**
+ * A connected space mirrors its source's tree, so changing that tree here is refused. a3doc can
+ * only add documents; an S3 bucket could do the rest, but the drive does not route its own
+ * folder, rename, move and delete operations to the bucket yet, and doing them only here would
+ * leave the space and the bucket apart.
+ */
 function refuseInConnected(ctx: OperationContext, what: string): void {
-  if (sourceOf(ctx)) throw substratError('conflict', `This space mirrors an a3doc folder, and a3doc can't ${what}.`);
+  const source = sourceOf(ctx);
+  if (!source) return;
+  if (source.provider === 'canopy.a3doc') throw substratError('conflict', `This space mirrors an a3doc folder, and a3doc can't ${what}.`);
+  throw substratError('conflict', `This space mirrors an ${sourceName(source.provider)} folder, and the drive can't ${what} in it yet.`);
+}
+
+/** The bound source, which must be `provider`: a send only goes where the space is connected. */
+function sourceFor(ctx: OperationContext, provider: string): DriveSource {
+  const source = sourceOf(ctx);
+  if (source?.provider !== provider) throw substratError('conflict', `this space is not connected to ${sourceName(provider)}`);
+  return source;
 }
 
 /** The entity refs the checks narrow onto. */
@@ -224,28 +244,68 @@ const mySpaceRequests = (ctx: OperationContext): PlatformRequest[] =>
     .filter((request: PlatformRequestEntry): request is PlatformRequest => !isUndecodablePlatformRequest(request))
     .filter(request => request.requestedBy === ctx.principal);
 
+/** A live file's current bytes as a write request into its own folder, for any file source. */
+function sourceWrite(ctx: OperationContext, file: { id: string; folder_id: string; name: string; current_version_id: string | null }, conflict: FileSourceConflict, source: string) {
+  const version = ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0];
+  if (!version?.blob_ref) throw substratError('conflict', `upload the file before sending it to ${source}`);
+  const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [file.folder_id])[0]!;
+  const payload = fileSourceWriteRequest.parse({ directory: folder.path, files: [{ attachmentId: version.blob_ref, name: file.name, size: version.size }], conflict });
+  return { payload, attachmentId: version.blob_ref };
+}
+
 const operations = {
   'drive/send-source-file': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
     const file = liveFile(ctx, input.fileId);
-    if (!sourceOf(ctx)) throw substratError('conflict', 'this space is not connected to a3doc');
+    sourceFor(ctx, 'canopy.a3doc');
     if (ctx.sql.query('SELECT item_id FROM drive_source_items WHERE kind = ? AND entity_id = ?', ['file', file.id]).length) {
       throw substratError('conflict', 'a3doc cannot replace a connected file');
     }
-    const version = ctx.sql.query<VersionRow>('SELECT * FROM drive_file_versions WHERE id = ?', [file.current_version_id])[0];
-    if (!version?.blob_ref) throw substratError('conflict', 'upload the file before sending it to a3doc');
-    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [file.folder_id])[0]!;
-    const payload = fileSourceWriteRequest.parse({ directory: folder.path, files: [{ attachmentId: version.blob_ref, name: file.name, size: version.size }], conflict: 'rename' });
+    const { payload, attachmentId } = sourceWrite(ctx, file, 'rename', 'a3doc');
     const pending = ctx.sql.query<{ attachment_id: string }>('SELECT attachment_id FROM drive_source_pending WHERE file_id = ?', [file.id])[0];
     // A repeat is harmless; a newer version is not: the earlier request's bytes are what a3doc receives.
-    if (pending && pending.attachment_id !== version.blob_ref) {
+    if (pending && pending.attachment_id !== attachmentId) {
       throw substratError('conflict', 'an earlier version of this file is still being sent to a3doc');
     }
     if (!pending) {
-      ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?)', [file.id, version.blob_ref]);
+      ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?)', [file.id, attachmentId]);
       ctx.emit({ type: 'a3doc.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
     }
     return { id: file.id, ...payload };
+  },
+  'drive/send-s3-file': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    const file = liveFile(ctx, input.fileId);
+    sourceFor(ctx, 'canopy.s3');
+    const { payload, attachmentId } = sourceWrite(ctx, file, input.conflict, 'the bucket');
+    // Every call sends: a bucket write is idempotent per event, and a send that failed for good
+    // (a 'fail' that found the name taken) must be retryable without a new version. The pending
+    // row follows the newest bytes, since a bucket can take a newer version.
+    ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?) ON CONFLICT(file_id) DO UPDATE SET attachment_id = excluded.attachment_id', [file.id, attachmentId]);
+    ctx.emit({ type: 's3.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
+    return { id: file.id, ...payload };
+  },
+  'drive/request-s3-change': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(input.folderId)));
+    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [input.folderId])[0];
+    if (!folder) throw substratError('not_found', `folder not found: ${input.folderId}`);
+    sourceFor(ctx, 'canopy.s3');
+    // The folder the permission was checked on bounds every path the request names.
+    const within = (path: string) => !folder.path || path === folder.path || path.startsWith(`${folder.path}/`);
+    const { request } = input;
+    const paths = request.op === 'delete' ? request.items.map((i) => i.path) : request.op === 'move' ? [request.from, request.to] : [request.path];
+    if (!paths.every(within)) throw substratError('forbidden', 'the request names a path outside the folder it was made in');
+    // The bucket would move, and the sync would then land the item onto a path the space already
+    // holds and be refused on every pass. Refuse it here, before anything leaves.
+    if (request.op === 'move') {
+      const slash = request.to.lastIndexOf('/');
+      const parent = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE path = ?', [slash < 0 ? '' : request.to.slice(0, slash)])[0];
+      const taken = ctx.sql.query('SELECT id FROM drive_folders WHERE path = ?', [request.to]).length > 0
+        || (!!parent && ctx.sql.query("SELECT id FROM drive_files WHERE folder_id = ? AND name = ? AND state = 'live'", [parent.id, request.to.slice(slash + 1)]).length > 0);
+      if (taken) throw substratError('conflict', `'${request.to}' already exists in this space`);
+    }
+    ctx.emit({ type: 's3.items-requested', schemaVersion: 1, entity: folderRef(folder.id), piiClass: 'none', payload: { request } });
+    return { id: folder.id, request };
   },
   'drive/source-write-journal': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.landSource));
@@ -519,8 +579,9 @@ const operations = {
     if (input.expectedCurrentVersion !== undefined && input.expectedCurrentVersion !== file.current_version_id) {
       throw substratError('conflict', 'file changed — reload before saving');
     }
-    // a3doc keeps a document as it was sent, so only a new file's first bytes can go to it.
-    if (file.current_version_id) refuseInConnected(ctx, 'replace a document');
+    // a3doc keeps a document as it was sent, so only a new file's first bytes can go to it. A
+    // bucket takes a newer version (`drive/send-s3-file` replaces by default).
+    if (file.current_version_id && sourceOf(ctx)?.provider !== 'canopy.s3') refuseInConnected(ctx, 'replace a document');
 
     // One location, guaranteed by the declaration's discriminated union: the columns
     // the other source would use stay null because there is nothing to read them

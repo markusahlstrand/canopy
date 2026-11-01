@@ -74,8 +74,11 @@ export async function landSourceChange(ctx: OperationContext, change: FileSource
   const parent = ctx.sql.query<Folder>('SELECT * FROM drive_folders WHERE path = ?', [parentPath])[0];
   if (!parent) throw substratError('conflict', 'source parent folder has not landed');
   if (change.kind === 'folder') {
-    const prior = held ? ctx.sql.query<Folder>('SELECT * FROM drive_folders WHERE id = ?', [held.entity_id])[0] : undefined;
+    let prior = held ? ctx.sql.query<Folder>('SELECT * FROM drive_folders WHERE id = ?', [held.entity_id])[0] : undefined;
     const atPath = ctx.sql.query<Folder>('SELECT * FROM drive_folders WHERE path = ?', [change.path])[0];
+    // A folder made here and sent to the source comes back as the source's item: adopt it, unless
+    // another source item already holds it.
+    if (!prior && atPath && !ctx.sql.query('SELECT item_id FROM drive_source_items WHERE kind = ? AND entity_id = ?', ['folder', atPath.id]).length) prior = atPath;
     if (atPath && atPath.id !== prior?.id) throw substratError('conflict', 'source folder path is occupied');
     const id = prior?.id ?? ulid();
     if (!prior) {

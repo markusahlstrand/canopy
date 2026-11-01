@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
 import { platformActorId, principalId, scopeId, tenantId, type FileSourceChange } from '@substrat-run/contracts';
 import { ulid } from '@substrat-run/kernel';
-import { driveManifest, driveModule, DRIVE_PERM } from '../src/index.js';
+import { driveManifest, driveModule, DRIVE_PERM, ROOT_FOLDER_ID } from '../src/index.js';
 import { ROLES } from '../src/provision.js';
 
 const dirs: string[] = [];
@@ -27,13 +27,15 @@ async function world() {
   const stub = await host.getScope(source, t, s), human = await host.getScope(owner, t, s), member = await host.getScope(editor, t, s);
   const land = <O = { entity: { entityType: string; entityId: string } }>(input: FileSourceChange) => stub.invoke<O>('drive/land-source-change', input);
   const bytes = await host.attachments(source, t, s);
-  const connect = (canUpload = true, connectionId = 'connection') =>
-    human.invoke('drive/record-source', { provider: 'canopy.a3doc', connectionId, account: 'ACME', folder: 'Facturas', canUpload });
+  const connect = (canUpload = true, connectionId = 'connection', provider = 'canopy.a3doc') =>
+    human.invoke('drive/record-source', { provider, connectionId, account: 'ACME', folder: 'Facturas', canUpload });
   const upsert = (itemId: string, path: string, kind: 'file' | 'folder' = 'file') => ({
     connectionId: 'connection', itemId, kind, path, name: path.split('/').at(-1)!, change: 'upsert' as const,
     previousPath: null, size: 5, contentType: 'text/plain', lastModifiedAt: null, webUrl: null, content: kind === 'file' ? 'follows' as const : null,
   });
-  return { land, upsert, bytes, stub, human, member, connect };
+  /** How many events of `type` the scope has emitted. */
+  const emitted = async (type: string) => (await host.admin.queryScope(staff, t, s, { sql: `SELECT COUNT(*) FROM _substrat_outbox WHERE type = '${type}'` })).rows[0]![0];
+  return { land, upsert, bytes, stub, human, member, connect, emitted };
 }
 
 it('keeps item and version identity on redelivery and appends changed content', async () => {
@@ -173,4 +175,62 @@ it('lets only a manager connect a space, and any member read what it is connecte
   await expect(w.member.invoke('drive/record-source', { provider: 'canopy.a3doc', connectionId: 'c', account: 'A', folder: '', canUpload: true })).rejects.toThrow();
   await w.connect();
   expect(await w.member.invoke('drive/get-source')).toMatchObject({ source: { account: 'ACME', folder: 'Facturas', canUpload: true } });
+});
+
+it('adopts a folder made here when the source reports it, but never one another item holds', async () => {
+  const w = await world();
+  const made = await w.human.invoke<{ id: string }>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Made here' });
+  const landed = await w.land(w.upsert('made-here/', 'Made here', 'folder'));
+  expect(landed.entity.entityId).toBe(made.id);
+  expect(await w.land(w.upsert('made-here/', 'Made here', 'folder'))).toEqual(landed);
+  await expect(w.land(w.upsert('other/', 'Made here', 'folder'))).rejects.toThrow('source folder path is occupied');
+});
+
+it('sends a file to the bucket, follows its newest version, and adopts the echo of its own attachment', async () => {
+  const w = await world();
+  await w.connect(true, 'connection', 'canopy.s3');
+  const file = await w.stub.invoke<{ id: string }>('drive/ensure-file', { folderId: 'root', name: 'Scan.txt' });
+  const entity = { entityType: 'file', entityId: file.id };
+  const upload = (text: string) => w.bytes.upload({ entity, filename: 'Scan.txt', contentType: 'text/plain', visibility: 'internal', body: new TextEncoder().encode(text) });
+  const one = await upload('one');
+  await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: one.id } });
+  expect(await w.stub.invoke('drive/send-s3-file', { fileId: file.id })).toMatchObject({ directory: '', conflict: 'replace', files: [{ attachmentId: one.id, name: 'Scan.txt' }] });
+  const two = await upload('two');
+  await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: two.id } });
+  expect(await w.stub.invoke('drive/send-s3-file', { fileId: file.id })).toMatchObject({ files: [{ attachmentId: two.id }] });
+  const before = await w.stub.invoke<{ file: { current_version_id: string } }>('drive/get-file', { fileId: file.id });
+  // The connector lands the drive's own attachment as the content: no new version.
+  const echoed = await w.land(w.upsert('Scan.txt', 'Scan.txt'));
+  expect(echoed.entity.entityId).toBe(file.id);
+  await w.land({ ...w.upsert('Scan.txt', 'Scan.txt'), change: 'content', attachment: two, replaces: two.id });
+  const after = await w.stub.invoke<{ file: { current_version_id: string } }>('drive/get-file', { fileId: file.id });
+  expect(after.file.current_version_id).toBe(before.file.current_version_id);
+});
+
+it('bounds an S3 change request by the folder it was made in', async () => {
+  const w = await world();
+  const box = await w.human.invoke<{ id: string }>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Box' });
+  const move0 = { op: 'move', kind: 'file', from: 'Box/a.txt', to: 'Box/b.txt' };
+  await expect(w.human.invoke('drive/request-s3-change', { folderId: box.id, request: move0 })).rejects.toThrow('not connected to S3 bucket');
+  await w.connect(true, 'connection', 'canopy.s3');
+  await expect(w.human.invoke('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Later' })).rejects.toThrow("the drive can't create folders in it yet");
+  const move = { op: 'move', kind: 'file', from: 'Box/a.txt', to: 'Box/b.txt' };
+  expect(await w.human.invoke('drive/request-s3-change', { folderId: box.id, request: move })).toMatchObject({ id: box.id, request: move });
+  await expect(w.human.invoke('drive/request-s3-change', { folderId: box.id, request: { ...move, to: 'Elsewhere/b.txt' } })).rejects.toThrow('outside the folder');
+  await expect(w.human.invoke('drive/request-s3-change', { folderId: box.id, request: { op: 'delete', items: [{ kind: 'folder', path: 'Boxed' }] } })).rejects.toThrow('outside the folder');
+  expect(await w.human.invoke('drive/request-s3-change', { folderId: ROOT_FOLDER_ID, request: { op: 'mkdir', path: 'Anywhere' } })).toMatchObject({ id: ROOT_FOLDER_ID });
+  // A move onto a path the space already holds would wedge the sync: refused before it leaves.
+  await expect(w.human.invoke('drive/request-s3-change', { folderId: ROOT_FOLDER_ID, request: { op: 'move', kind: 'folder', from: 'Other', to: 'Box' } })).rejects.toThrow("'Box' already exists in this space");
+});
+
+it('resends to the bucket after a send that failed for good, without a new version', async () => {
+  const w = await world();
+  await w.connect(true, 'connection', 'canopy.s3');
+  const file = await w.stub.invoke<{ id: string }>('drive/ensure-file', { folderId: 'root', name: 'Taken.txt' });
+  const one = await w.bytes.upload({ entity: { entityType: 'file', entityId: file.id }, filename: 'Taken.txt', contentType: 'text/plain', visibility: 'internal', body: new TextEncoder().encode('one') });
+  await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: one.id } });
+  await w.stub.invoke('drive/send-s3-file', { fileId: file.id, conflict: 'fail' });
+  // Say the connector refused that one ('fail' found the name taken): the same version goes again.
+  expect(await w.stub.invoke('drive/send-s3-file', { fileId: file.id, conflict: 'replace' })).toMatchObject({ conflict: 'replace', files: [{ attachmentId: one.id }] });
+  expect(await w.emitted('s3.files-requested')).toBe(2);
 });
