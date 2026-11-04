@@ -875,6 +875,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const rootLabel = activeSpaceName || 'My Drive';
   const currentPin = offlinePins.find(pin => pin.folderId === folderId);
   const currentPinError = pinErrors[`${auth.principal}\n${cacheSpace}\n${folderId}`] ?? null;
+  const pinSyncing = pinBusy || (currentPin?.status === 'syncing' && !currentPinError);
+  const folderActions = view === 'drive' && !offline && !linkPending && !linkListingUnavailable;
+  const pageTitle = view === 'trash' ? 'Trash' : view === 'search' ? 'Search' : view === 'shared' ? 'Shared with me' : crumbs.at(-1)?.name ?? rootLabel;
+  const pageCount = view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : folders.length + files.length;
   const saveCurrentFolderOffline = async () => {
     if (!auth.principal || !cacheSpace || pinBusy) return;
     const pin: FolderPin = { principal: auth.principal, space: cacheSpace, folderId,
@@ -1004,25 +1008,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       />
 
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
-      {!activePluginId && view === 'drive' && !offline && !linkPending && !linkListingUnavailable ? <div className="flex flex-wrap gap-2 px-4 py-2">
-        <CurrentFolderShare folderId={folderId} onShare={setSharing} />
-        {siteList.sites?.find(site => site.current)?.slug || currentSite() ? <CopyFolderLink key={folderId} folderId={folderId}
-          site={siteList.sites?.find(site => site.current)?.slug ?? currentSite() ?? undefined} compact /> : null}
-        {cacheSpace && auth.principal ? <>
-          <Button size="sm" variant="outline" disabled={pinBusy || (currentPin?.status === 'syncing' && !currentPinError)} onClick={() => void (currentPin?.status === 'ready' ? removeCurrentFolderOffline() : saveCurrentFolderOffline())}>
-            {pinBusy || (currentPin?.status === 'syncing' && !currentPinError) ? 'Saving offline…' : currentPin?.status === 'ready' ? 'Remove offline copy' : currentPin ? 'Retry offline download' : 'Available offline on this device'}
-          </Button>
-          {currentPin?.status === 'ready' && !currentPinError ? <span role="status" className="text-xs text-muted-foreground">
-            Saved for offline reading on this device · updated <time dateTime={new Date(currentPin.updatedAt).toISOString()}>{new Date(currentPin.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
-          </span> : null}
-          {currentPin?.status === 'partial' ? <span role="status" className="text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</span> : null}
-          {currentPin?.status === 'error' ? <span role="status" className="text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</span> : null}
-          {currentPin && currentPin.status !== 'ready' ? <Button size="sm" variant="ghost" disabled={pinBusy} onClick={() => void removeCurrentFolderOffline()}>Remove pin</Button> : null}
-        </> : null}
-      </div> : null}
-      {pinBusy && pinProgress ? <p role="status" className="px-4 text-xs text-muted-foreground">Saving {pinProgress.files} files in {pinProgress.folders} folders for offline reading…</p> : null}
-      {currentPinError ? <p role="alert" className="px-4 text-xs text-destructive">Offline copy incomplete: {currentPinError}</p> : null}
-
       <input
         ref={uploadRef}
         type="file"
@@ -1078,7 +1063,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       />
 
       {/* The one scrolling region: the rail and the topbar stay put. */}
-      <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-3 sm:p-4">
+      <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-3 sm:px-8 sm:pb-8 sm:pt-[22px]">
       {activePluginId ? <section className="flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border bg-card">
         <div className="flex items-center gap-2 border-b px-4 py-3"><Icon name="plugin" size={18} /><h2 className="min-w-0 flex-1 truncate font-medium">{activePlugin ? pluginManifest(activePlugin).name : 'Plugin unavailable'}</h2><Button size="sm" variant="outline" onClick={() => exitPluginApp()}>Back to drive</Button></div>
         {activePlugin ? <div className="min-h-0 flex-1"><SandboxPlugin plugin={activePlugin} /></div> : <p role="alert" className="p-4 text-sm text-muted-foreground">This plugin is no longer enabled in this space.</p>}
@@ -1092,7 +1077,36 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           Offline — showing saved names. Saved file copies can open read-only; changes and search are unavailable.
         </p>
       ) : null}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      {/* The page header, as the portal had it: what you are looking at on the left, what
+          you can do with it on the right. Folder actions are compact so they read as tools
+          on the folder rather than a banner across the space. */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="min-w-0">
+          <h1 className="truncate text-[22px] font-semibold tracking-tight">{pageTitle}</h1>
+          <div className="mt-0.5 whitespace-nowrap font-mono text-[13px] text-muted-foreground">
+            {pageCount} item{pageCount === 1 ? '' : 's'}{selection.size > 0 ? ` · ${selection.size} selected` : ''}
+          </div>
+        </div>
+        <div className="flex-1" />
+        {folderActions ? <>
+          <CurrentFolderShare folderId={folderId} onShare={setSharing} />
+          {siteList.sites?.find(site => site.current)?.slug || currentSite() ? <CopyFolderLink key={folderId} folderId={folderId}
+            site={siteList.sites?.find(site => site.current)?.slug ?? currentSite() ?? undefined} compact /> : null}
+          {cacheSpace && auth.principal ? <>
+            <Button size="sm" variant={currentPin?.status === 'ready' && !currentPinError ? 'secondary' : 'outline'} className="gap-1.5"
+              disabled={pinSyncing}
+              aria-label={pinSyncing ? 'Saving offline…' : currentPin?.status === 'ready' ? 'Remove offline copy' : currentPin ? 'Retry offline download' : 'Make available offline'}
+              title={currentPin?.status === 'ready' && !currentPinError ? `Saved for offline reading on this device · updated ${new Date(currentPin.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Click to remove.` : undefined}
+              onClick={() => void (currentPin?.status === 'ready' ? removeCurrentFolderOffline() : saveCurrentFolderOffline())}>
+              <Icon name={currentPin && currentPin.status !== 'ready' && !pinSyncing ? 'alert-triangle' : 'cloud'} size={14} />
+              <span className="hidden sm:inline">{pinSyncing ? 'Saving offline…' : currentPin?.status === 'ready' ? 'Available offline' : currentPin ? 'Retry offline' : 'Make available offline'}</span>
+            </Button>
+            {currentPin?.status === 'ready' && !currentPinError ? <span role="status" className="sr-only">
+              Saved for offline reading on this device · updated <time dateTime={new Date(currentPin.updatedAt).toISOString()}>{new Date(currentPin.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+            </span> : null}
+            {currentPin && currentPin.status !== 'ready' ? <Button size="sm" variant="ghost" disabled={pinBusy} onClick={() => void removeCurrentFolderOffline()}>Remove pin</Button> : null}
+          </> : null}
+        </> : null}
         <div className="relative">
           <Icon
             name="search"
@@ -1140,7 +1154,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         >
           <Icon name={layout === 'list' ? 'grid' : 'list'} className="size-4" />
         </Button>
-      </div>
+            </div>
+      {folderActions && cacheSpace && auth.principal && currentPin?.status === 'partial' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</p> : null}
+      {folderActions && cacheSpace && auth.principal && currentPin?.status === 'error' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</p> : null}
+      {pinBusy && pinProgress ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Saving {pinProgress.files} files in {pinProgress.folders} folders for offline reading…</p> : null}
+      {currentPinError ? <p role="alert" className="-mt-2 mb-3 text-xs text-destructive">Offline copy incomplete: {currentPinError}</p> : null}
 
       {/* Always rendered at one height, so nothing above the rows appears on select: a
           selection that pushed the table down made a double-click's second click miss. */}
