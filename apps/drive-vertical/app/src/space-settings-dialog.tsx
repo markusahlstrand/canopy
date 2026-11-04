@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Input, Icon, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@canopy/ui';
-import { getSpaceSettings, updateSpaceSettings } from './api';
+import { currentSite, deleteSite, getSpaceSettings, selectSite, updateSpaceSettings } from './api';
 import { defaultSpaceSettings, type SpaceSettings } from '../../src/space-settings';
 import { SpaceStyleFields } from './space-style-fields';
 import { SourceSettings } from './source-settings';
@@ -34,6 +34,23 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
       if (generation.current === ticket) setError(error instanceof Error ? error.message || 'Could not save or load space settings.' : String(error));
     } finally { if (generation.current === ticket) setBusy(false); }
   };
+  const remove = async () => {
+    const slug = currentSite();
+    if (!slug) return;
+    const ticket = generation.current;
+    setBusy(true); setError(null);
+    try {
+      await deleteSite(slug);
+      // The selected space is gone: drop the selection and land on the install's home space.
+      selectSite(null);
+      const url = new URL(window.location.href);
+      for (const key of ['site', 'path', 'folder', 'file']) url.searchParams.delete(key);
+      url.hash = '';
+      window.location.replace(url);
+    } catch (error) {
+      if (generation.current === ticket) { setError(error instanceof Error ? error.message || 'Could not delete this space.' : String(error)); setBusy(false); }
+    }
+  };
   return <Dialog open={open} onOpenChange={next => {if(!busy && (next || confirmDiscardDrafts()))onOpenChange(next);}}>
     <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[480px]">
       <DialogHeader className="px-5 pt-5"><DialogTitle>Space settings</DialogTitle><DialogDescription>Choose how this space appears to its members.</DialogDescription></DialogHeader>
@@ -55,9 +72,27 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
             </label>
           </section>
           <SourceSettings disabled={busy} onChanged={onSaved}/>
+          {currentSite() ? <DeleteSpace name={JSON.parse(initial || '{}').name ?? ''} disabled={busy} onDelete={() => void remove()}/> : null}
         </form>}
       </div>
       <DialogFooter className="border-t px-5 py-3"><Button type="button" variant="ghost" disabled={busy} onClick={() => {if(confirmDiscardDrafts())onOpenChange(false);}}>Cancel</Button><Button type="submit" form="space-settings-form" disabled={!loaded || busy || !settings.name.trim()}>{busy?'Saving…':'Save space'}</Button></DialogFooter>
     </DialogContent>
   </Dialog>;
+}
+
+/** Deleting is permanent for its members, so the name is typed out before the button arms. */
+function DeleteSpace({name,disabled,onDelete}: {name:string;disabled:boolean;onDelete:()=>void}) {
+  const [confirming,setConfirming] = useState(false), [typed,setTyped] = useState('');
+  return <section aria-label="Delete space" className="space-y-2 rounded-lg border border-destructive/40 p-3">
+    <h3 className="text-xs font-medium text-destructive">Delete space</h3>
+    <p className="text-xs text-muted-foreground">Removes this space and everything in it for every member. This cannot be undone.</p>
+    {!confirming ? <Button type="button" variant="outline" size="sm" className="text-destructive" disabled={disabled} onClick={()=>setConfirming(true)}><Icon name="trash" size={14}/> Delete space…</Button> : <div className="space-y-2">
+      <label htmlFor="delete-space-confirm" className="block text-xs text-muted-foreground">Type <span className="font-medium text-foreground">{name}</span> to confirm.</label>
+      <Input id="delete-space-confirm" value={typed} autoComplete="off" disabled={disabled} onChange={event=>setTyped(event.target.value)}/>
+      <div className="flex gap-2">
+        <Button type="button" variant="destructive" size="sm" disabled={disabled || !name || typed.trim() !== name} onClick={onDelete}>{disabled ? 'Deleting…' : 'Delete this space'}</Button>
+        <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={()=>{setConfirming(false);setTyped('');}}>Keep it</Button>
+      </div>
+    </div>}
+  </section>;
 }

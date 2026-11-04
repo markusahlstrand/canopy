@@ -809,6 +809,8 @@ export const getSpaceSettings = () => call<import('../../src/space-settings').Sp
 export const updateSpaceSettings = (settings: import('../../src/space-settings').SpaceSettings) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', {method:'PATCH',body:JSON.stringify(settings)});
 export type DriveSource = import('../../src/source-routes').DriveSource;
 /** The a3doc folder a space mirrors, or null; any member may read it, to know what the space allows. */
+/** Delete a space this login owns. The platform archives it; it leaves the switcher at once. */
+export const deleteSite = (slug: string) => call<void>(`/sites/${encodeURIComponent(slug)}`, { method: 'DELETE' });
 export const getSource = () => call<{ source: DriveSource | null }>('/source').then(result => result.source);
 export interface SourceStatus { source: DriveSource | null; binding: { status: string; lastSyncedAt: string | null; lastError: { at: string; message: string } | null } | null }
 export const getSourceStatus = () => call<SourceStatus>('/source/status');
