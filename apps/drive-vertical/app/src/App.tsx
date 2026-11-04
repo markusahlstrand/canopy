@@ -11,7 +11,8 @@ import { watchImageViewerPreference } from './image-viewer';
  * It renders with `@canopy/ui` — the same shadcn/radix primitives and the same
  * Canopy tokens the trusted plugins use.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Button, Icon } from '@canopy/ui';
 import {
   ApiError,
@@ -24,6 +25,8 @@ import {
   whoami,
 } from './api';
 import { confirmNavigation } from './navigation-guards';
+import { handleSpaceSwitch } from './space-navigation';
+import { publishPlugins } from './installed-plugins';
 import { folderLoginUrl } from './folder-links';
 import { DriveScreen } from './drive';
 import { clearMirror, offlineIdentity, onMirrorLogout, rememberOfflineIdentity, resumeMirror } from './scope-mirror';
@@ -313,6 +316,44 @@ export default function App() {
       });
   }, []);
 
+  /**
+   * Change space in place rather than reloading the page.
+   *
+   * A reload throws the whole shell away — the rail, the topbar, the session — to replace
+   * what is really one pane, and that is what makes a switch look like the app falling
+   * over. The reload's guarantee is still the point: no read from one space beside one
+   * from another. So the new space's principal is asked for FIRST (a principal is per
+   * space), with the old screen untouched and still consistent; only then is the space
+   * selected and the drive remounted under a new key, in one synchronous step, so nothing
+   * of the old screen runs against the new selection. Plugins are a per-space store that
+   * outlives the remount, so it is emptied for the new screen to refill.
+   *
+   * Anything short of a signed-in principal falls back to the reload, whose boot already
+   * knows what to do with a stale or unbound space.
+   */
+  const switching = useRef(0);
+  const [space, setSpace] = useState(currentSite);
+  useEffect(() => handleSpaceSwitch((slug, apply) => {
+    const ticket = ++switching.current;
+    const reload = () => { apply(); window.location.reload(); };
+    whoami(slug)
+      .then(async ({ principal, user }) => {
+        if (ticket !== switching.current) return;
+        if (!principal) return reload();
+        await resumeMirror(principal).catch(() => {});
+        if (ticket !== switching.current) return;
+        apply();
+        publishPlugins([]);
+        flushSync(() => {
+          setError(null);
+          setSession({ state: 'in', principal, user });
+          setSpace(slug);
+        });
+        void rememberOfflineIdentity(offlineSiteKey(), principal).catch(() => {});
+      })
+      .catch(() => { if (ticket === switching.current) reload(); });
+  }), []);
+
   useEffect(() => onMirrorLogout(() => {
     setSession({ state: 'out' });
     setError(null);
@@ -349,6 +390,7 @@ export default function App() {
         </main>
       ) : (
         <DriveScreen
+          key={space ?? ''}
           onError={setError}
           auth={{ user: session.user ?? {}, principal: session.principal }}
           onSignIn={() => (window.location.href = LOGIN_URL)}

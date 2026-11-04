@@ -39,7 +39,7 @@ import {
 } from '@canopy/ui';
 import { openSpace, spaceLabel } from './space-navigation';
 import { pluginManifest } from './installed-plugins';
-import { listSites, type PluginInstall, type Site } from './api';
+import { currentSite, listSites, type PluginInstall, type Site } from './api';
 
 /** The views this screen has. The portal's Home, Starred and Settings are not among them. */
 const NAV = [
@@ -113,12 +113,24 @@ interface SidebarProps {
   onSpacePlugins?: () => void;
 }
 
+/**
+ * The last space list this tab read. The list is the login's, not a space's, so a drive
+ * remounted by an in-place switch starts from it instead of an empty rail — with
+ * `current` moved to the selection, the one field that belonged to the old request.
+ */
+let lastSites: Site[] | null = null;
+const seededSites = (): Site[] | null => {
+  const selected = currentSite();
+  if (!lastSites || !selected || !lastSites.some(site => site.slug === selected)) return null;
+  return lastSites.map(site => ({ ...site, current: site.slug === selected }));
+};
+
 /** One space read shared by the desktop rail and the mobile sheet. */
 export function useSites() {
-  const [sites, setSites] = useState<Site[] | null>(null);
+  const [sites, setSites] = useState<Site[] | null>(seededSites);
   const [failed, setFailed] = useState(false);
   const request = useRef(0);
-  const loaded = useRef(false);
+  const loaded = useRef(sites !== null);
   const inFlight = useRef(false);
   const lastStarted = useRef(0);
   const retry = useCallback(() => {
@@ -127,7 +139,7 @@ export function useSites() {
     lastStarted.current = Date.now();
     setFailed(false);
     listSites()
-      .then(result => { if (request.current === current) { loaded.current = true; setSites(result); } })
+      .then(result => { lastSites = result; if (request.current === current) { loaded.current = true; setSites(result); } })
       .catch(() => {
         if (request.current !== current) return;
         if (!loaded.current) setSites([]);
