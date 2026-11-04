@@ -24,6 +24,8 @@ import {
   fileSourceChange,
   fileSourceWriteRequest,
   PROVISION_SIBLING_KIND,
+  ARCHIVE_SCOPE_KIND,
+  archiveScopePayload,
   provisionSiblingPayload,
   isUndecodablePlatformRequest,
   permissionKey,
@@ -353,6 +355,10 @@ const operations = {
     const payload = provisionSiblingPayload.parse(input);
     const id = ctx.requestPlatform({ kind: PROVISION_SIBLING_KIND, payload });
     return { id, slug: payload.slug, name: payload.name };
+  },
+  'drive/archive-space': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.manage));
+    return { id: ctx.requestPlatform({ kind: ARCHIVE_SCOPE_KIND, payload: archiveScopePayload.parse({ scopeId: ctx.scopeId }) }) };
   },
   'drive/space-requests': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));

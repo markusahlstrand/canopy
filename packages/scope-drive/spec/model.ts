@@ -1202,6 +1202,15 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     input: z.object({ name: z.string().trim().min(1).max(100), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/), owner: z.string().length(26) }),
     output: z.object({ id: z.string(), slug: z.string(), name: z.string() }),
   },
+  /**
+   * Retire THIS space: an owner asks the platform to archive the scope the operation runs in.
+   * Self-only on purpose — no input names a target, so an owner of one space can never reach
+   * another. The platform's `archive-scope` drain does the archiving, and is idempotent.
+   */
+  'drive/archive-space': {
+    summary: 'Delete this space', permission: 'drive:manage', input: z.object({}),
+    output: z.object({ id: z.string() }),
+  },
   'drive/space-requests': {
     summary: 'Your space creation requests', permission: 'drive:manage', input: z.object({}),
     output: z.object({ requests: z.array(z.object({ id: z.string(), slug: z.string(), name: z.string(), status: z.enum(['pending', 'done', 'failed']), error: z.string().nullable() })) }),

@@ -541,11 +541,8 @@ mountPlatformSurface<Env>(app, {
   },
   onDeleteScope: async (env, s) => {
     await sweeper(env).forgetScope(s);
-    // NOT dropped from the space registry here, and it cannot be: this hook is handed a
-    // scope id and no tenant, and the registry lives in the per-TENANT identity DO. A
-    // deleted space therefore lingers in the switcher until something with a tenant in
-    // hand removes it — an archive route, which canopy does not have yet. Manyfold's
-    // equivalent calls `forgetSite` from exactly such a route.
+    // The space registry is per TENANT and this hook may not be handed one; the delete
+    // route (`DELETE /api/sites/:slug`) forgets the entry, with the tenant in hand.
   },
   // Per-instance config delivery (the dashboard's Env and Identity tabs). WITHOUT this
   // hook `/internal/configure` answers 501 for the life of the app: the dashboard saves
@@ -966,6 +963,35 @@ app.get('/api/sites', async (c) => {
   return c.json(
     mine.map((site) => ({ slug: site.slug, name: site.name, icon: site.icon, color: site.color, current: site.scopeId === here })),
   );
+});
+
+/**
+ * Delete a space: an owner of THAT space retires it.
+ *
+ * Authority is read in the target, never the selection — the caller's principal there,
+ * and `drive/archive-space`'s `drive:manage` check run as it — so owning one space does
+ * not reach another. The operation enqueues the platform's `archive-scope` intent from
+ * the space itself, and the kick drains it now rather than at the next sweep.
+ *
+ * The registry entry goes at once: this route has the tenant in hand, which
+ * `onDeleteScope` does not, so this is the place the switcher learns the space is gone.
+ *
+ * The install's home space — the one the hostname routes to — is refused: every request
+ * without a selection lands there, and the install's identity configuration is keyed by it.
+ */
+app.delete('/api/sites/:slug', async (c) => {
+  const base = baseNode(c.req.raw, c.env);
+  const site = (await accessibleSites(c.req.raw, c.env)).find(site => site.slug === c.req.param('slug'));
+  if (!site) throw new HTTPException(404, { message: 'Space not found.' });
+  if (site.scopeId === base.scopeId) throw new HTTPException(409, { message: 'This is the home space of this install and cannot be deleted.' });
+  const scope = await hostFor(c.env).getScope(site.principal, base.tenantId, scopeId.parse(site.scopeId), kickFlags((name, value) => c.header(name, value)));
+  const { canManage } = await scope.invoke<{ canManage: boolean }>('drive/people-access');
+  if (!canManage) throw new HTTPException(403, { message: 'Only an owner can delete this space.' });
+  await scope.invoke('drive/archive-space', {});
+  const directory = identityDo(c.env, base);
+  await directory.forgetSite(site.scopeId);
+  await directory.deleteSpaceSettings(site.scopeId);
+  return c.body(null, 204);
 });
 
 /** Who am I — the first call every client makes. */

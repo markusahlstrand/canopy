@@ -249,6 +249,11 @@ describe('creating shared spaces through platform intents', () => {
     const requests = await stub.invoke<{requests: {id: string; status: string}[]}>('drive/space-requests', {});
     expect(requests.requests).toHaveLength(1); expect(requests.requests[0]).toMatchObject({ id: first.id, status: 'pending' });
   });
+  it('lets only an owner ask the platform to archive the space it is in', async () => {
+    for (const who of [bjorn, cleo]) await expect((await as(who)).invoke('drive/archive-space', {})).rejects.toThrow();
+    const archived = await (await as(ada)).invoke<{id: string}>('drive/archive-space', {});
+    expect(archived.id).toMatch(/^[0-9A-Z]{26}$/);
+  });
   it('refuses space creation and provisioning outcomes to members and folder-only managers', async () => {
     for (const who of [bjorn, cleo]) {
       const stub = await as(who);
