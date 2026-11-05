@@ -119,12 +119,20 @@ interface SidebarProps {
  * `current` moved to the selection, the one field that belonged to the old request.
  */
 let lastSites: Site[] | null = null;
-/** Drop the cached list when the login ends, so another login never starts from it. */
-export const forgetSites = () => { lastSites = null; };
+let sitesLogin: string | null = null;
+/**
+ * Tie the cached list to the login it was read for. The shell calls this whenever its
+ * session changes; a different login — or none — drops the list, so no login ever starts
+ * from another's spaces.
+ */
+export const bindSitesToLogin = (login: string | null) => {
+  if (login !== sitesLogin) lastSites = null;
+  sitesLogin = login;
+};
 /** The cached list with `current` on the selection, when it holds the selection at all. */
 const seededSites = (): Site[] | null => {
   const selected = currentSite();
-  if (!lastSites || !selected || !lastSites.some(site => site.slug === selected)) return null;
+  if (!lastSites || !sitesLogin || !selected || !lastSites.some(site => site.slug === selected)) return null;
   return lastSites.map(site => ({ ...site, current: site.slug === selected }));
 };
 

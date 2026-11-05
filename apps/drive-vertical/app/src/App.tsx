@@ -29,7 +29,7 @@ import { handleSpaceSwitch } from './space-navigation';
 import { publishPlugins } from './installed-plugins';
 import { folderLoginUrl } from './folder-links';
 import { DriveScreen } from './drive';
-import { forgetSites } from './sidebar';
+import { bindSitesToLogin } from './sidebar';
 import { clearMirror, offlineIdentity, onMirrorLogout, rememberOfflineIdentity, resumeMirror } from './scope-mirror';
 
 type User = { name?: string; email?: string };
@@ -349,6 +349,8 @@ export default function App() {
         if (!confirmNavigation()) return;
         apply();
         publishPlugins([]);
+        // Before the remount: the new drive seeds its rail from the cache while it renders.
+        bindSitesToLogin(user?.email ?? principal);
         flushSync(() => {
           setError(null);
           setSession({ state: 'in', principal, user });
@@ -359,10 +361,13 @@ export default function App() {
       .catch(() => { if (ticket === switching.current) reload(); });
   }), []);
 
+  // The space list is the login's: bind its cache to who is signed in, or to no one.
+  const login = session.state === 'in' ? session.user?.email ?? session.principal : null;
+  useEffect(() => { bindSitesToLogin(login); }, [login]);
+
   useEffect(() => onMirrorLogout(() => {
-    // A pending switch must not sign the tab back in, nor the next login see this one's spaces.
+    // A pending switch must not sign the tab back in.
     switching.current += 1;
-    forgetSites();
     setSession({ state: 'out' });
     setError(null);
   }), []);
