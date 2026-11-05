@@ -2,9 +2,12 @@ import { useLayoutEffect } from 'react';
 
 const pending = new Set<symbol>();
 let approved = false;
-/** Confirm before mutating space selection or signing out, rather than at browser unload. */
+/**
+ * Confirm before mutating space selection or signing out, rather than at browser unload.
+ * An approval stands until the pending work changes, so a re-check only asks about new work.
+ */
 export function confirmNavigation(): boolean {
-  if (pending.size && !window.confirm('Leave this space? Unsaved changes and queued uploads will be lost.')) return false;
+  if (pending.size && !approved && !window.confirm('Leave this space? Unsaved changes and queued uploads will be lost.')) return false;
   approved = true;
   return true;
 }

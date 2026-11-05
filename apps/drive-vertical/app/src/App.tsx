@@ -29,6 +29,7 @@ import { handleSpaceSwitch } from './space-navigation';
 import { publishPlugins } from './installed-plugins';
 import { folderLoginUrl } from './folder-links';
 import { DriveScreen } from './drive';
+import { forgetSites } from './sidebar';
 import { clearMirror, offlineIdentity, onMirrorLogout, rememberOfflineIdentity, resumeMirror } from './scope-mirror';
 
 type User = { name?: string; email?: string };
@@ -332,7 +333,9 @@ export default function App() {
    * knows what to do with a stale or unbound space.
    */
   const switching = useRef(0);
-  const [space, setSpace] = useState(currentSite);
+  // Bumped on every applied switch, not derived from the slug: opening a file in the space
+  // already shown must still remount the drive, which reads its target from the URL on mount.
+  const [mount, setMount] = useState(0);
   useEffect(() => handleSpaceSwitch((slug, apply) => {
     const ticket = ++switching.current;
     const reload = () => { apply(); window.location.reload(); };
@@ -342,12 +345,14 @@ export default function App() {
         if (!principal) return reload();
         await resumeMirror(principal).catch(() => {});
         if (ticket !== switching.current) return;
+        // Work may have started while the new space answered; it gets the same boundary.
+        if (!confirmNavigation()) return;
         apply();
         publishPlugins([]);
         flushSync(() => {
           setError(null);
           setSession({ state: 'in', principal, user });
-          setSpace(slug);
+          setMount(n => n + 1);
         });
         void rememberOfflineIdentity(offlineSiteKey(), principal).catch(() => {});
       })
@@ -355,6 +360,9 @@ export default function App() {
   }), []);
 
   useEffect(() => onMirrorLogout(() => {
+    // A pending switch must not sign the tab back in, nor the next login see this one's spaces.
+    switching.current += 1;
+    forgetSites();
     setSession({ state: 'out' });
     setError(null);
   }), []);
@@ -390,7 +398,7 @@ export default function App() {
         </main>
       ) : (
         <DriveScreen
-          key={space ?? ''}
+          key={mount}
           onError={setError}
           auth={{ user: session.user ?? {}, principal: session.principal }}
           onSignIn={() => (window.location.href = LOGIN_URL)}

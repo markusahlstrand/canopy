@@ -119,6 +119,8 @@ interface SidebarProps {
  * `current` moved to the selection, the one field that belonged to the old request.
  */
 let lastSites: Site[] | null = null;
+/** Drop the cached list when the login ends, so another login never starts from it. */
+export const forgetSites = () => { lastSites = null; };
 const seededSites = (): Site[] | null => {
   const selected = currentSite();
   if (!lastSites || !selected || !lastSites.some(site => site.slug === selected)) return null;
@@ -139,7 +141,7 @@ export function useSites() {
     lastStarted.current = Date.now();
     setFailed(false);
     listSites()
-      .then(result => { lastSites = result; if (request.current === current) { loaded.current = true; setSites(result); } })
+      .then(result => { if (request.current === current) { lastSites = result; loaded.current = true; setSites(result); } })
       .catch(() => {
         if (request.current !== current) return;
         if (!loaded.current) setSites([]);
