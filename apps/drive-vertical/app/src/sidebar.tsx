@@ -121,6 +121,7 @@ interface SidebarProps {
 let lastSites: Site[] | null = null;
 /** Drop the cached list when the login ends, so another login never starts from it. */
 export const forgetSites = () => { lastSites = null; };
+/** The cached list with `current` on the selection, when it holds the selection at all. */
 const seededSites = (): Site[] | null => {
   const selected = currentSite();
   if (!lastSites || !selected || !lastSites.some(site => site.slug === selected)) return null;

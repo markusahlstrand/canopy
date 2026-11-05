@@ -5,7 +5,9 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { currentSite, selectSite, whoami } from './api';
 import { openSpace, openSpaceFile } from './space-navigation';
-import { useNavigationGuard } from './navigation-guards';
+import { confirmNavigation, useNavigationGuard } from './navigation-guards';
+import { resumeMirror } from './scope-mirror';
+import { publishPlugins } from './installed-plugins';
 
 const mounts = vi.fn();
 vi.mock('./drive', async () => {
@@ -16,6 +18,14 @@ vi.mock('./drive', async () => {
       return <p>{auth.principal} in {currentSite() ?? 'home'}</p>;
     },
   };
+});
+vi.mock('./scope-mirror', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./scope-mirror')>();
+  return { ...actual, resumeMirror: vi.fn(actual.resumeMirror) };
+});
+vi.mock('./installed-plugins', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./installed-plugins')>();
+  return { ...actual, publishPlugins: vi.fn(actual.publishPlugins) };
 });
 vi.mock('./api', async (importOriginal) => ({ ...await importOriginal<typeof import('./api')>(), whoami: vi.fn() }));
 
@@ -88,5 +98,41 @@ it('re-asks about work that started while the new space answered, and stays put 
   await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
   expect(currentSite()).toBe('space-a');
   expect(screen.getByText('p-a in space-a')).toBeTruthy();
+  confirm.mockRestore();
+});
+
+it('a switch overtaken while its mirror resumes selects nothing, publishes nothing, changes no session', async () => {
+  selectSite('space-a');
+  vi.mocked(whoami).mockImplementation(async (slug?: string | null) => ({ principal: `p-${(slug ?? 'space-a').slice(-1)}` }));
+  render(<App />);
+  expect(await screen.findByText('p-a in space-a')).toBeTruthy();
+
+  let resumeB!: () => void;
+  vi.mocked(resumeMirror).mockImplementationOnce(() => new Promise<void>(resolve => { resumeB = resolve; }));
+  act(() => { openSpace('space-b'); });
+  await waitFor(() => expect(resumeMirror).toHaveBeenLastCalledWith('p-b'));
+  vi.mocked(publishPlugins).mockClear();
+
+  await act(async () => { openSpace('space-c'); });
+  expect(await screen.findByText('p-c in space-c')).toBeTruthy();
+  expect(publishPlugins).toHaveBeenCalledTimes(1);
+
+  await act(async () => { resumeB(); });
+  expect(currentSite()).toBe('space-c');
+  expect(screen.getByText('p-c in space-c')).toBeTruthy();
+  expect(publishPlugins).toHaveBeenCalledTimes(1);
+});
+
+it('an edit after leaving was approved is asked about again', () => {
+  const Draft = () => { useNavigationGuard(true); return null; };
+  render(<Draft />);
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  expect(confirmNavigation()).toBe(true);
+  expect(confirmNavigation()).toBe(true);
+  expect(confirm).toHaveBeenCalledTimes(1);
+  document.body.dispatchEvent(new Event('input', { bubbles: true }));
+  confirm.mockReturnValue(false);
+  expect(confirmNavigation()).toBe(false);
+  expect(confirm).toHaveBeenCalledTimes(2);
   confirm.mockRestore();
 });

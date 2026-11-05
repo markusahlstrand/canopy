@@ -8,6 +8,7 @@ export function spaceLink(slug: string): string {
   url.searchParams.set('site', slug);
   return url.toString();
 }
+/** Drop the destinations and invitations that belong to the space being left. */
 function clearPreviousSpaceLink(url: URL) {
   for (const key of ['path', 'folder', 'file', 'claim', 'invite']) url.searchParams.delete(key);
   url.hash = '';
@@ -19,11 +20,13 @@ function clearPreviousSpaceLink(url: URL) {
  */
 type SpaceSwitcher = (slug: string, apply: () => void) => void;
 let switcher: SpaceSwitcher | null = null;
+/** Register the shell's in-place switcher; returns the unregister. */
 export function handleSpaceSwitch(next: SpaceSwitcher): () => void {
   switcher = next;
   return () => { if (switcher === next) switcher = null; };
 }
 
+/** Hand a switch to the registered switcher, or apply it and reload. */
 function switchSpace(slug: string, apply: () => void) {
   if (switcher) return switcher(slug, apply);
   apply();
@@ -57,6 +60,7 @@ export function openSpaceFile(slug: string, fileId: string) {
   return openInSpace(slug, 'file', fileId);
 }
 
+/** Open a folder or file of `slug` behind the draft boundary. */
 function openInSpace(slug: string, key: 'folder' | 'file', id: string) {
   if (!confirmNavigation()) return false;
   switchSpace(slug, () => selectInUrl(slug, { key, id }));
