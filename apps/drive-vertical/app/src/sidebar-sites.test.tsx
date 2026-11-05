@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { listSites, type Site } from './api';
 import { useSites } from './sidebar';
 
-vi.mock('./api', () => ({ listSites: vi.fn() }));
+vi.mock('./api', () => ({ listSites: vi.fn(), currentSite: () => null }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); Reflect.deleteProperty(document, 'visibilityState'); });
 
 function Roster() {

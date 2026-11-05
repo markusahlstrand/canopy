@@ -11,7 +11,8 @@ import { watchImageViewerPreference } from './image-viewer';
  * It renders with `@canopy/ui` — the same shadcn/radix primitives and the same
  * Canopy tokens the trusted plugins use.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Button, Icon } from '@canopy/ui';
 import {
   ApiError,
@@ -24,8 +25,11 @@ import {
   whoami,
 } from './api';
 import { confirmNavigation } from './navigation-guards';
+import { handleSpaceSwitch } from './space-navigation';
+import { publishPlugins } from './installed-plugins';
 import { folderLoginUrl } from './folder-links';
 import { DriveScreen } from './drive';
+import { bindSitesToLogin } from './sidebar';
 import { clearMirror, offlineIdentity, onMirrorLogout, rememberOfflineIdentity, resumeMirror } from './scope-mirror';
 
 type User = { name?: string; email?: string };
@@ -313,7 +317,57 @@ export default function App() {
       });
   }, []);
 
+  /**
+   * Change space in place rather than reloading the page.
+   *
+   * A reload throws the whole shell away — the rail, the topbar, the session — to replace
+   * what is really one pane, and that is what makes a switch look like the app falling
+   * over. The reload's guarantee is still the point: no read from one space beside one
+   * from another. So the new space's principal is asked for FIRST (a principal is per
+   * space), with the old screen untouched and still consistent; only then is the space
+   * selected and the drive remounted under a new key, in one synchronous step, so nothing
+   * of the old screen runs against the new selection. Plugins are a per-space store that
+   * outlives the remount, so it is emptied for the new screen to refill.
+   *
+   * Anything short of a signed-in principal falls back to the reload, whose boot already
+   * knows what to do with a stale or unbound space.
+   */
+  const switching = useRef(0);
+  // Bumped on every applied switch, not derived from the slug: opening a file in the space
+  // already shown must still remount the drive, which reads its target from the URL on mount.
+  const [mount, setMount] = useState(0);
+  useEffect(() => handleSpaceSwitch((slug, apply) => {
+    const ticket = ++switching.current;
+    const reload = () => { apply(); window.location.reload(); };
+    whoami(slug)
+      .then(async ({ principal, user }) => {
+        if (ticket !== switching.current) return;
+        if (!principal) return reload();
+        await resumeMirror(principal).catch(() => {});
+        if (ticket !== switching.current) return;
+        // Work may have started while the new space answered; it gets the same boundary.
+        if (!confirmNavigation()) return;
+        apply();
+        publishPlugins([]);
+        // Before the remount: the new drive seeds its rail from the cache while it renders.
+        bindSitesToLogin(user?.email ?? principal);
+        flushSync(() => {
+          setError(null);
+          setSession({ state: 'in', principal, user });
+          setMount(n => n + 1);
+        });
+        void rememberOfflineIdentity(offlineSiteKey(), principal).catch(() => {});
+      })
+      .catch(() => { if (ticket === switching.current) reload(); });
+  }), []);
+
+  // The space list is the login's: bind its cache to who is signed in, or to no one.
+  const login = session.state === 'in' ? session.user?.email ?? session.principal : null;
+  useEffect(() => { bindSitesToLogin(login); }, [login]);
+
   useEffect(() => onMirrorLogout(() => {
+    // A pending switch must not sign the tab back in.
+    switching.current += 1;
     setSession({ state: 'out' });
     setError(null);
   }), []);
@@ -349,6 +403,7 @@ export default function App() {
         </main>
       ) : (
         <DriveScreen
+          key={mount}
           onError={setError}
           auth={{ user: session.user ?? {}, principal: session.principal }}
           onSignIn={() => (window.location.href = LOGIN_URL)}

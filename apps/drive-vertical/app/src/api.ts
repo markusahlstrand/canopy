@@ -282,8 +282,11 @@ export interface Me {
  *
  * `principal` is null for a login that is signed in but bound to no space here (#365):
  * the worker answers 401 only when nobody is signed in at all.
+ *
+ * `selectedSite` asks about a space before selecting it: a principal is per space, and
+ * an in-place switch has to know it before anything on screen reads the new space.
  */
-export const whoami = () => call<{ principal: string | null; user?: NonNullable<Me['user']> }>('/me');
+export const whoami = (selectedSite = site) => call<{ principal: string | null; user?: NonNullable<Me['user']> }>('/me', undefined, selectedSite);
 
 /**
  * Redeem an owner-claim link. The token arrives in the URL as `?claim=` (the platform
