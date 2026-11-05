@@ -136,3 +136,15 @@ it('an edit after leaving was approved is asked about again', () => {
   expect(confirm).toHaveBeenCalledTimes(2);
   confirm.mockRestore();
 });
+
+it('new work without an edit event — a retried upload — is asked about again', () => {
+  const Queue = ({ work }: { work: number }) => { useNavigationGuard(true, work); return null; };
+  const { rerender } = render(<Queue work={1} />);
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  expect(confirmNavigation()).toBe(true);
+  rerender(<Queue work={2} />);
+  confirm.mockReturnValue(false);
+  expect(confirmNavigation()).toBe(false);
+  expect(confirm).toHaveBeenCalledTimes(2);
+  confirm.mockRestore();
+});

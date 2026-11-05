@@ -13,6 +13,8 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(false);
   const sequence = useRef(0);
+  // Bumped whenever work is added — queued or retried — so the guard drops a stale approval.
+  const [work, setWork] = useState(0);
   const running = useRef(false);
   const inFlight = useRef<{ id: number; controller: AbortController } | null>(null);
   const mounted = useRef(true);
@@ -66,6 +68,7 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
   };
   const enqueue = (folderId: string, destination: string, files: File[]) => {
     queue.current.push(...files.map(file => ({ site: currentSite(), id: ++sequence.current, folderId, destination, name: file.name, file, state: 'queued' as const })));
+    setWork(n => n + 1);
     publish();
     void pump();
   };
@@ -76,7 +79,7 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
     publish();
   };
   const active = rows.some(row => row.state === 'queued' || row.state === 'uploading');
-  useNavigationGuard(active);
+  useNavigationGuard(active, work);
   const panel = rows.length ? <section aria-label="Uploads" className="max-h-48 shrink-0 overflow-auto border-b border-border px-4 py-2 text-sm">
     {rows.some(row => row.state === 'queued') || paused ? <Button size="sm" variant="outline" onClick={() => {
       pausedRef.current = !pausedRef.current;
@@ -87,6 +90,7 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
     <p role="status">{rows.filter(row => row.state === 'done').length} of {rows.length} uploaded{rows.some(row => row.state === 'cancelled') ? ` · ${rows.filter(row => row.state === 'cancelled').length} cancelled` : ''}</p>
     {rows.some(row => row.state === 'failed' && row.file) ? <Button size="sm" variant="outline" onClick={() => {
       queue.current = queue.current.map(row => row.state === 'failed' && row.file ? { ...row, state: 'queued', error: undefined } : row);
+      setWork(n => n + 1);
       publish(); void pump();
     }}>Retry failed uploads</Button> : null}
     {rows.some(row => row.state === 'queued') ? <Button size="sm" variant="outline" onClick={() => cancel()}>Cancel queued uploads</Button> : null}

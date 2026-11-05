@@ -24,8 +24,12 @@ export function confirmNavigation(): boolean {
   return true;
 }
 
-/** Browser exit protection shared by draft editors and the upload queue. */
-export function useNavigationGuard(active: boolean): void {
+/**
+ * Browser exit protection shared by draft editors and the upload queue.
+ * `work` is for work that grows without an edit event (a retried upload): any change to it
+ * re-arms the guard, which revokes an earlier approval like new work does.
+ */
+export function useNavigationGuard(active: boolean, work?: number): void {
   useLayoutEffect(() => {
     if (!active) return;
     const id = Symbol('pending work');
@@ -36,5 +40,5 @@ export function useNavigationGuard(active: boolean): void {
     };
     window.addEventListener('beforeunload', protect);
     return () => { pending.delete(id); revoke(); window.removeEventListener('beforeunload', protect); };
-  }, [active]);
+  }, [active, work]);
 }
