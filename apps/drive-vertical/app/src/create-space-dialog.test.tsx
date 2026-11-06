@@ -74,3 +74,71 @@ it('keeps Create disabled until a failed status check is retried successfully', 
   fireEvent.click(screen.getByRole('button',{name:'Retry status check'}));
   await waitFor(()=>expect((screen.getByRole('button',{name:'Create space'}) as HTMLButtonElement).disabled).toBe(false));
 });
+const a3docWorld = (connect: (init: RequestInit) => Response) => {
+  let done = false;
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === '/api/sites') { done = true; return new Response(JSON.stringify({ id: 'r', name: 'Books', slug: 'books-1' })); }
+    if (url === '/api/source') return connect(init!);
+    return new Response(JSON.stringify({ requests: done ? [{ id: 'r', name: 'Books', slug: 'books-1', status: 'done', error: null }] : [] }));
+  });
+  vi.stubGlobal('fetch', fetcher);
+  return fetcher;
+};
+const fillA3doc = async () => {
+  fireEvent.change(screen.getByLabelText('Space name'), { target: { value: 'Books' } });
+  fireEvent.click(screen.getByRole('radio', { name: /a3doc folder/ }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Create space' }) as HTMLButtonElement).disabled).toBe(true));
+  fireEvent.change(screen.getByLabelText('Company code'), { target: { value: 'ACME' } });
+  fireEvent.change(screen.getByLabelText('User'), { target: { value: 'ana' } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } });
+  fireEvent.change(screen.getByLabelText('a3doc folder'), { target: { value: 'Facturas' } });
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Create space' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Create space' }));
+};
+it('connects a new space to a3doc once it exists, then opens it', async () => {
+  const created = vi.fn();
+  const fetcher = a3docWorld(() => new Response(JSON.stringify({ provider: 'canopy.a3doc' })));
+  render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={created} />);
+  await fillA3doc();
+  await waitFor(() => expect(created).toHaveBeenCalledExactlyOnceWith('books-1'));
+  const put = fetcher.mock.calls.find(call => call[0] === '/api/source')!;
+  expect(put[1]!.method).toBe('PUT');
+  expect((put[1]!.headers as Record<string, string>)['x-site']).toBe('books-1');
+  expect(JSON.parse(put[1]!.body as string)).toEqual({ companyCode: 'ACME', user: 'ana', password: 'pw', folder: 'Facturas' });
+  // The login never reaches the space request itself.
+  expect(fetcher.mock.calls.find(call => call[0] === '/api/sites')![1]!.body).not.toContain('pw');
+});
+it('keeps the created space when a3doc refuses the login, and offers to open it', async () => {
+  const created = vi.fn();
+  a3docWorld(() => new Response(JSON.stringify({ detail: 'a3doc refused the login' }), { status: 400 }));
+  render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={created} />);
+  await fillA3doc();
+  expect(await screen.findByText(/a3doc did not connect: a3doc refused the login/)).toBeTruthy();
+  expect(created).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Open the space' }));
+  expect(created).toHaveBeenCalledExactlyOnceWith('books-1');
+});
+it('handles a finished request once when overlapping polls both report it done', async () => {
+  const created = vi.fn(); let posted = false, held: (() => void)[] = [], finishConnect = () => {};
+  const realInterval = globalThis.setInterval;
+  // A slow status read outlives the poll interval; shorten it so the two overlap in test time.
+  vi.stubGlobal('setInterval', (run: () => void, ms: number) => realInterval(run, ms === 3000 ? 10 : ms));
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+    if (url === '/api/sites') { posted = true; return new Response(JSON.stringify({ id: 'r', name: 'Books', slug: 'books-1' })); }
+    if (url === '/api/source') { await new Promise<void>(resolve => { finishConnect = resolve; }); return new Response(JSON.stringify({ provider: 'canopy.a3doc' })); }
+    if (posted) {
+      await new Promise<void>(resolve => { held.push(resolve); if (held.length === 2) { held.forEach(release => release()); held = []; } });
+      return new Response(JSON.stringify({ requests: [{ id: 'r', name: 'Books', slug: 'books-1', status: 'done', error: null }] }));
+    }
+    return new Response(JSON.stringify({ requests: [] }));
+  });
+  vi.stubGlobal('fetch', fetcher);
+  render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={created} />);
+  await fillA3doc();
+  await waitFor(() => expect(fetcher.mock.calls.some(call => call[0] === '/api/source')).toBe(true));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  expect(created).not.toHaveBeenCalled();
+  finishConnect();
+  await waitFor(() => expect(created).toHaveBeenCalledExactlyOnceWith('books-1'));
+  expect(fetcher.mock.calls.filter(call => call[0] === '/api/source')).toHaveLength(1);
+});

@@ -818,7 +818,8 @@ export const getSource = () => call<{ source: DriveSource | null }>('/source').t
 export interface SourceStatus { source: DriveSource | null; binding: { status: string; lastSyncedAt: string | null; lastError: { at: string; message: string } | null } | null }
 export const getSourceStatus = () => call<SourceStatus>('/source/status');
 export interface SourceLogin { companyCode: string; user: string; password: string; customerId?: string; folder: string }
-export const connectSource = (login: SourceLogin) => call<DriveSource>('/source', { method: 'PUT', body: JSON.stringify(login) });
+/** Connects the current space, or `selectedSite`: the create dialog connects a space it has not switched to yet. */
+export const connectSource = (login: SourceLogin, selectedSite = currentSite()) => call<DriveSource>('/source', { method: 'PUT', body: JSON.stringify(login) }, selectedSite);
 export const disconnectSource = () => call<void>('/source', { method: 'DELETE' });
 export interface PluginInstall { id: string; plugin_id: string; principal: string; manifest_json: string; source?: string; source_kind?: string; source_ref?: string; resolved?: string; source_sha256?: string; granted_capabilities?: string; enabled: number; updated_at: string }
 export const listPlugins = () => call<{ plugins: PluginInstall[] }>('/plugins');

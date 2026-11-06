@@ -2,7 +2,26 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input } from '@canopy/ui';
 import { connectSource, disconnectSource, getSourceStatus, type SourceLogin, type SourceStatus } from './api';
 
-const empty: SourceLogin = { companyCode: '', user: '', password: '', customerId: '', folder: '' };
+export const emptyLogin: SourceLogin = { companyCode: '', user: '', password: '', customerId: '', folder: '' };
+const empty = emptyLogin;
+/** Enough to try a connection: a3doc itself judges the rest. */
+export const loginReady = (login: SourceLogin) => !!login.companyCode.trim() && !!login.user.trim() && !!login.password;
+/** The login as the connect route takes it: an empty customer NIF means none. */
+export const loginPayload = (login: SourceLogin): SourceLogin => ({ ...login, customerId: login.customerId?.trim() || undefined });
+
+/** The a3doc login fields, shared by space settings and the create dialog. */
+export function SourceLoginFields({ value, disabled, onChange }: { value: SourceLogin; disabled: boolean; onChange: (next: SourceLogin) => void }) {
+  const field = (key: keyof SourceLogin, label: string, extra: { type?: string; placeholder?: string } = {}) =>
+    <label className="block space-y-1"><span className="text-xs text-muted-foreground">{label}</span>
+      <Input type={extra.type} placeholder={extra.placeholder} value={value[key] ?? ''} disabled={disabled} autoComplete="off" onChange={event => onChange({ ...value, [key]: event.target.value })}/>
+    </label>;
+  return <>
+    <p className="text-xs text-muted-foreground">The login your gestoría gave you for a3doc. The space then shows that folder’s documents and keeps them in sync.</p>
+    {field('companyCode', 'Company code')}{field('user', 'User')}{field('password', 'Password', { type: 'password' })}
+    {field('folder', 'a3doc folder', { placeholder: 'Leave empty for every folder' })}
+    {field('customerId', 'Customer NIF/CIF for uploads (optional)')}
+  </>;
+}
 const message = (error: unknown) => error instanceof Error ? error.message || 'Could not reach a3doc.' : String(error);
 const when = (iso: string) => new Date(iso).toLocaleString();
 
@@ -25,10 +44,6 @@ export function SourceSettings({ disabled, onChanged }: { disabled: boolean; onC
   };
   const source = status?.source, binding = status?.binding;
   const locked = disabled || busy;
-  const field = (key: keyof SourceLogin, label: string, extra: { type?: string; placeholder?: string } = {}) =>
-    <label className="block space-y-1"><span className="text-xs text-muted-foreground">{label}</span>
-      <Input type={extra.type} placeholder={extra.placeholder} value={form?.[key] ?? ''} disabled={locked} autoComplete="off" onChange={event => setForm(current => ({ ...(current ?? empty), [key]: event.target.value }))}/>
-    </label>;
   return <section aria-labelledby="settings-source" className="space-y-2"><h3 id="settings-source" className="text-xs font-medium text-muted-foreground">Source</h3>
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
     {!status ? <p role="status" className="text-sm text-muted-foreground">Loading source…</p> : source ? (
@@ -56,14 +71,11 @@ export function SourceSettings({ disabled, onChanged }: { disabled: boolean; onC
       </div>
     )}
     {form ? <div role="group" aria-label="Connect a3doc" className="space-y-2 rounded-lg border px-3 py-2.5">
-      <p className="text-xs text-muted-foreground">The login your gestoría gave you for a3doc. The space then shows that folder’s documents and keeps them in sync.</p>
-      {field('companyCode', 'Company code')}{field('user', 'User')}{field('password', 'Password', { type: 'password' })}
-      {field('folder', 'a3doc folder', { placeholder: 'Leave empty for every folder' })}
-      {field('customerId', 'Customer NIF/CIF for uploads (optional)')}
+      <SourceLoginFields value={form} disabled={locked} onChange={setForm}/>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => { setForm(null); setError(null); }}>Cancel</Button>
-        <Button type="button" size="sm" disabled={locked || !form.companyCode.trim() || !form.user.trim() || !form.password}
-          onClick={() => void run(() => connectSource({ ...form, customerId: form.customerId?.trim() || undefined }))}>{busy ? 'Connecting…' : 'Connect'}</Button>
+        <Button type="button" size="sm" disabled={locked || !loginReady(form)}
+          onClick={() => void run(() => connectSource(loginPayload(form)))}>{busy ? 'Connecting…' : 'Connect'}</Button>
       </div>
     </div> : null}
   </section>;
