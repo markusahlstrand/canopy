@@ -23,6 +23,8 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
   const active = useRef(true), slug = useRef('');
   /** The login for the request in flight; taken once, when that request is done. Never persisted. */
   const pendingLogin = useRef<{ requestId: string; login: SourceLogin } | null>(null);
+  /** The request already finished here: overlapping polls can each report it done before the effect stops. */
+  const finished = useRef<string | null>(null);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => {
     if (!open) return;
@@ -47,6 +49,8 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
     let alive = true;
     setStatusMissing(false);
     const finish = async (done: SpaceRequest) => {
+      if (finished.current === done.id) return;
+      finished.current = done.id;
       const held = pendingLogin.current?.requestId === done.id ? pendingLogin.current.login : null;
       pendingLogin.current = null;
       if (!held) { onCreated(done.slug); return; }

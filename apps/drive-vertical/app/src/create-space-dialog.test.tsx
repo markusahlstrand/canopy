@@ -118,3 +118,27 @@ it('keeps the created space when a3doc refuses the login, and offers to open it'
   fireEvent.click(screen.getByRole('button', { name: 'Open the space' }));
   expect(created).toHaveBeenCalledExactlyOnceWith('books-1');
 });
+it('handles a finished request once when overlapping polls both report it done', async () => {
+  const created = vi.fn(); let posted = false, held: (() => void)[] = [], finishConnect = () => {};
+  const realInterval = globalThis.setInterval;
+  // A slow status read outlives the poll interval; shorten it so the two overlap in test time.
+  vi.stubGlobal('setInterval', (run: () => void, ms: number) => realInterval(run, ms === 3000 ? 10 : ms));
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+    if (url === '/api/sites') { posted = true; return new Response(JSON.stringify({ id: 'r', name: 'Books', slug: 'books-1' })); }
+    if (url === '/api/source') { await new Promise<void>(resolve => { finishConnect = resolve; }); return new Response(JSON.stringify({ provider: 'canopy.a3doc' })); }
+    if (posted) {
+      await new Promise<void>(resolve => { held.push(resolve); if (held.length === 2) { held.forEach(release => release()); held = []; } });
+      return new Response(JSON.stringify({ requests: [{ id: 'r', name: 'Books', slug: 'books-1', status: 'done', error: null }] }));
+    }
+    return new Response(JSON.stringify({ requests: [] }));
+  });
+  vi.stubGlobal('fetch', fetcher);
+  render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={created} />);
+  await fillA3doc();
+  await waitFor(() => expect(fetcher.mock.calls.some(call => call[0] === '/api/source')).toBe(true));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  expect(created).not.toHaveBeenCalled();
+  finishConnect();
+  await waitFor(() => expect(created).toHaveBeenCalledExactlyOnceWith('books-1'));
+  expect(fetcher.mock.calls.filter(call => call[0] === '/api/source')).toHaveLength(1);
+});
