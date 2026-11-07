@@ -48,3 +48,33 @@ test('the address bar is a link to the space, folder, file and view on screen', 
   expect((await trashRead).ok()).toBe(true);
   await expect.poll(() => params().get('view')).toBe('trash');
 });
+
+test('Back and Forward walk the drive instead of leaving it', async ({ page }, info) => {
+  const folder = 'History checks';
+  const name = 'history.txt';
+  await signIn(page);
+  await createSpace(page, `${info.project.name} History`);
+  await createFolder(page, folder);
+  const root = page.url();
+
+  await page.getByRole('button', { name: `Actions for ${folder}`, exact: true }).locator('xpath=ancestor::tr').dblclick();
+  await expect.poll(() => new URL(page.url()).searchParams.get('folder')).toBeTruthy();
+  const inside = page.url();
+  await upload(page, name, 'walk me');
+  await revealRow(page, name);
+  await page.getByRole('button', { name: `Actions for ${name}`, exact: true }).locator('xpath=ancestor::tr').dblclick();
+  await expect(page.getByRole('button', { name: 'Close preview' })).toBeVisible();
+
+  await page.goBack();
+  await expect(page.getByRole('button', { name: 'Close preview' })).toBeHidden();
+  expect(page.url()).toBe(inside);
+  await revealRow(page, name);
+
+  await page.goBack();
+  expect(page.url()).toBe(root);
+  await revealRow(page, folder);
+
+  await page.goForward();
+  expect(page.url()).toBe(inside);
+  await revealRow(page, name);
+});

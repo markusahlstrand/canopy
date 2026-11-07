@@ -23,7 +23,7 @@ it('opens the same folder after a rename, preferring its ID over a legacy path',
   await screen.findAllByText('New/Renamed');
   await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/stable/files')).toBe(true));
   expect(fetcher.mock.calls.some(([url]) => url.includes('by-path') || url === '/api/folders/root/files')).toBe(false);
-  expect(location.search).toBe('?site=family&folder=stable');
+  await waitFor(() => expect(location.search).toBe('?site=family&folder=stable'));
 });
 it.each([403, 404])('reports a generic unavailable state for a denied or missing ID (%s)', async status => {
   history.replaceState(null, '', '/?folder=missing');
@@ -31,7 +31,7 @@ it.each([403, 404])('reports a generic unavailable state for a denied or missing
     ? new Response('Unavailable', { status }) : new Response(JSON.stringify(url.endsWith('/access') ? { canManage: false } : [])));
   render(<DriveScreen {...shell} />);
   await screen.findByText('This folder is unavailable or you do not have access.');
-  expect(location.search).toBe('');
+  await waitFor(() => expect(location.search).toBe(''));
 });
 it('preserves only the folder navigation destination through login and rejects another space', () => {
   selectSite('family'); history.replaceState(null, '', '/?site=family&folder=stable&path=Old&invite=secret');
@@ -62,5 +62,5 @@ it('also treats an explicit legacy root-ID link as the root with no blank crumb'
   vi.stubGlobal('fetch', fetcher); render(<DriveScreen {...shell} />);
   await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/root/files')).toBe(true));
   expect(screen.queryByRole('button', { name: 'Back to parent folder' })).toBeNull();
-  expect(location.search).toBe('?site=family');
+  await waitFor(() => expect(location.search).toBe('?site=family'));
 });

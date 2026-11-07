@@ -47,7 +47,15 @@ function selectInUrl(slug: string, target?: { key: 'folder' | 'file'; id: string
   selectSite(slug);
   url.searchParams.set('site', slug);
   if (target) url.searchParams.set(target.key, target.id);
-  window.history.replaceState(null, '', url);
+  // A move Back should undo; the same address is only a re-open of what is on screen.
+  if (url.href !== window.location.href) window.history.pushState(null, '', url);
+}
+
+/** Follow Back or Forward into another space: the URL already holds the destination. */
+export function followSpace(slug: string) {
+  if (!confirmNavigation()) return false;
+  switchSpace(slug, () => { selectSite(slug); });
+  return true;
 }
 
 /** Follow a shared-folder grant in another space without losing the folder on reload. */
