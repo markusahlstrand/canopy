@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input } from '@canopy/ui';
 import { connectSource, disconnectSource, getSourceStatus, type SourceLogin, type SourceStatus } from './api';
+import { useUnsavedDraft } from './drafts';
 
 export const emptyLogin: SourceLogin = { companyCode: '', user: '', password: '', customerId: '', folder: '' };
 const empty = emptyLogin;
@@ -48,11 +49,15 @@ export function sourceSyncNote({ source, binding, report }: SourceStatus): { fai
  * Where this space's files come from (#358): Canopy storage, or one a3doc folder the space
  * mirrors. Connecting and disconnecting take effect at once, apart from the dialog's Save.
  */
-export function SourceSettings({ disabled, onChanged }: { disabled: boolean; onChanged: () => void }) {
+export function SourceSettings({ disabled, onChanged, onDraftChange }: { disabled: boolean; onChanged: () => void; onDraftChange?: (drafting: boolean) => void }) {
   const [status, setStatus] = useState<SourceStatus | null>(null);
   const [form, setForm] = useState<SourceLogin | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
+  /** A login being typed: only Connect sends it, so nothing around this form may discard it unasked. */
+  const drafting = !!form && (!!form.user.trim() || !!form.password);
+  useUnsavedDraft(drafting);
+  useEffect(() => { onDraftChange?.(drafting); return () => onDraftChange?.(false); }, [drafting]);
   const load = () => getSourceStatus().then(next => { if (alive.current) setStatus(next); }).catch(e => { if (alive.current) setError(message(e)); });
   useEffect(() => { alive.current = true; void load(); return () => { alive.current = false; }; }, []);
   const run = async (work: () => Promise<unknown>) => {
@@ -64,8 +69,10 @@ export function SourceSettings({ disabled, onChanged }: { disabled: boolean; onC
   const source = status?.source, binding = status?.binding, report = status?.report;
   const note = status ? sourceSyncNote(status) : null;
   const locked = disabled || busy;
+  const connect = () => { if (form && !locked && loginReady(form)) void run(() => connectSource(loginPayload(form))); };
+  const alert = error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null;
   return <section aria-labelledby="settings-source" className="space-y-2"><h3 id="settings-source" className="text-xs font-medium text-muted-foreground">Source</h3>
-    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+    {form ? null : alert}
     {!status ? <p role="status" className="text-sm text-muted-foreground">Loading source…</p> : source ? (
       <div className="space-y-2 rounded-lg border px-3 py-2.5">
         <div className="flex items-start gap-3"><Icon name="link" size={18} className="mt-0.5 text-muted-foreground"/>
@@ -88,12 +95,15 @@ export function SourceSettings({ disabled, onChanged }: { disabled: boolean; onC
         {!form ? <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => setForm(empty)}>Connect a3doc</Button> : null}
       </div>
     )}
-    {form ? <div role="group" aria-label="Connect a3doc" className="space-y-2 rounded-lg border px-3 py-2.5">
+    {/* These fields sit inside the settings form, where Enter would save the space and not the login. */}
+    {form ? <div role="group" aria-label="Connect a3doc" className="space-y-2 rounded-lg border px-3 py-2.5"
+      onKeyDown={event => { if (event.key === 'Enter' && event.target instanceof HTMLInputElement) { event.preventDefault(); connect(); } }}>
       <SourceLoginFields value={form} disabled={locked} onChange={setForm}/>
+      {alert}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => { setForm(null); setError(null); }}>Cancel</Button>
         <Button type="button" size="sm" disabled={locked || !loginReady(form)}
-          onClick={() => void run(() => connectSource(loginPayload(form)))}>{busy ? 'Connecting…' : 'Connect'}</Button>
+          onClick={connect}>{busy ? 'Connecting…' : 'Connect'}</Button>
       </div>
     </div> : null}
   </section>;

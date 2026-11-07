@@ -58,6 +58,46 @@ it('keeps the form and says why when a3doc refuses the folder', async () => {
   await waitFor(() => expect((screen.getByLabelText('a3doc folder') as HTMLInputElement).value).toBe('Nope'));
 });
 
+it('connects on Enter in a login field, because the settings form around it would save instead', async () => {
+  const fetcher = platform();
+  render(<form onSubmit={() => { throw new Error('the space form must not submit'); }}><SourceSettings disabled={false} onChanged={() => {}} /></form>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect a3doc' }));
+  for (const [label, value] of [['Company code', 'ACME'], ['User', 'ana'], ['Password', 'pw']]) {
+    fireEvent.change(screen.getByLabelText(label!), { target: { value } });
+  }
+  expect(fireEvent.keyDown(screen.getByLabelText('Password'), { key: 'Enter' })).toBe(false);
+  await screen.findByText('a3doc · ACME');
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(1);
+});
+
+it('swallows Enter on an unfinished login, and shows a refusal beside the Connect button', async () => {
+  const fetcher = platform({ refuse: 'a3doc refused the login' });
+  render(<SourceSettings disabled={false} onChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect a3doc' }));
+  fireEvent.change(screen.getByLabelText('User'), { target: { value: 'ana' } });
+  expect(fireEvent.keyDown(screen.getByLabelText('User'), { key: 'Enter' })).toBe(false);
+  expect(fetcher.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false);
+  fireEvent.change(screen.getByLabelText('Company code'), { target: { value: 'ACME' } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  expect(screen.getByRole('group', { name: 'Connect a3doc' }).contains(await screen.findByRole('alert'))).toBe(true);
+});
+
+it('reports a login being typed, and that it ended once connected', async () => {
+  platform();
+  const draft = vi.fn();
+  render(<SourceSettings disabled={false} onChanged={() => {}} onDraftChange={draft} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect a3doc' }));
+  expect(draft).toHaveBeenLastCalledWith(false);
+  for (const [label, value] of [['Company code', 'ACME'], ['User', 'ana'], ['Password', 'pw']]) {
+    fireEvent.change(screen.getByLabelText(label!), { target: { value } });
+  }
+  expect(draft).toHaveBeenLastCalledWith(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await screen.findByText('a3doc · ACME');
+  expect(draft).toHaveBeenLastCalledWith(false);
+});
+
 it('offers only what a3doc can do on a mirrored row', () => {
   const file = { id: 'f', name: 'a.pdf', isFolder: false } as Parameters<typeof actionsFor>[0];
   const folder = { ...file, isFolder: true };
