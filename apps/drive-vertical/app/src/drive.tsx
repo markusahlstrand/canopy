@@ -21,7 +21,7 @@ import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui
 import { readViewPreferences, saveViewPreferences, watchViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
-import { indexedMirror, syncMirror } from './scope-mirror';
+import { indexedMirror, rememberOfflineIdentity, syncMirror } from './scope-mirror';
 import { listOfflinePins, offlineSpace, rememberOfflineSpace, removeOfflinePin, setOfflinePin, type FolderPin } from './offline-content';
 import { refreshOfflinePins, syncOfflineFolderOnce, type FolderSyncProgress } from './offline-folder-sync';
 import { OfflinePreview } from './offline-preview';
@@ -30,7 +30,7 @@ import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
 import { SelectionSummary } from './selection-summary';
-import { folderPath, linkedFolderId } from './folder-links';
+import { folderPath, linkedFolderId, linkedView, showInUrl } from './folder-links';
 import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
@@ -55,6 +55,7 @@ import {
   ApiError,
   ROOT_FOLDER_ID,
   currentSite,
+  offlineSiteKey,
   SEARCH_MIN,
   contentUrl,
   peopleAccess,
@@ -208,6 +209,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const skipLinkedListing = useRef(false);
   const linkNavigation = useRef(0);
+  /** The navigation whose link failed for a reason a reload can fix, so it stays in the URL. */
+  const retryableLink = useRef<number | null>(null);
   const [folderRecovery, setFolderRecovery] = useState(0);
   const unavailableFolder = useRef<string | null>(null);
   const [linkListingUnavailable, setLinkListingUnavailable] = useState(false);
@@ -223,7 +226,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [busy, setBusy] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [offline, setOffline] = useState(false);
-  const [view, setView] = useState<'drive' | 'trash' | 'search' | 'shared'>('drive');
+  const [view, setView] = useState<'drive' | 'trash' | 'search' | 'shared'>(linkedView);
   const searchOrigin = useRef<'drive' | 'trash' | 'shared'>('drive');
   const [term, setTerm] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -312,6 +315,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     if (liveSpace) {
       setSavedSpace(liveSpace);
       void rememberOfflineSpace(auth.principal, currentSite() ?? '', liveSpace).catch(() => {});
+      // The URL names this space even with no selection, so an offline reload looks it up by slug.
+      if (currentSite() !== liveSpace) {
+        void rememberOfflineSpace(auth.principal, liveSpace, liveSpace).catch(() => {});
+        void rememberOfflineIdentity(offlineSiteKey(liveSpace), auth.principal).catch(() => {});
+      }
     } else {
       void offlineSpace(auth.principal, currentSite() ?? '').then(space => { if (active) setSavedSpace(space); }).catch(() => {});
     }
@@ -340,11 +348,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => { void refreshPlugins().catch(() => {}); }, []);
 
   useEffect(() => {
-    const url = new URL(window.location.href);
-    url.searchParams.delete('path');
-    url.searchParams.delete('folder');
-    url.searchParams.delete('file');
-    window.history.replaceState(null, '', url);
     if (!initialFileId && !initialFolderId && !initialPath) return;
     let active = true;
     const generation = linkNavigation.current;
@@ -371,7 +374,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     };
     void resolve().catch((error: unknown) => {
       const subject = initialFileId ? 'file' : 'folder';
-      if (active && generation === linkNavigation.current) setLinkMessage(error instanceof ApiError && [401, 403, 404].includes(error.status)
+      if (!active || generation !== linkNavigation.current) return;
+      const unavailable = error instanceof ApiError && [401, 403, 404].includes(error.status);
+      if (!unavailable) retryableLink.current = generation;
+      setLinkMessage(unavailable
         ? `This ${subject} is unavailable or you do not have access.`
         : `Could not open the ${subject} link. Reload to retry.`);
     }).finally(() => { if (active) setLinkPending(false); });
@@ -379,6 +385,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   }, [initialFileId, initialFolderId, initialPath]);
 
   useEffect(() => { setLinkMessage(null); }, [folderId, view]);
+
+  // A pending link is still the URL's to answer: writing now would replace it with the root.
+  useEffect(() => {
+    if (linkPending || retryableLink.current === linkNavigation.current) return;
+    showInUrl({ site: cacheSpace, folderId, fileId: previewing, view });
+  }, [linkPending, cacheSpace, folderId, previewing, view]);
 
   useEffect(() => {
     if (!mobileNavOpen || !window.matchMedia) return;

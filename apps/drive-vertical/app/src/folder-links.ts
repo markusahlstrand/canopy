@@ -29,12 +29,39 @@ export function folderPath(): string {
   return linkedSite && linkedSite !== currentSite() ? '' : url.searchParams.get('path') ?? '';
 }
 
+/** The view a link names. Search is left out: a query would put what you typed in a shared URL. */
+export function linkedView(): 'drive' | 'trash' | 'shared' {
+  const url = new URL(window.location.href);
+  const linkedSite = url.searchParams.get('site');
+  const view = linkedSite && linkedSite !== currentSite() ? null : url.searchParams.get('view');
+  return view === 'trash' || view === 'shared' ? view : 'drive';
+}
+
+/**
+ * Keep the address bar on what the screen shows, so it can be sent as a link.
+ *
+ * The same stable IDs as the copy-link buttons, so no folder or file name reaches the URL.
+ * The space is always named: without it a link opens in the reader's own selected space.
+ * Anything else in the URL is not ours to rewrite.
+ */
+export function showInUrl({ site, folderId, fileId, view }: { site: string | null; folderId: string; fileId: string | null; view: string }) {
+  const url = new URL(window.location.href);
+  for (const key of ['path', 'folder', 'file', 'view']) url.searchParams.delete(key);
+  if (site) url.searchParams.set('site', site);
+  if (view === 'trash' || view === 'shared') url.searchParams.set('view', view);
+  if (fileId) url.searchParams.set('file', fileId);
+  else if (folderId !== ROOT_FOLDER_ID && view !== 'trash' && view !== 'shared') url.searchParams.set('folder', folderId);
+  if (url.href !== window.location.href) window.history.replaceState(null, '', url);
+}
+
 /** Login returns only navigation parameters, never invite/claim credentials. */
 export function folderLoginUrl(): string {
   const fileId = linkedFileId();
   const id = linkedFolderId();
   const path = folderPath();
-  if (!fileId && !id && !path && !currentSite()) return LOGIN_URL;
+  const view = linkedView();
+  if (!fileId && !id && !path && view === 'drive' && !currentSite()) return LOGIN_URL;
   const target = new URL(fileId ? fileLink(fileId) : id ? folderIdLink(id) : folderLink(path));
+  if (view !== 'drive') target.searchParams.set('view', view);
   return `${LOGIN_URL}?returnTo=${encodeURIComponent(target.pathname + target.search)}`;
 }

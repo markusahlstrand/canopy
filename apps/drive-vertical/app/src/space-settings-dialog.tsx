@@ -44,7 +44,7 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
       // The selected space is gone: drop the selection and land on the install's home space.
       selectSite(null);
       const url = new URL(window.location.href);
-      for (const key of ['site', 'path', 'folder', 'file']) url.searchParams.delete(key);
+      for (const key of ['site', 'path', 'folder', 'file', 'view']) url.searchParams.delete(key);
       url.hash = '';
       window.location.replace(url);
     } catch (error) {

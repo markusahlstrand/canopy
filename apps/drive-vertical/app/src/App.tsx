@@ -21,6 +21,7 @@ import {
   acceptInvite,
   claimOwner,
   currentSite,
+  offlineSiteKey,
   selectSite,
   whoami,
 } from './api';
@@ -43,9 +44,6 @@ type Session =
   | { state: 'out' }
   | { state: 'none'; user?: User }
   | { state: 'in'; principal: string; user?: User };
-
-/** The last verified principal is an offline hint for this routed site only. */
-const offlineSiteKey = () => JSON.stringify([window.location.origin, currentSite()]);
 
 /**
  * The two credentials that arrive as a LINK, and what to do with each.
@@ -204,6 +202,7 @@ const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
     url.searchParams.delete('path');
     url.searchParams.delete('folder');
     url.searchParams.delete('file');
+    url.searchParams.delete('view');
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
     return me;
   } catch (retry: unknown) {

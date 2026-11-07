@@ -907,7 +907,7 @@ describe('shared-folder discovery', () => {
 
     fireEvent.doubleClick(screen.getByText('Other / Reports').closest('tr')!);
     expect(currentSite()).toBe('other');
-    expect(window.location.search).toBe('?folder=01N');
+    expect(window.location.search).toBe('?site=other&folder=01N');
   });
 
   it('opens a shared folder locally while the space roster is still loading', async () => {
@@ -935,7 +935,7 @@ describe('shared-folder discovery', () => {
 
     fireEvent.doubleClick(screen.getByText('Leases'));
     expect(currentSite()).toBe('other');
-    expect(window.location.search).toBe('?folder=01N');
+    expect(window.location.search).toBe('?site=other&folder=01N');
     expect(pending.some(request => request.url.includes('/folders/01N/files'))).toBe(false);
   });
 
@@ -1259,7 +1259,7 @@ describe('a selection that has gone stale does not lock the install', () => {
     await flush();
     expect(currentSite()).toBeNull();
     // …and the URL cannot put it back on the next reload.
-    expect(window.location.search).not.toContain('site=');
+    expect(window.location.search).not.toContain('site=family');
     expect(window.location.search).not.toContain('folder=');
     expect(window.location.search).not.toContain('path=');
     expect(pending.some(p => p.url.includes('foreign-folder'))).toBe(false);
@@ -1333,7 +1333,7 @@ describe('a signed-in login with no space here (#365)', () => {
     await flush();
 
     expect(currentSite()).toBeNull();
-    expect(window.location.search).not.toContain('site=');
+    expect(window.location.search).not.toContain('site=family');
     expect(window.location.search).not.toContain('folder=');
     await answer('/api/sites', [{ slug: 'home', name: 'Home', current: true }]);
     await answer('/folders/root/folders', []);
@@ -1448,7 +1448,7 @@ describe('the rail reports its own failures', () => {
 });
 
 describe('a space change survives storage that refuses to hold it', () => {
-  it('clears a `?site=` link once the choice is stored, so it can be left', async () => {
+  it('replaces a `?site=` link with the chosen space, so it can be left', async () => {
     // Arrived through a link that names a space, with storage working. `api.ts` reads the
     // URL ahead of storage, so a parameter left behind outranks the new selection: every
     // click would persist correctly and none would take effect, pinning the person to the
@@ -1463,7 +1463,7 @@ describe('a space change survives storage that refuses to hold it', () => {
 
     fireEvent.click(screen.getByText('Home'));
     expect(currentSite()).toBe('home');
-    expect(window.location.search).not.toContain('site=');
+    expect(window.location.search).toBe('?site=home');
   });
 
   it('carries the slug in the URL when it cannot be stored', async () => {

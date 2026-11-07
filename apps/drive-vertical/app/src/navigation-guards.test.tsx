@@ -31,7 +31,7 @@ it('keeps a shared folder target while switching spaces', () => {
   history.replaceState(null, '', '/?file=old&path=Old&claim=old-claim&invite=old-invite#previous');
   expect(openSpaceFolder('space-b', 'folder-42')).toBe(true);
   expect(currentSite()).toBe('space-b');
-  expect(location.search).toBe('?folder=folder-42');
+  expect(location.search).toBe('?site=space-b&folder=folder-42');
   expect(location.hash).toBe('');
 });
 it('drops the previous folder and link credentials when opening another space', () => {
@@ -39,6 +39,6 @@ it('drops the previous folder and link credentials when opening another space', 
   history.replaceState(null, '', '/?site=space-a&folder=old&claim=old-claim&invite=old-invite#previous');
   expect(openSpace('space-b')).toBe(true);
   expect(currentSite()).toBe('space-b');
-  expect(location.search).toBe('');
+  expect(location.search).toBe('?site=space-b');
   expect(location.hash).toBe('');
 });

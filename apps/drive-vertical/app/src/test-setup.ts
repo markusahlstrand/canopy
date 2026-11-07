@@ -1,3 +1,4 @@
+import { afterEach } from 'vitest';
 /**
  * What jsdom does not implement and the moved components need.
  *
@@ -21,3 +22,7 @@ if (!('ResizeObserver' in globalThis)) {
 if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function scrollIntoView() {};
 }
+
+// The drive keeps the address bar on what it shows, so a test's folder or file would
+// otherwise open as a deep link in the next test of the file.
+afterEach(() => { window.history.replaceState(null, '', '/'); });

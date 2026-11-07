@@ -31,7 +31,7 @@ it('opens a renamed file in its containing folder without resolving legacy links
   expect(fetcher.mock.calls.some(([url]) => url.includes('/old/') || url.includes('by-path'))).toBe(false);
   await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/private-folder/files')).toBe(true));
   expect(fetcher.mock.calls.some(([url]) => url.includes('/folders/root/'))).toBe(false);
-  expect(location.search).toBe('?site=family');
+  expect(location.search).toBe('?site=family&file=stable');
 });
 it.each([401, 403, 404])('reports a generic unavailable file without exposing metadata (%s)', async status => {
   history.replaceState(null, '', '/?file=stable'); mockFiles(status); render(<DriveScreen {...shell} />);
@@ -86,7 +86,7 @@ it('drops a foreign file destination when authentication falls back to another s
   });
   vi.stubGlobal('fetch', fetcher); render(<App />);
   await screen.findByRole('complementary');
-  expect(location.search).not.toContain('file='); expect(location.search).not.toContain('site=');
+  expect(location.search).not.toContain('file='); expect(location.search).not.toContain('site=revoked');
   expect(fetcher.mock.calls.some(([url]) => url.includes('foreign-file'))).toBe(false);
 });
 
