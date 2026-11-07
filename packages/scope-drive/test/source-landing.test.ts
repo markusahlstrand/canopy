@@ -251,3 +251,12 @@ it('keeps a connector sync report any member can read, until the source changes'
   await w.human.invoke('drive/clear-source');
   expect(await w.member.invoke('drive/get-source')).toEqual({ source: null });
 });
+
+it('still answers with the source when the stored report does not parse', async () => {
+  const w = await world();
+  await w.connect();
+  await w.stub.invoke('drive/source-write-journal', { key: 'a3doc:sync-report', value: { total: 'many' } });
+  const answer = await w.member.invoke<{ source: { account: string } }>('drive/get-source');
+  expect(answer.source.account).toBe('ACME');
+  expect(answer).not.toHaveProperty('report');
+});

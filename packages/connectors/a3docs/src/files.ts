@@ -120,7 +120,7 @@ interface SyncPass {
   highWater?: string;
   /** Set once every page was read: held items the pass did not present, still to be checked one by one. */
   verify?: string[];
-  /** What this pass has read so far; a pass from before reports existed starts one when it resumes. */
+  /** What this pass has read so far; absent on a pass from before reports existed. */
   tally?: Pick<A3docSyncReport, 'total' | 'read' | 'skipped' | 'skippedContainers'>;
 }
 
@@ -215,13 +215,15 @@ export async function bindA3docScope(
     canUpload: canUploadAs(me.role),
     ...(sample.documents[0]?.CustomerId ? { customerId: sample.documents[0].CustomerId } : {}),
   };
-  // The same container bound again keeps its cursor, so a re-bind does not re-land the folder.
+  // The same container bound again keeps its cursor and any unfinished pass, so a re-bind neither
+  // re-lands the folder nor starts a long read over.
   const prior = await readBinding(host, input.connectionId, input.scopeId);
   if (prior && prior.containerId === binding.containerId) {
     if (prior.highWater) binding.highWater = prior.highWater;
     if (prior.lastFull) binding.lastFull = prior.lastFull;
     if (prior.lastSync) binding.lastSync = prior.lastSync;
     if (prior.reported) binding.reported = prior.reported;
+    if (prior.pass) binding.pass = prior.pass;
   }
   await host.admin.putConnectorState(input.connectionId, bindingKey(input.scopeId), binding);
   return binding;
@@ -555,11 +557,15 @@ async function syncFiles(
   // A binding from before reports existed reads in full once, so its space can say what it found.
   const due = !binding.reported || !binding.highWater || !binding.lastFull || now.getTime() - Date.parse(binding.lastFull) >= FULL_PASS_EVERY_MS;
   let pass: SyncPass = binding.pass ?? { id: crypto.randomUUID(), full: due, page: 0, startedAt: now.toISOString(), changes: 0 };
-  const tally = (pass.tally ??= { total: 0, read: 0, skipped: 0, skippedContainers: [] });
+  // A pass that began before reports existed read pages nobody counted: it finishes unreported,
+  // and `reported` stays unset, so the next pass reads in full and counts everything.
+  if (!binding.pass) pass.tally = { total: 0, read: 0, skipped: 0, skippedContainers: [] };
+  const counted = pass.tally !== undefined;
+  const tally = pass.tally ?? { total: 0, read: 0, skipped: 0, skippedContainers: [] };
   const outcome = (pages: number, complete: boolean, superseded = false): A3docSyncResult => ({
     scopeId: binding.scopeId, changes: pass.changes, full: pass.full, pages, complete,
     ...(superseded ? { superseded: true as const } : {}),
-    ...(pass.full ? { report: { ...tally, at: nowOf(options).toISOString(), complete, files: [...index.values()].filter((e) => e.kind === 'file').length } } : {}),
+    ...(pass.full && counted ? { report: { ...tally, at: nowOf(options).toISOString(), complete, files: [...index.values()].filter((e) => e.kind === 'file').length } } : {}),
   });
 
   const scopeRef = scopeIdSchema.parse(binding.scopeId);
@@ -778,7 +784,8 @@ async function syncFiles(
   const done: Partial<A3docBinding> = {
     lastSync: { syncedAt: nowOf(options).toISOString(), changes: pass.changes },
     ...(pass.highWater && (!binding.highWater || pass.highWater > binding.highWater) ? { highWater: pass.highWater } : {}),
-    ...(pass.full ? { lastFull: pass.startedAt, reported: true as const } : {}),
+    ...(pass.full ? { lastFull: pass.startedAt } : {}),
+    ...(pass.full && counted ? { reported: true as const } : {}),
   };
   if (!(await save(done, { endPass: true }))) return outcome(pages, false, true);
   return outcome(pages, true);

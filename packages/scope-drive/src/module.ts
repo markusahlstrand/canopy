@@ -324,8 +324,10 @@ const operations = {
   'drive/land-source-change': (ctx, input) => landSourceChange(ctx, fileSourceChange.parse(input)),
   'drive/get-source': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
+    // Only diagnostics: a report this version cannot read must not cost members the source itself.
     const row = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY])[0];
-    return { source: sourceOf(ctx), ...(row ? { report: sourceSyncReport.parse(JSON.parse(row.value)) } : {}) };
+    const report = row ? sourceSyncReport.safeParse(JSON.parse(row.value)) : null;
+    return { source: sourceOf(ctx), ...(report?.success ? { report: report.data } : {}) };
   },
   'drive/source-access': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));

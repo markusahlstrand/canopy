@@ -161,3 +161,18 @@ it('takes a folder path that starts at the root name a3doc shows', async () => {
   expect(w.ctx.scope.options.containerId).toBe(21);
   await expect(w.bind(`${root}/Nowhere`)).rejects.toThrow(/no a3doc folder/);
 });
+
+it('publishes no report from a pass that began before reports existed', async () => {
+  const w = world();
+  for (let i = 0; i < 30; i++) w.a3.add([21], `Invoice ${i}`, `bytes ${i}`);
+  await w.bind('Facturas/Recibidas');
+  await w.def.sweep!(w.ctx);
+  w.journal.delete('a3doc:sync-report');
+  // The stored pass as an older version left it: pages read, nothing counted.
+  for (const [key, value] of w.state) if (key.includes('binding')) { const { pass, ...rest } = value as { pass: Record<string, unknown> }; const { tally: _gone, ...older } = pass; w.state.set(key, { ...rest, pass: older }); }
+  await w.def.sweep!(w.ctx);
+  expect(keptReport(w)).toBeUndefined();
+  await w.def.sweep!(w.ctx);
+  await w.def.sweep!(w.ctx);
+  expect(keptReport(w)).toMatchObject({ complete: true, read: 30, total: 30 });
+});
