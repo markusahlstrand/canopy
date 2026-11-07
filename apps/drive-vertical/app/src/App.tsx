@@ -3,10 +3,11 @@ import { watchImageViewerPreference } from './image-viewer';
  * The drive's own front end.
  *
  * Scope-shaped on purpose: the hostname already resolved to a scope before the worker
- * saw the request, so the space is never in a URL here and the tenant is never in a
- * header. The sidebar does list the other spaces this login is bound in and can select
- * one (`x-site`, see `api.ts`) — but that names an ADDRESS the platform re-checks, which
- * is a different thing from the portal deciding for itself which space you are in.
+ * saw the request, so the tenant is never in a header. The sidebar does list the other
+ * spaces this login is bound in and can select one (`x-site`, see `api.ts`), and the URL
+ * names the space on screen so it can be sent as a link — but both name an ADDRESS the
+ * platform re-checks, which is a different thing from the portal deciding for itself
+ * which space you are in.
  *
  * It renders with `@canopy/ui` — the same shadcn/radix primitives and the same
  * Canopy tokens the trusted plugins use.
