@@ -8,6 +8,9 @@ import { a3docSecret, A3DOC_VERTICAL_PROVIDER } from '@canopy/connector-a3docs';
 
 export interface DriveSource { provider: string; connectionId: string; account: string; folder: string; canUpload: boolean; boundAt: string }
 
+/** What the connector's last full read found; see `A3docSyncReport`. */
+export interface SourceSyncReport { at: string; complete: boolean; total: number; read: number; skipped: number; skippedContainers: number[]; files: number }
+
 export type SourceRelay = ConnectionRelayAccess & { tenantId: TenantId; scopeId: ScopeId };
 
 /** The a3doc login and the folder under its root this space mirrors (`''` is the root). */
@@ -25,11 +28,11 @@ const connectInput = a3docSecret.extend({ folder: z.string().trim().max(500) });
 export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>) => Promise<{ scope: ScopeStub; relay: () => SourceRelay }>) {
   app.get('/api/source/status', async (c) => {
     const { scope, relay } = await resolve(c);
-    const { source } = await scope.invoke<{ source: DriveSource | null }>('drive/get-source');
-    if (!source) return c.json({ source: null, binding: null });
+    const { source, report } = await scope.invoke<{ source: DriveSource | null; report?: SourceSyncReport }>('drive/get-source');
+    if (!source) return c.json({ source: null, binding: null, report: null });
     const { bindings } = await relayed(() => listBindings(relay()));
     const binding = bindings.find((b) => b.connectionId === source.connectionId) ?? null;
-    return c.json({ source, binding: binding && { status: binding.status, lastSyncedAt: binding.lastSyncedAt, lastError: binding.lastError } });
+    return c.json({ source, binding: binding && { status: binding.status, lastSyncedAt: binding.lastSyncedAt, lastError: binding.lastError }, report: report ?? null });
   });
 
   app.put('/api/source', async (c) => {

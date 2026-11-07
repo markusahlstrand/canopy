@@ -24,6 +24,25 @@ export function SourceLoginFields({ value, disabled, onChange }: { value: Source
 }
 const message = (error: unknown) => error instanceof Error ? error.message || 'Could not reach a3doc.' : String(error);
 const when = (iso: string) => new Date(iso).toLocaleString();
+const documents = (count: number) => `${count} ${count === 1 ? 'document' : 'documents'}`;
+
+/**
+ * Why a connected space holds what it holds, in the order worth reading: a failure, then what the
+ * last full read found. Shared by space settings and the empty folder, where the question comes up.
+ */
+export function sourceSyncNote({ source, binding, report }: SourceStatus): { failed: boolean; text: string } | null {
+  if (!source) return null;
+  if (binding?.lastError && (!binding.lastSyncedAt || binding.lastError.at > binding.lastSyncedAt)) return { failed: true, text: `Last sync failed ${when(binding.lastError.at)}: ${binding.lastError.message}` };
+  if (binding && binding.status !== 'active') return { failed: true, text: `The a3doc login needs attention (${binding.status}). Connect again with the current password.` };
+  if (!report) return { failed: false, text: binding?.lastSyncedAt ? `Last synced ${when(binding.lastSyncedAt)}.` : 'Not synced yet. Documents appear after the first sync.' };
+  if (report.total === 0) return { failed: true, text: `a3doc listed no documents in this folder for this login (checked ${when(report.at)}). Check the folder, and that this user can see it in a3doc.` };
+  if (report.skipped > 0) {
+    const ids = report.skippedContainers.length ? ` They name a3doc folder ${report.skippedContainers.join(', ')}.` : ' a3doc gave no folder for them.';
+    return { failed: true, text: `${report.skipped} of ${documents(report.read)} read were skipped because a3doc files them outside this folder.${ids}` };
+  }
+  if (!report.complete) return { failed: false, text: `Syncing: read ${report.read} of ${documents(report.total)} so far.` };
+  return { failed: false, text: `Last full read ${when(report.at)}: ${report.read} of ${documents(report.total)}, ${report.files} here.` };
+}
 
 /**
  * Where this space's files come from (#358): Canopy storage, or one a3doc folder the space
@@ -42,7 +61,8 @@ export function SourceSettings({ disabled, onChanged }: { disabled: boolean; onC
     catch (e) { if (alive.current) setError(message(e)); }
     finally { if (alive.current) setBusy(false); }
   };
-  const source = status?.source, binding = status?.binding;
+  const source = status?.source, binding = status?.binding, report = status?.report;
+  const note = status ? sourceSyncNote(status) : null;
   const locked = disabled || busy;
   return <section aria-labelledby="settings-source" className="space-y-2"><h3 id="settings-source" className="text-xs font-medium text-muted-foreground">Source</h3>
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
@@ -53,9 +73,7 @@ export function SourceSettings({ disabled, onChanged }: { disabled: boolean; onC
             <p className="text-sm font-medium">a3doc · {source.account}</p>
             <p className="truncate text-xs text-muted-foreground">Mirrors {source.folder ? `the folder ${source.folder}` : 'every folder'}. {source.canUpload ? 'Uploads go on to a3doc.' : 'This a3doc user can only read, so nothing can be uploaded here.'}</p>
             <p className="text-xs text-muted-foreground">{binding?.lastSyncedAt ? `Last synced ${when(binding.lastSyncedAt)}.` : 'Not synced yet.'}</p>
-            {binding?.lastError && (!binding.lastSyncedAt || binding.lastError.at > binding.lastSyncedAt)
-              ? <p className="text-xs text-destructive">Last sync failed {when(binding.lastError.at)}: {binding.lastError.message}</p> : null}
-            {binding && binding.status !== 'active' ? <p className="text-xs text-destructive">The a3doc login needs attention ({binding.status}). Connect again with the current password.</p> : null}
+            {note && (note.failed || report) ? <p className={`text-xs ${note.failed ? 'text-destructive' : 'text-muted-foreground'}`}>{note.text}</p> : null}
           </div>
         </div>
         <p className="text-xs text-muted-foreground">Folders and documents here follow a3doc, so they can't be renamed, moved or deleted in Canopy. Disconnecting keeps every file, and the space becomes an ordinary one.</p>

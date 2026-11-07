@@ -49,7 +49,7 @@ import {
   type OperationHandler,
 } from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
-import { driveOperations, installedPluginManifest, type DriveSource } from '../spec/model.js';
+import { driveOperations, installedPluginManifest, sourceSyncReport, type DriveSource } from '../spec/model.js';
 import { driveManifest } from './manifest.js';
 import { driveMigrations, ROOT_FOLDER_ID } from './migrations.js';
 
@@ -106,6 +106,8 @@ interface DetailsRow {
  * Only a file's CURRENT version can match: an old version's text is history, not content.
  * `test/search.test.ts` runs this against the real kernel, so a renamed table fails there.
  */
+/** Where a connector keeps its last full read in the source journal. */
+const SYNC_REPORT_KEY = 'a3doc:sync-report';
 const CONTENT_SEARCH_SQL = `
   SELECT f.id AS file_id, bm25(_substrat_search__attachments) AS rank
     FROM _substrat_search__attachments
@@ -322,7 +324,8 @@ const operations = {
   'drive/land-source-change': (ctx, input) => landSourceChange(ctx, fileSourceChange.parse(input)),
   'drive/get-source': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
-    return { source: sourceOf(ctx) };
+    const row = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY])[0];
+    return { source: sourceOf(ctx), ...(row ? { report: sourceSyncReport.parse(JSON.parse(row.value)) } : {}) };
   },
   'drive/source-access': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
@@ -336,6 +339,9 @@ const operations = {
       ctx.sql.exec('DELETE FROM drive_source_items WHERE connection_id != ?', [input.connectionId]);
       ctx.sql.exec('DELETE FROM drive_source_pending');
     }
+    // The same folder again keeps its report: its cursor survives too, so no new full read will replace it.
+    const prior = sourceOf(ctx);
+    if (prior?.connectionId !== input.connectionId || prior.folder !== input.folder) ctx.sql.exec('DELETE FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY]);
     const boundAt = ctx.now();
     ctx.sql.exec(`INSERT INTO drive_source (id, provider, connection_id, account, folder, can_upload, bound_at) VALUES (1, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, connection_id = excluded.connection_id, account = excluded.account,
@@ -346,6 +352,7 @@ const operations = {
   'drive/clear-source': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
     ctx.sql.exec('DELETE FROM drive_source WHERE id = 1');
+    ctx.sql.exec('DELETE FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY]);
     return { ok: true as const };
   },
   'drive/request-space': async (ctx, input) => {

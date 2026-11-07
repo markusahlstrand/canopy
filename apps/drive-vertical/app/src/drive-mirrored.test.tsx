@@ -26,3 +26,12 @@ it('offers uploads, but not folders, when the a3doc user may upload', async () =
   expect(screen.getAllByRole('button', { name: /Upload/ }).length).toBeGreaterThan(0);
   expect(screen.queryByRole('button', { name: 'New folder' })).toBeNull();
 });
+
+it('answers an empty mirrored folder with what the last sync found', async () => {
+  const source = { provider: 'canopy.a3doc', connectionId: 'c1', account: 'ACME', folder: 'Facturas', canUpload: false, boundAt: '2026-10-31T09:00:00.000Z' };
+  const report = { at: '2026-11-06T22:00:00.000Z', complete: true, total: 3, read: 3, skipped: 3, skippedContainers: [99], files: 0 };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => Response.json(
+    url === '/api/source' ? { source } : url === '/api/source/status' ? { source, binding: { status: 'active', lastSyncedAt: report.at, lastError: null }, report } : url.endsWith('/access') ? { canManage: false } : [])));
+  render(<DriveScreen {...shell} />);
+  await screen.findByText('3 of 3 documents read were skipped because a3doc files them outside this folder. They name a3doc folder 99.');
+});

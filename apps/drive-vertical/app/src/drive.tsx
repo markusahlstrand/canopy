@@ -35,6 +35,7 @@ import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { CreateSpaceDialog } from './create-space-dialog';
+import { sourceSyncNote } from './source-settings';
 import { openSpace, openSpaceFolder, spaceLabel } from './space-navigation';
 import { SpacesDialog } from './spaces-dialog';
 import { PluginManagement } from './plugin-management';
@@ -61,6 +62,7 @@ import {
   createFile,
   createFolder,
   getSource,
+  getSourceStatus,
   type DriveSource,
   folderByPath,
   getFolder,
@@ -292,6 +294,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     return () => { current = false; };
   }, [liveSpace, sourceTick]);
   const mirrored = source !== null, canUpload = !source || source.canUpload;
+  // An empty mirrored folder is a question, so it answers with what the last sync found.
+  const [syncNote, setSyncNote] = useState<ReturnType<typeof sourceSyncNote>>(null);
+  useEffect(() => {
+    let current = true;
+    setSyncNote(null);
+    if (source) getSourceStatus().then(next => { if (current) setSyncNote(sourceSyncNote(next)); }).catch(() => {});
+    return () => { current = false; };
+  }, [source]);
   const [savedSpace, setSavedSpace] = useState<string | null>(null);
   const cacheSpace = liveSpace ?? savedSpace ?? currentSite();
   const [offlinePins, setOfflinePins] = useState<FolderPin[]>([]);
@@ -921,7 +931,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     <EmptyList
       icon="folder"
       title={folderId === ROOT_FOLDER_ID ? activeSpaceName ? `${activeSpaceName} is empty` : 'Your drive is empty' : 'This folder is empty'}
-      description={mirrored ? "Documents added to this a3doc folder appear here." : "Create a folder or upload files to get started."}
+      description={mirrored ? syncNote?.text ?? "Documents added to this a3doc folder appear here." : "Create a folder or upload files to get started."}
       actions={[
         ...(mirrored ? [] : [{ label: 'New folder', onClick: () => setCreating(true) }]),
         ...(canUpload ? [{ label: 'Upload files', onClick: () => uploadRef.current?.click() }] : []),

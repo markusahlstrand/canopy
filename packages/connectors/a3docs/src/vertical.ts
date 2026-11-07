@@ -1,6 +1,6 @@
 import type { ConnectorDefinition } from '@substrat-run/vertical-host/connectors';
 import { ConnectorRefusal } from '@substrat-run/kernel';
-import { bindA3docContext, dispatchA3docContext, syncA3docContext, A3DOC_FILES_EVENT } from './files.js';
+import { bindA3docContext, dispatchA3docContext, syncA3docContext, A3DOC_FILES_EVENT, SYNC_REPORT_KEY } from './files.js';
 import { probeA3docSecret } from './probe.js';
 import type { A3docOptions } from './connection.js';
 
@@ -27,6 +27,8 @@ export function a3docConnectorDefinition(
     bind: (ctx, binding) => bindA3docContext({ ...ctx, scope: { ...ctx.scope, options: binding } }, options(ctx.fetch)),
     sweep: async (ctx) => {
       const result = await syncA3docContext(ctx, options(ctx.fetch));
+      // Only diagnostics: a report that cannot be kept must not fail the files that did land.
+      if (result.report && !result.superseded) await ctx.invoke(config.journalOperation, { key: SYNC_REPORT_KEY, value: result.report }).catch(() => {});
       return { landed: result.changes, more: !result.complete };
     },
     dispatch: async (ctx, event) => {

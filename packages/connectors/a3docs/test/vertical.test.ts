@@ -36,7 +36,7 @@ function world() {
     },
   };
   const bind = async (folder = '') => { ctx.scope.options = await def.bind!(ctx, { folder }); };
-  return { a3, def, ctx, state, changes, bind, record };
+  return { a3, def, ctx, state, journal, changes, bind, record };
 }
 
 it('declares a vertical-owned provider and binds/sweeps inside its selected folder', async () => {
@@ -89,4 +89,75 @@ it('resumes hosted sweeps in bounded pages without exceeding the outbound-use ce
   }
   expect(more).toEqual([true, true, false]);
   expect(w.changes.filter(c => c.kind === 'file' && c.change === 'upsert')).toHaveLength(55);
+});
+
+const keptReport = (w: ReturnType<typeof world>) => w.journal.get('a3doc:sync-report') as { total: number; read: number; skipped: number; skippedContainers: number[]; files: number; complete: boolean } | undefined;
+
+it('reports a full read, and says when documents fall outside the bound folder', async () => {
+  const w = world();
+  w.a3.add([21], 'Invoice', 'inside');
+  // The root lists every document, even one filed in a folder this login's tree does not show.
+  w.a3.add([99], 'Stray', 'filed elsewhere');
+  await w.bind('');
+  await w.def.sweep!(w.ctx);
+  expect(keptReport(w)).toMatchObject({ complete: true, total: 2, read: 2, skipped: 1, skippedContainers: [99], files: 1 });
+  expect(JSON.stringify(keptReport(w))).not.toContain('Stray');
+});
+
+it('keeps the full read when a later pass only looks at what changed', async () => {
+  const w = world();
+  w.a3.add([21], 'Invoice', 'inside');
+  await w.bind('Facturas/Recibidas');
+  await w.def.sweep!(w.ctx);
+  const first = keptReport(w);
+  await w.def.sweep!(w.ctx);
+  expect(keptReport(w)).toEqual(first);
+});
+
+it('counts a read across the sweeps it takes', async () => {
+  const w = world();
+  for (let i = 0; i < 30; i++) w.a3.add([21], `Invoice ${i}`, `bytes ${i}`);
+  await w.bind('Facturas/Recibidas');
+  await w.def.sweep!(w.ctx);
+  expect(keptReport(w)).toMatchObject({ complete: false, read: 25, total: 30 });
+  await w.def.sweep!(w.ctx);
+  expect(keptReport(w)).toMatchObject({ complete: true, read: 30, total: 30, files: 30 });
+});
+
+it('still lands files when the report cannot be kept', async () => {
+  const w = world();
+  w.a3.add([21], 'Invoice', 'inside');
+  await w.bind('Facturas/Recibidas');
+  const invoke = w.ctx.invoke;
+  (w.ctx as { invoke: typeof invoke }).invoke = async <O>(operation: string, input?: unknown) => {
+    if ((input as { key?: string } | undefined)?.key === 'a3doc:sync-report') throw new Error('refused');
+    return invoke<O>(operation, input);
+  };
+  await expect(w.def.sweep!(w.ctx)).resolves.toMatchObject({ more: false });
+  expect(w.changes.some(c => c.kind === 'file')).toBe(true);
+});
+
+it('reads a binding from before reports existed in full on its next sweep', async () => {
+  const w = world();
+  w.a3.add([21], 'Invoice', 'inside');
+  await w.bind('Facturas/Recibidas');
+  await w.def.sweep!(w.ctx);
+  w.journal.delete('a3doc:sync-report');
+  for (const [key, value] of w.state) if (key.includes('binding')) { const { reported: _gone, ...older } = value as Record<string, unknown>; w.state.set(key, older); }
+  await w.def.sweep!(w.ctx);
+  expect(keptReport(w)).toMatchObject({ complete: true, total: 1, read: 1, files: 1 });
+  w.journal.delete('a3doc:sync-report');
+  await w.def.sweep!(w.ctx);
+  expect(keptReport(w)).toBeUndefined();
+});
+
+it('takes a folder path that starts at the root name a3doc shows', async () => {
+  const w = world();
+  w.a3.add([21], 'Invoice', 'inside');
+  const root = w.a3.tree[0]!.name;
+  await w.bind(root);
+  expect(w.ctx.scope.options.containerId).toBe(1);
+  await w.bind(`${root}/Facturas/Recibidas`);
+  expect(w.ctx.scope.options.containerId).toBe(21);
+  await expect(w.bind(`${root}/Nowhere`)).rejects.toThrow(/no a3doc folder/);
 });

@@ -234,3 +234,20 @@ it('resends to the bucket after a send that failed for good, without a new versi
   expect(await w.stub.invoke('drive/send-s3-file', { fileId: file.id, conflict: 'replace' })).toMatchObject({ conflict: 'replace', files: [{ attachmentId: one.id }] });
   expect(await w.emitted('s3.files-requested')).toBe(2);
 });
+
+const report = { at: '2026-11-06T22:00:00.000Z', complete: true, total: 4, read: 4, skipped: 4, skippedContainers: [99], files: 0 };
+
+it('keeps a connector sync report any member can read, until the source changes', async () => {
+  const w = await world();
+  await w.connect();
+  // Through the real operation: its key rule is what a connector's write has to pass.
+  await w.stub.invoke('drive/source-write-journal', { key: 'a3doc:sync-report', value: report });
+  expect(await w.member.invoke('drive/get-source')).toMatchObject({ report });
+  await w.connect();
+  expect(await w.member.invoke('drive/get-source')).toMatchObject({ report });
+  await w.connect(true, 'another-connection');
+  expect(await w.member.invoke('drive/get-source')).not.toHaveProperty('report');
+  await w.stub.invoke('drive/source-write-journal', { key: 'a3doc:sync-report', value: report });
+  await w.human.invoke('drive/clear-source');
+  expect(await w.member.invoke('drive/get-source')).toEqual({ source: null });
+});

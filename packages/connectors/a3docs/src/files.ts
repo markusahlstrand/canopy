@@ -100,6 +100,8 @@ export interface A3docBinding {
   highWater?: string;
   /** When the last full pass completed. */
   lastFull?: string;
+  /** Set once a full pass has produced a report. */
+  reported?: true;
   /** A pass in progress, saved after every page so a cut-off pass resumes there. */
   pass?: SyncPass;
   lastSync?: { syncedAt: string; changes: number; unplaced?: number };
@@ -118,6 +120,8 @@ interface SyncPass {
   highWater?: string;
   /** Set once every page was read: held items the pass did not present, still to be checked one by one. */
   verify?: string[];
+  /** What this pass has read so far; a pass from before reports existed starts one when it resumes. */
+  tally?: Pick<A3docSyncReport, 'total' | 'read' | 'skipped' | 'skippedContainers'>;
 }
 
 interface ItemEntry {
@@ -217,14 +221,19 @@ export async function bindA3docScope(
     if (prior.highWater) binding.highWater = prior.highWater;
     if (prior.lastFull) binding.lastFull = prior.lastFull;
     if (prior.lastSync) binding.lastSync = prior.lastSync;
+    if (prior.reported) binding.reported = prior.reported;
   }
   await host.admin.putConnectorState(input.connectionId, bindingKey(input.scopeId), binding);
   return binding;
 }
 
-/** The container a path of names leads to from the root; `[]` is the root itself. */
+/**
+ * The container a path of names leads to from the root; `[]` is the root itself. a3doc shows the
+ * root as a folder ("Todos"), so a path may start with its name; a real child of that name wins.
+ */
 function containerAtPath(tree: A3Container[], segments: string[]): A3Container | null {
-  return folderUnder(findContainer(tree, A3DOC_ROOT_CONTAINER), segments);
+  const root = findContainer(tree, A3DOC_ROOT_CONTAINER);
+  return folderUnder(root, segments) ?? (segments[0] === root?.name.trim() ? folderUnder(root, segments.slice(1)) : null);
 }
 
 /** The container a path of names leads to from `from`; `[]` is `from` itself. */
@@ -425,6 +434,30 @@ const FILES_RETRY: ConnectorOptions = { maxAttempts: 8, baseDelayMs: 5_000, maxD
 
 // ── reads: the sync ──────────────────────────────────────────────────────────
 
+/**
+ * What a full pass found, for whoever asks why a space looks the way it does. Counts and a3doc
+ * folder ids only: no titles, so it can sit where any member of the space may read it.
+ */
+export interface A3docSyncReport {
+  at: string;
+  /** False while the pass is still working through its pages. */
+  complete: boolean;
+  /** Documents a3doc says the bound folder holds, itself and everything under it. */
+  total: number;
+  /** Documents this pass has read from a3doc. */
+  read: number;
+  /** Read documents with no placement in the bound folder's tree, so nothing landed for them. */
+  skipped: number;
+  /** A few of the folders those documents named instead. */
+  skippedContainers: number[];
+  /** Files this space holds from a3doc after this call. */
+  files: number;
+}
+
+/** Where a report is kept in the scope's source journal; `drive/get-source` reads it back. */
+export const SYNC_REPORT_KEY = 'a3doc:sync-report';
+const SKIPPED_CONTAINERS_KEPT = 5;
+
 export interface A3docSyncResult {
   scopeId: string;
   /** Changes landed by this call. */
@@ -436,6 +469,8 @@ export interface A3docSyncResult {
   complete: boolean;
   /** Set when the binding was unbound or bound again while this call ran; it stopped without writing it back. */
   superseded?: true;
+  /** Set for a full pass. A later incremental pass reads only what changed, so it says nothing about the folder. */
+  report?: A3docSyncReport;
 }
 
 /**
@@ -517,8 +552,15 @@ async function syncFiles(
     }
   };
   for (const [id, entry] of index) indexFile(id, entry, true);
-  const due = !binding.highWater || !binding.lastFull || now.getTime() - Date.parse(binding.lastFull) >= FULL_PASS_EVERY_MS;
+  // A binding from before reports existed reads in full once, so its space can say what it found.
+  const due = !binding.reported || !binding.highWater || !binding.lastFull || now.getTime() - Date.parse(binding.lastFull) >= FULL_PASS_EVERY_MS;
   let pass: SyncPass = binding.pass ?? { id: crypto.randomUUID(), full: due, page: 0, startedAt: now.toISOString(), changes: 0 };
+  const tally = (pass.tally ??= { total: 0, read: 0, skipped: 0, skippedContainers: [] });
+  const outcome = (pages: number, complete: boolean, superseded = false): A3docSyncResult => ({
+    scopeId: binding.scopeId, changes: pass.changes, full: pass.full, pages, complete,
+    ...(superseded ? { superseded: true as const } : {}),
+    ...(pass.full ? { report: { ...tally, at: nowOf(options).toISOString(), complete, files: [...index.values()].filter((e) => e.kind === 'file').length } } : {}),
+  });
 
   const scopeRef = scopeIdSchema.parse(binding.scopeId);
   const scope = await host.getConnectorScope(connectionId, scopeRef);
@@ -674,8 +716,9 @@ async function syncFiles(
   let pages = 0;
   let listed = pass.verify !== undefined;
   while (!listed && pages < pageBudget) {
-    const { documents } = await client.listDocuments({ containerId: binding.containerId, children: true, pageIndex: pass.page, pageSize });
+    const { documents, total } = await client.listDocuments({ containerId: binding.containerId, children: true, pageIndex: pass.page, pageSize });
     pages++;
+    tally.total = total;
     let reachedFloor = false;
     for (const doc of documents) {
       const modified = parseA3Date(doc.DateModified);
@@ -685,6 +728,13 @@ async function syncFiles(
       }
       if (modified && (!pass.highWater || modified > pass.highWater)) pass.highWater = modified;
       const placements = (doc.ContainersId ?? [binding.containerId]).filter((c) => folderPath.has(c));
+      tally.read++;
+      if (!placements.length) {
+        tally.skipped++;
+        for (const c of doc.ContainersId ?? []) {
+          if (tally.skippedContainers.length < SKIPPED_CONTAINERS_KEPT && !tally.skippedContainers.includes(c)) tally.skippedContainers.push(c);
+        }
+      }
       for (const c of placements) await landDoc(doc, c);
       // A placement held for this document that its own record no longer lists has moved out.
       if (doc.ContainersId !== undefined) {
@@ -701,9 +751,9 @@ async function syncFiles(
     }
     pass.changes += changes;
     changes = 0;
-    if (!(await save({ pass }))) return { scopeId: binding.scopeId, changes: pass.changes, full: pass.full, pages, complete: false, superseded: true };
+    if (!(await save({ pass }))) return outcome(pages, false, true);
   }
-  if (!listed) return { scopeId: binding.scopeId, changes: pass.changes, full: pass.full, pages, complete: false };
+  if (!listed) return outcome(pages, false);
 
   // ── held items a full pass never presented: each checked on its own ──
   const verifyBudget = options.maxVerify ?? SYNC_VERIFY_PER_CALL;
@@ -722,16 +772,16 @@ async function syncFiles(
   if (queue.length) {
     pass.verify = queue;
     await save({ pass });
-    return { scopeId: binding.scopeId, changes: pass.changes, full: pass.full, pages, complete: false };
+    return outcome(pages, false);
   }
 
   const done: Partial<A3docBinding> = {
     lastSync: { syncedAt: nowOf(options).toISOString(), changes: pass.changes },
     ...(pass.highWater && (!binding.highWater || pass.highWater > binding.highWater) ? { highWater: pass.highWater } : {}),
-    ...(pass.full ? { lastFull: pass.startedAt } : {}),
+    ...(pass.full ? { lastFull: pass.startedAt, reported: true as const } : {}),
   };
-  if (!(await save(done, { endPass: true }))) return { scopeId: binding.scopeId, changes: pass.changes, full: pass.full, pages, complete: false, superseded: true };
-  return { scopeId: binding.scopeId, changes: pass.changes, full: pass.full, pages, complete: true };
+  if (!(await save(done, { endPass: true }))) return outcome(pages, false, true);
+  return outcome(pages, true);
 }
 
 function findContainer(tree: A3Container[], id: number): A3Container | null {
