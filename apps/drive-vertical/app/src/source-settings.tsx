@@ -55,7 +55,9 @@ export function SourceSettings({ disabled, onChanged, onDraftChange }: { disable
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
   /** A login being typed: only Connect sends it, so nothing around this form may discard it unasked. */
-  const drafting = !!form && (!!form.user.trim() || !!form.password);
+  const formStart = useRef<SourceLogin | null>(null);
+  const openForm = (start: SourceLogin) => { formStart.current = start; setForm(start); };
+  const drafting = !!form && JSON.stringify(form) !== JSON.stringify(formStart.current);
   useUnsavedDraft(drafting);
   useEffect(() => { onDraftChange?.(drafting); return () => onDraftChange?.(false); }, [drafting]);
   const load = () => getSourceStatus().then(next => { if (alive.current) setStatus(next); }).catch(e => { if (alive.current) setError(message(e)); });
@@ -85,19 +87,19 @@ export function SourceSettings({ disabled, onChanged, onDraftChange }: { disable
         </div>
         <p className="text-xs text-muted-foreground">Folders and documents here follow a3doc, so they can't be renamed, moved or deleted in Canopy. Disconnecting keeps every file, and the space becomes an ordinary one.</p>
         <div className="flex gap-2">
-          <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => setForm({ ...empty, companyCode: source.account, folder: source.folder })}>Connect again</Button>
+          <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => openForm({ ...empty, companyCode: source.account, folder: source.folder })}>Connect again</Button>
           <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={() => void run(disconnectSource)}>{busy && !form ? 'Disconnecting…' : 'Disconnect'}</Button>
         </div>
       </div>
     ) : (
       <div className="flex items-center gap-3 rounded-lg border px-3 py-2.5"><Icon name="cloud" size={18} className="text-muted-foreground"/>
         <div className="flex-1"><p className="text-sm font-medium">Canopy storage</p><p className="text-xs text-muted-foreground">Files stay in this install’s storage.</p></div>
-        {!form ? <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => setForm(empty)}>Connect a3doc</Button> : null}
+        {!form ? <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => openForm(empty)}>Connect a3doc</Button> : null}
       </div>
     )}
     {/* These fields sit inside the settings form, where Enter would save the space and not the login. */}
     {form ? <div role="group" aria-label="Connect a3doc" className="space-y-2 rounded-lg border px-3 py-2.5"
-      onKeyDown={event => { if (event.key === 'Enter' && event.target instanceof HTMLInputElement) { event.preventDefault(); connect(); } }}>
+      onKeyDown={event => { if (event.key === 'Enter' && event.target instanceof HTMLInputElement && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); connect(); } }}>
       <SourceLoginFields value={form} disabled={locked} onChange={setForm}/>
       {alert}
       <div className="flex justify-end gap-2">
