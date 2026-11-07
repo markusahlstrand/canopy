@@ -41,10 +41,11 @@ on:
       # module itself — its operations, its schema — is neither previewed nor deployed,
       # and the worker keeps serving the last bundle until something under
       # apps/drive-vertical happens to change. Found when a PR adding two operations to
-      # @canopy/scope-drive produced no preview at all.
+      # @canopy/scope-drive produced no preview at all. The connectors are bundled the same way.
       - 'packages/scope-drive/**'
       - 'packages/docworker/**'
       - 'packages/ui/**'
+      - 'packages/connectors/**'
       - '.github/workflows/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -63,10 +64,11 @@ on:
       # module itself — its operations, its schema — is neither previewed nor deployed,
       # and the worker keeps serving the last bundle until something under
       # apps/drive-vertical happens to change. Found when a PR adding two operations to
-      # @canopy/scope-drive produced no preview at all.
+      # @canopy/scope-drive produced no preview at all. The connectors are bundled the same way.
       - 'packages/scope-drive/**'
       - 'packages/docworker/**'
       - 'packages/ui/**'
+      - 'packages/connectors/**'
       - '.github/workflows/**'
       - 'package.json'
       - 'pnpm-lock.yaml'

@@ -7,7 +7,9 @@ import { emptyLogin, loginPayload, loginReady, SourceLoginFields } from './sourc
 /**
  * The platform owns provisioning; the dialog follows its durable result instead of claiming success on enqueue.
  * A space can start on an a3doc folder: the login waits in memory until the space exists, since a
- * connection binds to a space, and then goes to the same connect route space settings use.
+ * connection binds to a space, and then goes to the same connect route space settings use. A
+ * refused login leaves an ordinary space behind, so the dialog stays on it until the person retries
+ * or moves on, and everything it reports sits outside the scrolling form, where it cannot be missed.
  */
 export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; onCreated: (slug: string) => void }) {
   const [icon, setIcon] = useState<SpaceSettings['icon']>('folder'), [color, setColor] = useState<SpaceSettings['color']>('#3b82f6');
@@ -26,6 +28,12 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
   /** The request already finished here: overlapping polls can each report it done before the effect stops. */
   const finished = useRef<string | null>(null);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  const connect = async (space: string, value: SourceLogin) => {
+    setConnecting(true);
+    try { await connectSource(loginPayload(value), space); if (active.current) onCreated(space); }
+    catch (error) { if (active.current) setConnectFailed({ slug: space, message: error instanceof Error ? error.message || 'Could not reach a3doc.' : String(error) }); }
+    finally { if (active.current) setConnecting(false); }
+  };
   useEffect(() => {
     if (!open) return;
     let alive = true;
@@ -54,10 +62,7 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
       const held = pendingLogin.current?.requestId === done.id ? pendingLogin.current.login : null;
       pendingLogin.current = null;
       if (!held) { onCreated(done.slug); return; }
-      setConnecting(true);
-      try { await connectSource(loginPayload(held), done.slug); if (active.current) onCreated(done.slug); }
-      catch (error) { if (active.current) setConnectFailed({ slug: done.slug, message: error instanceof Error ? error.message || 'Could not reach a3doc.' : String(error) }); }
-      finally { if (active.current) setConnecting(false); }
+      await connect(done.slug, held);
     };
     const check = async () => {
       try {
@@ -94,7 +99,9 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
     catch (error) { if (active.current) setError(error instanceof Error ? error.message || 'Could not complete the request.' : String(error)); }
     finally { if (active.current) setBusy(false); }
   };
-  const locked = busy || request?.status === 'pending' || connecting || connectFailed !== null;
+  const retryConnect = () => { if (connectFailed && !connecting && loginReady(login)) void connect(connectFailed.slug, login); };
+  const loginLocked = busy || request?.status === 'pending' || connecting;
+  const locked = loginLocked || connectFailed !== null;
   const choice = (value: 'canopy' | 'a3doc', icon: 'cloud' | 'link', title: string, detail: string) =>
     <label className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 has-[:disabled]:cursor-default has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${storage === value ? 'border-primary bg-primary/5' : ''}`}>
       <input type="radio" name="space-storage" value={value} className="sr-only" checked={storage === value} disabled={locked} onChange={() => setStorage(value)}/>
@@ -102,13 +109,15 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
       <div><p className="text-sm font-medium">{title}</p><p className="text-xs text-muted-foreground">{detail}</p></div>
     </label>;
   const stalled = request?.status === 'pending' && request.requestedAt && now - Date.parse(request.requestedAt) >= 5 * 60_000;
-  return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
+  // Polling stops with the dialog, and with it the only chance to use a held login.
+  const holdingLogin = connecting || (request?.status === 'pending' && pendingLogin.current?.requestId === request.id && !stalled);
+  return <Dialog open={open} onOpenChange={value => { if (!busy && !holdingLogin) onOpenChange(value); }}>
     <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[480px]">
       <DialogHeader className="px-5 pt-5">
         <DialogTitle>Create a space</DialogTitle>
         <DialogDescription>A shared place for a family, team, or project. You’ll be its owner.</DialogDescription>
       </DialogHeader>
-      <form id="create-space" onSubmit={event => { event.preventDefault(); void create(); }} className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-4">
+      <form id="create-space" onSubmit={event => { event.preventDefault(); if (connectFailed) retryConnect(); else void create(); }} className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-4">
         <section className="space-y-2">
           <label htmlFor="space-name" className="text-xs font-medium text-muted-foreground">Space name</label>
           <Input id="space-name" autoFocus maxLength={100} placeholder="Space name (e.g. Family)" value={name}
@@ -121,24 +130,26 @@ export function CreateSpaceDialog({ open, onOpenChange, onCreated }: { open: boo
           {choice('canopy', 'cloud', 'Canopy storage', 'Files stay in this install’s storage.')}
           {choice('a3doc', 'link', 'a3doc folder', 'The space mirrors a folder from your gestoría’s a3doc and keeps it in sync.')}
           {storage === 'a3doc' ? <div role="group" aria-label="a3doc login" className="space-y-2 rounded-lg border px-3 py-2.5">
-            <SourceLoginFields value={login} disabled={locked} onChange={setLogin}/>
+            <SourceLoginFields value={login} disabled={loginLocked} onChange={setLogin}/>
           </div> : null}
         </section>
         <section className="space-y-1 rounded-lg border border-dashed p-3">
           <h3 className="text-sm font-medium">People and plugins</h3>
           <p className="text-xs text-muted-foreground">After the space opens, invite members and choose plugins for everyone in its space settings.</p>
         </section>
+      </form>
+      <div className="shrink-0 space-y-2 border-t px-5 py-3 empty:hidden">
         {checking ? <p role="status" className="text-sm text-muted-foreground">Checking previous space requests…</p> : null}
         {error ? <p role="alert" className="text-sm text-destructive">{error} Your creation request can still complete; check its status before starting another.</p> : null}
         {statusMissing ? <p role="status" className="text-sm text-muted-foreground">The latest status did not include this request. It may still complete; Canopy will keep checking.</p> : null}
         {checkFailed ? <Button type="button" variant="outline" onClick={() => setCheckRetry(value => value + 1)}>Retry status check</Button> : null}
         {request ? <p role={request.status === 'failed' ? 'alert' : 'status'} className="rounded-lg bg-muted px-3 py-2 text-sm">{request.status === 'pending' ? (pendingLogin.current?.requestId === request.id ? 'Creating your space… a3doc connects once it is ready, so keep this page open.' : 'Creating your space… You can close this dialog and return to check its progress.') : request.status === 'failed' ? `Could not create the space: ${request.error ?? 'The platform refused the request.'}` : connecting ? 'Space created. Connecting a3doc…' : 'Space created.'}</p> : null}
-        {connectFailed ? <div role="alert" className="space-y-2 text-sm"><p className="text-destructive">The space was created, but a3doc did not connect: {connectFailed.message}</p><p className="text-muted-foreground">It is an ordinary space for now. Connect a3doc again from its space settings.</p><Button type="button" variant="outline" onClick={() => onCreated(connectFailed.slug)}>Open the space</Button></div> : null}
-        {stalled ? <div className="space-y-2 text-sm"><p>This request is still waiting. It may finish later, even if you start a different space.</p><Button type="button" variant="outline" onClick={() => { setIgnoredRequestId(request.id); setRequest(null); setName(''); slug.current = ''; setError(null); setStatusMissing(false); }}>Start a different space</Button></div> : null}
-      </form>
+        {connectFailed && !connecting ? <div role="alert" className="space-y-2 text-sm"><p className="text-destructive">The space was created, but a3doc did not connect: {connectFailed.message}</p><p className="text-muted-foreground">It is an ordinary space for now. Correct the login and try again, or open the space and connect a3doc later from its space settings.</p><Button type="button" variant="outline" onClick={() => onCreated(connectFailed.slug)}>Open the space</Button></div> : null}
+        {stalled ? <div className="space-y-2 text-sm"><p>This request is still waiting. It may finish later, even if you start a different space.{pendingLogin.current?.requestId === request.id ? ' a3doc only connects while this dialog is open; otherwise connect it later from the space’s settings.' : ''}</p><Button type="button" variant="outline" onClick={() => { setIgnoredRequestId(request.id); setRequest(null); setName(''); slug.current = ''; setError(null); setStatusMissing(false); }}>Start a different space</Button></div> : null}
+      </div>
       <DialogFooter className="border-t px-5 py-3">
-        <Button type="button" variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>Close</Button>
-        <Button type="submit" form="create-space" disabled={busy || checking || checkFailed || !name.trim() || locked || connecting || (storage === 'a3doc' && !loginReady(login))}>{busy ? 'Requesting…' : request?.status === 'failed' ? 'Retry creation' : 'Create space'}</Button>
+        <Button type="button" variant="ghost" disabled={busy || holdingLogin} onClick={() => onOpenChange(false)}>Close</Button>
+        <Button type="submit" form="create-space" disabled={connectFailed ? connecting || !loginReady(login) : busy || checking || checkFailed || !name.trim() || locked || (storage === 'a3doc' && !loginReady(login))}>{connectFailed ? (connecting ? 'Connecting…' : 'Try again') : busy ? 'Requesting…' : request?.status === 'failed' ? 'Retry creation' : 'Create space'}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>;
