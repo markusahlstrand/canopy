@@ -325,9 +325,12 @@ const operations = {
   'drive/get-source': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
     // Only diagnostics: a report this version cannot read must not cost members the source itself.
+    const source = sourceOf(ctx);
     const row = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY])[0];
     const report = row ? sourceSyncReport.safeParse(JSON.parse(row.value)) : null;
-    return { source: sourceOf(ctx), ...(report?.success ? { report: report.data } : {}) };
+    // A sweep can finish after a rebind; its report describes the old source, so it is not this one's.
+    const current = report?.success && report.data.connectionId === source?.connectionId && report.data.folder === source.folder;
+    return { source, ...(current ? { report: report.data } : {}) };
   },
   'drive/source-access': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));

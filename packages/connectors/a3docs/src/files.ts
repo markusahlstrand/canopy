@@ -441,6 +441,9 @@ const FILES_RETRY: ConnectorOptions = { maxAttempts: 8, baseDelayMs: 5_000, maxD
  * folder ids only: no titles, so it can sit where any member of the space may read it.
  */
 export interface A3docSyncReport {
+  /** The source this read belongs to: a read finishing after a rebind must not speak for the new one. */
+  connectionId: string;
+  folder: string;
   at: string;
   /** False while the pass is still working through its pages. */
   complete: boolean;
@@ -565,7 +568,7 @@ async function syncFiles(
   const outcome = (pages: number, complete: boolean, superseded = false): A3docSyncResult => ({
     scopeId: binding.scopeId, changes: pass.changes, full: pass.full, pages, complete,
     ...(superseded ? { superseded: true as const } : {}),
-    ...(pass.full && counted ? { report: { ...tally, at: nowOf(options).toISOString(), complete, files: [...index.values()].filter((e) => e.kind === 'file').length } } : {}),
+    ...(pass.full && counted ? { report: { ...tally, connectionId, folder: binding.folder, at: nowOf(options).toISOString(), complete, files: [...index.values()].filter((e) => e.kind === 'file').length } } : {}),
   });
 
   const scopeRef = scopeIdSchema.parse(binding.scopeId);

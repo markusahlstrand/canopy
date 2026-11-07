@@ -231,7 +231,7 @@ export type DriveSource = z.infer<typeof driveSource>;
 
 /** What a connector's last full read found: counts and provider folder ids, never document names. */
 export const sourceSyncReport = z.object({
-  at: z.string(), complete: z.boolean(), total: z.number().int(), read: z.number().int(),
+  connectionId: z.string(), folder: z.string(), at: z.string(), complete: z.boolean(), total: z.number().int(), read: z.number().int(),
   skipped: z.number().int(), skippedContainers: z.array(z.number().int()), files: z.number().int(),
 });
 export type SourceSyncReport = z.infer<typeof sourceSyncReport>;

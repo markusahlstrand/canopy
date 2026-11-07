@@ -101,6 +101,7 @@ it('reports a full read, and says when documents fall outside the bound folder',
   await w.bind('');
   await w.def.sweep!(w.ctx);
   expect(keptReport(w)).toMatchObject({ complete: true, total: 2, read: 2, skipped: 1, skippedContainers: [99], files: 1 });
+  expect(keptReport(w)).toMatchObject({ connectionId: w.ctx.connection.id, folder: '' });
   expect(JSON.stringify(keptReport(w))).not.toContain('Stray');
 });
 
