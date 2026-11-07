@@ -50,7 +50,7 @@ it('switches space in place: asks the new space who we are first, then remounts 
   await act(async () => { answer({ principal: 'p-b' }); });
   expect(await screen.findByText('p-b in space-b')).toBeTruthy();
   expect(currentSite()).toBe('space-b');
-  expect(location.search).toBe('');
+  expect(location.search).toBe('?site=space-b');
   expect(mounts).toHaveBeenCalledTimes(2);
 });
 

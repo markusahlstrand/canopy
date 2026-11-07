@@ -23,7 +23,7 @@ it('opens the same folder after a rename, preferring its ID over a legacy path',
   await screen.findAllByText('New/Renamed');
   await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/stable/files')).toBe(true));
   expect(fetcher.mock.calls.some(([url]) => url.includes('by-path') || url === '/api/folders/root/files')).toBe(false);
-  expect(location.search).toBe('?site=family');
+  expect(location.search).toBe('?site=family&folder=stable');
 });
 it.each([403, 404])('reports a generic unavailable state for a denied or missing ID (%s)', async status => {
   history.replaceState(null, '', '/?folder=missing');

@@ -22,7 +22,8 @@ it('resolves a deep link before reading its folder listing', async () => {
   await screen.findAllByText('Shared/Papers');
   await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/folders/papers/files', expect.anything()));
   expect(fetch.mock.calls.some(([url]) => url === '/api/folders/root/files')).toBe(false);
-  expect(location.search).toBe('');
+  // A path link settles on the folder's stable ID: renames cannot break what gets re-shared.
+  expect(location.search).toBe('?folder=papers');
 });
 
 it('does not resolve a linked path after the active space has changed', () => {

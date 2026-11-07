@@ -10,7 +10,7 @@ export function spaceLink(slug: string): string {
 }
 /** Drop the destinations and invitations that belong to the space being left. */
 function clearPreviousSpaceLink(url: URL) {
-  for (const key of ['path', 'folder', 'file', 'claim', 'invite']) url.searchParams.delete(key);
+  for (const key of ['path', 'folder', 'file', 'view', 'claim', 'invite']) url.searchParams.delete(key);
   url.hash = '';
 }
 /**
@@ -40,13 +40,13 @@ export function openSpace(slug: string) {
   return true;
 }
 
-/** Select `slug`, and leave the URL agreeing with the selection (see the sidebar's rule). */
+/** Select `slug` and name it in the URL, which outranks storage and is what gets shared. */
 function selectInUrl(slug: string, target?: { key: 'folder' | 'file'; id: string }) {
   const url = new URL(window.location.href);
   clearPreviousSpaceLink(url);
+  selectSite(slug);
+  url.searchParams.set('site', slug);
   if (target) url.searchParams.set(target.key, target.id);
-  if (selectSite(slug)) url.searchParams.delete('site');
-  else url.searchParams.set('site', slug);
   window.history.replaceState(null, '', url);
 }
 

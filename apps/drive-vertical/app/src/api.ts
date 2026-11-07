@@ -56,6 +56,9 @@ if (!site) {
 
 export const currentSite = (): string | null => site;
 
+/** The last verified principal is an offline hint for this routed site only. */
+export const offlineSiteKey = (slug = currentSite()): string => JSON.stringify([window.location.origin, slug]);
+
 /**
  * Select a space, and say whether the choice will survive a reload.
  *
