@@ -329,6 +329,15 @@ describe('sync', () => {
     expect([...w.mirror().keys()].filter((k) => k.includes('@')).length).toBe(150);
   });
 
+  it('a re-bind of the same folder keeps an unfinished pass', async () => {
+    const w = await world();
+    for (let i = 0; i < 120; i++) w.a3.add([21], `Invoice ${i}`, `bytes ${i}`);
+    await w.bind('Facturas/Recibidas');
+    expect(await w.sync({ maxPages: 1 })).toMatchObject({ complete: false, pages: 1 });
+    await w.bind('Facturas/Recibidas');
+    expect(await w.sync({ maxPages: 1 })).toMatchObject({ complete: true, pages: 1 });
+  });
+
   it('stops for a scope unbound mid-pass, and sweeps every bound scope', async () => {
     const w = await world();
     w.a3.add([21], 'F', 'x');

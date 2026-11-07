@@ -229,6 +229,13 @@ export const driveSource = z.object({
 });
 export type DriveSource = z.infer<typeof driveSource>;
 
+/** What a connector's last full read found: counts and provider folder ids, never document names. */
+export const sourceSyncReport = z.object({
+  connectionId: z.string(), folder: z.string(), at: z.string(), complete: z.boolean(), total: z.number().int(), read: z.number().int(),
+  skipped: z.number().int(), skippedContainers: z.array(z.number().int()), files: z.number().int(),
+});
+export type SourceSyncReport = z.infer<typeof sourceSyncReport>;
+
 const sourceChangeInput = z.object({
   ...fileSourceChange.options[0].partial().shape,
   ...fileSourceChange.options[1].partial().shape,
@@ -270,7 +277,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   /** A provider upload attempt (or the ids an S3 move carries over) must survive a failed connector call. No credentials live here. */
   'drive/source-write-journal': {
     summary: 'Read or persist a connector upload attempt', permission: 'drive:land-source',
-    input: z.object({ key: z.string().regex(/^(a3doc:write:|s3:moves$)/).max(200), value: z.unknown().optional() }),
+    input: z.object({ key: z.string().regex(/^(a3doc:write:|a3doc:sync-report$|s3:moves$)/).max(200), value: z.unknown().optional() }),
     output: z.object({ value: z.unknown() }),
   },
   /** A connector lands one item at a time; people are never granted this key. */
@@ -281,7 +288,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   /** The file source this space is connected to, or null; what members need to know what they may do here. */
   'drive/get-source': {
     summary: 'The file source this space is connected to', permission: 'drive:read',
-    output: z.object({ source: driveSource.nullable() }),
+    output: z.object({ source: driveSource.nullable(), report: sourceSyncReport.optional() }),
     http: { method: 'GET', path: '/source' },
   },
   /**

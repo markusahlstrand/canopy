@@ -815,7 +815,8 @@ export type DriveSource = import('../../src/source-routes').DriveSource;
 /** Delete a space this login owns. The platform archives it; it leaves the switcher at once. */
 export const deleteSite = (slug: string) => call<void>(`/sites/${encodeURIComponent(slug)}`, { method: 'DELETE' });
 export const getSource = () => call<{ source: DriveSource | null }>('/source').then(result => result.source);
-export interface SourceStatus { source: DriveSource | null; binding: { status: string; lastSyncedAt: string | null; lastError: { at: string; message: string } | null } | null }
+export interface SourceSyncReport { at: string; complete: boolean; total: number; read: number; skipped: number; skippedContainers: number[]; files: number }
+export interface SourceStatus { source: DriveSource | null; binding: { status: string; lastSyncedAt: string | null; lastError: { at: string; message: string } | null } | null; report?: SourceSyncReport | null }
 export const getSourceStatus = () => call<SourceStatus>('/source/status');
 export interface SourceLogin { companyCode: string; user: string; password: string; customerId?: string; folder: string }
 /** Connects the current space, or `selectedSite`: the create dialog connects a space it has not switched to yet. */
