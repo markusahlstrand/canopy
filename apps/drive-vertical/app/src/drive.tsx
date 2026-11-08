@@ -133,6 +133,8 @@ function sorted<T extends { name: string; updated_at?: string }>(rows: T[], sort
 }
 
 const OFFLINE_WRITE = 'You are offline. Reconnect to save this change.';
+/** The least time between re-reads of the screen while pushed changes keep arriving. */
+const LIVE_REFRESH_GAP_MS = 3_000;
 
 /**
  * Re-read the pages already visible, so a live refresh cannot collapse navigation.
@@ -459,7 +461,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * while doing it, so folder B's own read could no longer correct the result. A ref
    * keeps "refresh what is on screen" true at the moment it is called.
    */
-  const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const refreshRef = useRef<(retryFolder?: boolean, quiet?: boolean) => Promise<void>>(async () => {});
   useEffect(() => watchViewPreferences(value => {
     setLayout(value.layout);
     setSort(value.sort);
@@ -469,7 +471,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const changeMatchFilter = (value: MatchFilter) => { reads.current.invalidate(); setMatchFilter(value); setSelection(new Set()); setBusy(true); };
 
   /** One refresh for both views, so an action never leaves half the screen stale. */
-  const refresh = useCallback(async (retryFolder = false) => {
+  /**
+   * `quiet` is a refresh nobody asked for (a pushed change): it re-reads what is on screen without
+   * the loading state, so a sync landing an item a second neither flickers an empty folder between
+   * skeleton and empty state nor spins the topbar.
+   */
+  const refresh = useCallback(async (retryFolder = false, quiet = false) => {
     if (linkPending) return;
     if (skipLinkedListing.current && view === 'drive') {
       if (!retryFolder || !unavailableFolder.current) { setBusy(false); return; }
@@ -493,7 +500,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       listingDepth.current = { folder: view === 'drive' ? folderId : '', files: 1, folders: 1 };
     }
     const ticket = reads.current.take();
-    setBusy(true);
+    if (!quiet) setBusy(true);
     setLoadingPage(false);
     setFoldersNext(null);
     setFilesNext(null);
@@ -650,8 +657,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         do {
           pending = false;
           void syncMirror(principal).catch(() => {});
-          await refreshRef.current();
+          await refreshRef.current(false, true);
           // Use the current view for the trailing read; navigation still owns its tickets.
+          // A burst (a source sync lands an item a second) re-reads every few seconds, not nonstop.
+          if (active && pending) await new Promise(resolve => setTimeout(resolve, LIVE_REFRESH_GAP_MS));
         } while (active && pending);
       } finally {
         refreshing = false;

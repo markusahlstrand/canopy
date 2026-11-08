@@ -410,6 +410,10 @@ describe('live refreshes', () => {
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', [file('01A', 'first.txt')]);
     expect(screen.getByText('first.txt')).toBeTruthy();
+    // The trailing read waits out the gap, so a burst re-reads every few seconds, not nonstop.
+    await flush(2_900);
+    expect(pending.filter((p) => p.url.includes('/folders/root/files'))).toHaveLength(0);
+    await flush(100);
     expect(pending.filter((p) => p.url.includes('/folders/root/files'))).toHaveLength(1);
 
     await answer('/folders/root/folders', []);
@@ -418,6 +422,19 @@ describe('live refreshes', () => {
     expect(screen.queryByText('first.txt')).toBeNull();
     expect(pending.filter((p) => /\/folders\/root\/(files|folders)(?:\?|$)/.test(p.url))).toHaveLength(0);
     expect((screen.getByLabelText('Refresh') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('re-reads an empty folder quietly, without swapping its empty state for the loading skeleton', async () => {
+    const live = watch();
+    await renderDrive();
+    expect(screen.getByText(/is empty$/)).toBeTruthy();
+    live.notify();
+    await flush(150);
+    expect(pending.filter((p) => p.url.includes('/folders/root/files'))).toHaveLength(1);
+    expect(screen.getByText(/is empty$/)).toBeTruthy();
+    await answer('/folders/root/folders', []);
+    await answer('/folders/root/files', []);
+    expect(screen.getByText(/is empty$/)).toBeTruthy();
   });
 
   it('keeps navigation authoritative and refreshes the current folder on the trailing read', async () => {
@@ -435,6 +452,7 @@ describe('live refreshes', () => {
     expect(screen.queryByText('stale-root.txt')).toBeNull();
     expect(screen.getByText('papers.txt')).toBeTruthy();
     expect(pending.filter((p) => /\/folders\/root\/(files|folders)(?:\?|$)/.test(p.url))).toHaveLength(0);
+    await flush(3_000);
     expect(pending.filter((p) => p.url.includes('/folders/01F/files'))).toHaveLength(1);
 
     await answer('/folders/01F/folders', []);
