@@ -173,23 +173,23 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
       '@substrat-run/adapter-cloudflare':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/attachment-extractors':
-        specifier: 0.2.37
-        version: 0.2.37(zod@4.6.7)
+        specifier: 0.2.49
+        version: 0.2.49(zod@4.6.7)
       '@substrat-run/contracts':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/kernel':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/vertical-auth':
-        specifier: ^0.30.0
-        version: 0.30.0(hono@4.13.14)(zod@4.6.7)
+        specifier: ^0.32.1
+        version: 0.32.1(hono@4.13.14)(zod@4.6.7)
       '@substrat-run/vertical-host':
-        specifier: ^0.176.0
-        version: 0.176.0(@ai-sdk/provider@4.0.33)(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(@ai-sdk/provider@4.0.35)(zod@4.6.7)
       hono:
         specifier: ^4.13.14
         version: 4.13.14
@@ -213,8 +213,8 @@ importers:
         specifier: ^5.20261030.1
         version: 5.20261030.1
       '@substrat-run/adapter-sqlite':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
@@ -357,24 +357,24 @@ importers:
   packages/connectors/a3docs:
     dependencies:
       '@substrat-run/contracts':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/kernel':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/vertical-host':
-        specifier: ^0.176.0
-        version: 0.176.0(@ai-sdk/provider@4.0.33)(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(@ai-sdk/provider@4.0.35)(zod@4.6.7)
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@substrat-run/adapter-sqlite':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/contract-tests':
-        specifier: ^0.176.0
-        version: 0.176.0(vitest@5.0.5(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(vitest@5.0.5(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.7)
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
@@ -421,14 +421,14 @@ importers:
   packages/connectors/s3:
     dependencies:
       '@substrat-run/contracts':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/kernel':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/vertical-host':
-        specifier: ^0.176.0
-        version: 0.176.0(@ai-sdk/provider@4.0.33)(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(@ai-sdk/provider@4.0.35)(zod@4.6.7)
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -577,14 +577,14 @@ importers:
         specifier: workspace:*
         version: link:../connectors/s3
       '@substrat-run/contracts':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/kernel':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/vertical-host':
-        specifier: ^0.176.0
-        version: 0.176.0(@ai-sdk/provider@4.0.33)(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(@ai-sdk/provider@4.0.35)(zod@4.6.7)
       hono:
         specifier: ^4.13.14
         version: 4.13.14
@@ -593,14 +593,14 @@ importers:
         version: 4.6.7
     devDependencies:
       '@substrat-run/adapter-sqlite':
-        specifier: ^0.176.0
-        version: 0.176.0(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(zod@4.6.7)
       '@substrat-run/attachment-extractors':
-        specifier: ^0.2.37
-        version: 0.2.37(zod@4.6.7)
+        specifier: ^0.2.49
+        version: 0.2.49(zod@4.6.7)
       '@substrat-run/contract-tests':
-        specifier: ^0.176.0
-        version: 0.176.0(vitest@5.0.5(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.7)
+        specifier: ^0.188.0
+        version: 0.188.0(vitest@5.0.5(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.7)
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
@@ -675,26 +675,26 @@ importers:
 
 packages:
 
-  '@ai-sdk/gateway@4.0.125':
-    resolution: {integrity: sha512-9raNdkENebDxVl4piGntpQgOBHB62K1rC87KceV8kkGOc/g7s6lwbxN7C6QTqXYJaM+h1Lnm64MDgnHAmzUApg==}
+  '@ai-sdk/gateway@4.0.132':
+    resolution: {integrity: sha512-ppStDEz96g+JEuxGiVTP29OKBjPyYZXRxs38wnq3427U2QbZtxe6TukrgSAAq0n4yaHvSvVAWJY9kBlW8XudYg==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/openai-compatible@3.0.77':
-    resolution: {integrity: sha512-RzFe7uaMo6Yww9SdeGwHjNiERQvT79unzMlvQva7QEpjUDjzWE/OK04wTLFBRlJrxYMOSSLjUCJKGJGU9os9zQ==}
+  '@ai-sdk/openai-compatible@3.0.82':
+    resolution: {integrity: sha512-wey0CbujWRkZbbrJjw/GJHyjXpt0v44PQKaTGTVGmigqnM057G7GQHDyZQQj9O0lICY5qJxzpn4wCSftT8BSQg==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/provider-utils@5.0.67':
-    resolution: {integrity: sha512-EUzV6GXutGcesWKOY8tRKgijfuv1LUBpqAquMh5k0n74NCjDbca5d5ZG12qhVtM2X5UwM4B2ZMP2XpnAwZlA8Q==}
+  '@ai-sdk/provider-utils@5.0.72':
+    resolution: {integrity: sha512-M6QAztI84jWumQSvKcGOL91DxhChsWxn3D3gYtV0/7E1TPQg9BmLdIerOolUC/jghQbMlQrHyzp0hqdIhUZ2Rw==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/provider@4.0.33':
-    resolution: {integrity: sha512-C6ylMuAXjgqKJllp6ODIJwUltK/tm3ZmIj4V2fqENP3Y8gif2DyeJSsTcDwFrXppgEKcrBisi/BWx2tYeoeCAw==}
+  '@ai-sdk/provider@4.0.35':
+    resolution: {integrity: sha512-yBz6fmLS8MSCIzy7NiHEUAq56ZLD4ZA1GR6bpXBxgbwUacP1La7LuwAr/xy9jSzthem4F8Xu2OrhvU/JrE9fYA==}
     engines: {node: '>=22'}
 
   '@asamuzakjp/css-color@7.1.9':
@@ -2430,14 +2430,14 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
-  '@substrat-run/adapter-cloudflare@0.176.0':
-    resolution: {integrity: sha512-QjXv7pGVWLCXYSUdVDUoWtpQBzO0u/ZNp7hm2i7LasL7/R6T8VYwbNDR3U79WNuqgla+N44VjFSb5UrkhuIeRQ==}
+  '@substrat-run/adapter-cloudflare@0.188.0':
+    resolution: {integrity: sha512-OQClcgUD5VpF7/YRKj5qxqsW1yCY7O2e7/5WP38pNj4ywODmNorVh5D5BNTZVZBr0utcoqyflwIBiyMWwR9HHA==}
 
-  '@substrat-run/adapter-sqlite@0.176.0':
-    resolution: {integrity: sha512-vceo9rTP1A2soooQpd17LzUUZyt3gvAYR3OthZdL/ynLw0OqeuywbCzGw2wTj93iFTOM/8JGz0Oby6sKOQEtrw==}
+  '@substrat-run/adapter-sqlite@0.188.0':
+    resolution: {integrity: sha512-0ADGJQGKPeaA51zHxslxX2PFLF4WsX4qpRzozwb0ek2Cz16xB3bFfS+2oZqFIN0Y87JrMlqvlYfOJsC1csdhHg==}
 
-  '@substrat-run/attachment-extractors@0.2.37':
-    resolution: {integrity: sha512-ktP/smaksKMVJpIgrRgNAtnjXhs4wxRhSHqH9jXGReNKBppkYh1Q3R4AG8XjCkOUQ93aJv7kFrETPfGQWxr/rA==}
+  '@substrat-run/attachment-extractors@0.2.49':
+    resolution: {integrity: sha512-1WeMbuJRr8yZ8S1u2Kk3MxRaidO9iIHcQQzR9aUlMdTimRk4T+DRVM/02jWJA782FcPeQM8eyG08LtDC+BxTgQ==}
 
   '@substrat-run/boundary-lint@0.8.2':
     resolution: {integrity: sha512-93gLaAzwZ7YxBsItDoEB6pOqteKgIaWyLhFL6XCCM5uvWwrfjnhr2cjVc7MDBwBdQRaKK/7vTVQhVC9C9ptkdw==}
@@ -2448,14 +2448,19 @@ packages:
     engines: {node: '>=20'}
     hasBin: true
 
-  '@substrat-run/contract-tests@0.176.0':
-    resolution: {integrity: sha512-u/+wDeENhGyDMVmrJtaWYmyp5qRFOJR0qrdJp08WTUHy+jl9VGSJJ6ZVygqbRlYXEJhuyDB4RTUKRhV2YteT6w==}
+  '@substrat-run/contract-tests@0.188.0':
+    resolution: {integrity: sha512-b6Nw3Kr/0uAZpFnXCBVmq4smh5q5fJBe6nh3Mkyyzx1lt/dy8pqqyGciKc8DIrci+b9Cco9AfmW0aet8xKvdhg==}
     peerDependencies:
       vitest: ^3.2.7 || ^4.0.0 || ^5.0.0
       zod: ^4.4.0
 
   '@substrat-run/contracts@0.176.0':
     resolution: {integrity: sha512-bD5SAZwrDBCPj1gT5CY5tJGauCUNB8SUJ5lvPp1z8aGmuL81PEh+mS12n1s67nDh7CQyvc+xC6kpXCusx8Wi6w==}
+    peerDependencies:
+      zod: ^4.4.0
+
+  '@substrat-run/contracts@0.188.0':
+    resolution: {integrity: sha512-w2oQeZYES1kQefE4hks7wg4HQo6Qvn/mKtykjeXJFCZKBaL85KIroiXCUMocdHUVKDi529Y+uwIiP2HYX1c5Yw==}
     peerDependencies:
       zod: ^4.4.0
 
@@ -2472,8 +2477,11 @@ packages:
   '@substrat-run/kernel@0.176.0':
     resolution: {integrity: sha512-6lAQgJ/pi8/Qd+rjWJKjlVZeDl3g15uGUACwDuYfAorGHQX0i4K4EafRGKOp0lcFIvEeXR6uAeW1RtSNZKW+yQ==}
 
-  '@substrat-run/model-providers@0.5.66':
-    resolution: {integrity: sha512-gQUvnEiPTUO+k2C2tvE/VopadAM48N8Yr/VOC61v4q/BFrhajCdudsQwfR+uNZAT12Xqy8THnSn2V/ddcLPd9g==}
+  '@substrat-run/kernel@0.188.0':
+    resolution: {integrity: sha512-sG7QlK6KE6Ssi6Y53BiTlD0ScVwJSl2CDKK38cg9cO5jdxmsGb7a9azWWizT2LrThjrYoT9pzh1UcgPm5XgBsA==}
+
+  '@substrat-run/model-providers@0.5.78':
+    resolution: {integrity: sha512-+3Hgn/0luon6WFzSAURUqNWKQEL0NK6SCwPxz7AckuN/BJl89tgOt8IoY5jl53i38S5GFYywmt98ZaHJNV1/BQ==}
 
   '@substrat-run/model-view@0.6.24':
     resolution: {integrity: sha512-kZHsyMk7GGgHcScmjdhAzP3yopt7NC1sLSi0a3tckFosihy94+L8+8rzNYvbnaUesZBwb3xcdMVJqNF+WJIYWg==}
@@ -2492,8 +2500,13 @@ packages:
     peerDependencies:
       hono: ^4.13.13
 
-  '@substrat-run/vertical-host@0.176.0':
-    resolution: {integrity: sha512-aO5HGCP+hhDejyUMUBqWumdgN/xkB+yjy7xKhOz+D0Qt0VWkQpiUugEdlDr4Z2OGgU6p9ZsHSEBbvx950GftMQ==}
+  '@substrat-run/vertical-auth@0.32.1':
+    resolution: {integrity: sha512-S5Bg8TehVpv0/cKQ5OskVG49AA6HYSqGLuspNg5TSi5v3QzvdH86v4UTHViKCdjZfnZj1xP5h4CyM7wTvU2mng==}
+    peerDependencies:
+      hono: ^4.13.13
+
+  '@substrat-run/vertical-host@0.188.0':
+    resolution: {integrity: sha512-x48rhTMVxbLfiTMLFmC7VnCiM/UgJlh4uky/5glAswAbpoCB3fnaczrm96S22Zr+1+DyBDFMPJse31xnVMuChQ==}
 
   '@tailwindcss/node@4.3.3':
     resolution: {integrity: sha512-/T8IKEsf9VTU6tLjgC7+sv2mOPtQxzE2jMw7u4Tt40Tx+QSZxpzh95/H6cMKoja9XuW7iMdLJYBB0o9G1CaAgg==}
@@ -2953,8 +2966,8 @@ packages:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
 
-  ai@7.0.152:
-    resolution: {integrity: sha512-cxQaE/17qhgqJcLCespbnyaN3c4IkGuNUtBXKSX1yTvlSsQ7ERV2ygFADMG7d+IWCUuvi7R8DrqAy9DGj0cgkg==}
+  ai@7.0.159:
+    resolution: {integrity: sha512-4e/BwDoKJlMNYZaqERcTbGte+4TwroN9qKnCprog/XVfD9InzVPlhCviDhN452JIRrRsYg9BT0WsQ2C3Ds2mVQ==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -4751,29 +4764,29 @@ packages:
 
 snapshots:
 
-  '@ai-sdk/gateway@4.0.125(zod@4.6.7)':
+  '@ai-sdk/gateway@4.0.132(zod@4.6.7)':
     dependencies:
-      '@ai-sdk/provider': 4.0.33
-      '@ai-sdk/provider-utils': 5.0.67(zod@4.6.7)
+      '@ai-sdk/provider': 4.0.35
+      '@ai-sdk/provider-utils': 5.0.72(zod@4.6.7)
       '@vercel/oidc': 3.2.0
       zod: 4.6.7
 
-  '@ai-sdk/openai-compatible@3.0.77(zod@4.6.7)':
+  '@ai-sdk/openai-compatible@3.0.82(zod@4.6.7)':
     dependencies:
-      '@ai-sdk/provider': 4.0.33
-      '@ai-sdk/provider-utils': 5.0.67(zod@4.6.7)
+      '@ai-sdk/provider': 4.0.35
+      '@ai-sdk/provider-utils': 5.0.72(zod@4.6.7)
       zod: 4.6.7
 
-  '@ai-sdk/provider-utils@5.0.67(zod@4.6.7)':
+  '@ai-sdk/provider-utils@5.0.72(zod@4.6.7)':
     dependencies:
-      '@ai-sdk/provider': 4.0.33
+      '@ai-sdk/provider': 4.0.35
       '@standard-schema/spec': 1.1.0
       '@workflow/serde': 4.1.0
       eventsource-parser: 3.1.1
       undici: 7.30.1
       zod: 4.6.7
 
-  '@ai-sdk/provider@4.0.33':
+  '@ai-sdk/provider@4.0.35':
     dependencies:
       json-schema: 0.4.0
 
@@ -6457,24 +6470,24 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@substrat-run/adapter-cloudflare@0.176.0(zod@4.6.7)':
+  '@substrat-run/adapter-cloudflare@0.188.0(zod@4.6.7)':
     dependencies:
-      '@substrat-run/contracts': 0.176.0(zod@4.6.7)
-      '@substrat-run/kernel': 0.176.0(zod@4.6.7)
+      '@substrat-run/contracts': 0.188.0(zod@4.6.7)
+      '@substrat-run/kernel': 0.188.0(zod@4.6.7)
     transitivePeerDependencies:
       - zod
 
-  '@substrat-run/adapter-sqlite@0.176.0(zod@4.6.7)':
+  '@substrat-run/adapter-sqlite@0.188.0(zod@4.6.7)':
     dependencies:
-      '@substrat-run/contracts': 0.176.0(zod@4.6.7)
-      '@substrat-run/kernel': 0.176.0(zod@4.6.7)
+      '@substrat-run/contracts': 0.188.0(zod@4.6.7)
+      '@substrat-run/kernel': 0.188.0(zod@4.6.7)
       better-sqlite3: 13.0.3
     transitivePeerDependencies:
       - zod
 
-  '@substrat-run/attachment-extractors@0.2.37(zod@4.6.7)':
+  '@substrat-run/attachment-extractors@0.2.49(zod@4.6.7)':
     dependencies:
-      '@substrat-run/kernel': 0.176.0(zod@4.6.7)
+      '@substrat-run/kernel': 0.188.0(zod@4.6.7)
     transitivePeerDependencies:
       - zod
 
@@ -6491,14 +6504,18 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@substrat-run/contract-tests@0.176.0(vitest@5.0.5(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.7)':
+  '@substrat-run/contract-tests@0.188.0(vitest@5.0.5(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(zod@4.6.7)':
     dependencies:
-      '@substrat-run/contracts': 0.176.0(zod@4.6.7)
-      '@substrat-run/kernel': 0.176.0(zod@4.6.7)
+      '@substrat-run/contracts': 0.188.0(zod@4.6.7)
+      '@substrat-run/kernel': 0.188.0(zod@4.6.7)
       vitest: 5.0.5(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
       zod: 4.6.7
 
   '@substrat-run/contracts@0.176.0(zod@4.6.7)':
+    dependencies:
+      zod: 4.6.7
+
+  '@substrat-run/contracts@0.188.0(zod@4.6.7)':
     dependencies:
       zod: 4.6.7
 
@@ -6524,11 +6541,17 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@substrat-run/model-providers@0.5.66(zod@4.6.7)':
+  '@substrat-run/kernel@0.188.0(zod@4.6.7)':
     dependencies:
-      '@ai-sdk/openai-compatible': 3.0.77(zod@4.6.7)
-      '@substrat-run/contracts': 0.176.0(zod@4.6.7)
-      ai: 7.0.152(zod@4.6.7)
+      '@substrat-run/contracts': 0.188.0(zod@4.6.7)
+    transitivePeerDependencies:
+      - zod
+
+  '@substrat-run/model-providers@0.5.78(zod@4.6.7)':
+    dependencies:
+      '@ai-sdk/openai-compatible': 3.0.82(zod@4.6.7)
+      '@substrat-run/contracts': 0.188.0(zod@4.6.7)
+      ai: 7.0.159(zod@4.6.7)
     transitivePeerDependencies:
       - zod
 
@@ -6556,14 +6579,26 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@substrat-run/vertical-host@0.176.0(@ai-sdk/provider@4.0.33)(zod@4.6.7)':
+  '@substrat-run/vertical-auth@0.32.1(hono@4.13.14)(zod@4.6.7)':
     dependencies:
-      '@substrat-run/contracts': 0.176.0(zod@4.6.7)
-      '@substrat-run/kernel': 0.176.0(zod@4.6.7)
-      '@substrat-run/model-providers': 0.5.66(zod@4.6.7)
-      ai: 7.0.152(zod@4.6.7)
+      '@substrat-run/contracts': 0.188.0(zod@4.6.7)
+      '@substrat-run/kernel': 0.188.0(zod@4.6.7)
+      '@substrat-run/oidc-rp': 0.13.0(hono@4.13.14)
+      '@substrat-run/psl': 0.2.5
       hono: 4.13.14
-      workers-ai-provider: 4.0.1(@ai-sdk/provider@4.0.33)(ai@7.0.152(zod@4.6.7))
+      jose: 6.2.14
+    transitivePeerDependencies:
+      - zod
+
+  '@substrat-run/vertical-host@0.188.0(@ai-sdk/provider@4.0.35)(zod@4.6.7)':
+    dependencies:
+      '@substrat-run/contracts': 0.188.0(zod@4.6.7)
+      '@substrat-run/kernel': 0.188.0(zod@4.6.7)
+      '@substrat-run/model-providers': 0.5.78(zod@4.6.7)
+      '@substrat-run/vertical-auth': 0.32.1(hono@4.13.14)(zod@4.6.7)
+      ai: 7.0.159(zod@4.6.7)
+      hono: 4.13.14
+      workers-ai-provider: 4.0.1(@ai-sdk/provider@4.0.35)(ai@7.0.159(zod@4.6.7))
     transitivePeerDependencies:
       - '@ai-sdk/anthropic'
       - '@ai-sdk/google'
@@ -6954,11 +6989,11 @@ snapshots:
 
   agent-base@7.1.4: {}
 
-  ai@7.0.152(zod@4.6.7):
+  ai@7.0.159(zod@4.6.7):
     dependencies:
-      '@ai-sdk/gateway': 4.0.125(zod@4.6.7)
-      '@ai-sdk/provider': 4.0.33
-      '@ai-sdk/provider-utils': 5.0.67(zod@4.6.7)
+      '@ai-sdk/gateway': 4.0.132(zod@4.6.7)
+      '@ai-sdk/provider': 4.0.35
+      '@ai-sdk/provider-utils': 5.0.72(zod@4.6.7)
       zod: 4.6.7
 
   ajv-draft-04@1.0.0(ajv@8.20.0):
@@ -8548,10 +8583,10 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20261023.1
       '@cloudflare/workerd-windows-64': 1.20261023.1
 
-  workers-ai-provider@4.0.1(@ai-sdk/provider@4.0.33)(ai@7.0.152(zod@4.6.7)):
+  workers-ai-provider@4.0.1(@ai-sdk/provider@4.0.35)(ai@7.0.159(zod@4.6.7)):
     dependencies:
-      '@ai-sdk/provider': 4.0.33
-      ai: 7.0.152(zod@4.6.7)
+      '@ai-sdk/provider': 4.0.35
+      ai: 7.0.159(zod@4.6.7)
 
   wrangler@4.156.0(@cloudflare/workers-types@5.20261030.1)(@types/node@26.6.6):
     dependencies:
