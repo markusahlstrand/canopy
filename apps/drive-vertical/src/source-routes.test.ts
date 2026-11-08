@@ -8,13 +8,13 @@ import { mountSource, type DriveSource } from './source-routes';
 const tenantId = '01JZ00000000000000000TEN01' as TenantId, scopeId = '01JZ00000000000000000SC001' as ScopeId;
 const CONNECTION = '01JZ00000000000000000C0N01', OTHER = '01JZ00000000000000000C0N02';
 
-function world(options: { manager?: boolean; prior?: DriveSource | null; refuse?: { path: string; status: number; error: string } } = {}) {
+function world(options: { manager?: boolean; prior?: DriveSource | null; refuse?: { path: string; status: number; error: string; connectionIds?: string[] } } = {}) {
   let source: DriveSource | null = options.prior ?? null;
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(url)).pathname, body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     calls.push({ path, body });
-    if (options.refuse?.path === path) return Response.json({ error: options.refuse.error }, { status: options.refuse.status });
+    if (options.refuse?.path === path && (!options.refuse.connectionIds || options.refuse.connectionIds.includes(String(body.connectionId)))) return Response.json({ error: options.refuse.error }, { status: options.refuse.status });
     const boundAt = '2026-10-31T10:00:00.000Z';
     switch (path) {
       case '/internal/connections/upsert': return Response.json({ connectionId: CONNECTION, created: true, granted: [] });
@@ -78,4 +78,34 @@ it('refuses a non-manager before reaching the platform, and passes on what a3doc
   expect(res.status).toBe(409);
   expect(await res.text()).toContain("no a3doc folder at 'Nope'");
   expect(refused.source()).toBeNull();
+});
+
+it('names the relay call and its status when the platform answers something other than a refusal', async () => {
+  const crashed = world({ manager: true, refuse: { path: '/internal/connections/bind', status: 500, error: undefined as unknown as string } });
+  const res = await crashed.connect();
+  expect(res.status).toBe(502);
+  expect(await res.text()).toContain(`the platform refused to bind connection ${CONNECTION} (500): unknown error`);
+  expect(crashed.source()).toBeNull();
+});
+
+it('puts the previous account back when binding its replacement fails', async () => {
+  const prior: DriveSource = { provider: 'canopy.a3doc', connectionId: OTHER, account: 'OLD', folder: 'Viejo', canUpload: false, boundAt: 'then' };
+  const w = world({ manager: true, prior, refuse: { path: '/internal/connections/bind', status: 500, error: undefined as unknown as string, connectionIds: [CONNECTION] } });
+  expect((await w.connect()).status).toBe(502);
+  expect(w.calls.map((c) => [c.path, c.body.connectionId])).toEqual([
+    ['/internal/connections/upsert', undefined], ['/internal/connections/unbind', OTHER],
+    ['/internal/connections/bind', CONNECTION], ['/internal/connections/bind', OTHER],
+  ]);
+  expect(w.calls.at(-1)!.body).toMatchObject({ options: { folder: 'Viejo' } });
+  expect(w.source()).toEqual(prior);
+});
+
+it('records no source when neither the replacement nor the previous account binds', async () => {
+  const prior: DriveSource = { provider: 'canopy.a3doc', connectionId: OTHER, account: 'OLD', folder: '', canUpload: false, boundAt: 'then' };
+  const w = world({ manager: true, prior, refuse: { path: '/internal/connections/bind', status: 500, error: undefined as unknown as string } });
+  const res = await w.connect();
+  expect(res.status).toBe(502);
+  expect(await res.text()).toContain(`bind connection ${CONNECTION} (500)`);
+  expect(w.source()).toBeNull();
+  expect(await (await w.app.request('/api/source/status')).json()).toEqual({ source: null, binding: null, report: null });
 });

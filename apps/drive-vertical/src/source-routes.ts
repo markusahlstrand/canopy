@@ -47,10 +47,22 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
       externalAccountRef: secret.companyCode, secret, createdBy: principal,
     }));
     // A space mirrors one folder: another account's binding goes before this one is made.
-    if (prior && prior.connectionId !== connectionId) {
-      await relayed(() => unbindConnection({ ...access, connectionId: connectionIdSchema.parse(prior.connectionId), unboundBy: principal }));
+    const replaced = prior && prior.connectionId !== connectionId ? prior : null;
+    if (replaced) {
+      await relayed(() => unbindConnection({ ...access, connectionId: connectionIdSchema.parse(replaced.connectionId), unboundBy: principal }));
     }
-    const bound = await relayed(() => bindConnection({ ...access, connectionId, options: { folder }, boundBy: principal }));
+    let bound: Awaited<ReturnType<typeof bindConnection>>;
+    try {
+      bound = await relayed(() => bindConnection({ ...access, connectionId, options: { folder }, boundBy: principal }));
+    } catch (error) {
+      // The space must not keep recording a source nothing binds any more: put the previous
+      // account back on its folder, or, when even that fails, record no source at all.
+      if (replaced) {
+        await relayed(() => bindConnection({ ...access, connectionId: connectionIdSchema.parse(replaced.connectionId), options: { folder: replaced.folder }, boundBy: principal }))
+          .catch(() => scope.invoke('drive/clear-source'));
+      }
+      throw error;
+    }
     const source = await scope.invoke<DriveSource>('drive/record-source', {
       provider: A3DOC_VERTICAL_PROVIDER, connectionId, account: secret.companyCode,
       folder: typeof bound.options.folder === 'string' ? bound.options.folder : folder,
@@ -76,8 +88,10 @@ async function relayed<T>(call: () => Promise<T>): Promise<T> {
     return await call();
   } catch (error) {
     if (!(error instanceof ConnectionRequestError)) throw error;
-    const reason = error.message.replace(/^.*?\(\d+\): /, '');
     const status = error.status === 409 || error.status === 422 ? error.status : 502;
-    throw new HTTPException(status, { message: status === 502 ? `Could not reach a3doc through the platform: ${reason}` : reason });
+    // A refusal is the user's to read; anything else keeps which relay call failed and its status,
+    // since "unknown error" alone cannot tell a platform crash from an answer that would not parse.
+    if (status !== 502) throw new HTTPException(status, { message: error.message.replace(/^.*?\(\d+\): /, '') });
+    throw new HTTPException(502, { message: `Could not reach a3doc through the platform: ${error.message}` });
   }
 }
