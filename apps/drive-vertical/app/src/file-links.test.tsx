@@ -31,12 +31,14 @@ it('opens a renamed file in its containing folder without resolving legacy links
   expect(fetcher.mock.calls.some(([url]) => url.includes('/old/') || url.includes('by-path'))).toBe(false);
   await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/folders/private-folder/files')).toBe(true));
   expect(fetcher.mock.calls.some(([url]) => url.includes('/folders/root/'))).toBe(false);
-  await waitFor(() => expect(location.search).toBe('?site=family&file=stable'));
+  expect(location.search).toBe('?site=family&file=stable');
 });
 it.each([401, 403, 404])('reports a generic unavailable file without exposing metadata (%s)', async status => {
   history.replaceState(null, '', '/?file=stable'); mockFiles(status); render(<DriveScreen {...shell} />);
   await screen.findByText('This file is unavailable or you do not have access.');
-  expect(screen.queryByText('Renamed.zip')).toBeNull(); await waitFor(() => expect(location.search).toBe(''));
+  expect(screen.queryByText('Renamed.zip')).toBeNull();
+  // The address bar follows once the link stops pending, a beat after the message renders.
+  await waitFor(() => expect(location.search).toBe(''));
 });
 it('retires an unresolved link when the screen unmounts', async () => {
   let finish!: (response: Response) => void;
