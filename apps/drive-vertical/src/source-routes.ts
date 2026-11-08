@@ -76,8 +76,10 @@ async function relayed<T>(call: () => Promise<T>): Promise<T> {
     return await call();
   } catch (error) {
     if (!(error instanceof ConnectionRequestError)) throw error;
-    const reason = error.message.replace(/^.*?\(\d+\): /, '');
     const status = error.status === 409 || error.status === 422 ? error.status : 502;
-    throw new HTTPException(status, { message: status === 502 ? `Could not reach a3doc through the platform: ${reason}` : reason });
+    // A refusal is the user's to read; anything else keeps which relay call failed and its status,
+    // since "unknown error" alone cannot tell a platform crash from an answer that would not parse.
+    if (status !== 502) throw new HTTPException(status, { message: error.message.replace(/^.*?\(\d+\): /, '') });
+    throw new HTTPException(502, { message: `Could not reach a3doc through the platform: ${error.message}` });
   }
 }
