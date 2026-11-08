@@ -6,9 +6,11 @@
  * The API is the one a3doc's own web app (a3doc.wolterskluwer.es) speaks: every call is a JSON
  * `POST <apiBase>/<Method>` whose body carries a session `token`, and every answer is HTTP 200
  * with an `errorCode` (0 = ok). API failures are read from the body; transport failures are
- * checked separately. The token comes from `signIn` (company code + user + password).
+ * checked separately. The token comes from signing in the way the web app's login form does:
+ * `LoginMfaBegin`, then `LoginMfaComplete` (company code + user + password). `signIn` is only the
+ * web app's silent refresh, and it answers errorCode 3 to a plain login.
  *
- * Methods the web app uses, and so the whole surface there is: `signIn`, `UserInfo`,
+ * Methods the web app uses, and so the whole surface there is: `LoginMfaBegin`, `LoginMfaComplete`, `UserInfo`,
  * `ContainersTree`, `RootContainer`, `GetDocumentsExtended`, `Download`, `Upload`,
  * `GetCustomersListExtended`, `Logout`. There is **no delete, rename, move, or create-folder**:
  * a3doc's clients can add documents but never take them away.
@@ -19,10 +21,19 @@ export const A3DOC_ADDRESS_PROVIDER = "https://a3asesordoc-serviceaddressprovide
 
 /**
  * The device the browser build signs in as, verbatim: platform 13 and type 0 for a browser, and the
- * fixed `deviceId` every browser sends. a3doc refused the connector's own id with errorCode 3
- * ("Error en los parámetros indicados en la llamada.").
+ * fixed `deviceId` every browser sends.
  */
 export const A3DOC_WEB_DEVICE = { devicePlatform: 13, deviceType: 0, deviceId: "123456789123456789123456789" } as const;
+/**
+ * Where a3doc sends a person after an MFA challenge. The connector never opens one, but
+ * `LoginMfaBegin` takes them, so it passes the web app's own.
+ */
+export const A3DOC_MFA_REDIRECTS = {
+  successRedirectUrl: "https://a3doc.wolterskluwer.es/mfa/success",
+  errorRedirectUrl: "https://a3doc.wolterskluwer.es/mfa/error",
+} as const;
+/** `mfaStatus` from `LoginMfaBegin`, as the web app names them. */
+export const A3DOC_MFA = { NONE: 0, OPTIONAL: 1, REQUIRED: 2 } as const;
 /** The id of the root container ("Todos"). */
 export const A3DOC_ROOT_CONTAINER = 1;
 /** `errorCode` a3doc answers with when the session token is unknown or expired. */
@@ -63,6 +74,15 @@ export class A3docError extends Error {
   ) {
     super(`a3doc ${method} failed: error ${code}${detail ? ` (${detail})` : ""}`);
     this.name = "A3docError";
+  }
+}
+
+/** a3doc accepted the login but wants a person to pass its MFA challenge, which the connector cannot. */
+export class A3docMfaRequiredError extends A3docError {
+  constructor(readonly mfaStatus: number | undefined) {
+    super(0, "LoginMfaBegin");
+    this.message = "a3doc requires this user to confirm sign-in with MFA, which Canopy cannot do yet.";
+    this.name = "A3docMfaRequiredError";
   }
 }
 
@@ -166,15 +186,30 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
     return apiBase;
   }
 
+  /**
+   * Sign in as the web app's login form does. `LoginMfaBegin` checks the login and says whether MFA
+   * applies; without it, or when it is optional (the form's "skip"), `LoginMfaComplete` with an
+   * empty completion id hands out the token. Mandatory MFA needs a person at a3doc's challenge page.
+   */
   async function signIn(): Promise<string> {
     const base = await resolveApiBase();
-    const body = await post<Envelope & { token?: string }>(
-      `${base}/signIn`,
-      { ...A3DOC_WEB_DEVICE, tenant: companyCode, user, password },
-      "signIn",
+    const login = { ...A3DOC_WEB_DEVICE, tenant: companyCode, user, password };
+    const begun = await post<Envelope & { mfaStatus?: unknown; MfaStatus?: unknown }>(
+      `${base}/LoginMfaBegin`,
+      { ...login, ...A3DOC_MFA_REDIRECTS },
+      "LoginMfaBegin",
     );
-    if (!body.token) throw new A3docError(body.errorCode ?? 0, "signIn", body.errorMessage);
-    token = body.token;
+    if (begun.errorCode) throw new A3docError(begun.errorCode, "LoginMfaBegin", begun.errorMessage);
+    const raw = begun.mfaStatus !== undefined ? begun.mfaStatus : begun.MfaStatus;
+    const mfaStatus = typeof raw === "number" ? raw : undefined;
+    if (mfaStatus !== A3DOC_MFA.NONE && mfaStatus !== A3DOC_MFA.OPTIONAL) throw new A3docMfaRequiredError(mfaStatus);
+    const done = await post<Envelope & { token?: string }>(
+      `${base}/LoginMfaComplete`,
+      { ...login, mfaCompletionId: "", mfaStatus },
+      "LoginMfaComplete",
+    );
+    if (!done.token) throw new A3docError(done.errorCode ?? 0, "LoginMfaComplete", done.errorMessage);
+    token = done.token;
     return token;
   }
 
