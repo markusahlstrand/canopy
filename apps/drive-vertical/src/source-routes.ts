@@ -47,10 +47,22 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
       externalAccountRef: secret.companyCode, secret, createdBy: principal,
     }));
     // A space mirrors one folder: another account's binding goes before this one is made.
-    if (prior && prior.connectionId !== connectionId) {
-      await relayed(() => unbindConnection({ ...access, connectionId: connectionIdSchema.parse(prior.connectionId), unboundBy: principal }));
+    const replaced = prior && prior.connectionId !== connectionId ? prior : null;
+    if (replaced) {
+      await relayed(() => unbindConnection({ ...access, connectionId: connectionIdSchema.parse(replaced.connectionId), unboundBy: principal }));
     }
-    const bound = await relayed(() => bindConnection({ ...access, connectionId, options: { folder }, boundBy: principal }));
+    let bound: Awaited<ReturnType<typeof bindConnection>>;
+    try {
+      bound = await relayed(() => bindConnection({ ...access, connectionId, options: { folder }, boundBy: principal }));
+    } catch (error) {
+      // The space must not keep recording a source nothing binds any more: put the previous
+      // account back on its folder, or, when even that fails, record no source at all.
+      if (replaced) {
+        await relayed(() => bindConnection({ ...access, connectionId: connectionIdSchema.parse(replaced.connectionId), options: { folder: replaced.folder }, boundBy: principal }))
+          .catch(() => scope.invoke('drive/clear-source'));
+      }
+      throw error;
+    }
     const source = await scope.invoke<DriveSource>('drive/record-source', {
       provider: A3DOC_VERTICAL_PROVIDER, connectionId, account: secret.companyCode,
       folder: typeof bound.options.folder === 'string' ? bound.options.folder : folder,
