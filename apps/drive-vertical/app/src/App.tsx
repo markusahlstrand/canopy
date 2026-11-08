@@ -137,7 +137,7 @@ function pendingLink(): { kind: LinkKind; token: string; fromUrl: boolean } | nu
       // Before anything can await: a token in the address bar is one screenshot or pasted
       // link from being someone else's.
       url.searchParams.delete(param);
-      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
       return { kind, token: fromUrl, fromUrl: true };
     }
   }
@@ -180,7 +180,7 @@ const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
   const url = new URL(window.location.href);
   if (url.searchParams.has('site')) {
     url.searchParams.delete('site');
-    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
   }
   // Put the selection back — and if storage refuses to hold it, put it back where it
   // came from. In a private window the URL is the ONLY carrier (the rail's own rule),
@@ -189,7 +189,7 @@ const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
   const restore = () => {
     if (!selectSite(selected)) {
       url.searchParams.set('site', selected);
-      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     }
   };
 
@@ -204,7 +204,7 @@ const whoamiWithoutStaleSpace = async (): ReturnType<typeof whoami> => {
     url.searchParams.delete('folder');
     url.searchParams.delete('file');
     url.searchParams.delete('view');
-    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     return me;
   } catch (retry: unknown) {
     restore();
@@ -336,7 +336,7 @@ export default function App() {
   // Bumped on every applied switch, not derived from the slug: opening a file in the space
   // already shown must still remount the drive, which reads its target from the URL on mount.
   const [mount, setMount] = useState(0);
-  useEffect(() => handleSpaceSwitch((slug, apply) => {
+  useEffect(() => handleSpaceSwitch((slug, apply, cancel) => {
     const ticket = ++switching.current;
     const reload = () => { apply(); window.location.reload(); };
     whoami(slug)
@@ -346,7 +346,7 @@ export default function App() {
         await resumeMirror(principal).catch(() => {});
         if (ticket !== switching.current) return;
         // Work may have started while the new space answered; it gets the same boundary.
-        if (!confirmNavigation()) return;
+        if (!confirmNavigation()) return cancel?.();
         apply();
         publishPlugins([]);
         // Before the remount: the new drive seeds its rail from the cache while it renders.

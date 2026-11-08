@@ -31,7 +31,7 @@ import { PreviewPanel } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
 import { SelectionSummary } from './selection-summary';
-import { folderPath, linkedFolderId, linkedView, showInUrl, type DriveEntry } from './folder-links';
+import { folderPath, linkedFolderId, linkedView, showInUrl, storedIndex, type DriveEntry } from './folder-links';
 import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
@@ -205,7 +205,7 @@ export interface DriveScreenProps {
 }
 
 /** Two entries with the same key show the same screen, so moving between them is no move. */
-const entryKey = ({ folderId, view, fileId }: DriveEntry) => JSON.stringify([folderId, view, fileId]);
+const entryKey = ({ folderId, view, fileId }: Pick<DriveEntry, 'folderId' | 'view' | 'fileId'>) => JSON.stringify([folderId, view, fileId]);
 
 export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenProps) {
   const initialFileId = useRef(linkedFileId()).current;
@@ -238,9 +238,6 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [view, setView] = useState<'drive' | 'trash' | 'search' | 'shared'>(linkedView);
   const searchOrigin = useRef<'drive' | 'trash' | 'shared'>('drive');
   const [term, setTerm] = useState('');
-  /** The last term searched, which outlives the view: leaving search clears `term` first. */
-  const searchTerm = useRef('');
-  if (view === 'search') searchTerm.current = term;
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [matchFilter, setMatchFilter] = useState<MatchFilter>('all');
   const visibleHits = filterMatches(hits, matchFilter);
@@ -409,15 +406,21 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   // A pending link is still the URL's to answer: writing now would replace it with the root.
   useEffect(() => {
     if (linkPending || retryableLink.current === linkNavigation.current) return;
-    const entry: DriveEntry = { folderId, crumbs, view, fileId: previewing, term: view === 'search' ? searchTerm.current : '' };
+    const entry = { folderId, crumbs, view, fileId: previewing, term: view === 'search' ? term : '' };
     const previous = shownEntry.current;
     const moved = previous !== null && entryKey(previous) !== entryKey(entry);
-    // Typing does not write an entry, so a search gets its term as it is left.
-    if (moved && previous.view === 'search') window.history.replaceState({ ...previous, term: searchTerm.current }, '');
-    showInUrl(cacheSpace, entry, moved);
-    shownEntry.current = entry;
+    shownEntry.current = showInUrl(cacheSpace, entry, moved);
     shownUrl.current = window.location.href;
   }, [linkPending, cacheSpace, folderId, crumbs, previewing, view]);
+
+  // Typing writes no entry, but the Search entry on screen keeps the latest term, so Back
+  // and then Forward return to it. Declared after the URL effect: a new search pushes first.
+  useEffect(() => {
+    const shown = shownEntry.current;
+    if (view !== 'search' || shown?.view !== 'search' || shown.term === term) return;
+    shownEntry.current = { ...shown, term };
+    window.history.replaceState(shownEntry.current, '');
+  }, [term, view]);
 
   useEffect(() => {
     if (!mobileNavOpen || !window.matchMedia) return;
@@ -816,10 +819,25 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    * An entry with no state is one this screen never showed: a reload reads it as a link.
    */
   const followHistory = useRef<(entry: DriveEntry | null) => void>(() => {});
+  /** The position a refusal stepped back to: its own popstate is not a new move. */
+  const returning = useRef<number | null>(null);
   followHistory.current = (entry) => {
-    const refuse = () => { if (shownUrl.current) window.history.pushState(shownEntry.current, '', shownUrl.current); };
-    const site = new URL(window.location.href).searchParams.get('site');
-    if (site && site !== (cacheSpace ?? currentSite())) { if (!followSpace(site)) refuse(); return; }
+    const arrived = window.location.href;
+    // Step back to the entry on screen, which keeps the entries after it for Forward.
+    // An entry that records no position can only be answered by pushing the screen again.
+    const refuse = () => {
+      const shown = shownEntry.current;
+      const at = storedIndex();
+      if (!shown || !shownUrl.current) return;
+      if (at !== null && at !== shown.index) { returning.current = shown.index; window.history.go(shown.index - at); }
+      else window.history.pushState(shown, '', shownUrl.current);
+    };
+    const site = new URL(arrived).searchParams.get('site');
+    if (site && site !== (cacheSpace ?? currentSite())) {
+      // A late no comes while the new space loads; a move made since then owns the address.
+      if (!followSpace(site, () => { if (window.location.href === arrived) refuse(); })) refuse();
+      return;
+    }
     if (!entry) { if (confirmNavigation()) window.location.reload(); else refuse(); return; }
     if (!exitPluginApp() || !setPreviewing(entry.fileId)) { refuse(); return; }
     linkNavigation.current++;
@@ -831,6 +849,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     shownEntry.current = entry;
     shownUrl.current = window.location.href;
     setCrumbs(entry.crumbs);
+    // Set even when the screen already shows them: a link's folder update queued but not yet
+    // rendered would otherwise land after this and open the linked folder instead.
+    setView(entry.view);
+    setFolderId(entry.folderId);
     if (entry.view === view && entry.folderId === folderId && (view !== 'search' || entry.term === term)) return;
     reads.current.invalidate();
     setTerm(entry.term);
@@ -839,11 +861,16 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     setSelection(new Set());
     setBusy(true);
     if (entry.view === 'shared') { setFolders([]); setFiles([]); }
-    setView(entry.view);
-    setFolderId(entry.folderId);
   };
   useEffect(() => {
-    const onPop = (event: PopStateEvent) => followHistory.current(event.state as DriveEntry | null);
+    const onPop = (event: PopStateEvent) => {
+      const state = event.state as Partial<DriveEntry> | null;
+      const stepBack = returning.current;
+      returning.current = null;
+      if (stepBack !== null && state?.index === stepBack) return;
+      // A space switch's entry records only a position until its screen fills it in.
+      followHistory.current(state && typeof state.folderId === 'string' ? state as DriveEntry : null);
+    };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);

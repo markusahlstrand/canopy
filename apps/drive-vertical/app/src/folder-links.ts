@@ -47,7 +47,18 @@ export interface DriveEntry {
   view: 'drive' | 'trash' | 'search' | 'shared';
   fileId: string | null;
   term: string;
+  /** Its position in the tab's history, so a refused Back or Forward can step back to it. */
+  index: number;
 }
+
+/** The position `history.state` records, or null for an entry that does not record one. */
+export function storedIndex(): number | null {
+  const index = (window.history.state as { index?: unknown } | null)?.index;
+  return typeof index === 'number' ? index : null;
+}
+
+/** The position a new entry pushed after the current one takes. */
+export const nextIndex = (): number => (storedIndex() ?? 0) + 1;
 
 /**
  * Keep the address bar on what the screen shows, so it can be sent as a link.
@@ -57,7 +68,8 @@ export interface DriveEntry {
  * Anything else in the URL is not ours to rewrite. `push` is for a move Back should undo;
  * tidying the current address replaces it, so Back has no stop that shows the same screen.
  */
-export function showInUrl(site: string | null, entry: DriveEntry, push: boolean) {
+export function showInUrl(site: string | null, shown: Omit<DriveEntry, 'index'>, push: boolean): DriveEntry {
+  const entry: DriveEntry = { ...shown, index: push ? nextIndex() : storedIndex() ?? 0 };
   const { folderId, fileId, view } = entry;
   const url = new URL(window.location.href);
   for (const key of ['path', 'folder', 'file', 'view']) url.searchParams.delete(key);
@@ -67,6 +79,7 @@ export function showInUrl(site: string | null, entry: DriveEntry, push: boolean)
   else if (folderId !== ROOT_FOLDER_ID && view !== 'trash' && view !== 'shared') url.searchParams.set('folder', folderId);
   if (push) window.history.pushState(entry, '', url);
   else window.history.replaceState(entry, '', url);
+  return entry;
 }
 
 /** Login returns only navigation parameters, never invite/claim credentials. */

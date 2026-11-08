@@ -4,7 +4,7 @@ import { DriveScreen } from './drive';
 import { selectSite } from './api';
 import * as drafts from './drafts';
 import { useNavigationGuard } from './navigation-guards';
-import { openSpace } from './space-navigation';
+import { handleSpaceSwitch, openSpace } from './space-navigation';
 vi.mock('./live-updates', () => ({ watchDriveChanges: () => () => {} }));
 afterEach(() => { cleanup(); selectSite(null); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const shell = { onError: () => {}, auth: { user: {}, principal: 'ada' }, onSignIn: () => {}, onSignOut: () => {} };
@@ -20,6 +20,7 @@ function serve() {
     '/api/folders/plans/folders': [q1],
     '/api/folders/plans/files': [note],
     '/api/shared-folders': { folders: [] },
+    '/api/search': { hits: [] },
   };
   const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(routes[url.split('?')[0]!] ?? (url.endsWith('/access') ? { canManage: false } : []))));
   vi.stubGlobal('fetch', fetcher);
@@ -104,8 +105,58 @@ it('keeps the screen and puts the address back when Back would discard a draft',
   await screen.findByRole('button', { name: 'Close preview' });
   vi.spyOn(drafts, 'confirmDiscardDrafts').mockReturnValue(false);
   await go(-1);
+  // The refusal steps forward again on a later task.
+  await waitFor(() => expect(location.search).toBe('?site=home&file=note'));
   expect(screen.getByRole('button', { name: 'Close preview' })).toBeTruthy();
-  expect(location.search).toBe('?site=home&file=note');
+});
+
+it('keeps the later entries when Back is refused, so Forward still reaches them', async () => {
+  await start();
+  await intoPlans();
+  fireEvent.doubleClick(screen.getByText('note.txt'));
+  await screen.findByRole('button', { name: 'Close preview' });
+  // The preview stays open beside Trash on desktop.
+  fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+  await waitFor(() => expect(location.search).toBe('?site=home&view=trash&file=note'));
+  await go(-1);
+  await waitFor(() => expect(location.search).toBe('?site=home&file=note'));
+  const length = history.length;
+  const refuse = vi.spyOn(drafts, 'confirmDiscardDrafts').mockReturnValue(false);
+  await go(-1);
+  await waitFor(() => expect(location.search).toBe('?site=home&file=note'));
+  expect(history.length).toBe(length);
+  refuse.mockRestore();
+  await go(1);
+  await waitFor(() => expect(location.search).toBe('?site=home&view=trash&file=note'));
+});
+
+it('keeps the latest search term on its entry, so Back then Forward returns to it', async () => {
+  await start();
+  await screen.findByText('Plans');
+  const box = screen.getByRole('textbox', { name: 'Search this space' });
+  fireEvent.change(box, { target: { value: 'bud' } });
+  await waitFor(() => expect((history.state as { view: string }).view).toBe('search'));
+  fireEvent.change(box, { target: { value: 'budget' } });
+  await waitFor(() => expect((history.state as { term: string }).term).toBe('budget'));
+  await go(-1);
+  await screen.findByText('Plans');
+  await go(1);
+  await waitFor(() => expect((screen.getByRole('textbox', { name: 'Search this space' }) as HTMLInputElement).value).toBe('budget'));
+});
+
+it('puts the address back when a switch Back into another space is declined while it loads', async () => {
+  await start();
+  await screen.findByText('Plans');
+  const unregister = handleSpaceSwitch((_slug, _apply, cancel) => cancel?.());
+  try {
+    history.pushState({ index: 1 }, '', '/?site=family');
+    await go(-1);
+    const length = history.length;
+    await go(1);
+    await waitFor(() => expect(location.search).toBe('?site=home'));
+    expect(history.length).toBe(length);
+    expect(screen.getByText('Plans')).toBeTruthy();
+  } finally { unregister(); }
 });
 
 it('asks before reloading an entry it has no state for, and stays put on a no', async () => {

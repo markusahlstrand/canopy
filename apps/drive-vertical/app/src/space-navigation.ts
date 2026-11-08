@@ -1,5 +1,6 @@
 import { selectSite, type Site } from './api';
 import { confirmNavigation } from './navigation-guards';
+import { nextIndex } from './folder-links';
 /** Keep a usable label when an older space has no display name. */
 export const spaceLabel = (site: Pick<Site, 'name' | 'slug'>): string => site.name.trim() || site.slug;
 /** A portable link to a space, without a file or folder from the sender's view. */
@@ -18,7 +19,7 @@ function clearPreviousSpaceLink(url: URL) {
  * and the shell calls it once it can render the new space whole. Without a registered
  * switcher (a screen mounted on its own, a test) a space change is apply-then-reload.
  */
-type SpaceSwitcher = (slug: string, apply: () => void) => void;
+type SpaceSwitcher = (slug: string, apply: () => void, cancel?: () => void) => void;
 let switcher: SpaceSwitcher | null = null;
 /** Register the shell's in-place switcher; returns the unregister. */
 export function handleSpaceSwitch(next: SpaceSwitcher): () => void {
@@ -26,9 +27,9 @@ export function handleSpaceSwitch(next: SpaceSwitcher): () => void {
   return () => { if (switcher === next) switcher = null; };
 }
 
-/** Hand a switch to the registered switcher, or apply it and reload. */
-function switchSpace(slug: string, apply: () => void) {
-  if (switcher) return switcher(slug, apply);
+/** Hand a switch to the registered switcher, or apply it and reload. `cancel` hears a late no. */
+function switchSpace(slug: string, apply: () => void, cancel?: () => void) {
+  if (switcher) return switcher(slug, apply, cancel);
   apply();
   window.location.reload();
 }
@@ -48,13 +49,16 @@ function selectInUrl(slug: string, target?: { key: 'folder' | 'file'; id: string
   url.searchParams.set('site', slug);
   if (target) url.searchParams.set(target.key, target.id);
   // A move Back should undo; the same address is only a re-open of what is on screen.
-  if (url.href !== window.location.href) window.history.pushState(null, '', url);
+  if (url.href !== window.location.href) window.history.pushState({ index: nextIndex() }, '', url);
 }
 
-/** Follow Back or Forward into another space: the URL already holds the destination. */
-export function followSpace(slug: string) {
+/**
+ * Follow Back or Forward into another space: the URL already holds the destination.
+ * `cancel` runs if the switch is declined after this returns, while the new space loads.
+ */
+export function followSpace(slug: string, cancel: () => void) {
   if (!confirmNavigation()) return false;
-  switchSpace(slug, () => { selectSite(slug); });
+  switchSpace(slug, () => { selectSite(slug); }, cancel);
   return true;
 }
 
