@@ -16,6 +16,13 @@
 
 /** Where the web app looks up a company's API endpoint (`/v1/Address/<companyCode>`). */
 export const A3DOC_ADDRESS_PROVIDER = "https://a3asesordoc-serviceaddressprovider.a3software.com";
+
+/**
+ * The device the browser build signs in as, verbatim: platform 13 and type 0 for a browser, and the
+ * fixed `deviceId` every browser sends. a3doc refused the connector's own id with errorCode 3
+ * ("Error en los parámetros indicados en la llamada.").
+ */
+export const A3DOC_WEB_DEVICE = { devicePlatform: 13, deviceType: 0, deviceId: "123456789123456789123456789" } as const;
 /** The id of the root container ("Todos"). */
 export const A3DOC_ROOT_CONTAINER = 1;
 /** `errorCode` a3doc answers with when the session token is unknown or expired. */
@@ -161,10 +168,9 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
 
   async function signIn(): Promise<string> {
     const base = await resolveApiBase();
-    // devicePlatform 13 / deviceType 0 is what the browser build sends.
     const body = await post<Envelope & { token?: string }>(
       `${base}/signIn`,
-      { devicePlatform: 13, deviceType: 0, tenant: companyCode, user, password, deviceId: "canopy-a3docs-connector" },
+      { ...A3DOC_WEB_DEVICE, tenant: companyCode, user, password },
       "signIn",
     );
     if (!body.token) throw new A3docError(body.errorCode ?? 0, "signIn", body.errorMessage);

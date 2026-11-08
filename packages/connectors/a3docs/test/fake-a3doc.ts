@@ -106,6 +106,10 @@ export class FakeA3doc {
 
   private handle(method: string, body: Record<string, unknown>): unknown {
     if (method === 'signIn') {
+      // Real a3doc answers a device it does not accept before it looks at the login.
+      if (body.devicePlatform !== 13 || body.deviceType !== 0 || body.deviceId !== '123456789123456789123456789') {
+        return { errorCode: 3, errorMessage: 'Error en los parámetros indicados en la llamada.' };
+      }
       if (body.tenant !== COMPANY || body.user !== USER || body.password !== PASSWORD) {
         return { errorCode: 1, errorMessage: 'Usuario o contraseña incorrectos.' };
       }

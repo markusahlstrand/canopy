@@ -36,7 +36,9 @@ it('opens a renamed file in its containing folder without resolving legacy links
 it.each([401, 403, 404])('reports a generic unavailable file without exposing metadata (%s)', async status => {
   history.replaceState(null, '', '/?file=stable'); mockFiles(status); render(<DriveScreen {...shell} />);
   await screen.findByText('This file is unavailable or you do not have access.');
-  expect(screen.queryByText('Renamed.zip')).toBeNull(); expect(location.search).toBe('');
+  expect(screen.queryByText('Renamed.zip')).toBeNull();
+  // The address bar follows once the link stops pending, a beat after the message renders.
+  await waitFor(() => expect(location.search).toBe(''));
 });
 it('retires an unresolved link when the screen unmounts', async () => {
   let finish!: (response: Response) => void;

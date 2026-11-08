@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createA3docClient, A3docError, bytesToBase64, base64ToBytes, canUploadAs, isAmbiguousA3Date, parseA3Date } from '../src/client.js';
+import { createA3docClient, A3docError, A3DOC_WEB_DEVICE, bytesToBase64, base64ToBytes, canUploadAs, isAmbiguousA3Date, parseA3Date } from '../src/client.js';
 
 describe('parseA3Date', () => {
   it('reads Spanish wall-clock time in Europe/Madrid across the DST change', () => {
@@ -36,6 +36,17 @@ it('treats the roles the web app hides its upload page from as read-only', () =>
   expect(canUploadAs(5)).toBe(true);
 });
 
+it('signs in with exactly the fields the a3doc web app sends', async () => {
+  const sent: unknown[] = [];
+  const client = createA3docClient({
+    credentials: { companyCode: 'company', user: 'user', password: 'password' },
+    apiBase: 'https://a3.example/v1',
+    fetch: async (_url, init) => { sent.push(JSON.parse(String(init?.body))); return { status: 200, text: async () => '{"errorCode":0,"token":"session"}' }; },
+  });
+  await client.signIn();
+  expect(sent).toEqual([{ devicePlatform: 13, deviceType: 0, deviceId: '123456789123456789123456789', tenant: 'company', user: 'user', password: 'password' }]);
+  expect(A3DOC_WEB_DEVICE.deviceId).toMatch(/^\d{27}$/);
+});
 
 describe('response validation', () => {
   const invalid = [
