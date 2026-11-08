@@ -118,6 +118,47 @@ it('keeps the created space when a3doc refuses the login, and offers to open it'
   fireEvent.click(screen.getByRole('button', { name: 'Open the space' }));
   expect(created).toHaveBeenCalledExactlyOnceWith('books-1');
 });
+it('reports a refused login outside the scrolling form, and retries it with a corrected one', async () => {
+  const created = vi.fn(); let refusals = 1;
+  const fetcher = a3docWorld(() => refusals-- > 0 ? new Response(JSON.stringify({ detail: 'a3doc refused the login' }), { status: 400 }) : new Response(JSON.stringify({ provider: 'canopy.a3doc' })));
+  render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={created} />);
+  await fillA3doc();
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain('a3doc refused the login');
+  expect(alert.closest('form')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'right' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  await waitFor(() => expect(created).toHaveBeenCalledExactlyOnceWith('books-1'));
+  const puts = fetcher.mock.calls.filter(call => call[0] === '/api/source');
+  expect(puts).toHaveLength(2);
+  expect((puts[1]![1]!.headers as Record<string, string>)['x-site']).toBe('books-1');
+  expect(JSON.parse(puts[1]![1]!.body as string).password).toBe('right');
+  expect(fetcher.mock.calls.filter(call => call[0] === '/api/sites' && call[1]?.method === 'POST')).toHaveLength(1);
+});
+it('retries from the keyboard without requesting a second space', async () => {
+  let refusals = 1;
+  const fetcher = a3docWorld(() => refusals-- > 0 ? new Response(JSON.stringify({ detail: 'nope' }), { status: 400 }) : new Response(JSON.stringify({ provider: 'canopy.a3doc' })));
+  const created = vi.fn();
+  render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={created} />);
+  await fillA3doc();
+  await screen.findByRole('alert');
+  fireEvent.submit(screen.getByLabelText('Password').closest('form')!);
+  await waitFor(() => expect(created).toHaveBeenCalledOnce());
+  expect(fetcher.mock.calls.filter(call => call[0] === '/api/sites' && call[1]?.method === 'POST')).toHaveLength(1);
+});
+it('stays open while a login waits for the space, since closing would lose it', async () => {
+  const closed = vi.fn();
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => init?.method === 'POST'
+    ? new Response(JSON.stringify({ id: 'r', name: 'Books', slug: 'books-1' }))
+    : new Response(JSON.stringify({ requests: url === '/api/site-requests' && fetcher.mock.calls.some(call => call[1]?.method === 'POST') ? [{ id: 'r', name: 'Books', slug: 'books-1', status: 'pending', error: null, requestedAt: new Date().toISOString() }] : [] })));
+  vi.stubGlobal('fetch', fetcher);
+  render(<CreateSpaceDialog open onOpenChange={closed} onCreated={() => {}} />);
+  await fillA3doc();
+  await screen.findByText(/a3doc connects once it is ready/);
+  for (const close of screen.getAllByRole('button', { name: 'Close' })) fireEvent.click(close);
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+  expect(closed).not.toHaveBeenCalled();
+});
 it('handles a finished request once when overlapping polls both report it done', async () => {
   const created = vi.fn(); let posted = false, held: (() => void)[] = [], finishConnect = () => {};
   const realInterval = globalThis.setInterval;

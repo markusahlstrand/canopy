@@ -7,7 +7,7 @@ import { SourceSettings } from './source-settings';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;onOpenChange:(open:boolean)=>void;onSaved:()=>void}) {
   const [settings,setSettings] = useState<SpaceSettings>(defaultSpaceSettings(''));
-  const [initial,setInitial] = useState(''), [busy,setBusy] = useState(false), [loaded,setLoaded] = useState(false), [error,setError] = useState<string|null>(null), [retry,setRetry] = useState(0);
+  const [initial,setInitial] = useState(''), [busy,setBusy] = useState(false), [loaded,setLoaded] = useState(false), [error,setError] = useState<string|null>(null), [retry,setRetry] = useState(0), [sourceDraft,setSourceDraft] = useState(false);
   useUnsavedDraft(open && loaded && JSON.stringify(settings) !== initial);
   const generation = useRef(0);
   useEffect(() => {
@@ -56,7 +56,7 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
       <DialogHeader className="px-5 pt-5"><DialogTitle>Space settings</DialogTitle><DialogDescription>Choose how this space appears to its members.</DialogDescription></DialogHeader>
       <div className="min-h-0 overflow-y-auto px-5 py-4">
         {error ? <p role="alert" className="mb-3 text-sm text-destructive">{error}{!loaded ? <Button variant="outline" size="sm" onClick={()=>setRetry(value=>value+1)}>Retry settings</Button>:null}</p>:null}
-        {!loaded ? <p role="status" className="text-sm text-muted-foreground">Loading settings…</p> : <form id="space-settings-form" className="space-y-5" onSubmit={event=>{event.preventDefault();if(!busy)void save();}}>
+        {!loaded ? <p role="status" className="text-sm text-muted-foreground">Loading settings…</p> : <form id="space-settings-form" className="space-y-5" onSubmit={event=>{event.preventDefault();if(!busy&&!sourceDraft)void save();}}>
           <section className="space-y-2"><label htmlFor="settings-space-name" className="text-xs font-medium text-muted-foreground">Space name</label>
             <Input id="settings-space-name" value={settings.name} maxLength={100} disabled={busy} onChange={event=>setSettings({...settings,name:event.target.value})}/>
             <SpaceStyleFields icon={settings.icon} color={settings.color} disabled={busy} onIcon={icon=>setSettings({...settings,icon:icon as SpaceSettings['icon']})} onColor={color=>setSettings({...settings,color:color as SpaceSettings['color']})}/>
@@ -71,11 +71,11 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
               <span><span className="block text-sm font-medium">Label new uploads automatically</span><span className="block text-xs text-muted-foreground">An AI model reads the text of each uploaded document and adds a type label and a short description. Labels and descriptions people wrote are kept.</span></span>
             </label>
           </section>
-          <SourceSettings disabled={busy} onChanged={onSaved}/>
+          <SourceSettings disabled={busy} onChanged={onSaved} onDraftChange={setSourceDraft}/>
           {currentSite() ? <DeleteSpace name={JSON.parse(initial || '{}').name ?? ''} disabled={busy} onDelete={() => void remove()}/> : null}
         </form>}
       </div>
-      <DialogFooter className="border-t px-5 py-3"><Button type="button" variant="ghost" disabled={busy} onClick={() => {if(confirmDiscardDrafts())onOpenChange(false);}}>Cancel</Button><Button type="submit" form="space-settings-form" disabled={!loaded || busy || !settings.name.trim()}>{busy?'Saving…':'Save space'}</Button></DialogFooter>
+      <DialogFooter className="border-t px-5 py-3">{sourceDraft?<p role="status" className="mr-auto self-center text-xs text-muted-foreground">Connect or cancel the a3doc login first.</p>:null}<Button type="button" variant="ghost" disabled={busy} onClick={() => {if(confirmDiscardDrafts())onOpenChange(false);}}>Cancel</Button><Button type="submit" form="space-settings-form" disabled={!loaded || busy || sourceDraft || !settings.name.trim()}>{busy?'Saving…':'Save space'}</Button></DialogFooter>
     </DialogContent>
   </Dialog>;
 }
