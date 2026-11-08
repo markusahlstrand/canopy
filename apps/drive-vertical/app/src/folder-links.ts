@@ -38,20 +38,48 @@ export function linkedView(): 'drive' | 'trash' | 'shared' {
 }
 
 /**
+ * What one entry of this tab's history restores. Crumb names and the search term stay in
+ * `history.state`, which never leaves the browser; only the IDs reach the URL.
+ */
+export interface DriveEntry {
+  folderId: string;
+  crumbs: { id: string; name: string }[];
+  view: 'drive' | 'trash' | 'search' | 'shared';
+  fileId: string | null;
+  term: string;
+  /** Its position in the tab's history, so a refused Back or Forward can step back to it. */
+  index: number;
+}
+
+/** The position `history.state` records, or null for an entry that does not record one. */
+export function storedIndex(): number | null {
+  const index = (window.history.state as { index?: unknown } | null)?.index;
+  return typeof index === 'number' ? index : null;
+}
+
+/** The position a new entry pushed after the current one takes. */
+export const nextIndex = (): number => (storedIndex() ?? 0) + 1;
+
+/**
  * Keep the address bar on what the screen shows, so it can be sent as a link.
  *
  * The same stable IDs as the copy-link buttons, so no folder or file name reaches the URL.
  * The space is always named: without it a link opens in the reader's own selected space.
- * Anything else in the URL is not ours to rewrite.
+ * Anything else in the URL is not ours to rewrite. `push` is for a move Back should undo;
+ * tidying the current address replaces it, so Back has no stop that shows the same screen.
  */
-export function showInUrl({ site, folderId, fileId, view }: { site: string | null; folderId: string; fileId: string | null; view: string }) {
+export function showInUrl(site: string | null, shown: Omit<DriveEntry, 'index'>, push: boolean): DriveEntry {
+  const entry: DriveEntry = { ...shown, index: push ? nextIndex() : storedIndex() ?? 0 };
+  const { folderId, fileId, view } = entry;
   const url = new URL(window.location.href);
   for (const key of ['path', 'folder', 'file', 'view']) url.searchParams.delete(key);
   if (site) url.searchParams.set('site', site);
   if (view === 'trash' || view === 'shared') url.searchParams.set('view', view);
   if (fileId) url.searchParams.set('file', fileId);
   else if (folderId !== ROOT_FOLDER_ID && view !== 'trash' && view !== 'shared') url.searchParams.set('folder', folderId);
-  if (url.href !== window.location.href) window.history.replaceState(null, '', url);
+  if (push) window.history.pushState(entry, '', url);
+  else window.history.replaceState(entry, '', url);
+  return entry;
 }
 
 /** Login returns only navigation parameters, never invite/claim credentials. */

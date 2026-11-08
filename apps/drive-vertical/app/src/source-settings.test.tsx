@@ -95,7 +95,8 @@ it('reports a login being typed, and that it ended once connected', async () => 
   expect(draft).toHaveBeenLastCalledWith(true);
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
   await screen.findByText('a3doc · ACME');
-  expect(draft).toHaveBeenLastCalledWith(false);
+  // The draft flag is reported from an effect, which can land a beat after the connected line renders.
+  await waitFor(() => expect(draft).toHaveBeenLastCalledWith(false));
 });
 
 it('counts any typed login field as a draft, but not a prefilled Connect again form', async () => {
