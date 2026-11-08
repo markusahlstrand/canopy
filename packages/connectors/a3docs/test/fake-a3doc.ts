@@ -30,6 +30,8 @@ interface FakeDoc {
 
 export class FakeA3doc {
   role = 5;
+  /** `mfaStatus` LoginMfaBegin answers: 0 none, 1 optional, 2 mandatory. */
+  mfa = 0;
   private token: string | null = null;
   private code = 1000;
   private clock = Date.UTC(2026, 9, 1, 8, 0, 0);
@@ -105,14 +107,19 @@ export class FakeA3doc {
   }
 
   private handle(method: string, body: Record<string, unknown>): unknown {
-    if (method === 'signIn') {
-      // Real a3doc answers a device it does not accept before it looks at the login.
-      if (body.devicePlatform !== 13 || body.deviceType !== 0 || body.deviceId !== '123456789123456789123456789') {
-        return { errorCode: 3, errorMessage: 'Error en los parámetros indicados en la llamada.' };
-      }
+    const refused = { errorCode: 3, errorMessage: 'Error en los parámetros indicados en la llamada.' };
+    // Real a3doc answers a plain login on signIn (the web app's silent refresh) with errorCode 3.
+    if (method === 'signIn') return refused;
+    if (method === 'LoginMfaBegin' || method === 'LoginMfaComplete') {
+      if (body.devicePlatform !== 13 || body.deviceType !== 0 || body.deviceId !== '123456789123456789123456789') return refused;
       if (body.tenant !== COMPANY || body.user !== USER || body.password !== PASSWORD) {
-        return { errorCode: 1, errorMessage: 'Usuario o contraseña incorrectos.' };
+        return { errorCode: 4, errorMessage: 'Login incorrecto.' };
       }
+      if (method === 'LoginMfaBegin') {
+        if (typeof body.successRedirectUrl !== 'string' || typeof body.errorRedirectUrl !== 'string') return refused;
+        return { errorCode: 0, mfaStatus: this.mfa, MfaUiUrl: this.mfa ? 'https://mfa.a3.example/challenge' : '' };
+      }
+      if (body.mfaCompletionId !== '' || body.mfaStatus !== this.mfa || this.mfa === 2) return refused;
       this.token = `tok-${this.calls.length}`;
       return { errorCode: 0, token: this.token };
     }

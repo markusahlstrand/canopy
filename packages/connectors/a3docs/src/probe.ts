@@ -26,7 +26,7 @@ export async function probeA3docConnection(host: ScopeHost, connection: Connecti
 }
 
 /**
- * Sign in, then read who that is. A refusal from a3doc (an `errorCode` on `signIn`) is a definite
+ * Sign in, then read who that is. A refusal from a3doc (an `errorCode` while signing in) is a definite
  * answer about the credential; anything else (a timeout, a page that is not a3doc's JSON) is the
  * probe not being able to tell, which must never block a connect.
  */
@@ -34,8 +34,8 @@ async function probeWith(client: A3docClient, companyCode: string): Promise<Conn
   try {
     await client.signIn();
   } catch (e) {
-    // An A3docError is a3doc answering: the address provider knows no such company, or signIn
-    // refused the user and password. Anything else is the network, and says nothing either way.
+    // An A3docError is a3doc answering: the address provider knows no such company, or sign-in
+    // refused the user and password, or wants MFA. Anything else is the network, and says nothing either way.
     return probeOf({ ok: false, refused: e instanceof A3docError, error: messageOf(e) });
   }
   try {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createA3docClient, A3docError, A3DOC_WEB_DEVICE, bytesToBase64, base64ToBytes, canUploadAs, isAmbiguousA3Date, parseA3Date } from '../src/client.js';
+import { createA3docClient, A3docError, A3docMfaRequiredError, A3DOC_MFA_REDIRECTS, bytesToBase64, base64ToBytes, canUploadAs, isAmbiguousA3Date, parseA3Date } from '../src/client.js';
 
 describe('parseA3Date', () => {
   it('reads Spanish wall-clock time in Europe/Madrid across the DST change', () => {
@@ -36,16 +36,49 @@ it('treats the roles the web app hides its upload page from as read-only', () =>
   expect(canUploadAs(5)).toBe(true);
 });
 
-it('signs in with exactly the fields the a3doc web app sends', async () => {
-  const sent: unknown[] = [];
-  const client = createA3docClient({
-    credentials: { companyCode: 'company', user: 'user', password: 'password' },
-    apiBase: 'https://a3.example/v1',
-    fetch: async (_url, init) => { sent.push(JSON.parse(String(init?.body))); return { status: 200, text: async () => '{"errorCode":0,"token":"session"}' }; },
+describe('signing in as the web app login form does', () => {
+  const signInWith = (begin: unknown) => {
+    const sent: { url: string; body: Record<string, unknown> }[] = [];
+    const client = createA3docClient({
+      credentials: { companyCode: 'company', user: 'user', password: 'password' },
+      apiBase: 'https://a3.example/v1',
+      fetch: async (url, init) => {
+        sent.push({ url, body: JSON.parse(String(init?.body)) });
+        const answer = url.endsWith('/LoginMfaBegin') ? begin : { errorCode: 0, token: 'session' };
+        return { status: 200, text: async () => JSON.stringify(answer) };
+      },
+    });
+    return { client, sent };
+  };
+  const login = { devicePlatform: 13, deviceType: 0, deviceId: '123456789123456789123456789', tenant: 'company', user: 'user', password: 'password' };
+
+  it('begins, then completes with an empty completion id when a3doc asks for no MFA', async () => {
+    const { client, sent } = signInWith({ errorCode: 0, mfaStatus: 0, MfaUiUrl: '' });
+    await client.signIn();
+    expect(sent).toEqual([
+      { url: 'https://a3.example/v1/LoginMfaBegin', body: { ...login, ...A3DOC_MFA_REDIRECTS } },
+      { url: 'https://a3.example/v1/LoginMfaComplete', body: { ...login, mfaCompletionId: '', mfaStatus: 0 } },
+    ]);
+    expect(sent.some(({ url }) => url.endsWith('/signIn'))).toBe(false);
   });
-  await client.signIn();
-  expect(sent).toEqual([{ devicePlatform: 13, deviceType: 0, deviceId: '123456789123456789123456789', tenant: 'company', user: 'user', password: 'password' }]);
-  expect(A3DOC_WEB_DEVICE.deviceId).toMatch(/^\d{27}$/);
+
+  it('skips optional MFA, as the form\'s skip button does, reading either casing of the status', async () => {
+    const { client, sent } = signInWith({ errorCode: 0, MfaStatus: 1, MfaUiUrl: 'https://mfa.example' });
+    await client.signIn();
+    expect(sent[1]!.body).toMatchObject({ mfaCompletionId: '', mfaStatus: 1 });
+  });
+
+  it.each([{ mfaStatus: 2, MfaUiUrl: 'https://mfa.example' }, {}])('says so when a3doc demands MFA or will not say: %j', async (begin) => {
+    const { client, sent } = signInWith({ errorCode: 0, ...begin });
+    await expect(client.signIn()).rejects.toBeInstanceOf(A3docMfaRequiredError);
+    await expect(client.signIn()).rejects.toThrow('requires this user to confirm sign-in with MFA');
+    expect(sent.every(({ url }) => url.endsWith('/LoginMfaBegin'))).toBe(true);
+  });
+
+  it('reports a refused login in a3doc\'s words', async () => {
+    const { client } = signInWith({ errorCode: 4, errorMessage: 'Login incorrecto.' });
+    await expect(client.signIn()).rejects.toThrow('a3doc LoginMfaBegin failed: error 4 (Login incorrecto.)');
+  });
 });
 
 describe('response validation', () => {
@@ -58,7 +91,7 @@ describe('response validation', () => {
     { status: 200, body: '<html>gateway</html>', error: 'expected JSON' },
   ];
   it.each(invalid)('rejects $status / $body for sign-in, listings, searches and downloads', async ({ status, body, error }) => {
-    let response = { status: 200, body: '{"errorCode":0,"token":"session"}' };
+    let response = { status: 200, body: '{"errorCode":0,"mfaStatus":0,"token":"session"}' };
     const client = createA3docClient({
       credentials: { companyCode: 'company', user: 'user', password: 'password' },
       apiBase: 'https://a3.example/v1',
@@ -85,7 +118,7 @@ describe('document payload validation', () => {
     credentials: { companyCode: 'company', user: 'user', password: 'password' },
     apiBase: 'https://a3.example/v1',
     fetch: async (url) => ({ status: 200, text: async () => JSON.stringify(
-      url.endsWith('/signIn') ? { errorCode: 0, token: 'session' } : payload,
+      /\/LoginMfa(Begin|Complete)$/.test(url) ? { errorCode: 0, mfaStatus: 0, token: 'session' } : payload,
     ) }),
   });
   it.each([
