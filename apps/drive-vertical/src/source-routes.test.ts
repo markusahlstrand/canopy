@@ -20,6 +20,7 @@ function world(options: { manager?: boolean; prior?: DriveSource | null; refuse?
       case '/internal/connections/upsert': return Response.json({ connectionId: CONNECTION, created: true, granted: [] });
       case '/internal/connections/bind': return Response.json({ connectionId: body.connectionId, scopeId, options: { folder: 'Facturas/2026', containerId: 7, canUpload: true }, boundAt });
       case '/internal/connections/unbind': return Response.json({ connectionId: body.connectionId, scopeId, unbound: true });
+      case '/internal/connections/sync': return Response.json({ bindings: [{ connectionId: CONNECTION, outcome: 'landed', at: boundAt, pending: false }] });
       case '/internal/connections/bindings': return Response.json({ bindings: [{ connectionId: CONNECTION, provider: 'canopy.a3doc', status: 'active', options: {}, boundAt, lastSyncedAt: boundAt, lastError: null }] });
     }
     return new Response(null, { status: 404 });
@@ -48,7 +49,9 @@ it('connects the space to its own connection, bound to its folder, and records w
   const w = world({ manager: true });
   const res = await w.connect();
   expect(res.status).toBe(200);
-  expect(w.calls.map((c) => c.path)).toEqual(['/internal/connections/upsert', '/internal/connections/bind']);
+  // The first sync starts at once, after the source is recorded.
+  expect(w.calls.map((c) => c.path)).toEqual(['/internal/connections/upsert', '/internal/connections/bind', '/internal/connections/sync']);
+  expect(w.calls[2]!.body).toMatchObject({ tenantId, scopeId, provider: 'canopy.a3doc' });
   expect(w.calls[0]!.body).toMatchObject({ tenantId, scopeId, provider: 'canopy.a3doc', owner: 'scope', externalAccountRef: 'ACME', createdBy: 'owner', secret: { companyCode: 'ACME', user: 'ana', password: 'pw' } });
   expect(w.calls[1]!.body).toMatchObject({ connectionId: CONNECTION, options: { folder: 'Facturas/2026' }, boundBy: 'owner' });
   expect(w.source()).toMatchObject({ connectionId: CONNECTION, account: 'ACME', folder: 'Facturas/2026', canUpload: true });
@@ -62,6 +65,7 @@ it('unbinds another account before binding the new one, and disconnects', async 
   await w.connect();
   expect(w.calls.map((c) => [c.path, c.body.connectionId])).toEqual([
     ['/internal/connections/upsert', undefined], ['/internal/connections/unbind', OTHER], ['/internal/connections/bind', CONNECTION],
+    ['/internal/connections/sync', undefined],
   ]);
   expect((await w.app.request('/api/source', { method: 'DELETE' })).status).toBe(204);
   expect(w.calls.at(-1)).toMatchObject({ path: '/internal/connections/unbind', body: { connectionId: CONNECTION, unboundBy: 'owner' } });
@@ -108,4 +112,30 @@ it('records no source when neither the replacement nor the previous account bind
   expect(await res.text()).toContain(`bind connection ${CONNECTION} (500)`);
   expect(w.source()).toBeNull();
   expect(await (await w.app.request('/api/source/status')).json()).toEqual({ source: null, binding: null, report: null });
+});
+
+it('connects even when the first sync cannot be started', async () => {
+  const w = world({ manager: true, refuse: { path: '/internal/connections/sync', status: 503, error: 'busy' } });
+  expect((await w.connect()).status).toBe(200);
+  expect(w.source()).toMatchObject({ connectionId: CONNECTION });
+});
+
+it('syncs now: answers what the poll of this space did, and says when it is too soon', async () => {
+  const sync = (w: ReturnType<typeof world>) => w.app.request('/api/source/sync', { method: 'POST' });
+  const member = world();
+  expect((await sync(member)).status).toBe(403);
+  expect(member.calls).toEqual([]);
+  expect((await sync(world({ manager: true }))).status).toBe(409);
+
+  const prior: DriveSource = { provider: 'canopy.a3doc', connectionId: CONNECTION, account: 'ACME', folder: '', canUpload: false, boundAt: 'then' };
+  const w = world({ manager: true, prior });
+  const res = await sync(w);
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ outcome: 'landed', at: '2026-10-31T10:00:00.000Z', pending: false });
+  expect(w.calls.at(-1)).toMatchObject({ path: '/internal/connections/sync', body: { provider: 'canopy.a3doc' } });
+
+  const soon = world({ manager: true, prior, refuse: { path: '/internal/connections/sync', status: 429, error: 'polled in the last minute' } });
+  const refused = await sync(soon);
+  expect(refused.status).toBe(429);
+  expect(await refused.text()).toContain('less than a minute ago');
 });

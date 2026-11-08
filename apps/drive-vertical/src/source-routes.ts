@@ -3,13 +3,16 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { connectionId as connectionIdSchema, type ScopeId, type TenantId } from '@substrat-run/contracts';
 import type { ScopeStub } from '@substrat-run/kernel';
-import { bindConnection, ConnectionRequestError, listBindings, unbindConnection, upsertConnection, type ConnectionRelayAccess } from '@substrat-run/vertical-host';
+import { bindConnection, ConnectionRequestError, listBindings, syncConnections, unbindConnection, upsertConnection, type ConnectionRelayAccess } from '@substrat-run/vertical-host';
 import { a3docSecret, A3DOC_VERTICAL_PROVIDER } from '@canopy/connector-a3docs';
 
 export interface DriveSource { provider: string; connectionId: string; account: string; folder: string; canUpload: boolean; boundAt: string }
 
 /** What the connector's last full read found; see `A3docSyncReport`. */
 export interface SourceSyncReport { at: string; complete: boolean; total: number; read: number; skipped: number; skippedContainers: number[]; files: number }
+
+/** What one poll of this space's binding did; `pending` means more is left for a later sync. */
+export interface SourceSyncOutcome { outcome: 'landed' | 'unchanged' | 'failed' | 'in-progress'; at: string; pending: boolean; error?: string }
 
 export type SourceRelay = ConnectionRelayAccess & { tenantId: TenantId; scopeId: ScopeId };
 
@@ -68,7 +71,30 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
       folder: typeof bound.options.folder === 'string' ? bound.options.folder : folder,
       canUpload: bound.options.canUpload === true,
     });
+    // The first sync starts now rather than at the platform's next pass, without holding up the
+    // answer: the poll reads and lands a whole batch. Best effort; the scheduled pass is the backstop.
+    background(c, syncConnections({ ...access, provider: A3DOC_VERTICAL_PROVIDER }).catch(() => {}));
     return c.json(source);
+  });
+
+  /** **Sync now**: poll this space's binding at once and say what the poll did. */
+  app.post('/api/source/sync', async (c) => {
+    const { scope, relay } = await resolve(c);
+    const { source } = await scope.invoke<{ principal: string; source: DriveSource | null }>('drive/source-access');
+    if (!source) throw new HTTPException(409, { message: 'This space has no a3doc source to sync.' });
+    let polled: Awaited<ReturnType<typeof syncConnections>>;
+    try {
+      polled = await syncConnections({ ...relay(), provider: A3DOC_VERTICAL_PROVIDER });
+    } catch (error) {
+      if (error instanceof ConnectionRequestError && error.status === 429) {
+        throw new HTTPException(429, { message: 'This space synced less than a minute ago. Try again in a minute.' });
+      }
+      return relayed(() => Promise.reject(error));
+    }
+    const mine = polled.bindings.find((b) => b.connectionId === source.connectionId);
+    if (!mine) throw new HTTPException(409, { message: 'The platform holds no binding for this space’s a3doc source. Connect it again.' });
+    const { connectionId: _, ...outcome } = mine;
+    return c.json(outcome satisfies SourceSyncOutcome);
   });
 
   app.delete('/api/source', async (c) => {
@@ -80,6 +106,15 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
     }
     return c.body(null, 204);
   });
+}
+
+/** Keep work running after the answer where the runtime allows it; elsewhere it simply runs on. */
+function background(c: Context, work: Promise<unknown>) {
+  try {
+    c.executionCtx.waitUntil(work);
+  } catch {
+    // No execution context (Node, tests): the promise still runs, it just isn't awaited.
+  }
 }
 
 /** The relay's refusal in its own words: a credential a3doc rejected or a folder it lacks is the caller's to fix. */

@@ -149,9 +149,53 @@ const read = { at: '2026-11-06T22:00:00.000Z', complete: true, total: 2, read: 2
 
 it('says what a sync found, a current failure first', () => {
   expect(sourceSyncNote(status({ source: null }))).toBeNull();
-  expect(sourceSyncNote(status({ binding: { status: 'active', lastSyncedAt: null, lastError: null } }))?.text).toMatch(/^Not synced yet/);
+  expect(sourceSyncNote(status({ binding: { status: 'active', lastSyncedAt: null, lastError: null } }))?.text).toMatch(/^The first sync is under way/);
   expect(sourceSyncNote(status({ report: { ...read, total: 0, read: 0, files: 0 } }))).toMatchObject({ failed: true, text: expect.stringContaining('a3doc listed no documents') });
   expect(sourceSyncNote(status({ report: { ...read, complete: false, read: 1 } }))).toEqual({ failed: false, text: 'Syncing: read 1 of 2 documents so far.' });
   expect(sourceSyncNote(status({ report: read }))?.text).toContain('2 of 2 documents, 2 here.');
   expect(sourceSyncNote(status({ report: read, binding: { status: 'active', lastSyncedAt: null, lastError: { at: '2026-11-06T22:05:00.000Z', message: 'a3doc refused' } } }))).toMatchObject({ failed: true, text: expect.stringContaining('a3doc refused') });
+});
+
+function syncing(options: { sync?: () => Response; firstSync?: boolean } = {}) {
+  const binding = options.firstSync
+    ? { status: 'active', lastSyncedAt: null, lastError: null }
+    : { status: 'active', lastSyncedAt: '2026-10-31T09:05:00.000Z', lastError: null };
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/source/status')) return Response.json({ source: connected, binding, report: null });
+    if (url.endsWith('/source/sync') && init?.method === 'POST') return options.sync?.() ?? Response.json({ outcome: 'landed', at: '2026-10-31T09:06:00.000Z', pending: true });
+    return new Response(null, { status: 404 });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  return fetcher;
+}
+
+it('syncs now and says what the sync did', async () => {
+  const fetcher = syncing(), changed = vi.fn();
+  render(<SourceSettings disabled={false} onChanged={changed} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
+  expect(await screen.findByText(/^Synced: new or changed documents arrived\. More is left/)).toBeTruthy();
+  expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith('/source/sync') && init?.method === 'POST')).toBe(true);
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it('says why a sync now was refused', async () => {
+  syncing({ sync: () => Response.json({ detail: 'This space synced less than a minute ago. Try again in a minute.' }, { status: 429 }) });
+  render(<SourceSettings disabled={false} onChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('less than a minute ago');
+});
+
+it('follows the first sync until it has finished once', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const fetcher = syncing({ firstSync: true });
+    render(<SourceSettings disabled={false} onChanged={() => {}} />);
+    await screen.findByText('First sync under way.');
+    const reads = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith('/source/status')).length;
+    const before = reads();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitFor(() => expect(reads()).toBe(before + 1));
+  } finally {
+    vi.useRealTimers();
+  }
 });

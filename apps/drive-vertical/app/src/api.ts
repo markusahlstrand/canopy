@@ -825,6 +825,9 @@ export interface SourceLogin { companyCode: string; user: string; password: stri
 /** Connects the current space, or `selectedSite`: the create dialog connects a space it has not switched to yet. */
 export const connectSource = (login: SourceLogin, selectedSite = currentSite()) => call<DriveSource>('/source', { method: 'PUT', body: JSON.stringify(login) }, selectedSite);
 export const disconnectSource = () => call<void>('/source', { method: 'DELETE' });
+export type SourceSyncOutcome = import('../../src/source-routes').SourceSyncOutcome;
+/** **Sync now**: poll the space's a3doc binding at once; the platform allows one a minute. */
+export const syncSource = () => call<SourceSyncOutcome>('/source/sync', { method: 'POST' });
 export interface PluginInstall { id: string; plugin_id: string; principal: string; manifest_json: string; source?: string; source_kind?: string; source_ref?: string; resolved?: string; source_sha256?: string; granted_capabilities?: string; enabled: number; updated_at: string }
 export const listPlugins = () => call<{ plugins: PluginInstall[] }>('/plugins');
 export type PluginProvenance = { kind: 'inline' | 'github' | 'npm' | 'zip' | 'bundled'; ref: string; resolved: string; token?: string };
