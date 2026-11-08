@@ -79,3 +79,11 @@ it('refuses a non-manager before reaching the platform, and passes on what a3doc
   expect(await res.text()).toContain("no a3doc folder at 'Nope'");
   expect(refused.source()).toBeNull();
 });
+
+it('names the relay call and its status when the platform answers something other than a refusal', async () => {
+  const crashed = world({ manager: true, refuse: { path: '/internal/connections/bind', status: 500, error: undefined as unknown as string } });
+  const res = await crashed.connect();
+  expect(res.status).toBe(502);
+  expect(await res.text()).toContain(`the platform refused to bind connection ${CONNECTION} (500): unknown error`);
+  expect(crashed.source()).toBeNull();
+});
