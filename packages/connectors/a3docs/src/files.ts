@@ -593,7 +593,29 @@ async function syncFiles(
   };
 
   // ── folders ──
+  // The tree is the gestoría's category tree, shared by all of its clients: its names can name
+  // another client (a house, a company). So the walk only works out each folder's name and path,
+  // and a folder lands when a document this login can see lands in it (`landFolder`). A folder
+  // that has already landed still follows renames and moves here.
   const folderPath = new Map<number, string>([[binding.containerId, '']]);
+  const planned = new Map<number, { id: string; parentId: number; entry: ItemEntry }>();
+  const upsertFolder = async (id: string, entry: ItemEntry, prior: ItemEntry | undefined) => {
+    await invoke({
+      change: 'upsert',
+      connectionId,
+      itemId: id,
+      kind: 'folder',
+      path: entry.path,
+      name: entry.name,
+      previousPath: prior && prior.path !== entry.path ? prior.path : null,
+      size: null,
+      contentType: null,
+      lastModifiedAt: null,
+      webUrl: null,
+      content: null,
+    });
+    changes++;
+  };
   const walkFolders = async (parentId: number, parentPath: string, nodes: A3Container[] | null | undefined) => {
     const siblings = [...index.values()].filter((e) => e.kind === 'folder' && e.parentId === parentId);
     for (const node of nodes ?? []) {
@@ -603,33 +625,31 @@ async function syncFiles(
       if ((!prior || prior.name !== name) && siblings.some((s) => s.name === name && s !== prior)) name = `${name} (${node.id})`;
       const path = join(parentPath, name);
       folderPath.set(node.id, path);
-      if (!prior || prior.path !== path) {
-        await invoke({
-          change: 'upsert',
-          connectionId,
-          itemId: id,
-          kind: 'folder',
-          path,
-          name,
-          previousPath: prior && prior.path !== path ? prior.path : null,
-          size: null,
-          contentType: null,
-          lastModifiedAt: null,
-          webUrl: null,
-          content: null,
-        });
-        changes++;
-      }
       const entry: ItemEntry = { kind: 'folder', parentId, path, name, source: node.name, attachmentId: null, seenIn: pass.id };
       siblings.push(entry);
-      await put(id, entry);
+      if (prior?.kind === 'folder') {
+        if (prior.path !== path) await upsertFolder(id, entry, prior);
+        await put(id, entry);
+      } else {
+        planned.set(node.id, { id, parentId, entry });
+      }
       await walkFolders(node.id, path, node.children);
     }
   };
   await walkFolders(binding.containerId, '', bound.children);
+  /** Land a folder a document is about to land in, after the folders above it. */
+  const landFolder = async (containerId: number): Promise<void> => {
+    const plan = planned.get(containerId);
+    if (!plan) return;
+    await landFolder(plan.parentId);
+    planned.delete(containerId);
+    await upsertFolder(plan.id, plan.entry, undefined);
+    await put(plan.id, plan.entry);
+  };
 
   // ── documents ──
   const landDoc = async (doc: A3Document, containerId: number) => {
+    await landFolder(containerId);
     const id = `${doc.Id}@${containerId}`;
     const prior = index.get(id);
     const dir = folderPath.get(containerId)!;

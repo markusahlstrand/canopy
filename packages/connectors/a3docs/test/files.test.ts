@@ -174,14 +174,17 @@ describe('bind', () => {
 });
 
 describe('sync', () => {
-  it('lands the folder tree and every document with its bytes, under stable item ids', async () => {
+  it('lands every document with its bytes, and only the folders those documents sit in', async () => {
     const w = await world();
     w.a3.add([11], '303 3T', '%PDF 303');
     w.a3.add([1], 'Escritura', '%PDF deed');
     await w.bind();
     const r = await w.sync();
     expect(r).toMatchObject({ complete: true, full: true });
-    expect(pathsOf(w.mirror())).toEqual(['Escritura.pdf', 'Facturas', 'Facturas/Recibidas', 'Fiscal', 'Fiscal/Modelo 303', 'Fiscal/Modelo 303/303 3T.pdf']);
+    // The tree is the gestoría's, shared by its clients: Facturas holds nothing this login sees.
+    expect(pathsOf(w.mirror())).toEqual(['Escritura.pdf', 'Fiscal', 'Fiscal/Modelo 303', 'Fiscal/Modelo 303/303 3T.pdf']);
+    const folders = w.landed.filter((c) => c.change === 'upsert' && c.kind === 'folder').map((c) => c.change === 'upsert' && c.path);
+    expect(folders).toEqual(['Fiscal', 'Fiscal/Modelo 303']);
     const content = w.landed.filter((c) => c.change === 'content');
     expect(content).toHaveLength(2);
     expect(content.every((c) => c.change === 'content' && c.replaces === null)).toBe(true);
@@ -189,6 +192,20 @@ describe('sync', () => {
     const before = w.landed.length;
     await w.sync();
     expect(w.landed.length).toBe(before);
+  });
+
+  it('lands a folder, and the folders above it, once a document arrives in it', async () => {
+    const w = await world();
+    w.a3.add([1], 'Escritura', '%PDF deed');
+    await w.bind();
+    await w.sync();
+    expect(pathsOf(w.mirror()).filter((p) => p.startsWith('Facturas'))).toEqual([]);
+    w.a3.add([21], 'Factura', 'one');
+    await w.sync();
+    expect(pathsOf(w.mirror()).filter((p) => p.startsWith('Facturas'))).toEqual(['Facturas', 'Facturas/Recibidas', 'Facturas/Recibidas/Factura.pdf']);
+    // Parents first: the drive refuses an item whose parent has not landed.
+    const order = w.landed.filter((c) => c.change === 'upsert' && c.path.startsWith('Facturas')).map((c) => c.change === 'upsert' && c.path);
+    expect(order).toEqual(['Facturas', 'Facturas/Recibidas', 'Facturas/Recibidas/Factura.pdf']);
   });
 
   it('keeps names stable: a clash suffixes the later arrival, and removing a sibling renames nothing', async () => {
@@ -292,7 +309,7 @@ describe('sync', () => {
     const r = await w.sync();
     expect(r.full).toBe(false);
     expect(listCalls() - before).toBe(1);
-    expect(w.mirror().size).toBe(4 /* folders */ + 6);
+    expect(w.mirror().size).toBe(2 /* Facturas, Facturas/Recibidas */ + 6);
   });
 
   it('a file over the cap lands without bytes, and nothing is downloaded for it', async () => {
