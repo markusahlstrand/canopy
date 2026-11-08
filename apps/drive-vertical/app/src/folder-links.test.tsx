@@ -49,5 +49,5 @@ it('cleans up an unavailable link and reports a single unavailable state', async
   vi.stubGlobal('fetch', async (url: string) => new Response(JSON.stringify(url.includes('by-path') ? null : url.endsWith('/access') ? { canManage: false } : [])));
   render(<DriveScreen onError={() => {}} auth={{ user: {} }} onSignIn={() => {}} onSignOut={() => {}} />);
   await screen.findByText('This folder is unavailable or you do not have access.');
-  expect(location.search).toBe('');
+  await waitFor(() => expect(location.search).toBe(''));
 });
