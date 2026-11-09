@@ -616,6 +616,15 @@ async function syncFiles(
     });
     changes++;
   };
+  /** Land a planned folder, after the folders above it: a document is about to land in it, or a landed folder is moving under it. */
+  const landFolder = async (containerId: number): Promise<void> => {
+    const plan = planned.get(containerId);
+    if (!plan) return;
+    await landFolder(plan.parentId);
+    planned.delete(containerId);
+    await upsertFolder(plan.id, plan.entry, undefined);
+    await put(plan.id, plan.entry);
+  };
   const walkFolders = async (parentId: number, parentPath: string, nodes: A3Container[] | null | undefined) => {
     const siblings = [...index.values()].filter((e) => e.kind === 'folder' && e.parentId === parentId);
     for (const node of nodes ?? []) {
@@ -628,7 +637,11 @@ async function syncFiles(
       const entry: ItemEntry = { kind: 'folder', parentId, path, name, source: node.name, attachmentId: null, seenIn: pass.id };
       siblings.push(entry);
       if (prior?.kind === 'folder') {
-        if (prior.path !== path) await upsertFolder(id, entry, prior);
+        if (prior.path !== path) {
+          // The walk visits parents first, so a new parent with nothing in it yet is still planned.
+          await landFolder(parentId);
+          await upsertFolder(id, entry, prior);
+        }
         await put(id, entry);
       } else {
         planned.set(node.id, { id, parentId, entry });
@@ -637,15 +650,6 @@ async function syncFiles(
     }
   };
   await walkFolders(binding.containerId, '', bound.children);
-  /** Land a folder a document is about to land in, after the folders above it. */
-  const landFolder = async (containerId: number): Promise<void> => {
-    const plan = planned.get(containerId);
-    if (!plan) return;
-    await landFolder(plan.parentId);
-    planned.delete(containerId);
-    await upsertFolder(plan.id, plan.entry, undefined);
-    await put(plan.id, plan.entry);
-  };
 
   // ── documents ──
   const landDoc = async (doc: A3Document, containerId: number) => {
