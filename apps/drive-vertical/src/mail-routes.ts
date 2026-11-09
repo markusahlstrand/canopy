@@ -56,8 +56,9 @@ async function relayed<T>(call: () => Promise<T>): Promise<T> {
     if (!(error instanceof MailInAddressError)) throw error;
     // A refusal is the user's to read (a preview cannot have an address, an allowlist too long);
     // anything else, including the platform rejecting this worker's credentials or rate-limiting
-    // it, is the platform's, and says so.
-    if (USER_REFUSALS.includes(error.status)) throw new HTTPException(error.status === 404 ? 404 : 409, { message: error.message.replace(/^.*?\(\d+\): /, '') });
+    // it, is the platform's, and says so. Never a 404: to settings that means this worker has no
+    // mail routes, and it hides the panel, so the platform's own 404 has to stay visible.
+    if (USER_REFUSALS.includes(error.status)) throw new HTTPException(409, { message: error.message.replace(/^.*?\(\d+\): /, '') });
     throw new HTTPException(502, { message: `Could not reach the platform's mail service: ${error.message}` });
   }
 }

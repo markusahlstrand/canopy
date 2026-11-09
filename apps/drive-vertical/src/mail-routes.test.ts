@@ -71,6 +71,12 @@ it("relays the platform's refusal in its own words", async () => {
   expect(await res.text()).toContain('previews cannot have an address');
 });
 
+it("answers a platform 404 as a refusal, since a 404 from this route hides the settings panel", async () => {
+  const res = await world({ manager: true, refuse: 404 }).app.request('/api/mail');
+  expect(res.status).toBe(409);
+  expect(await res.text()).toContain('previews cannot have an address');
+});
+
 it.each([401, 429])("treats a %i from the platform as the platform's failure, not the user's refusal", async (status) => {
   const res = await world({ manager: true, refuse: status }).post({ action: 'request' });
   expect(res.status).toBe(502);

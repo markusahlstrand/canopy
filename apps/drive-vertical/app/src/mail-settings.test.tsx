@@ -9,9 +9,10 @@ const held = (allowlist: string[]) => ({
   stats: { received: 2, delivered: 2, rejected: 1, deadLettered: 0, pending: 0, lastReceivedAt: null, lastRejectReason: null },
 });
 
-function platform(options: { status?: number; connected?: boolean } = {}) {
+function platform(options: { status?: number; connected?: boolean; meFails?: boolean } = {}) {
   let address: ReturnType<typeof held> | null = null;
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/me') && options.meFails) return Response.json({ detail: 'down' }, { status: 500 });
     if (url.endsWith('/me')) return Response.json({ principal: 'p', user: { email: 'me@example.com' } });
     if (!url.endsWith('/mail')) return new Response(null, { status: 404 });
     if (options.status) return Response.json({ detail: 'no' }, { status: options.status });
@@ -40,6 +41,15 @@ it('gets an address that starts with your own email as the only sender, and turn
   vi.stubGlobal('confirm', vi.fn(() => true));
   fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
   await screen.findByText('No address');
+});
+
+it('says so and opens no sender list when your email cannot be looked up, since an empty list lets anyone send', async () => {
+  const fetcher = platform({ meFails: true });
+  render(<MailSettings disabled={false}/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Get an address' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('Could not look up your email address');
+  expect(screen.queryByLabelText('Who may send')).toBeNull();
+  expect(fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
 });
 
 function holding(allowlist: string[]) {
