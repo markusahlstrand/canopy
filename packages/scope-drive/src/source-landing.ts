@@ -60,7 +60,8 @@ export async function landSourceChange(ctx: OperationContext, change: FileSource
     ctx.sql.exec(`INSERT INTO drive_file_versions (id, file_id, source, blob_ref, mime, size, created_at, created_by)
       VALUES (?, ?, 'blob', ?, ?, ?, ?, ?)`, [id, file.id, change.attachment.id, attachment.content_type, attachment.size, now, ctx.principal]);
     ctx.link(ref('file_version', id), ref('file', file.id));
-    ctx.sql.exec('UPDATE drive_files SET current_version_id = ?, updated_at = ? WHERE id = ?', [id, now, file.id]);
+    // Not `updated_at`: the upsert before this set it to when the source last changed the file.
+    ctx.sql.exec('UPDATE drive_files SET current_version_id = ? WHERE id = ?', [id, file.id]);
     remember(file.id);
     ctx.sql.exec('DELETE FROM drive_source_pending WHERE file_id = ?', [file.id]);
     ctx.emit({ type: 'drive.file-written', schemaVersion: 1, entity: ref('file', file.id), piiClass: 'none', payload: { id: file.id, folder_id: file.folder_id, current_version_id: id } });
@@ -103,15 +104,21 @@ export async function landSourceChange(ctx: OperationContext, change: FileSource
   if (!prior && occupied?.state === 'live' && ctx.sql.query('SELECT file_id FROM drive_source_pending WHERE file_id = ?', [occupied.id]).length) prior = occupied;
   if (occupied && occupied.id !== prior?.id) throw substratError('conflict', 'source file name is occupied');
   const id = prior?.id ?? ulid();
+  // When the source last changed the file, not when it reached this space; without one, now.
+  const sourceTime = Date.parse(change.lastModifiedAt ?? '');
+  const sourceModified = Number.isNaN(sourceTime) ? null : new Date(sourceTime).toISOString();
+  const modified = sourceModified ?? now;
   if (!prior) {
-    ctx.sql.exec("INSERT INTO drive_files (id, folder_id, name, created_at, updated_at, state) VALUES (?, ?, ?, ?, ?, 'live')", [id, parent.id, change.name, now, now]);
+    ctx.sql.exec("INSERT INTO drive_files (id, folder_id, name, created_at, updated_at, state) VALUES (?, ?, ?, ?, ?, 'live')", [id, parent.id, change.name, now, modified]);
     ctx.link(ref('file', id), ref('folder', parent.id));
     ctx.emit({ type: 'drive.file-created', schemaVersion: 1, entity: ref('file', id), piiClass: 'none', payload: { id, folder_id: parent.id } });
   } else if (prior.folder_id !== parent.id || prior.name !== change.name || prior.state !== 'live') {
     if (prior.folder_id !== parent.id) ctx.relink(ref('file', id), ref('folder', prior.folder_id), ref('folder', parent.id));
-    ctx.sql.exec("UPDATE drive_files SET folder_id = ?, name = ?, state = 'live', deleted_at = NULL, updated_at = ? WHERE id = ?", [parent.id, change.name, now, id]);
+    ctx.sql.exec("UPDATE drive_files SET folder_id = ?, name = ?, state = 'live', deleted_at = NULL, updated_at = ? WHERE id = ?", [parent.id, change.name, modified, id]);
     ctx.emit({ type: 'drive.file-renamed', schemaVersion: 1, entity: ref('file', id), piiClass: 'none', payload: { id, folder_id: parent.id, name: change.name } });
   }
+  // New bytes announce themselves in the `content` change, so the date alone needs no event.
+  if (prior && (sourceModified || change.content === 'follows')) ctx.sql.exec('UPDATE drive_files SET updated_at = ? WHERE id = ?', [modified, id]);
   remember(id, change.content === 'too-large' ? 'too-large' : 'ready');
   return { entity: ref('file', id) };
 }

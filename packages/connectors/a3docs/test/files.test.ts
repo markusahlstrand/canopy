@@ -241,6 +241,24 @@ describe('sync', () => {
     expect(after.slice(0, 3)).toEqual(['Fiscal', 'Fiscal/Modelo 303', 'Fiscal/Modelo 303/Recibidas']);
   });
 
+  it('re-sends a file landed before dates were kept, once, on the next full pass, without its bytes', async () => {
+    const w = await world();
+    const doc = w.a3.add([21], 'Factura', 'one');
+    await w.bind();
+    await w.sync();
+    for (const row of await w.host.admin.listConnectorState(w.conn, 'a3doc:')) {
+      const value = row.value as { kind?: string; dated?: true } | null;
+      if (value?.kind === 'file') { delete value.dated; await w.host.admin.putConnectorState(w.conn, row.key, value); }
+    }
+    const before = w.landed.length, downloads = () => w.a3.calls.filter((c) => c.method === 'Download').length, fetched = downloads();
+    await w.sync({ now: w.tomorrow() });
+    expect(w.landed.slice(before)).toEqual([expect.objectContaining({ change: 'upsert', itemId: `${doc.Id}@21`, content: 'unchanged', lastModifiedAt: expect.any(String) })]);
+    expect(downloads()).toBe(fetched);
+    const after = w.landed.length;
+    await w.sync({ now: new Date(w.tomorrow().getTime() + 2 * 86_400_000) });
+    expect(w.landed.length).toBe(after);
+  });
+
   it('keeps names stable: a clash suffixes the later arrival, and removing a sibling renames nothing', async () => {
     const w = await world();
     const first = w.a3.add([21], 'Factura', 'one');

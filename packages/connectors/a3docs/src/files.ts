@@ -141,6 +141,8 @@ interface ItemEntry {
   /** The landed content's attachment and its sha256. */
   attachmentId: string | null;
   sha256?: string | null;
+  /** The drive holds a3doc's modified date for it; items landed before it kept dates lack this. */
+  dated?: true;
   /** Held without bytes: over the size cap. */
   tooLarge?: boolean;
   /** `dateModified` names a wall-clock time that happened twice. */
@@ -683,7 +685,7 @@ async function syncFiles(
       bytes = await client.download(doc.Id);
       if (bytes && (await sha256Hex(bytes)) !== prior.sha256) contentChanged = true;
     }
-    if (prior && prior.path === path && !contentChanged && !!prior.tooLarge === tooLarge) {
+    if (prior?.dated && prior.path === path && !contentChanged && !!prior.tooLarge === tooLarge) {
       await put(id, { ...prior, seenIn: pass.id });
       return;
     }
@@ -717,6 +719,7 @@ async function syncFiles(
       attachmentId: prior?.attachmentId ?? null,
       sha256: prior?.sha256 ?? null,
       tooLarge,
+      dated: true,
       ambiguous: isAmbiguousA3Date(doc.DateModified),
       seenIn: pass.id,
     };

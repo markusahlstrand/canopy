@@ -386,6 +386,48 @@ describe('an action refreshes the folder on screen, not the one it started in', 
   });
 });
 
+describe('the all-files view', () => {
+  const toggle = () => screen.getByRole('button', { name: 'All files with categories and labels' });
+
+  it('lists every file below the folder with its category and labels, and goes back', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Fiscal', path: 'Fiscal' }], [file('01T', 'top.txt')]);
+    fireEvent.click(toggle());
+    await flush();
+    expect(toggle().getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Switch to grid' })).toBeNull();
+    await answer('/folders/root/all-files', { next: null, entries: [
+      { ...file('01A', 'modelo.pdf'), folder_path: 'Fiscal/Modelo 303', labels: ['tax', '2024'] },
+      { ...file('01B', 'deed.pdf'), folder_path: '', labels: [] },
+    ] });
+    expect(screen.getByText('modelo.pdf')).toBeTruthy();
+    expect(screen.getAllByText('Fiscal/Modelo 303').length).toBeGreaterThan(0);
+    expect(screen.getByText('tax')).toBeTruthy();
+    expect(screen.getAllByText('Top level').length).toBeGreaterThan(0);
+    expect(screen.getByText('2 items')).toBeTruthy();
+    expect(screen.queryByText('Fiscal')).toBeNull();
+
+    fireEvent.click(toggle());
+    await flush();
+    await answer('/folders/root/folders', [{ id: '01F', parent_id: 'root', name: 'Fiscal', path: 'Fiscal' }]);
+    await answer('/folders/root/files', [file('01T', 'top.txt')]);
+    expect(screen.getByText('top.txt')).toBeTruthy();
+    expect(screen.queryByText('modelo.pdf')).toBeNull();
+  });
+
+  it('loads further pages after the last id of the one before', async () => {
+    await renderDrive();
+    fireEvent.click(toggle());
+    await flush();
+    await answer('/folders/root/all-files', { next: '01A', entries: [{ ...file('01A', 'first.pdf'), folder_path: 'A', labels: [] }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more files' }));
+    await flush();
+    await answer('/folders/root/all-files?after=01A', { next: null, entries: [{ ...file('01B', 'second.pdf'), folder_path: 'B', labels: [] }] });
+    expect(screen.getByText('first.pdf')).toBeTruthy();
+    expect(screen.getByText('second.pdf')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Load more files' })).toBeNull();
+  });
+});
+
 describe('live refreshes', () => {
   function watch() {
     let notify = () => {};

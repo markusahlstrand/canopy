@@ -1236,6 +1236,29 @@ const operations = {
     return { entries, next: rows.length > limit ? entries.at(-1)!.name : null };
   },
 
+  'drive/list-subtree-files': async (ctx, input) => {
+    // Read on a folder covers everything below it, so one check answers for the whole walk.
+    assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
+    const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [input.folderId])[0];
+    if (!folder) throw substratError('not_found', `folder not found: ${input.folderId}`);
+    const limit = input.limit ?? 500;
+    // `substr`, not LIKE: a folder's name may hold `%` or `_`.
+    const rows = ctx.sql.query<FileRow & { folder_path: string; labels_json: string | null }>(
+      `SELECT f.*, d.path AS folder_path, x.labels_json AS labels_json FROM drive_files f
+         JOIN drive_folders d ON d.id = f.folder_id
+         LEFT JOIN drive_file_details x ON x.file_id = f.id
+        WHERE f.state = 'live' AND f.id > ?
+          AND (? = '' OR d.path = ? OR substr(d.path, 1, length(?) + 1) = ? || '/')
+        ORDER BY f.id LIMIT ?`,
+      [input.after ?? '', folder.path, folder.path, folder.path, folder.path, limit + 1],
+    );
+    const page = rows.slice(0, limit);
+    return {
+      entries: page.map(({ labels_json, ...file }) => ({ ...file, labels: labels_json ? JSON.parse(labels_json) as string[] : [] })),
+      next: rows.length > limit ? page.at(-1)!.id : null,
+    };
+  },
+
   'drive/file-text': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, fileRef(input.fileId)));
     const current = currentText(ctx, input.fileId);
