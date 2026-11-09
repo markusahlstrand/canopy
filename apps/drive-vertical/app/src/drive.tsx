@@ -16,7 +16,7 @@ import { SearchMatchFilter, filterMatches, type MatchFilter } from './search-mat
  * Folders and files are one list, folders first, because that is what a drive looks
  * like — but they are two reads and two entity types underneath, and the actions differ.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
 import { readViewPreferences, saveViewPreferences, watchViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
@@ -28,6 +28,7 @@ import { refreshOfflinePins, syncOfflineFolderOnce, type FolderSyncProgress } fr
 import { OfflinePreview } from './offline-preview';
 import { watchDriveChanges } from './live-updates';
 import { PreviewPanel, type PreviewMode } from './preview';
+import { PreviewResizeHandle, PREVIEW_WIDTH_VAR, usePreviewWidth } from './preview-resize';
 import { AllFilesTable } from './all-files-table';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
@@ -260,6 +261,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     changePreviewMode(mode);
     try { localStorage.setItem('canopy.previewMode', mode); } catch { /* storage unavailable: keep it for this session */ }
   }, []);
+  const [previewWidth, setPreviewWidth] = usePreviewWidth();
   const previewId = useRef(previewing);
   previewId.current = previewing;
   const previewSaving = useRef(false);
@@ -1032,6 +1034,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const pinSyncing = pinBusy || (currentPin?.status === 'syncing' && !currentPinError);
   const folderActions = view === 'drive' && !offline && !linkPending && !linkListingUnavailable;
   const pageTitle = view === 'trash' ? 'Trash' : view === 'search' ? 'Search' : view === 'shared' ? 'Shared with me' : crumbs.at(-1)?.name ?? rootLabel;
+  const previewCovers = previewMode === 'full' && !(offline && !hasUnsavedDrafts());
   const pageCount = showingAll ? subtreeFiles.length : view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : folders.length + files.length;
   const saveCurrentFolderOffline = async () => {
     if (!auth.principal || !cacheSpace || pinBusy) return;
@@ -1444,9 +1447,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </FileDropZone>
 
       {previewing ? (
-        <div className={previewMode === 'full' && !(offline && !hasUnsavedDrafts())
-          ? 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:inset-0 md:z-40'
-          : 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0'}>
+        <div
+          style={{ [PREVIEW_WIDTH_VAR]: `${previewWidth}px` } as CSSProperties}
+          className={previewCovers
+            ? 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:inset-0 md:z-40'
+            : 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:relative md:inset-auto md:z-auto md:w-[var(--preview-w)] md:min-w-80 md:max-w-[calc(100vw-35rem)] md:shrink-0'}>
+          {previewCovers ? null : <PreviewResizeHandle width={previewWidth} onChange={setPreviewWidth} />}
           {offline && !hasUnsavedDrafts() ? cacheSpace && auth.principal && files.find(file => file.id === previewing) ? <OfflinePreview
             file={files.find(file => file.id === previewing)!}
             principal={auth.principal}

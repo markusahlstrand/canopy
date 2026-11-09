@@ -432,7 +432,7 @@ export function PreviewPanel({
   return (
     <aside
       aria-label="Preview"
-      className={cn('flex h-full w-full flex-col bg-background', mode === 'full' ? '' : 'border-l border-border md:w-[28rem]')}
+      className={cn('flex h-full w-full flex-col bg-background', mode === 'full' ? '' : 'border-l border-border')}
     >
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Icon name="file-text" className="size-4 text-muted-foreground" />
