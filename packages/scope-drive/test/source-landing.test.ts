@@ -273,3 +273,49 @@ it('ignores a report from a sweep that finished after the source changed', async
   await w.stub.invoke('drive/source-write-journal', { key: 'a3doc:sync-report', value: report });
   expect(await w.member.invoke('drive/get-source')).not.toHaveProperty('report');
 });
+
+it('dates a landed file by when the source last changed it, through its content and later edits', async () => {
+  const w = await world();
+  const input = { ...w.upsert('doc@1', 'Invoice.txt'), lastModifiedAt: '2024-03-05T10:00:00.000Z' };
+  const { entity } = await w.land(input);
+  const updated = async () => (await w.stub.invoke<{ file: { updated_at: string } }>('drive/get-file', { fileId: entity.entityId })).file.updated_at;
+  expect(await updated()).toBe('2024-03-05T10:00:00.000Z');
+  const attachment = await w.bytes.upload({ entity, filename: input.name, contentType: 'text/plain', visibility: 'internal', body: new TextEncoder().encode('first') });
+  await w.land({ ...input, change: 'content', attachment, replaces: null });
+  expect(await updated()).toBe('2024-03-05T10:00:00.000Z');
+  // A file landed before dates were kept gets its date from a re-send with the content unchanged.
+  await w.land({ ...input, content: 'unchanged', lastModifiedAt: '2024-06-01T08:30:00.000Z' });
+  expect(await updated()).toBe('2024-06-01T08:30:00.000Z');
+  // A date that cannot be read is no date: the landing time, never a stored garbage string.
+  await w.land({ ...input, content: 'follows', lastModifiedAt: 'not a date' });
+  expect(Number.isNaN(Date.parse(await updated()))).toBe(false);
+  expect(await updated()).not.toBe('2024-06-01T08:30:00.000Z');
+});
+
+it('lists every live file at or below a folder, with its folder path and labels', async () => {
+  const w = await world();
+  const a = (await w.land(w.upsert('c1', 'A', 'folder'))).entity.entityId;
+  await w.land(w.upsert('c2', 'A/B', 'folder'));
+  await w.land(w.upsert('c3', 'A%', 'folder'));
+  const top = (await w.land(w.upsert('f0', 'top.txt'))).entity.entityId;
+  const inA = (await w.land(w.upsert('f1', 'A/one.txt'))).entity.entityId;
+  const inB = (await w.land(w.upsert('f2', 'A/B/two.txt'))).entity.entityId;
+  await w.land(w.upsert('f3', 'A%/other.txt'));
+  const gone = w.upsert('f4', 'A/gone.txt');
+  await w.land(gone);
+  await w.land({ connectionId: 'connection', itemId: 'f4', kind: 'file', path: gone.path, name: gone.name, change: 'delete', reason: 'deleted' });
+  await w.human.invoke('drive/update-file-details', { fileId: inB, description: '', labels: ['tax', '2024'], expectedRevision: 0 });
+  type Listing = { entries: { id: string; name: string; folder_path: string; labels: string[] }[]; next: string | null };
+  const list = (folderId: string, more: object = {}) => w.human.invoke<Listing>('drive/list-subtree-files', { folderId, ...more });
+
+  const below = await list(a);
+  expect(below.entries.map((f) => [f.name, f.folder_path, f.labels])).toEqual([['one.txt', 'A', []], ['two.txt', 'A/B', ['tax', '2024']]]);
+  expect(below.next).toBeNull();
+  expect((await list(ROOT_FOLDER_ID)).entries.map((f) => f.id)).toEqual(expect.arrayContaining([top, inA, inB]));
+  expect((await list(ROOT_FOLDER_ID)).entries).toHaveLength(4);
+
+  const first = await list(a, { limit: 1 });
+  expect(first.entries.map((f) => f.id)).toEqual([inA]);
+  expect((await list(a, { after: first.next!, limit: 1 })).entries.map((f) => f.id)).toEqual([inB]);
+  await expect(list('01J00000000000000000000000')).rejects.toThrow();
+});
