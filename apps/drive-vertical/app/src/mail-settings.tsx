@@ -47,8 +47,15 @@ export function MailSettings({ disabled, onDraftChange }: { disabled: boolean; o
   };
   // Forwarding your own mail is the case this is for, so the list starts with your own address.
   const start = async () => {
-    const me = await whoami().catch(() => null);
-    if (alive.current) openEditor(me?.user?.email ?? '');
+    setError(null);
+    let me: Awaited<ReturnType<typeof whoami>>;
+    try { me = await whoami(); }
+    catch {
+      // An empty list means anyone may send, so a failed lookup must not quietly start from one.
+      if (alive.current) setError('Could not look up your email address. Try again.');
+      return;
+    }
+    if (alive.current) openEditor(me.user?.email ?? '');
   };
   const copy = async () => {
     if (!mail?.address) return;
