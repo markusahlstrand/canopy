@@ -68,6 +68,7 @@ it('refuses non-managers, a bad allowlist and a connected space before reaching 
 it("relays the platform's refusal in its own words", async () => {
   const res = await world({ manager: true, refuse: 422 }).post({ action: 'request' });
   expect(res.status).toBe(409);
+  expect(await res.text()).toContain('previews cannot have an address');
 });
 
 it.each([401, 429])("treats a %i from the platform as the platform's failure, not the user's refusal", async (status) => {
