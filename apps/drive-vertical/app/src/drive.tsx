@@ -28,6 +28,7 @@ import { refreshOfflinePins, syncOfflineFolderOnce, type FolderSyncProgress } fr
 import { OfflinePreview } from './offline-preview';
 import { watchDriveChanges } from './live-updates';
 import { PreviewPanel } from './preview';
+import { AllFilesTable } from './all-files-table';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
 import { SelectionSummary } from './selection-summary';
@@ -70,6 +71,8 @@ import {
   getFolder,
   getFile,
   listFolderPage,
+  listSubtreeFilesPage,
+  type SubtreeFile,
   listFoldersPage,
   appendRows,
   listSharedFolders,
@@ -440,16 +443,22 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const unselect = (ids: string[]) => setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
   const [savedView] = useState(readViewPreferences);
   const [layout, setLayout] = useState<'list' | 'grid'>(savedView.layout);
+  /** The flat view: every file at or below this folder, with its category and labels. */
+  const [allFiles, setAllFiles] = useState(false);
+  const [subtreeFiles, setSubtreeFiles] = useState<SubtreeFile[]>([]);
+  const [subtreeNext, setSubtreeNext] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>(savedView.sort);
   // Only files already loaded in the active listing participate. Match its sort
   // order, and use the same draft boundary as table and palette navigation.
-  const previewFiles = offline ? [] : view === 'drive' ? sorted(files, sort) : view === 'search' ? sorted(visibleHits, sort) : [];
+  const showingAll = allFiles && view === 'drive' && !offline;
+  const driveRows: DriveFile[] = showingAll ? subtreeFiles : files;
+  const previewFiles = offline ? [] : view === 'drive' ? sorted(driveRows, sort) : view === 'search' ? sorted(visibleHits, sort) : [];
   const previewIndex = previewFiles.findIndex(file => file.id === previewing);
-  const listedPreview = previewing ? (view === 'search' ? hits : files).find(file => file.id === previewing) : undefined;
+  const listedPreview = previewing ? (view === 'search' ? hits : driveRows).find(file => file.id === previewing) : undefined;
   const previewNavigation = previewIndex < 0 ? undefined : {
     previous: previewFiles[previewIndex - 1]?.id ?? null,
     next: previewFiles[previewIndex + 1]?.id ?? null,
-    moreAvailable: view === 'drive' && filesNext !== null,
+    moreAvailable: view === 'drive' && (showingAll ? subtreeNext : filesNext) !== null,
     onOpen: (id: string) => { setPreviewing(id); },
   };
   const reads = useRef(latestOnly());
@@ -504,6 +513,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     setLoadingPage(false);
     setFoldersNext(null);
     setFilesNext(null);
+    setSubtreeNext(null);
     setTrashNext(null);
     setLoadFailed(false);
     try {
@@ -526,6 +536,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         if (!reads.current.current(ticket)) return;
         setTrash(bin.entries);
         setTrashNext(bin.next);
+      } else if (allFiles) {
+        const contents = await readLoadedPages(next => listSubtreeFilesPage(folderId, next), listingDepth.current.files, () => reads.current.current(ticket));
+        if (!reads.current.current(ticket)) return;
+        setSubtreeFiles(contents.entries);
+        setSubtreeNext(contents.next);
       } else {
         const depth = { ...listingDepth.current };
         const [subfolders, contents] = await Promise.all([
@@ -580,7 +595,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, term, matchFilter, onError, auth.principal, linkPending]);
+  }, [folderId, view, term, matchFilter, onError, auth.principal, linkPending, allFiles]);
 
   const moreTrash = async () => {
     if (!trashNext || busy || loadingPage || offline) return;
@@ -610,6 +625,24 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       listingDepth.current.files++;
       setFiles(rows => appendRows(rows, page.entries));
       setFilesNext(page.next);
+    } catch (e: unknown) {
+      if (reads.current.current(ticket)) onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (reads.current.current(ticket)) setLoadingPage(false);
+    }
+  };
+
+  const moreSubtree = async () => {
+    if (!subtreeNext || busy || loadingPage || offline) return;
+    const ticket = reads.current.take();
+    setLoadingPage(true);
+    onError(null);
+    try {
+      const page = await listSubtreeFilesPage(folderId, subtreeNext);
+      if (!reads.current.current(ticket)) return;
+      listingDepth.current.files++;
+      setSubtreeFiles(rows => appendRows(rows, page.entries));
+      setSubtreeNext(page.next);
     } catch (e: unknown) {
       if (reads.current.current(ticket)) onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -991,7 +1024,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const pinSyncing = pinBusy || (currentPin?.status === 'syncing' && !currentPinError);
   const folderActions = view === 'drive' && !offline && !linkPending && !linkListingUnavailable;
   const pageTitle = view === 'trash' ? 'Trash' : view === 'search' ? 'Search' : view === 'shared' ? 'Shared with me' : crumbs.at(-1)?.name ?? rootLabel;
-  const pageCount = view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : folders.length + files.length;
+  const pageCount = showingAll ? subtreeFiles.length : view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : folders.length + files.length;
   const saveCurrentFolderOffline = async () => {
     if (!auth.principal || !cacheSpace || pinBusy) return;
     const pin: FolderPin = { principal: auth.principal, space: cacheSpace, folderId,
@@ -1255,7 +1288,24 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           />
         </div>
 
-        <Button
+        {view === 'drive' && !offline ? (
+          <Button
+            variant={showingAll ? 'secondary' : 'outline'}
+            size="sm"
+            aria-pressed={showingAll}
+            aria-label="All files with categories and labels"
+            title="All files with categories and labels"
+            onClick={() => {
+              listingDepth.current = { folder: folderId, files: 1, folders: 1 };
+              setSelection(new Set());
+              setAllFiles(on => !on);
+            }}
+          >
+            <Icon name="tag" className="size-4" />
+          </Button>
+        ) : null}
+
+        {showingAll ? null : <Button
           variant="outline"
           size="sm"
           onClick={() => {
@@ -1266,7 +1316,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           aria-label={layout === 'list' ? 'Switch to grid' : 'Switch to list'}
         >
           <Icon name={layout === 'list' ? 'grid' : 'list'} className="size-4" />
-        </Button>
+        </Button>}
             </div>
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'partial' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</p> : null}
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'error' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</p> : null}
@@ -1327,6 +1377,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           loading={busy}
           empty={empty}
         />
+      ) : showingAll ? (
+        <AllFilesTable
+          files={sorted(subtreeFiles, sort).map((file) => ({ ...fileItem(file), category: file.folder_path, labels: file.labels }))}
+          below={folderId === ROOT_FOLDER_ID ? null : crumbs.at(-1)?.name ?? null}
+          sort={sort}
+          onSort={onSort}
+          onOpen={(id) => setPreviewing(id)}
+          loading={busy}
+        />
       ) : (
         <FileTable
           files={[...sorted(folders, sort).map(folderItem), ...sorted(files, sort).map((file) => fileItem(file))]}
@@ -1357,6 +1416,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       {view === 'trash' && !offline && trashNext ? (
         <Button variant="outline" size="sm" disabled={busy || loadingPage} onClick={() => void moreTrash()}>
           {loadingPage ? 'Loading Trash…' : 'Load more Trash'}
+        </Button>
+      ) : null}
+      {showingAll && subtreeNext ? (
+        <Button variant="outline" size="sm" disabled={busy || loadingPage} onClick={() => void moreSubtree()}>
+          {loadingPage ? 'Loading files…' : 'Load more files'}
         </Button>
       ) : null}
       {view === 'drive' && !offline && filesNext ? (

@@ -664,6 +664,12 @@ export const listTrashPage = (next: string | null = null) => readPage<DriveFile>
 export const listFoldersPage = (folderId: string, next: string | null = null, selectedSite = site) =>
   readPage<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/folders`, next, 'listing', selectedSite);
 
+/** A file in the flat all-files view: where it sits, and its labels. */
+export interface SubtreeFile extends DriveFile { folder_path: string; labels: string[] }
+/** Every live file at or below a folder; `next` is the last id of the page. */
+export const listSubtreeFilesPage = (folderId: string, next: string | null = null) =>
+  call<ListingPage<SubtreeFile>>(`/folders/${encodeURIComponent(folderId)}/all-files${next ? `?after=${encodeURIComponent(next)}` : ''}`);
+
 export interface SharedFolder extends DriveFolder { siteSlug: string; siteName: string; current: boolean }
 export const listSharedFolders = () => call<{ folders: SharedFolder[] }>('/shared-folders');
 

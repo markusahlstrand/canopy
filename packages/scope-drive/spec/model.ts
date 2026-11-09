@@ -840,6 +840,22 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     }),
   },
 
+  /** Every live file at or below a folder, flat, with where it sits and its labels. */
+  'drive/list-subtree-files': {
+    summary: 'Every live file at or below a folder, with its folder path and labels',
+    permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({
+      folderId: z.string(),
+      after: z.string().optional(),
+      limit: z.number().int().min(1).max(500).optional(),
+    }),
+    output: z.object({
+      entries: z.array(driveEntities.file.fields.extend({ folder_path: z.string(), labels: z.array(z.string()) })),
+      next: z.string().nullable(),
+    }),
+    http: { method: 'GET', path: '/folders/{folderId}/all-files' },
+  },
+
   /**
    * What extraction found in a file — or `null`, which is its own answer.
    *
