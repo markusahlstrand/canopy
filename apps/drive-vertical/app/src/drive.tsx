@@ -27,7 +27,7 @@ import { listOfflinePins, offlineSpace, rememberOfflineSpace, removeOfflinePin, 
 import { refreshOfflinePins, syncOfflineFolderOnce, type FolderSyncProgress } from './offline-folder-sync';
 import { OfflinePreview } from './offline-preview';
 import { watchDriveChanges } from './live-updates';
-import { PreviewPanel } from './preview';
+import { PreviewPanel, type PreviewMode } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
 import { SelectionSummary } from './selection-summary';
@@ -249,6 +249,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [creating, setCreating] = useState(false);
   const [creatingFile, setCreatingFile] = useState<PluginCreator | null>(null);
   const [previewing, changePreview] = useState<string | null>(null);
+  // Docked beside the list, or covering the screen; remembered across files and sessions.
+  const [previewMode, changePreviewMode] = useState<PreviewMode>(() => {
+    try { return localStorage.getItem('canopy.previewMode') === 'full' ? 'full' : 'split'; } catch { return 'split'; }
+  });
+  const setPreviewMode = useCallback((mode: PreviewMode) => {
+    changePreviewMode(mode);
+    try { localStorage.setItem('canopy.previewMode', mode); } catch { /* storage unavailable: keep it for this session */ }
+  }, []);
   const previewId = useRef(previewing);
   previewId.current = previewing;
   const previewSaving = useRef(false);
@@ -1372,7 +1380,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </FileDropZone>
 
       {previewing ? (
-        <div className="fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0">
+        <div className={previewMode === 'full' && !(offline && !hasUnsavedDrafts())
+          ? 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:inset-0 md:z-40'
+          : 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0'}>
           {offline && !hasUnsavedDrafts() ? cacheSpace && auth.principal && files.find(file => file.id === previewing) ? <OfflinePreview
             file={files.find(file => file.id === previewing)!}
             principal={auth.principal}
@@ -1386,6 +1396,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             onClose={() => setPreviewing(null)}
             onError={onError}
             onSavingChange={onPreviewSaving}
+            mode={previewMode}
+            onModeChange={setPreviewMode}
           />}
         </div>
       ) : null}
