@@ -7,6 +7,11 @@ export async function signIn(page: Page) {
   await page.getByRole('link', { name: /Local Owner/ }).click();
   await expect(page.getByRole('button', { name: 'Spaces, current: Acceptance Drive' })).toBeVisible();
 }
+/** The account menu sits at the foot of the rail, which a phone keeps in its navigation sheet. */
+export async function openAccountMenu(page: Page) {
+  if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.locator('sub-user-menu').locator('visible=true').getByRole('button').first().click();
+}
 export async function nav(page: Page, name: string) {
   if (page.viewportSize()!.width < 768) {
     await page.getByRole('button', { name: 'Open navigation' }).click();

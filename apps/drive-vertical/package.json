@@ -27,6 +27,7 @@
     "@substrat-run/adapter-cloudflare": "^0.190.0",
     "@substrat-run/attachment-extractors": "0.2.51",
     "@substrat-run/contracts": "^0.190.0",
+    "@substrat-run/elements": "^0.5.0",
     "@substrat-run/kernel": "^0.190.0",
     "@substrat-run/vertical-auth": "^0.32.3",
     "@substrat-run/vertical-host": "^0.190.0",

@@ -32,6 +32,7 @@ import { PreviewResizeHandle, PREVIEW_WIDTH_VAR, usePreviewWidth } from './previ
 import { AllFilesTable } from './all-files-table';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
+import { AccountMenu } from './account-menu';
 import { SelectionSummary } from './selection-summary';
 import { folderPath, linkedFolderId, linkedView, showInUrl, storedIndex, type DriveEntry } from './folder-links';
 import { linkedFileId } from './file-links';
@@ -1086,6 +1087,21 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     />
   );
 
+  // One menu, in the desktop rail and the phone's sheet; the sheet closes before a dialog opens.
+  const accountMenu = (compact: boolean, beforeOpen?: () => void) => {
+    const opening = (open: (value: boolean) => void) => () => { beforeOpen?.(); open(true); };
+    return <AccountMenu
+      auth={auth}
+      compact={compact}
+      offline={offline}
+      onSignIn={onSignIn}
+      onSignOut={onSignOut}
+      onOpenViewers={opening(setViewersOpen)}
+      onOpenAppPasswords={offline ? undefined : opening(setAppPasswordsOpen)}
+      onOpenPeople={canManagePeople && !offline ? opening(setPeopleOpen) : undefined}
+    />;
+  };
+
   return (
     <div className="flex min-h-0 flex-1">
       <div className="hidden md:block">
@@ -1109,6 +1125,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onSpaceSettings={() => setSpaceSettingsOpen(true)}
           onSpaceMembers={() => setPeopleOpen(true)}
           onSpacePlugins={() => setViewersOpen(true)}
+          account={compact => accountMenu(compact)}
           onRetry={siteList.retry}
         />
       </div>
@@ -1137,6 +1154,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             onSpaceSettings={() => { setMobileNavOpen(false); setSpaceSettingsOpen(true); }}
             onSpaceMembers={() => { setMobileNavOpen(false); setPeopleOpen(true); }}
             onSpacePlugins={() => { setMobileNavOpen(false); setViewersOpen(true); }}
+            account={compact => accountMenu(compact, () => setMobileNavOpen(false))}
             onRetry={siteList.retry}
           />
         </SheetContent>
@@ -1154,14 +1172,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onUpload={canUpload ? () => startWrite(() => uploadRef.current?.click()) : undefined}
         onRefresh={() => void refresh(true)}
         syncing={busy}
-        onOpenViewers={() => setViewersOpen(true)}
-        onOpenAppPasswords={offline ? undefined : () => setAppPasswordsOpen(true)}
-        onOpenPeople={canManagePeople && !offline ? () => setPeopleOpen(true) : undefined}
         offline={offline}
         writeBlocked={linkPending || linkListingUnavailable}
-        auth={auth}
-        onSignIn={onSignIn}
-        onSignOut={onSignOut}
       />
 
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}

@@ -5,16 +5,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@canopy/ui";
-import type { Me } from './api';
-
-function initialsOf(s: string): string {
-  const parts = s.split(/[\s@.]+/).filter(Boolean);
-  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "U";
-}
 
 // Keep the first crumb + last two; anything deeper collapses behind a `…` menu so
 // a deep path can't squeeze the search box or wrap the topbar onto a second row.
@@ -51,21 +43,10 @@ interface TopbarProps {
   onOpenCmd: () => void;
   /** Absent where nothing can be uploaded (a read-only a3doc space). */
   onUpload?: () => void;
-  auth: Me;
-  onSignIn: () => void;
-  onSignOut: () => void;
   /** Backend unreachable — the app is view-only, so disable uploads. */
   offline?: boolean;
   /** A deep link has not resolved its destination folder yet. */
   writeBlocked?: boolean;
-  /**
-   * Open the People dialog. Absent for anyone who may not manage the people here —
-   * a menu item that answers 403 is worse than no menu item.
-   */
-  onOpenPeople?: () => void;
-  onOpenViewers?: () => void;
-  /** Open the WebDAV app-password dialog. Absent while offline. */
-  onOpenAppPasswords?: () => void;
   /** Force a re-fetch of the current view (re-syncs the offline mirror + reloads). */
   onRefresh?: () => void;
   /** True while a background sync is in flight — spins the refresh icon. */
@@ -80,29 +61,11 @@ export function Topbar({
   onOpenMenu,
   onOpenCmd,
   onUpload,
-  auth,
-  onSignIn,
-  onSignOut,
   offline,
   writeBlocked,
-  onOpenPeople,
-  onOpenViewers,
-  onOpenAppPasswords,
   onRefresh,
   syncing,
 }: TopbarProps) {
-  const realUser = auth.user;
-  // Logged out whenever there's no real authenticated user. Never fall back to a
-  // fabricated demo persona — that used to render "MC" (Maya Chen) in the avatar
-  // and hide the login button whenever the backend reported auth as unconfigured.
-  const loggedOut = !realUser;
-  const display = realUser
-    ? {
-        name: realUser.name ?? realUser.email ?? "Account",
-        email: realUser.email ?? "",
-        initials: initialsOf(realUser.name ?? realUser.email ?? "U"),
-      }
-    : { name: "Not signed in", email: "", initials: "?" };
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:gap-3 sm:px-4">
       <button
@@ -220,46 +183,6 @@ export function Topbar({
         <Icon name="upload" size={16} />
         <span className="hidden sm:inline">Upload</span>
       </Button> : null}
-
-      {/* Account: square login button when logged out, avatar menu otherwise */}
-      {loggedOut ? (
-        <Button
-          onClick={onSignIn}
-          size="icon"
-          disabled={offline}
-          title={offline ? "You're offline" : undefined}
-          className="gap-1.5 sm:w-auto sm:px-3"
-        >
-          <Icon name="log-out" size={16} className="rotate-180" /> <span className="sr-only sm:not-sr-only">Log in</span>
-        </Button>
-      ) : (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button aria-label="Account menu" className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-[12px] font-semibold text-primary-foreground">
-              {display.initials}
-            </button>
-          </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel>
-            <div className="font-medium">{display.name}</div>
-            {display.email && (
-              <div className="text-[12px] font-normal text-muted-foreground">{display.email}</div>
-            )}
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {onOpenPeople && (
-            <DropdownMenuItem onClick={onOpenPeople}>
-              <Icon name="users" size={15} /> People…
-            </DropdownMenuItem>
-          )}
-          {onOpenViewers ? <DropdownMenuItem onClick={onOpenViewers}>Plugins…</DropdownMenuItem> : null}
-          {onOpenAppPasswords ? <DropdownMenuItem onClick={onOpenAppPasswords}>Connect with WebDAV…</DropdownMenuItem> : null}
-          <DropdownMenuItem onClick={onSignOut}>
-            <Icon name="log-out" size={15} /> Sign out
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-        </DropdownMenu>
-      )}
     </header>
   );
 }

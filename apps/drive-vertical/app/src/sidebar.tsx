@@ -16,11 +16,12 @@
  *     (#57/#58), so there is nothing to probe and no honest colour to show.
  *   - The storage card: it read `STORAGE` out of the portal's mock data. There is no quota
  *     endpoint, and a progress bar over an invented number is worse than no progress bar.
- *   - The user row: the topbar carries the account menu, and one shell needs one of those.
+ *
+ * The account menu closes the rail, in the corner a workspace app keeps it.
  *
  * `New` stays, because both of its items are real operations.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Button,
   CanopyMark,
@@ -111,6 +112,8 @@ interface SidebarProps {
   onSpaceSettings?: () => void;
   onSpaceMembers?: () => void;
   onSpacePlugins?: () => void;
+  /** The account control, told whether the rail is collapsed. */
+  account?: (compact: boolean) => ReactNode;
 }
 
 /**
@@ -224,7 +227,7 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = [], onCreate, offline = false, writeBlocked = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = [], onCreate, offline = false, writeBlocked = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin, account }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [spaceQuery, setSpaceQuery] = useState('');
   const narrow = mobile ? false : collapsed;
@@ -418,6 +421,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = 
             <Icon name="panel-left" size={16} />
           </button>
         )}
+        {account ? <div className={cn('shrink-0 border-t p-2', narrow && 'flex justify-center')}>{account(narrow)}</div> : null}
       </aside>
     </TooltipProvider>
   );
