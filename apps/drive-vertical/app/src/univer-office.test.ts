@@ -1,6 +1,6 @@
 import {expect,it} from 'vitest';
 // @ts-expect-error — the plugin is plain JS, loaded as source by the sandbox in production.
-import {workbookFromSheetJS} from '../../../../examples/plugins/univer-office/index.js';
+import {classify,workbookFromSheetJS} from '../../../../examples/plugins/univer-office/index.js';
 import {pluginCatalog} from './plugin-catalog';
 
 const book=(sheet:Record<string,unknown>,extra:object={})=>workbookFromSheetJS({SheetNames:['Costs'],Sheets:{Costs:sheet},...extra});
@@ -25,6 +25,18 @@ it('carries merges, column widths and hidden sheets',()=>{
  expect(wb.sheets.sheet1.mergeData).toEqual([{startRow:0,endRow:1,startColumn:0,endColumn:3}]);
  expect(wb.sheets.sheet1.columnData).toEqual({0:{w:140}});
  expect(wb.sheets.sheet1.hidden).toBe(1);
+});
+it('moves dates in a 1904 workbook onto the 1900 base, and nothing else',()=>{
+ const sheet={A1:{t:'n',v:40000,z:'yyyy-mm-dd'},B1:{t:'n',v:40000,z:'0.00'},C1:{t:'n',v:40000,z:'[h]:mm'},D1:{t:'n',v:40000,z:'"days" 0'}};
+ const cells=(extra:object)=>book(sheet,extra).sheets.sheet1.cellData[0];
+ expect(cells({Workbook:{WBProps:{date1904:true}}})).toMatchObject({0:{v:41462},1:{v:40000},2:{v:40000},3:{v:40000}});
+ expect(cells({})).toMatchObject({0:{v:40000}});
+});
+it('keeps a .csv editable when the browser reports it as an Excel file',()=>{
+ expect(classify('report.csv','a,b','application/vnd.ms-excel')).toEqual({kind:'sheet-csv',delim:','});
+ expect(classify('report.tsv','a','application/vnd.ms-excel')).toEqual({kind:'sheet-csv',delim:'\t'});
+ expect(classify('report.xlsx','','')).toEqual({kind:'sheet-excel'});
+ expect(classify('report','','application/vnd.ms-excel')).toEqual({kind:'sheet-excel'});
 });
 it('keeps one sheet per Excel sheet, in order',()=>{
  const wb=workbookFromSheetJS({SheetNames:['B','A'],Sheets:{B:{},A:{}}});

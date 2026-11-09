@@ -27,7 +27,7 @@ const UNIVER = "0.25.1";
 const PEERS = [
   "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
   "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
-  "https://unpkg.com/rxjs/dist/bundles/rxjs.umd.min.js",
+  "https://unpkg.com/rxjs@7.8.2/dist/bundles/rxjs.umd.min.js",
 ];
 const PRESETS = `https://unpkg.com/@univerjs/presets@${UNIVER}/lib/umd/index.js`;
 const SHEET = {
@@ -119,10 +119,16 @@ function workbookFromRows(rows, name) {
 }
 
 // ── SheetJS workbook → Univer snapshot ───────────────────────────────────────
+// Workbooks on Excel's 1904 date system count from 1904; Univer's serials count from 1900.
+const DAYS_1900_TO_1904 = 1462;
+function isDateFormat(z) {
+  if (!z || /\[[hms]+\]/i.test(z)) return false; // [h]:mm is a duration, not a point in time
+  return /[ymdhs]/i.test(z.replace(/"[^"]*"|[\\_*].|\[[^\]]*\]/g, ""));
+}
 // Univer's CellValueType: 1 string, 2 number, 3 boolean.
-function univerCell(cell) {
+function univerCell(cell, date1904) {
   const out = {};
-  if (cell.t === "n") Object.assign(out, { v: cell.v, t: 2 });
+  if (cell.t === "n") Object.assign(out, { v: date1904 && isDateFormat(cell.z) ? cell.v + DAYS_1900_TO_1904 : cell.v, t: 2 });
   else if (cell.t === "s" || cell.t === "str") Object.assign(out, { v: cell.v, t: 1 });
   else if (cell.t === "b") Object.assign(out, { v: cell.v ? 1 : 0, t: 3 });
   else if (cell.t === "e") Object.assign(out, { v: cell.w || "#ERROR!", t: 1 });
@@ -139,6 +145,7 @@ function a1(ref) {
   return { row: Number(m[2]) - 1, col: col - 1 };
 }
 export function workbookFromSheetJS(wb) {
+  const date1904 = !!(wb.Workbook && wb.Workbook.WBProps && wb.Workbook.WBProps.date1904);
   const sheets = {};
   const sheetOrder = wb.SheetNames.map((name, index) => {
     const ws = wb.Sheets[name] || {};
@@ -149,7 +156,7 @@ export function workbookFromSheetJS(wb) {
     let lastCol = 0;
     for (const ref of Object.keys(ws)) {
       const at = a1(ref);
-      const cell = at && univerCell(ws[ref]);
+      const cell = at && univerCell(ws[ref], date1904);
       if (!cell) continue;
       (cellData[at.row] = cellData[at.row] || {})[at.col] = cell;
       lastRow = Math.max(lastRow, at.row);
@@ -182,11 +189,12 @@ export function workbookFromSheetJS(wb) {
 // ── decide what this file is ─────────────────────────────────────────────────
 // Returns "sheet-csv" | "sheet-excel" | "sheet" | "doc" | "slide". `snapshot` is the
 // parsed JSON for the snapshot kinds, `delim` the separator for the csv kind.
-function classify(name, text, mime) {
+export function classify(name, text, mime) {
   const ext = (name.split(".").pop() || "").toLowerCase();
+  // Before the MIME check: Windows with Excel installed reports .csv as application/vnd.ms-excel.
+  if (ext === "csv" || ext === "tsv") return { kind: "sheet-csv", delim: ext === "tsv" ? "\t" : "," };
   if (/^(xls|xlsx|xlsm|xlsb|ods)$/.test(ext) || /spreadsheetml|ms-excel|opendocument\.spreadsheet/i.test(mime || ""))
     return { kind: "sheet-excel" };
-  if (ext === "csv" || ext === "tsv") return { kind: "sheet-csv", delim: ext === "tsv" ? "\t" : "," };
   let snapshot = null;
   try {
     snapshot = JSON.parse(text);
