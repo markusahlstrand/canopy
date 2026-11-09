@@ -18,6 +18,7 @@ export const DRIVE_PERM = {
   write: permissionKey.parse('drive:write'),
   manage: permissionKey.parse('drive:manage'),
   landSource: permissionKey.parse('drive:land-source'),
+  receiveMail: permissionKey.parse('drive:receive-mail'),
 } as const;
 
 export const driveManifest = moduleManifest.parse({
@@ -28,6 +29,7 @@ export const driveManifest = moduleManifest.parse({
   ...manifestOperations(driveOperations, {
     permissions: {
       'drive:land-source': 'Land connector files and content in this space',
+      'drive:receive-mail': 'File mail forwarded to this space\'s address',
       'drive:read': 'See a folder and the files in it',
       'drive:write': 'Add files and folders, and supersede a file with a new version',
       'drive:manage': 'Share a folder and delete what is in it',
@@ -61,6 +63,16 @@ export const driveManifest = moduleManifest.parse({
       readPermission: DRIVE_PERM.read,
       writePermission: DRIVE_PERM.write,
     },
+    /**
+     * Mail-in stores every byte of one message on the one entity its `message` change answers: the
+     * message's folder (#357). Only the mail address holds `drive:receive-mail`, so no person can
+     * put bytes on a folder, and reading them needs `drive:read` there, as a file's bytes do.
+     */
+    {
+      entityType: 'folder',
+      readPermission: DRIVE_PERM.read,
+      writePermission: DRIVE_PERM.receiveMail,
+    },
   ],
   // Live frames carry only the changed id. The scope checks drive:read on that
   // exact entity for each subscriber before it sends an invalidation.
@@ -74,6 +86,8 @@ export const driveManifest = moduleManifest.parse({
   connections: [
     { provider: 'canopy.a3doc', operation: 'drive/land-source-change', permission: 'drive:land-source', bind: 'on-request' },
     { provider: 'canopy.s3', operation: 'drive/land-source-change', permission: 'drive:land-source', bind: 'on-request' },
+    // The platform's inbound mail (substrat#2611): an address per space, asked for from settings.
+    { provider: 'mail-in', operation: 'drive/receive-mail', permission: 'drive:receive-mail' },
   ],
   // A vertical may declare only its bare slug (substrat#2388); the key matches `substrat.slug`.
   entitlementKey: 'drive-vertical',
