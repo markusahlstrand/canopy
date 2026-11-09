@@ -3,7 +3,7 @@
   "id": "univer-office",
   "name": "Univer Office",
   "version": "0.1.0",
-  "description": "View and edit spreadsheets and documents with Univer (loaded from a CDN): opens CSV/TSV and Univer .usheet/.udoc/.univer JSON snapshots, saving changes back to the drive. Univer slide snapshots (.uslide) render read-only — slide editing is experimental upstream.",
+  "description": "View and edit spreadsheets and documents with Univer (loaded from a CDN): opens CSV/TSV and Univer .usheet/.udoc/.univer JSON snapshots, saving changes back to the drive, and shows Excel and OpenDocument spreadsheets (.xls, .xlsx, .xlsm, .xlsb, .ods) read-only. Univer slide snapshots (.uslide) render read-only — slide editing is experimental upstream.",
   "icon": "table-2",
   "color": "199 89% 48%",
   "entry": "index.js",
@@ -20,7 +20,17 @@
           ".usheet",
           ".udoc",
           ".uslide",
-          ".univer"
+          ".univer",
+          ".xls",
+          ".xlsx",
+          ".xlsm",
+          ".xlsb",
+          ".ods",
+          "application/vnd.ms-excel",
+          "application/vnd.ms-excel.sheet.macroEnabled.12",
+          "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "application/vnd.oasis.opendocument.spreadsheet"
         ]
       }
     ],

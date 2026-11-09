@@ -1,0 +1,62 @@
+import {expect,it} from 'vitest';
+// @ts-expect-error — the plugin is plain JS, loaded as source by the sandbox in production.
+import {classify,workbookFromSheetJS} from '../../../../examples/plugins/univer-office/index.js';
+import {pluginCatalog} from './plugin-catalog';
+
+const book=(sheet:Record<string,unknown>,extra:object={})=>workbookFromSheetJS({SheetNames:['Costs'],Sheets:{Costs:sheet},...extra});
+
+it('maps each cell type, keeping formulas and number formats',()=>{
+ const {sheets:{sheet1}}=book({
+  '!ref':'A1:E1',
+  A1:{t:'s',v:'Rent'},B1:{t:'n',v:1200,z:'0.00'},C1:{t:'n',v:2400,f:'B1*2'},D1:{t:'b',v:true},E1:{t:'e',v:7,w:'#DIV/0!'},
+ });
+ expect(sheet1.name).toBe('Costs');
+ expect(sheet1.cellData[0]).toEqual({
+  0:{v:'Rent',t:1},1:{v:1200,t:2,s:{n:{pattern:'0.00'}}},2:{v:2400,t:2,f:'=B1*2'},3:{v:1,t:3},4:{v:'#DIV/0!',t:1},
+ });
+});
+it('sizes the grid to the data, so rows past the default grid are not lost',()=>{
+ const {sheets:{sheet1}}=book({AB5000:{t:'n',v:1}});
+ expect(sheet1.cellData[4999][27]).toEqual({v:1,t:2});
+ expect(sheet1).toMatchObject({rowCount:5000,columnCount:28});
+});
+it('carries merges, column widths and hidden sheets',()=>{
+ const wb=book({A1:{t:'s',v:'Title'},'!merges':[{s:{r:0,c:0},e:{r:1,c:3}}],'!cols':[{wpx:140},undefined]},{Workbook:{Sheets:[{Hidden:1}]}});
+ expect(wb.sheets.sheet1.mergeData).toEqual([{startRow:0,endRow:1,startColumn:0,endColumn:3}]);
+ expect(wb.sheets.sheet1.columnData).toEqual({0:{w:140}});
+ expect(wb.sheets.sheet1.hidden).toBe(1);
+});
+it('moves dates in a 1904 workbook onto the 1900 base, and nothing else',()=>{
+ const sheet={A1:{t:'n',v:40000,z:'yyyy-mm-dd'},B1:{t:'n',v:40000,z:'0.00'},C1:{t:'n',v:40000,z:'[h]:mm'},D1:{t:'n',v:40000,z:'"days" 0'}};
+ const cells=(extra:object)=>book(sheet,extra).sheets.sheet1.cellData[0];
+ expect(cells({Workbook:{WBProps:{date1904:true}}})).toMatchObject({0:{v:41462},1:{v:40000},2:{v:40000},3:{v:40000}});
+ expect(cells({})).toMatchObject({0:{v:40000}});
+});
+it('shifts a 1904 value only when its own format section is a date',()=>{
+ const z='0" USD";yyyy-mm-dd';
+ const {sheets:{sheet1}}=book({A1:{t:'n',v:40000,z},B1:{t:'n',v:-40000,z},C1:{t:'n',v:40000,z:'yyyy-mm-dd;@'},D1:{t:'n',v:40000,z:'[<100]0;yyyy-mm-dd'}},{Workbook:{WBProps:{date1904:true}}});
+ expect(sheet1.cellData[0]).toMatchObject({0:{v:40000},1:{v:-38538},2:{v:41462},3:{v:40000}});
+});
+it('refuses a workbook too large for the viewer, and opens one full-height sheet',()=>{
+ const tall=(name:string)=>[name,{A1048576:{t:'n',v:1}}] as const;
+ const many=Array.from({length:3},(_,i)=>tall('S'+i));
+ expect(()=>workbookFromSheetJS({SheetNames:many.map(([n])=>n),Sheets:Object.fromEntries(many)})).toThrow(/too large/);
+ expect(()=>book({A1:{t:'s',v:'x'},'!merges':[{s:{r:0,c:0},e:{r:999,c:9999}}]})).toThrow(/too large/);
+ expect(book({A1048576:{t:'n',v:1}}).sheets.sheet1.rowCount).toBe(1048576);
+});
+it('keeps a .csv editable when the browser reports it as an Excel file',()=>{
+ expect(classify('report.csv','a,b','application/vnd.ms-excel')).toEqual({kind:'sheet-csv',delim:','});
+ expect(classify('report.tsv','a','application/vnd.ms-excel')).toEqual({kind:'sheet-csv',delim:'\t'});
+ expect(classify('report.xlsx','','')).toEqual({kind:'sheet-excel'});
+ expect(classify('report','','application/vnd.ms-excel')).toEqual({kind:'sheet-excel'});
+});
+it('keeps one sheet per Excel sheet, in order',()=>{
+ const wb=workbookFromSheetJS({SheetNames:['B','A'],Sheets:{B:{},A:{}}});
+ expect(wb.sheetOrder).toEqual(['sheet1','sheet2']);
+ expect(wb.sheets.sheet2.name).toBe('A');
+});
+it('is in the catalog with the hosts it loads code from, and matches Excel files',()=>{
+ const entry=pluginCatalog.find(row=>row.manifest.id==='univer-office')!;
+ expect(entry.manifest.capabilities).toContainEqual({kind:'net:fetch',hosts:['unpkg.com','cdn.sheetjs.com']});
+ expect(entry.manifest.contributes!.viewers![0]!.match).toEqual(expect.arrayContaining(['.xls','.xlsx','application/vnd.ms-excel']));
+});

@@ -77,7 +77,7 @@ it('names the install being replaced in the confirmation', async () => {
 });
 it('restores bundled catalog review and source authoring', () => {
   render(<PluginManagement open onOpenChange={() => {}} />);
-  expect(screen.getAllByText(/Listed hosts serve code that runs with the opened file/)).toHaveLength(3);
+  expect(screen.getAllByText(/Listed hosts serve code that runs with the opened file/)).toHaveLength(4);
   fireEvent.click(screen.getByRole('button', { name: 'Editors' }));
   expect(screen.getByRole('button', { name: 'View Markdown source' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: /View PDF/i })).toBeNull();

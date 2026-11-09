@@ -10,14 +10,21 @@ file: a CSV saves back as CSV, and a Univer document saves its JSON snapshot. It
 **Spreadsheet** and **Document** entries in the host's *New* menu. Univer slide snapshots
 (`.uslide`) open read-only, since slide editing is still experimental upstream.
 
+Excel and OpenDocument spreadsheets (`.xls`, `.xlsx`, `.xlsm`, `.xlsb`, `.ods`) open
+**read-only**: SheetJS parses the file and the plugin hands Univer values, formulas, merged
+cells, number formats and column widths. Charts, images, macros and cell styling aren't
+shown. Plugins can only save text back to the file they opened, so these can't be edited
+yet.
+
 ## At a glance
 
 - **Type:** File viewer + editor (sandboxed)
-- **Handles:** `text/csv`, `.csv`, `.tsv`, and Univer snapshots `.usheet`, `.udoc`,
-  `.uslide` (read-only), `.univer`
-- **Capabilities:** `item:read`, `item:write`
+- **Handles:** `text/csv`, `.csv`, `.tsv`, Univer snapshots `.usheet`, `.udoc`,
+  `.uslide` (read-only), `.univer`, and spreadsheets `.xls`, `.xlsx`, `.xlsm`, `.xlsb`,
+  `.ods` (read-only)
+- **Capabilities:** `item:read`, `item:write`, `net:fetch` (`unpkg.com`, `cdn.sheetjs.com`)
 - **Creates:** "Spreadsheet" (`.csv`) and "Document" (`.udoc`)
-- **Availability:** built-in — always available, not in the store
+- **Availability:** install from the drive's plugin catalog
 - **Source:** `examples/plugins/univer-office/`
 
 ## See also
