@@ -158,7 +158,7 @@ function sourceOf(ctx: OperationContext): DriveSource | null {
 }
 
 /** What a provider is called in a refusal. */
-const SOURCE_NAMES: Record<string, string> = { 'canopy.a3doc': 'a3doc', 'canopy.s3': 'S3 bucket' };
+const SOURCE_NAMES: Record<string, string> = { 'canopy.a3doc': 'a3doc', 'canopy.s3': 'S3 bucket', 'canopy.qonto': 'Qonto' };
 const sourceName = (provider: string) => SOURCE_NAMES[provider] ?? provider;
 
 /**
@@ -171,6 +171,7 @@ function refuseInConnected(ctx: OperationContext, what: string): void {
   const source = sourceOf(ctx);
   if (!source) return;
   if (source.provider === 'canopy.a3doc') throw substratError('conflict', `This space mirrors an a3doc folder, and a3doc can't ${what}.`);
+  if (source.provider === 'canopy.qonto') throw substratError('conflict', `This space mirrors a Qonto account, so you can't ${what} here.`);
   throw substratError('conflict', `This space mirrors an ${sourceName(source.provider)} folder, and the drive can't ${what} in it yet.`);
 }
 
@@ -561,7 +562,7 @@ const operations = {
     }
     if (existing) return existing;
     const source = sourceOf(ctx);
-    if (source && !source.canUpload) throw substratError('forbidden', "This space mirrors an a3doc folder, and its a3doc user can't upload.");
+    if (source && !source.canUpload) throw substratError('forbidden', source.provider === 'canopy.qonto' ? "This space mirrors a Qonto account, so nothing can be uploaded here." : "This space mirrors an a3doc folder, and its a3doc user can't upload.");
 
     const now = ctx.now();
     const row: FileRow = {

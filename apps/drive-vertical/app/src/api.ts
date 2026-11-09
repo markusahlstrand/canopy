@@ -828,8 +828,9 @@ export interface SourceSyncReport { at: string; complete: boolean; total: number
 export interface SourceStatus { source: DriveSource | null; binding: { status: string; lastSyncedAt: string | null; lastError: { at: string; message: string } | null } | null; report?: SourceSyncReport | null }
 export const getSourceStatus = () => call<SourceStatus>('/source/status');
 export interface SourceLogin { companyCode: string; user: string; password: string; customerId?: string; folder: string }
+export interface QontoLogin { provider: 'canopy.qonto'; login: string; secretKey: string }
 /** Connects the current space, or `selectedSite`: the create dialog connects a space it has not switched to yet. */
-export const connectSource = (login: SourceLogin, selectedSite = currentSite()) => call<DriveSource>('/source', { method: 'PUT', body: JSON.stringify(login) }, selectedSite);
+export const connectSource = (login: SourceLogin | QontoLogin, selectedSite = currentSite()) => call<DriveSource>('/source', { method: 'PUT', body: JSON.stringify(login) }, selectedSite);
 export const disconnectSource = () => call<void>('/source', { method: 'DELETE' });
 
 /** The space's mail address (#357), as the platform keeps it, beside what this drive has filed. */

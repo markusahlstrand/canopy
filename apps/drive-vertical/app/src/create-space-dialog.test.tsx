@@ -183,3 +183,24 @@ it('handles a finished request once when overlapping polls both report it done',
   await waitFor(() => expect(created).toHaveBeenCalledExactlyOnceWith('books-1'));
   expect(fetcher.mock.calls.filter(call => call[0] === '/api/source')).toHaveLength(1);
 });
+it('starts a space on a Qonto account, connecting it once the space exists', async () => {
+  const created = vi.fn(); let done = false;
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+    if (url === '/api/sites') { done = true; return new Response(JSON.stringify({ id: 'r', name: 'Bank', slug: 'bank-created' })); }
+    if (url.endsWith('/source')) return new Response(JSON.stringify({ provider: 'canopy.qonto' }));
+    return new Response(JSON.stringify({ requests: done ? [{ id: 'r', name: 'Bank', slug: 'bank-created', status: 'done', error: null }] : [] }));
+  });
+  vi.stubGlobal('fetch', fetcher); render(<CreateSpaceDialog open onOpenChange={() => {}} onCreated={created} />);
+  fireEvent.change(screen.getByLabelText('Space name'), { target: { value: 'Bank' } });
+  fireEvent.click(screen.getByRole('radio', { name: /Qonto account/ }));
+  const submit = screen.getByRole('button', { name: 'Create space' }) as HTMLButtonElement;
+  fireEvent.change(screen.getByLabelText('Login'), { target: { value: 'acme-1234' } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(submit.disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText('Secret key'), { target: { value: 'the-key' } });
+  await waitFor(() => expect(submit.disabled).toBe(false));
+  fireEvent.click(submit);
+  await waitFor(() => expect(created).toHaveBeenCalledExactlyOnceWith('bank-created'));
+  const connect = fetcher.mock.calls.find(call => call[1]?.method === 'PUT')!;
+  expect(JSON.parse(connect[1]!.body as string)).toEqual({ provider: 'canopy.qonto', login: 'acme-1234', secretKey: 'the-key' });
+});

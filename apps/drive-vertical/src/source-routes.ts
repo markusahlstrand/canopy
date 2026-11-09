@@ -5,6 +5,7 @@ import { connectionId as connectionIdSchema, type ScopeId, type TenantId } from 
 import type { ScopeStub } from '@substrat-run/kernel';
 import { bindConnection, ConnectionRequestError, listBindings, syncConnections, unbindConnection, upsertConnection, type ConnectionRelayAccess } from '@substrat-run/vertical-host';
 import { a3docSecret, A3DOC_VERTICAL_PROVIDER } from '@canopy/connector-a3docs';
+import { qontoSecret, QONTO_VERTICAL_PROVIDER } from '@canopy/connector-qonto';
 
 export interface DriveSource { provider: string; connectionId: string; account: string; folder: string; canUpload: boolean; boundAt: string }
 
@@ -18,6 +19,19 @@ export type SourceRelay = ConnectionRelayAccess & { tenantId: TenantId; scopeId:
 
 /** The a3doc login and the folder under its root this space mirrors (`''` is the root). */
 const connectInput = a3docSecret.extend({ folder: z.string().trim().max(500) });
+
+/** What to connect, read from the request. A body naming no provider is an a3doc login. */
+function parseConnect(body: unknown) {
+  if ((body as { provider?: unknown } | null)?.provider === QONTO_VERTICAL_PROVIDER) {
+    const input = qontoSecret.safeParse(body);
+    if (!input.success) throw new HTTPException(400, { message: 'Enter the Qonto login and secret key.' });
+    return { provider: QONTO_VERTICAL_PROVIDER, label: `Qonto ${input.data.login}`, account: input.data.login, secret: input.data, folder: '' };
+  }
+  const input = connectInput.safeParse(body);
+  if (!input.success) throw new HTTPException(400, { message: 'Enter the a3doc company code, user and password.' });
+  const { folder, ...secret } = input.data;
+  return { provider: A3DOC_VERTICAL_PROVIDER, label: `a3doc ${secret.companyCode}`, account: secret.companyCode, secret, folder };
+}
 
 /**
  * Connect a space to its own a3doc folder, or disconnect it (#358, substrat#2732).
@@ -40,14 +54,12 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
 
   app.put('/api/source', async (c) => {
     const { scope, relay } = await resolve(c);
-    const input = connectInput.safeParse(await c.req.json().catch(() => null));
-    if (!input.success) throw new HTTPException(400, { message: 'Enter the a3doc company code, user and password.' });
-    const { folder, ...secret } = input.data;
+    const { provider, label, account, secret, folder } = parseConnect(await c.req.json().catch(() => null));
     const { principal, source: prior } = await scope.invoke<{ principal: string; source: DriveSource | null }>('drive/source-access');
     const access = relay();
     const { connectionId } = await relayed(() => upsertConnection({
-      ...access, provider: A3DOC_VERTICAL_PROVIDER, owner: 'scope', label: `a3doc ${secret.companyCode}`,
-      externalAccountRef: secret.companyCode, secret, createdBy: principal,
+      ...access, provider, owner: 'scope', label,
+      externalAccountRef: account, secret, createdBy: principal,
     }));
     // A space mirrors one folder: another account's binding goes before this one is made.
     const replaced = prior && prior.connectionId !== connectionId ? prior : null;
@@ -67,13 +79,13 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
       throw error;
     }
     const source = await scope.invoke<DriveSource>('drive/record-source', {
-      provider: A3DOC_VERTICAL_PROVIDER, connectionId, account: secret.companyCode,
+      provider, connectionId, account,
       folder: typeof bound.options.folder === 'string' ? bound.options.folder : folder,
       canUpload: bound.options.canUpload === true,
     });
     // The first sync starts now rather than at the platform's next pass, without holding up the
     // answer: the poll reads and lands a whole batch. Best effort; the scheduled pass is the backstop.
-    background(c, syncConnections({ ...access, provider: A3DOC_VERTICAL_PROVIDER }).catch(() => {}));
+    background(c, syncConnections({ ...access, provider }).catch(() => {}));
     return c.json(source);
   });
 
@@ -81,10 +93,10 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
   app.post('/api/source/sync', async (c) => {
     const { scope, relay } = await resolve(c);
     const { source } = await scope.invoke<{ principal: string; source: DriveSource | null }>('drive/source-access');
-    if (!source) throw new HTTPException(409, { message: 'This space has no a3doc source to sync.' });
+    if (!source) throw new HTTPException(409, { message: 'This space has no source to sync.' });
     let polled: Awaited<ReturnType<typeof syncConnections>>;
     try {
-      polled = await syncConnections({ ...relay(), provider: A3DOC_VERTICAL_PROVIDER });
+      polled = await syncConnections({ ...relay(), provider: source.provider });
     } catch (error) {
       if (error instanceof ConnectionRequestError && error.status === 429) {
         throw new HTTPException(429, { message: 'This space synced less than a minute ago. Try again in a minute.' });
@@ -92,7 +104,7 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
       return relayed(() => Promise.reject(error));
     }
     const mine = polled.bindings.find((b) => b.connectionId === source.connectionId);
-    if (!mine) throw new HTTPException(409, { message: 'The platform holds no binding for this space’s a3doc source. Connect it again.' });
+    if (!mine) throw new HTTPException(409, { message: 'The platform holds no binding for this space’s source. Connect it again.' });
     const { connectionId: _, ...outcome } = mine;
     return c.json(outcome satisfies SourceSyncOutcome);
   });
@@ -127,6 +139,6 @@ async function relayed<T>(call: () => Promise<T>): Promise<T> {
     // A refusal is the user's to read; anything else keeps which relay call failed and its status,
     // since "unknown error" alone cannot tell a platform crash from an answer that would not parse.
     if (status !== 502) throw new HTTPException(status, { message: error.message.replace(/^.*?\(\d+\): /, '') });
-    throw new HTTPException(502, { message: `Could not reach a3doc through the platform: ${error.message}` });
+    throw new HTTPException(502, { message: `Could not reach the source through the platform: ${error.message}` });
   }
 }
