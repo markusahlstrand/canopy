@@ -65,6 +65,15 @@ export function MailSettings({ disabled, onDraftChange }: { disabled: boolean; o
   };
   const locked = disabled || busy;
   const address = mail?.address;
+  // Replacing or revoking kills an address nobody can get back, so these ask first.
+  const replace = () => {
+    if (address && window.confirm('Replace this address? Mail sent to the old one is refused from now on, so anyone forwarding to it will need the new one.')) void run({ action: 'rotate', allowlist: address.allowlist });
+  };
+  const turnOff = () => {
+    if (window.confirm('Turn off this address? Mail sent to it is refused from now on and anything still on the way is dropped. Mail already filed stays. Getting an address later gives a different one.')) void run({ action: 'revoke' });
+  };
+  // Every action below would drop what's being typed, so they wait for the editor to close.
+  const actionsLocked = locked || allowlist !== null;
   const alert = error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null;
   const editor = allowlist === null ? null : <div role="group" aria-label="Mail senders" className="space-y-2 rounded-lg border px-3 py-2.5"
     onKeyDown={event => { if (event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault(); }}>
@@ -75,8 +84,8 @@ export function MailSettings({ disabled, onDraftChange }: { disabled: boolean; o
     {alert}
     <div className="flex justify-end gap-2">
       <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => { setAllowlist(null); setError(null); }}>Cancel</Button>
-      <Button type="button" size="sm" disabled={locked} onClick={() => void run({ action: address ? 'rotate' : 'request', allowlist: parseAllowlist(allowlist) })}>
-        {busy ? 'Saving…' : address ? 'Save and get a new address' : 'Get an address'}
+      <Button type="button" size="sm" disabled={locked} onClick={() => void run({ action: 'request', allowlist: parseAllowlist(allowlist) })}>
+        {busy ? 'Saving…' : address ? 'Save senders' : 'Get an address'}
       </Button>
     </div>
   </div>;
@@ -94,9 +103,9 @@ export function MailSettings({ disabled, onDraftChange }: { disabled: boolean; o
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => void copy()}>{copied ? 'Copied' : 'Copy address'}</Button>
-          <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => openEditor(address.allowlist.join(', '))}>Change senders</Button>
-          <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => void run({ action: 'rotate', allowlist: address.allowlist })}>New address</Button>
-          <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={() => void run({ action: 'revoke' })}>{busy ? 'Working…' : 'Turn off'}</Button>
+          <Button type="button" variant="outline" size="sm" disabled={actionsLocked} onClick={() => openEditor(address.allowlist.join(', '))}>Change senders</Button>
+          <Button type="button" variant="outline" size="sm" disabled={actionsLocked} onClick={replace}>New address</Button>
+          <Button type="button" variant="ghost" size="sm" disabled={actionsLocked} onClick={turnOff}>{busy ? 'Working…' : 'Turn off'}</Button>
         </div>
         {mail.connected ? <p className="text-xs text-destructive">This space now mirrors a connected source, so mail sent here can't be filed until it is disconnected.</p> : null}
         <p className="text-xs text-muted-foreground">A new address stops the old one at once. Mail already filed stays.</p>

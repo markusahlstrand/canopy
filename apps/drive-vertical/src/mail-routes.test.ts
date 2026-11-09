@@ -69,3 +69,8 @@ it("relays the platform's refusal in its own words", async () => {
   const res = await world({ manager: true, refuse: 422 }).post({ action: 'request' });
   expect(res.status).toBe(409);
 });
+
+it.each([401, 429])("treats a %i from the platform as the platform's failure, not the user's refusal", async (status) => {
+  const res = await world({ manager: true, refuse: status }).post({ action: 'request' });
+  expect(res.status).toBe(502);
+});

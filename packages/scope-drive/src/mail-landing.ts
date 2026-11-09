@@ -28,15 +28,24 @@ const ref = (entityType: string, entityId: string): Ref => ({ entityType, entity
 type Message = { message_id: string; folder_id: string };
 type Folder = { id: string; path: string };
 
+/** Cut to `max`, keeping a short extension and never splitting a character in two. */
+function bounded(name: string, max: number): string {
+  if (name.length <= max) return name;
+  const extension = /\.[a-z0-9]{1,16}$/i.exec(name)?.[0] ?? '';
+  return name.slice(0, max - extension.length).replace(/[\ud800-\udbff]$/, '').trimEnd() + extension;
+}
+
 /** A file or folder name from untrusted text: one segment, printable, bounded. */
 export function mailName(text: string, fallback: string, max = 120): string {
   const cleaned = text
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    // Format characters first: a bidi override makes `invoice\u202Efdp.exe` read as `invoiceexe.pdf`.
+    .replace(/\p{Cf}/gu, '')
+    .replace(/\p{Cc}/gu, ' ')
     .replace(/[/\\]/g, '-')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^\.+$/, '');
-  const name = (cleaned || fallback).slice(0, max).trim();
+  const name = bounded(cleaned || fallback, max).trim();
   return name || fallback;
 }
 
@@ -150,8 +159,8 @@ export async function landMailChange(ctx: OperationContext, input: unknown): Pro
     let name = wanted;
     for (let n = 2; folderAt(ctx, `${mail.path}/${name}`); n++) name = `${wanted} (${n})`;
     const folder = createFolder(ctx, mail.id, mail.path, name);
-    // No sender, subject or body here: those live in the message's own files (message.eml), where
-    // erasure and permissions already reach. This row is only the delivery's identity.
+    // No sender or body here, and the subject only as the folder's name: the rest lives in
+    // message.eml, where erasure and permissions already reach. This row is only the delivery's identity.
     ctx.sql.exec(
       'INSERT INTO drive_mail_messages (message_id, connection_id, folder_id, received_at, attachments) VALUES (?, ?, ?, ?, ?)',
       [change.messageId, change.connectionId, folder.id, change.receivedAt, change.attachments.filter((a) => a.lands).length],

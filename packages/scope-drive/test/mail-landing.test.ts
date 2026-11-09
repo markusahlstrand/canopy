@@ -141,3 +141,17 @@ it('names folders and files from untrusted text as one safe segment', () => {
   expect(mailName('   ', 'fallback')).toBe('fallback');
   expect(mailName('a'.repeat(300), 'x')).toHaveLength(120);
 });
+
+it('leaves nothing in a name that can disguise it', () => {
+  expect(mailName('invoice\u202Efdp.exe', 'x')).toBe('invoicefdp.exe');
+  expect(mailName('a\u200Bb\uFEFFc\u0085d', 'x')).toBe('abc d');
+  expect(mailName('\u200B..', 'fallback')).toBe('fallback');
+});
+
+it('keeps the extension when a long name is shortened, and whole characters', () => {
+  const name = mailName(`${'a'.repeat(130)}.pdf`, 'x');
+  expect(name).toHaveLength(120);
+  expect(name.endsWith('a.pdf')).toBe(true);
+  expect(mailName(`${'a'.repeat(115)}😀😀.pdf`, 'x')).toBe(`${'a'.repeat(115)}.pdf`);
+  expect(mailName(`${'a'.repeat(200)}.not an extension`, 'x')).toHaveLength(120);
+});

@@ -37,8 +37,49 @@ it('gets an address that starts with your own email as the only sender, and turn
   const post = fetcher.mock.calls.find(([, init]) => init?.method === 'POST')!;
   expect(JSON.parse(post[1]!.body as string)).toEqual({ action: 'request', allowlist: ['me@example.com', '@supplier.example'] });
   expect(screen.getByText('Only from me@example.com, @supplier.example.')).toBeTruthy();
+  vi.stubGlobal('confirm', vi.fn(() => true));
   fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
   await screen.findByText('No address');
+});
+
+function holding(allowlist: string[]) {
+  const posted: unknown[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method === 'POST') posted.push(JSON.parse(String(init.body)));
+    return Response.json({ address: held(allowlist), connected: false, messages: 0, lastReceivedAt: null });
+  }));
+  return posted;
+}
+
+it('changes who may send on the same address, without replacing it', async () => {
+  const posted = holding(['me@example.com']);
+  render(<MailSettings disabled={false}/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Change senders' }));
+  fireEvent.change(screen.getByLabelText('Who may send'), { target: { value: '@supplier.example' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save senders' }));
+  await waitFor(() => expect(posted).toEqual([{ action: 'request', allowlist: ['@supplier.example'] }]));
+});
+
+it('asks before replacing or turning off an address, and does nothing when declined', async () => {
+  const posted = holding(['me@example.com']);
+  const confirm = vi.fn(() => false);
+  vi.stubGlobal('confirm', confirm);
+  render(<MailSettings disabled={false}/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'New address' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+  expect(confirm).toHaveBeenCalledTimes(2);
+  expect(posted).toEqual([]);
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole('button', { name: 'New address' }));
+  await waitFor(() => expect(posted).toEqual([{ action: 'rotate', allowlist: ['me@example.com'] }]));
+});
+
+it('offers nothing that would drop senders being typed', async () => {
+  holding(['me@example.com']);
+  render(<MailSettings disabled={false}/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Change senders' }));
+  for (const name of ['Change senders', 'New address', 'Turn off']) expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Copy address' }) as HTMLButtonElement).disabled).toBe(false);
 });
 
 it('renders nothing for someone who may not manage the space', async () => {

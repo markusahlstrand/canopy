@@ -47,14 +47,17 @@ export function mountMail<E extends Env>(app: Hono<E>, resolve: (c: Context<E>) 
   });
 }
 
+const USER_REFUSALS = [400, 403, 404, 409, 422];
+
 async function relayed<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (error) {
     if (!(error instanceof MailInAddressError)) throw error;
     // A refusal is the user's to read (a preview cannot have an address, an allowlist too long);
-    // anything else is the platform's, and says so.
-    if (error.status >= 400 && error.status < 500) throw new HTTPException(error.status === 404 ? 404 : 409, { message: error.message.replace(/^.*?\(\d+\): /, '') });
+    // anything else, including the platform rejecting this worker's credentials or rate-limiting
+    // it, is the platform's, and says so.
+    if (USER_REFUSALS.includes(error.status)) throw new HTTPException(error.status === 404 ? 404 : 409, { message: error.message.replace(/^.*?\(\d+\): /, '') });
     throw new HTTPException(502, { message: `Could not reach the platform's mail service: ${error.message}` });
   }
 }
