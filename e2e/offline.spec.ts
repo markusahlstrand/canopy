@@ -2,7 +2,7 @@ import { test, expect, type Page, type APIResponse } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { signIn, createFolder, action, upload, rename } from './support';
+import { signIn, createFolder, action, upload, rename, openAccountMenu } from './support';
 import { invite, openMembers } from './spaces';
 import { acceptInvitation } from './recipients';
 
@@ -185,12 +185,12 @@ test('sign-out in another tab clears native pins, bytes and the open saved previ
   await mirrorReady(page);
   const second = await context.newPage();
   await second.goto('/');
-  await expect(second.getByRole('button', { name: 'Account menu', exact: true })).toBeVisible();
+  await expect(second.getByRole('button', { name: /^Spaces, current/ })).toBeVisible();
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await action(page, 'logout.txt', 'Open');
   await expect(page.getByRole('region', { name: 'Offline preview of logout.txt', exact: true }).getByText('Clear these private synthetic bytes', { exact: true })).toBeVisible();
-  await second.getByRole('button', { name: 'Account menu', exact: true }).click();
+  await openAccountMenu(second);
   await second.getByRole('menuitem', { name: 'Sign out', exact: true }).click();
   await expect.poll(async () => (await contentState(page)).versions.length).toBe(0);
   expect((await contentState(page)).pins).toEqual([]);
@@ -289,7 +289,7 @@ test('changing the authenticated principal invalidates an in-flight native downl
     await context.clearCookies();
     await context.addCookies(await recipientContext.cookies());
     await page.reload();
-    await expect(page.getByRole('button', { name: 'Account menu', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Spaces, current/ })).toBeVisible();
     expect((await (await page.request.get('/api/me')).json()).principal).toBe(principal);
     await expect.poll(async () => (await contentState(page)).versions.length).toBe(0);
     release();

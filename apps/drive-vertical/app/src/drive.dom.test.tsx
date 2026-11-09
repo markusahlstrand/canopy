@@ -196,13 +196,12 @@ it('uses the selected space slug until its display name is available', async () 
 function DraftMarker() { useUnsavedDraft(true); return null; }
 
 /**
- * Open the account menu in the topbar. Radix again: it answers the keyboard, not `click`.
- * Every assertion about what is IN this menu has to prove the menu opened first, or a
- * missing item and a closed menu read identically.
+ * Choose an item from the account menu, as Web Awesome reports one: the menu's items sit in
+ * the light DOM whether or not it is open, and opening it needs a real layout.
  */
-function accountMenu(): void {
-  fireEvent.keyDown(within(screen.getByRole('banner')).getByText('AE'), { key: 'Enter' });
-  expect(screen.getByText('Sign out')).toBeTruthy();
+function chooseAccountItem(label: string): void {
+  const item = screen.getByText(label);
+  act(() => { item.closest('sub-user-menu')!.dispatchEvent(new CustomEvent('wa-select', { detail: { item }, bubbles: true })); });
 }
 
 describe('search result explanations', () => {
@@ -1633,8 +1632,7 @@ describe('an invitation is redeemed by opening its link', () => {
 
 it('opens bundled viewer controls from the account menu', async () => {
   await renderDrive();
-  accountMenu();
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Plugins…' }));
+  chooseAccountItem('Plugins…');
   await act(async () => {});
   expect(screen.getByRole('dialog', { name: 'Plugins' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Disable image viewer' })).toBeTruthy();
@@ -1645,15 +1643,13 @@ describe('the People surface is offered only to whoever may use it', () => {
     await renderDrive();
     await answer('/people/access', { canManage: false });
 
-    accountMenu();
     expect(screen.queryByText('People…')).toBeNull();
   });
 
   it('asks before removing somebody, and then removes them', async () => {
     await renderDrive();
     await answer('/people/access', { canManage: true });
-    accountMenu();
-    fireEvent.click(screen.getByText('People…'));
+    chooseAccountItem('People…');
     await answer('/api/invites', { roles: ['member'], invites: [] });
     await answer('/api/people', {
       people: [{ principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' }],
@@ -1680,8 +1676,7 @@ describe('the People surface is offered only to whoever may use it', () => {
   it('can be talked out of it', async () => {
     await renderDrive();
     await answer('/people/access', { canManage: true });
-    accountMenu();
-    fireEvent.click(screen.getByText('People…'));
+    chooseAccountItem('People…');
     await answer('/api/invites', { roles: ['member'], invites: [] });
     await answer('/api/people', {
       people: [{ principal: '01B', email: 'bjorn@example.com', name: 'Bjorn', seen_at: 'x' }],
@@ -1697,8 +1692,7 @@ describe('the People surface is offered only to whoever may use it', () => {
     await renderDrive();
     await answer('/people/access', { canManage: true });
 
-    accountMenu();
-    fireEvent.click(screen.getByText('People…'));
+    chooseAccountItem('People…');
     await answer('/api/invites', {
       roles: ['member'],
       invites: [{ principal: '01P', roleKey: 'member', email: 'bjorn@example.com' }],
@@ -1725,8 +1719,7 @@ describe('the People surface is offered only to whoever may use it', () => {
     await renderDrive();
     await answer('/people/access', { canManage: true });
 
-    accountMenu();
-    fireEvent.click(screen.getByText('People…'));
+    chooseAccountItem('People…');
     // The read is in flight and unanswered. The dialog is closed on top of it — this
     // component stays mounted, so nothing cancels it.
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -1738,8 +1731,7 @@ describe('the People surface is offered only to whoever may use it', () => {
 
     // Reopened, its own read still pending: what shows now is whatever state the closed
     // dialog was left in. A stale answer applied while closed would be sitting here.
-    accountMenu();
-    fireEvent.click(screen.getByText('People…'));
+    chooseAccountItem('People…');
     expect(screen.queryByText('ghost@example.com')).toBeNull();
     // Back to loading — the two reads share one ticket, so a stale answer cannot land half of
     // the list they are merged into.
@@ -1750,8 +1742,7 @@ describe('the People surface is offered only to whoever may use it', () => {
     await renderDrive();
     await answer('/people/access', { canManage: true });
 
-    accountMenu();
-    fireEvent.click(screen.getByText('People…'));
+    chooseAccountItem('People…');
     await answer('/api/invites', {
       roles: ['member'],
       invites: [{ principal: '01P', roleKey: 'member', email: 'bjorn@example.com' }],

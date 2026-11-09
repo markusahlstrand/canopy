@@ -1,5 +1,5 @@
 import { test, expect, type APIResponse, type Page } from '@playwright/test';
-import { signIn, createFolder } from './support';
+import { signIn, createFolder, openAccountMenu } from './support';
 import { createSpace, openSpaces, switchSpace, openMembers, invite } from './spaces';
 
 // Every root folder name in one space, following Link continuations: the shared
@@ -20,9 +20,12 @@ test('create, switch, style and manage a long-named space without sending action
   const name = `${info.project.name} A very long acceptance space name for testing the narrow navigation`;
   const renamed = `${info.project.name} Styled acceptance space`;
   await signIn(page);
-  await page.getByRole('button', { name: 'Account menu', exact: true }).click();
-  await expect(page.getByRole('menu').getByText('Local Owner', { exact: true })).toBeVisible();
+  await openAccountMenu(page);
+  await expect(page.getByRole('menuitem', { name: 'Sign out', exact: true })).toBeVisible();
+  await expect(page.locator('sub-user-menu').locator('visible=true').getByText('Local Owner').first()).toBeVisible();
   await page.keyboard.press('Escape');
+  // On a phone the menu lives in the navigation sheet, which the next step needs closed.
+  if (page.viewportSize()!.width < 768) await page.keyboard.press('Escape');
   await createSpace(page, name);
   await expect(page.getByText(`${name} is empty`, { exact: true })).toBeVisible();
   await createFolder(page, 'Only in the new space');

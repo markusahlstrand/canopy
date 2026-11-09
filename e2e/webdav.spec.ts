@@ -1,11 +1,11 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
-import { signIn, createFolder, action, upload, downloaded, revealRow } from './support';
+import { signIn, createFolder, action, upload, downloaded, revealRow, openAccountMenu } from './support';
 import { invite, openMembers } from './spaces';
 import { acceptInvitation } from './recipients';
 
 /** Mint an app password through the account menu, as a person would, and read it once. */
 async function appPassword(page: Page, name: string) {
-  await page.getByRole('button', { name: 'Account menu', exact: true }).click();
+  await openAccountMenu(page);
   await page.getByRole('menuitem', { name: 'Connect with WebDAV…', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect with WebDAV', exact: true });
   await expect(dialog.getByRole('textbox', { name: 'Server address', exact: true })).toHaveValue(/\/dav\/$/);
@@ -115,7 +115,7 @@ test('WebDAV mounts spaces and direct grants with app passwords, and revocation 
     expect((await recipient(enc([space, papers, 'from-dav.txt']), 'GET')).status()).toBe(404);
 
     // Revoking the owner's password ends that client's access at once.
-    await page.getByRole('button', { name: 'Account menu', exact: true }).click();
+    await openAccountMenu(page);
     await page.getByRole('menuitem', { name: 'Connect with WebDAV…', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Connect with WebDAV', exact: true });
     await dialog.getByRole('button', { name: `Revoke ${prefix} Finder`, exact: true }).click();

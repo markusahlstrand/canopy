@@ -13,3 +13,42 @@
 /* Tailwind's content detection is rooted at this app, so the class names that
    live inside @canopy/ui would generate no utilities without this. */
 @source "../../../../packages/ui/src";
+
+/* Substrat's elements draw from Web Awesome's tokens. Pointed at Canopy's here, so they
+   follow the same palette and `.dark` as everything else; the layer is Web Awesome's last.
+   Its theme is imported in main.tsx: Tailwind's @import step leaves the theme's own
+   `@import url(...)` lines unresolved, and the colour palette goes missing with them. */
+@layer wa-theme-overrides {
+  :root {
+    --wa-font-family-body: var(--font-sans);
+    --wa-color-surface-default: hsl(var(--popover));
+    --wa-color-surface-raised: hsl(var(--popover));
+    --wa-color-surface-border: hsl(var(--border));
+    --wa-color-text-normal: hsl(var(--foreground));
+    --wa-color-text-quiet: hsl(var(--muted-foreground));
+    --wa-color-focus: hsl(var(--ring));
+    --wa-color-brand-fill-loud: hsl(var(--primary));
+    --wa-color-brand-on-loud: hsl(var(--primary-foreground));
+    --wa-color-neutral-fill-quiet: hsl(var(--accent));
+    --wa-color-neutral-border-quiet: hsl(var(--border));
+    --wa-color-neutral-border-normal: hsl(var(--border));
+  }
+}
+
+/* The rail's type size, inherited through the shadow roots. */
+.canopy-account {
+  --wa-font-size-m: 13.5px;
+  --wa-font-size-s: 13.5px;
+  font-size: 13.5px;
+}
+
+/* Items we slot in are light DOM, so Tailwind's reset beats their `:host` padding. */
+.canopy-account wa-dropdown-item {
+  padding: 0.5em 1em;
+}
+
+/* The trigger fills the rail, as the rows above it do. */
+.canopy-account::part(trigger) {
+  width: 100%;
+  border-radius: var(--radius);
+}

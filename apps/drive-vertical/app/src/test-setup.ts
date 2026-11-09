@@ -23,6 +23,12 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function scrollIntoView() {};
 }
 
+// Web Awesome's form-associated controls report validity through this, which jsdom lacks.
+if (typeof ElementInternals !== 'undefined' && !ElementInternals.prototype.setValidity) {
+  ElementInternals.prototype.setValidity = function setValidity() {};
+  Object.defineProperty(ElementInternals.prototype, 'validity', { configurable: true, get: () => ({ valid: true }) });
+}
+
 // The drive keeps the address bar on what it shows, so a test's folder or file would
 // otherwise open as a deep link in the next test of the file.
 afterEach(() => { window.history.replaceState(null, '', '/'); });
