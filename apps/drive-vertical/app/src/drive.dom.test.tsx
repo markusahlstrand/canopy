@@ -1200,6 +1200,33 @@ describe('the mobile drive shell and empty views', () => {
     expect(pending.some((p) => p.url.endsWith('/files/01A'))).toBe(true);
   });
 
+  const singleTap = () => vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query === '(max-width: 767px)', media: query,
+    addListener: () => {}, removeListener: () => {},
+    addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+  }));
+
+  it('docks the preview at the remembered width, with a resize handle', async () => {
+    singleTap();
+    localStorage.setItem('canopy.previewWidth', '640');
+    try {
+      await renderDrive([], [file('01A', 'lease.pdf')]);
+      fireEvent.click(screen.getByText('lease.pdf'));
+      expect(screen.getByRole('separator', { name: 'Resize preview' }).parentElement!.style.getPropertyValue('--preview-w')).toBe('640px');
+    } finally { localStorage.removeItem('canopy.previewWidth'); }
+  });
+
+  it('offers no resize handle when the preview covers the screen', async () => {
+    singleTap();
+    localStorage.setItem('canopy.previewMode', 'full');
+    try {
+      await renderDrive([], [file('01A', 'lease.pdf')]);
+      fireEvent.click(screen.getByText('lease.pdf'));
+      expect(screen.getByRole('complementary', { name: 'Preview' })).toBeTruthy();
+      expect(screen.queryByRole('separator', { name: 'Resize preview' })).toBeNull();
+    } finally { localStorage.removeItem('canopy.previewMode'); }
+  });
+
   it('closes a mobile preview when navigating to another view', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query === '(max-width: 767px)', media: query,
