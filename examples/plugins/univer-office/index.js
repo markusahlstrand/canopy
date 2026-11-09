@@ -10,32 +10,39 @@
 //   .udoc / document ...... Univer document from a native snapshot; saves the JSON snapshot.
 //   .uslide / slides ...... read-only outline of the snapshot (slide editing is experimental upstream).
 //   .univer ............... auto-detected from the JSON shape (workbook / document / slides).
+//   .xls/.xlsx/.xlsm/.xlsb/.ods  read-only spreadsheet, parsed by SheetJS (the host can only save text back).
 //
 // If the CDN is unreachable we fall back to a plain-text editor on the raw bytes
-// so the file is still editable + saveable offline.
+// so the file is still editable + saveable offline (Excel files are binary, so
+// those show a message instead).
 //
 // Contract: export default `render(ctx)` with ctx.{container, file, emit}.
 //   ctx.file = { name, mime, bytes: ArrayBuffer, writable: boolean }
 //   save:  ctx.emit("save", { content })  → host replies { type:"canopy:save-result", ok, error? }
 
-// Peer globals (pinned, as Univer's own CDN quickstart does) + Univer packages
-// (unpinned → latest; the @univerjs/* packages release in lockstep).
+// Peer globals (pinned, as Univer's own CDN quickstart does) + Univer packages.
+// Univer is pinned to 0.25.1 because 1.x no longer publishes the lib/umd bundles
+// this plugin loads; moving past it means loading Univer as ES modules instead.
+const UNIVER = "0.25.1";
 const PEERS = [
   "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
   "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
   "https://unpkg.com/rxjs/dist/bundles/rxjs.umd.min.js",
 ];
-const PRESETS = "https://unpkg.com/@univerjs/presets/lib/umd/index.js";
+const PRESETS = `https://unpkg.com/@univerjs/presets@${UNIVER}/lib/umd/index.js`;
 const SHEET = {
   echarts: "https://unpkg.com/echarts@5.6.0/dist/echarts.min.js",
-  js: "https://unpkg.com/@univerjs/preset-sheets-core/lib/umd/index.js",
-  locale: "https://unpkg.com/@univerjs/preset-sheets-core/lib/umd/locales/en-US.js",
-  css: "https://unpkg.com/@univerjs/preset-sheets-core/lib/index.css",
+  js: `https://unpkg.com/@univerjs/preset-sheets-core@${UNIVER}/lib/umd/index.js`,
+  locale: `https://unpkg.com/@univerjs/preset-sheets-core@${UNIVER}/lib/umd/locales/en-US.js`,
+  css: `https://unpkg.com/@univerjs/preset-sheets-core@${UNIVER}/lib/index.css`,
 };
+// Same SheetJS version as packages/docworker; the npm registry's 0.18.5 has known
+// parser CVEs. The "full" build carries the codepages legacy .xls files need.
+const SHEETJS = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
 const DOC = {
-  js: "https://unpkg.com/@univerjs/preset-docs-core/lib/umd/index.js",
-  locale: "https://unpkg.com/@univerjs/preset-docs-core/lib/umd/locales/en-US.js",
-  css: "https://unpkg.com/@univerjs/preset-docs-core/lib/index.css",
+  js: `https://unpkg.com/@univerjs/preset-docs-core@${UNIVER}/lib/umd/index.js`,
+  locale: `https://unpkg.com/@univerjs/preset-docs-core@${UNIVER}/lib/umd/locales/en-US.js`,
+  css: `https://unpkg.com/@univerjs/preset-docs-core@${UNIVER}/lib/index.css`,
 };
 
 function loadScript(src) {
@@ -111,11 +118,74 @@ function workbookFromRows(rows, name) {
   };
 }
 
+// ── SheetJS workbook → Univer snapshot ───────────────────────────────────────
+// Univer's CellValueType: 1 string, 2 number, 3 boolean.
+function univerCell(cell) {
+  const out = {};
+  if (cell.t === "n") Object.assign(out, { v: cell.v, t: 2 });
+  else if (cell.t === "s" || cell.t === "str") Object.assign(out, { v: cell.v, t: 1 });
+  else if (cell.t === "b") Object.assign(out, { v: cell.v ? 1 : 0, t: 3 });
+  else if (cell.t === "e") Object.assign(out, { v: cell.w || "#ERROR!", t: 1 });
+  if (cell.f) out.f = "=" + cell.f;
+  // Dates are numbers in a date format, so this is also what makes them read as dates.
+  if (cell.t === "n" && cell.z && cell.z !== "General") out.s = { n: { pattern: cell.z } };
+  return Object.keys(out).length ? out : null;
+}
+function a1(ref) {
+  const m = /^([A-Z]+)([0-9]+)$/.exec(ref);
+  if (!m) return null;
+  let col = 0;
+  for (const ch of m[1]) col = col * 26 + ch.charCodeAt(0) - 64;
+  return { row: Number(m[2]) - 1, col: col - 1 };
+}
+export function workbookFromSheetJS(wb) {
+  const sheets = {};
+  const sheetOrder = wb.SheetNames.map((name, index) => {
+    const ws = wb.Sheets[name] || {};
+    const id = "sheet" + (index + 1);
+    const merges = ws["!merges"] || [];
+    const cellData = {};
+    let lastRow = 0;
+    let lastCol = 0;
+    for (const ref of Object.keys(ws)) {
+      const at = a1(ref);
+      const cell = at && univerCell(ws[ref]);
+      if (!cell) continue;
+      (cellData[at.row] = cellData[at.row] || {})[at.col] = cell;
+      lastRow = Math.max(lastRow, at.row);
+      lastCol = Math.max(lastCol, at.col);
+    }
+    for (const m of merges) {
+      lastRow = Math.max(lastRow, m.e.r);
+      lastCol = Math.max(lastCol, m.e.c);
+    }
+    const columnData = {};
+    (ws["!cols"] || []).forEach((col, i) => {
+      if (col && col.wpx) columnData[i] = { w: col.wpx };
+    });
+    sheets[id] = {
+      id,
+      name,
+      cellData,
+      columnData,
+      // Univer drops anything past its default grid, so size it to the data.
+      rowCount: Math.max(lastRow + 1, 100),
+      columnCount: Math.max(lastCol + 1, 26),
+      mergeData: merges.map((m) => ({ startRow: m.s.r, endRow: m.e.r, startColumn: m.s.c, endColumn: m.e.c })),
+      hidden: wb.Workbook && wb.Workbook.Sheets && wb.Workbook.Sheets[index] && wb.Workbook.Sheets[index].Hidden ? 1 : 0,
+    };
+    return id;
+  });
+  return { id: "excel-import", sheetOrder, sheets };
+}
+
 // ── decide what this file is ─────────────────────────────────────────────────
-// Returns "sheet-csv" | "sheet" | "doc" | "slide". `snapshot` is the parsed JSON
-// for the snapshot kinds, `delim` the separator for the csv kind.
-function classify(name, text) {
+// Returns "sheet-csv" | "sheet-excel" | "sheet" | "doc" | "slide". `snapshot` is the
+// parsed JSON for the snapshot kinds, `delim` the separator for the csv kind.
+function classify(name, text, mime) {
   const ext = (name.split(".").pop() || "").toLowerCase();
+  if (/^(xls|xlsx|xlsm|xlsb|ods)$/.test(ext) || /spreadsheetml|ms-excel|opendocument\.spreadsheet/i.test(mime || ""))
+    return { kind: "sheet-excel" };
   if (ext === "csv" || ext === "tsv") return { kind: "sheet-csv", delim: ext === "tsv" ? "\t" : "," };
   let snapshot = null;
   try {
@@ -149,7 +219,8 @@ function slideText(node, out, depth) {
 export default async function render(ctx) {
   const { container, file } = ctx;
   const text = new TextDecoder().decode(new Uint8Array(file.bytes));
-  const info = classify(file.name, text);
+  const info = classify(file.name, text, file.mime);
+  const isExcel = info.kind === "sheet-excel";
 
   // ── toolbar: filename · status · Save ───────────────────────────────────────
   const bar = document.createElement("div");
@@ -219,7 +290,18 @@ export default async function render(ctx) {
     return;
   }
 
-  if (file.writable) container.appendChild(bar);
+  if (isExcel) {
+    saveBtn.remove(); // read-only — no save affordance
+    container.appendChild(bar);
+    const banner = document.createElement("div");
+    banner.textContent = "Read-only preview — Excel files can't be edited or saved here yet.";
+    banner.style.cssText =
+      "padding:8px 12px;margin-bottom:12px;border-radius:8px;background:#fef3c7;color:#92400e;font:13px system-ui,-apple-system,sans-serif";
+    container.appendChild(banner);
+    // Typing in Univer's own inputs (find, zoom) isn't a change to this file: keep
+    // the host from warning about unsaved edits that can never be saved.
+    document.documentElement.setAttribute("data-canopy-transient", "");
+  } else if (file.writable) container.appendChild(bar);
   const host = document.createElement("div");
   host.id = "univer-host";
   host.style.cssText = "width:100%;height:640px;position:relative";
@@ -265,7 +347,7 @@ export default async function render(ctx) {
     } else {
       // sheet or sheet-csv
       await injectCss(SHEET.css);
-      await loadInOrder([...PEERS, SHEET.echarts, PRESETS, SHEET.js, SHEET.locale]);
+      await loadInOrder([...PEERS, SHEET.echarts, PRESETS, SHEET.js, SHEET.locale, ...(isExcel ? [SHEETJS] : [])]);
       const { createUniver } = UniverPresets;
       const { LocaleType, mergeLocales } = UniverCore;
       const { UniverSheetsCorePreset } = UniverPresetSheetsCore;
@@ -276,8 +358,9 @@ export default async function render(ctx) {
         theme,
         presets: [UniverSheetsCorePreset({ container: "univer-host" })],
       });
-      const data =
-        info.kind === "sheet-csv"
+      const data = isExcel
+        ? workbookFromSheetJS(XLSX.read(new Uint8Array(file.bytes), { type: "array", cellNF: true, cellStyles: true }))
+        : info.kind === "sheet-csv"
           ? workbookFromRows(parseDelimited(text, info.delim), file.name)
           : info.snapshot || { id: "workbook" };
       const create = univerAPI.createWorkbook || univerAPI.createUniverSheet;
@@ -290,9 +373,19 @@ export default async function render(ctx) {
         }
         return JSON.stringify(wb.save(), null, 2);
       };
-      attachDirtyWatcher(univerAPI, markDirty);
+      if (isExcel) {
+        await univerAPI.getActiveWorkbook().getWorkbookPermission().setReadOnly();
+      } else attachDirtyWatcher(univerAPI, markDirty);
     }
   } catch (err) {
+    if (isExcel) {
+      // Binary: a text editor on these bytes would be garbage, and saving it would corrupt the file.
+      host.style.height = "auto";
+      host.textContent = "Couldn't open this spreadsheet: " + (err && err.message ? err.message : err);
+      host.style.font = "13px system-ui,-apple-system,sans-serif";
+      ctx.emit("loaded", { kind: info.kind, error: true });
+      return;
+    }
     // Offline / CDN blocked → plain textarea editor on the raw bytes.
     host.style.height = "auto";
     const ta = document.createElement("textarea");
