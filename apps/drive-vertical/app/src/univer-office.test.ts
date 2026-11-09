@@ -32,6 +32,18 @@ it('moves dates in a 1904 workbook onto the 1900 base, and nothing else',()=>{
  expect(cells({Workbook:{WBProps:{date1904:true}}})).toMatchObject({0:{v:41462},1:{v:40000},2:{v:40000},3:{v:40000}});
  expect(cells({})).toMatchObject({0:{v:40000}});
 });
+it('shifts a 1904 value only when its own format section is a date',()=>{
+ const z='0" USD";yyyy-mm-dd';
+ const {sheets:{sheet1}}=book({A1:{t:'n',v:40000,z},B1:{t:'n',v:-40000,z},C1:{t:'n',v:40000,z:'yyyy-mm-dd;@'},D1:{t:'n',v:40000,z:'[<100]0;yyyy-mm-dd'}},{Workbook:{WBProps:{date1904:true}}});
+ expect(sheet1.cellData[0]).toMatchObject({0:{v:40000},1:{v:-38538},2:{v:41462},3:{v:40000}});
+});
+it('refuses a workbook too large for the viewer, and opens one full-height sheet',()=>{
+ const tall=(name:string)=>[name,{A1048576:{t:'n',v:1}}] as const;
+ const many=Array.from({length:3},(_,i)=>tall('S'+i));
+ expect(()=>workbookFromSheetJS({SheetNames:many.map(([n])=>n),Sheets:Object.fromEntries(many)})).toThrow(/too large/);
+ expect(()=>book({A1:{t:'s',v:'x'},'!merges':[{s:{r:0,c:0},e:{r:999,c:9999}}]})).toThrow(/too large/);
+ expect(book({A1048576:{t:'n',v:1}}).sheets.sheet1.rowCount).toBe(1048576);
+});
 it('keeps a .csv editable when the browser reports it as an Excel file',()=>{
  expect(classify('report.csv','a,b','application/vnd.ms-excel')).toEqual({kind:'sheet-csv',delim:','});
  expect(classify('report.tsv','a','application/vnd.ms-excel')).toEqual({kind:'sheet-csv',delim:'\t'});

@@ -121,14 +121,26 @@ function workbookFromRows(rows, name) {
 // ── SheetJS workbook → Univer snapshot ───────────────────────────────────────
 // Workbooks on Excel's 1904 date system count from 1904; Univer's serials count from 1900.
 const DAYS_1900_TO_1904 = 1462;
-function isDateFormat(z) {
-  if (!z || /\[[hms]+\]/i.test(z)) return false; // [h]:mm is a duration, not a point in time
-  return /[ymdhs]/i.test(z.replace(/"[^"]*"|[\\_*].|\[[^\]]*\]/g, ""));
+function isDateSection(section) {
+  if (/\[[hms]+\]/i.test(section)) return false; // [h]:mm is a duration, not a point in time
+  return /[ymdhs]/i.test(section.replace(/\[[^\]]*\]/g, ""));
 }
+// A format can hold a section each for positive, negative and zero, and only the value's own
+// section says what it is. With [conditions] the section depends on them, so all must be dates.
+function isDateFormat(z, value) {
+  if (!z) return false;
+  const sections = z.replace(/"[^"]*"|[\\_*]./g, "").split(";");
+  if (/\[[<>=]/.test(z)) return sections.every(isDateSection);
+  return isDateSection(sections[value > 0 ? 0 : value < 0 ? 1 : 2] ?? sections[0]);
+}
+// What Univer allocates entries for: every row of every sheet, and every cell of every merge. The
+// limit fits one full-height Excel sheet, so a real workbook gets through and a crafted one that
+// would hang the viewer is refused before Univer sees it.
+const MAX_GRID_ENTRIES = 2_000_000;
 // Univer's CellValueType: 1 string, 2 number, 3 boolean.
 function univerCell(cell, date1904) {
   const out = {};
-  if (cell.t === "n") Object.assign(out, { v: date1904 && isDateFormat(cell.z) ? cell.v + DAYS_1900_TO_1904 : cell.v, t: 2 });
+  if (cell.t === "n") Object.assign(out, { v: date1904 && isDateFormat(cell.z, cell.v) ? cell.v + DAYS_1900_TO_1904 : cell.v, t: 2 });
   else if (cell.t === "s" || cell.t === "str") Object.assign(out, { v: cell.v, t: 1 });
   else if (cell.t === "b") Object.assign(out, { v: cell.v ? 1 : 0, t: 3 });
   else if (cell.t === "e") Object.assign(out, { v: cell.w || "#ERROR!", t: 1 });
@@ -147,6 +159,7 @@ function a1(ref) {
 export function workbookFromSheetJS(wb) {
   const date1904 = !!(wb.Workbook && wb.Workbook.WBProps && wb.Workbook.WBProps.date1904);
   const sheets = {};
+  let gridEntries = 0;
   const sheetOrder = wb.SheetNames.map((name, index) => {
     const ws = wb.Sheets[name] || {};
     const id = "sheet" + (index + 1);
@@ -166,6 +179,10 @@ export function workbookFromSheetJS(wb) {
       lastRow = Math.max(lastRow, m.e.r);
       lastCol = Math.max(lastCol, m.e.c);
     }
+    const rowCount = Math.max(lastRow + 1, 100);
+    gridEntries += rowCount;
+    for (const m of merges) gridEntries += (m.e.r - m.s.r + 1) * (m.e.c - m.s.c + 1);
+    if (gridEntries > MAX_GRID_ENTRIES) throw new Error("it's too large to preview here.");
     const columnData = {};
     (ws["!cols"] || []).forEach((col, i) => {
       if (col && col.wpx) columnData[i] = { w: col.wpx };
@@ -176,7 +193,7 @@ export function workbookFromSheetJS(wb) {
       cellData,
       columnData,
       // Univer drops anything past its default grid, so size it to the data.
-      rowCount: Math.max(lastRow + 1, 100),
+      rowCount,
       columnCount: Math.max(lastCol + 1, 26),
       mergeData: merges.map((m) => ({ startRow: m.s.r, endRow: m.e.r, startColumn: m.s.c, endColumn: m.e.c })),
       hidden: wb.Workbook && wb.Workbook.Sheets && wb.Workbook.Sheets[index] && wb.Workbook.Sheets[index].Hidden ? 1 : 0,
