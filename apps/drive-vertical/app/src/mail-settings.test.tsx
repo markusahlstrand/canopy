@@ -54,6 +54,37 @@ it('explains why a connected space has no address', async () => {
   expect(screen.queryByRole('button', { name: 'Get an address' })).toBeNull();
 });
 
+it('offers a retry when the platform fails, and renders the address once it answers', async () => {
+  let fail = true;
+  vi.stubGlobal('fetch', vi.fn(async () => fail ? Response.json({ detail: 'mail service down' }, { status: 502 }) : Response.json({ address: held([]), connected: false, messages: 0, lastReceivedAt: null })));
+  render(<MailSettings disabled={false}/>);
+  await screen.findByRole('alert');
+  fail = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  await screen.findByText('mail+drive-k3x9@in.substrat.run');
+});
+
+it('says so when the address could not be copied', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ address: held([]), connected: false, messages: 0, lastReceivedAt: null })));
+  vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('Denied')) } });
+  render(<MailSettings disabled={false}/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Copy address' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('Could not copy');
+  expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull();
+});
+
+it('reports a sender edit as a draft until it is cancelled', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ address: held(['me@example.com']), connected: false, messages: 0, lastReceivedAt: null })));
+  const draft = vi.fn();
+  render(<MailSettings disabled={false} onDraftChange={draft}/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Change senders' }));
+  expect(draft).not.toHaveBeenCalledWith(true);
+  fireEvent.change(screen.getByLabelText('Who may send'), { target: { value: 'you@example.com' } });
+  await waitFor(() => expect(draft).toHaveBeenLastCalledWith(true));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(draft).toHaveBeenLastCalledWith(false));
+});
+
 it('parses an allowlist typed with commas, spaces or semicolons', () => {
   expect(parseAllowlist(' A@x.com,@y.org; b@z.com  ')).toEqual(['a@x.com', '@y.org', 'b@z.com']);
 });

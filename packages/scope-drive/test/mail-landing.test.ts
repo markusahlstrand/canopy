@@ -103,6 +103,38 @@ it('lets only the address land mail, and only bytes stored on the message folder
     .rejects.toThrow('before their message');
 });
 
+it('restores a landed version after someone replaced it, but no other bytes on the folder', async () => {
+  const w = await world();
+  const first = await w.receive(message('m1'));
+  const other = await w.bytes.upload({ entity: first.entity!, filename: 'other.pdf', contentType: 'application/pdf', visibility: 'internal', body: new TextEncoder().encode('other') });
+  const pdf = await w.bytes.upload({ entity: first.entity!, filename: 'invoice-1234.pdf', contentType: 'application/pdf', visibility: 'internal', body: new TextEncoder().encode('%PDF') });
+  await w.receive({ change: 'attachment', connectionId: CONN, messageId: 'm1', index: 0, attachment: { id: pdf.id, filename: pdf.filename, contentType: pdf.contentType, size: pdf.size, sha256: pdf.sha256 } });
+  const file = (await children(w.human, first.entity!.entityId)).entries[0]!;
+  const fileRef = { entityType: 'file', entityId: file.id };
+  const edit = await w.ownerBytes.upload({ entity: fileRef, filename: file.name, contentType: 'application/pdf', visibility: 'internal', body: new TextEncoder().encode('edited') });
+  await w.human.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: edit.id } });
+  await w.human.invoke('drive/restore-version', { fileId: file.id, versionId: file.current_version_id });
+  const got = await w.human.invoke<{ version: { blob_ref: string } }>('drive/get-file', { fileId: file.id });
+  expect(got.version.blob_ref).toBe(pdf.id);
+  // Bytes on the same folder that this file never held are still nobody's to name.
+  await expect(w.human.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: other.id } })).rejects.toThrow('no attachment');
+});
+
+it('refuses new mail while the space mirrors a source, and still answers what already landed', async () => {
+  const w = await world();
+  const first = await w.receive(message('m1'));
+  const pick = (a: { id: string; filename: string; contentType: string; size: number; sha256: string }) => ({ id: a.id, filename: a.filename, contentType: a.contentType, size: a.size, sha256: a.sha256 });
+  const landedBytes = await w.bytes.upload({ entity: first.entity!, filename: 'a.pdf', contentType: 'application/pdf', visibility: 'internal', body: new TextEncoder().encode('a') });
+  const pendingBytes = await w.bytes.upload({ entity: first.entity!, filename: 'b.pdf', contentType: 'application/pdf', visibility: 'internal', body: new TextEncoder().encode('b') });
+  const landed = { change: 'attachment', connectionId: CONN, messageId: 'm1', index: 0, attachment: pick(landedBytes) };
+  await w.receive(landed);
+  await w.human.invoke('drive/record-source', { provider: 'canopy.a3doc', connectionId: CONN, account: 'ACME', folder: 'Facturas', canUpload: true });
+  await expect(w.receive(message('m2'))).rejects.toThrow('connected source');
+  await expect(w.receive({ ...landed, index: 1, attachment: pick(pendingBytes) })).rejects.toThrow('connected source');
+  expect(await w.receive(message('m1'))).toEqual(first);
+  expect(await w.receive(landed)).toEqual({ ok: true });
+});
+
 it('names folders and files from untrusted text as one safe segment', () => {
   expect(mailName('Re: a/b\\c\u0007  d', 'x')).toBe('Re: a-b-c d');
   expect(mailName('..', 'fallback')).toBe('fallback');

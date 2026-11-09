@@ -1,5 +1,5 @@
 import { landSourceChange } from './source-landing.js';
-import { landMailChange, mailSummary } from './mail-landing.js';
+import { landedMailAttachment, landMailChange, mailSummary } from './mail-landing.js';
 import { searchSnippet, SNIPPET_SCAN_LIMIT } from './search-snippet.js';
 /**
  * The drive's handlers — the first canopy operations written as scope-local code.
@@ -635,7 +635,7 @@ const operations = {
         `SELECT entity_id, content_type, size FROM _substrat_attachments
          WHERE id = ? AND entity_type = 'file'`,
         [loc.blobRef],
-      )[0];
+      )[0] ?? landedMailAttachment(ctx, file.id, loc.blobRef);
       if (!attachment) throw substratError('not_found', `no attachment: ${loc.blobRef}`);
       if (attachment.entity_id !== file.id) {
         throw substratError(

@@ -7,4 +7,4 @@ A space can get an email address to forward mail to, such as supplier invoices (
 
 Each forwarded message lands in `Mail/` as its own folder, named by date and subject. The folder holds `message.eml` and each attachment as an ordinary file, so search, previews and the offline copy pick them up. A message delivered twice is filed once.
 
-Every Substrat library moves to its latest release (0.190), which carries the original message.
+Every Substrat library moves to its latest release. Contracts 0.190 is the one that carries the original message.

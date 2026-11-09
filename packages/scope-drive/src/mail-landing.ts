@@ -79,9 +79,38 @@ function landedBytes(ctx: OperationContext, message: Message, attachmentId: stri
   return row;
 }
 
+/**
+ * While a space mirrors a source, mail waits: ordinary folder and file creation refuses there too.
+ * The platform retries with backoff and then keeps the message for an operator, so a space that
+ * disconnects soon afterwards still gets it. Redeliveries of what already landed answer before this.
+ */
+function refuseWhileConnected(ctx: OperationContext): void {
+  if (ctx.sql.query('SELECT id FROM drive_source WHERE id = 1').length) {
+    throw substratError('conflict', 'This space mirrors a connected source, so mail cannot be filed in it.');
+  }
+}
+
+/**
+ * The bytes of a version mail itself landed on this file, which live on the message's folder and
+ * not on the file. Lets `drive/restore-version` bring an original back after someone replaced it;
+ * a folder attachment this file never held stays unknown to `drive/record-version`.
+ */
+export function landedMailAttachment(ctx: OperationContext, fileId: string, attachmentId: string) {
+  return ctx.sql.query<{ entity_id: string; content_type: string; size: number }>(
+    `SELECT v.file_id AS entity_id, a.content_type, a.size
+       FROM drive_file_versions v
+       JOIN drive_mail_parts p ON p.file_id = v.file_id
+       JOIN drive_mail_messages m ON m.message_id = p.message_id
+       JOIN _substrat_attachments a ON a.id = v.blob_ref AND a.entity_type = 'folder' AND a.entity_id = m.folder_id
+      WHERE v.file_id = ? AND v.blob_ref = ?`,
+    [fileId, attachmentId],
+  )[0];
+}
+
 /** One part of a message becomes one file, once. */
 function landPart(ctx: OperationContext, message: Message, part: string, filename: string, attachmentId: string): { ok: true } {
   if (ctx.sql.query('SELECT file_id FROM drive_mail_parts WHERE message_id = ? AND part = ?', [message.message_id, part]).length) return { ok: true };
+  refuseWhileConnected(ctx);
   const bytes = landedBytes(ctx, message, attachmentId);
   const now = ctx.now();
   const fileId = ulid();
@@ -113,6 +142,7 @@ export async function landMailChange(ctx: OperationContext, input: unknown): Pro
   if (change.change === 'message') {
     // A redelivery answers the same folder, so the platform's bytes land where the first answer said.
     if (held) return { entity: ref('folder', held.folder_id), raw: true };
+    refuseWhileConnected(ctx);
     const root = folderAt(ctx, '');
     if (!root || root.id !== ROOT_FOLDER_ID) throw substratError('conflict', 'the space has no root folder');
     const mail = folderAt(ctx, MAIL_FOLDER) ?? createFolder(ctx, root.id, '', MAIL_FOLDER);
