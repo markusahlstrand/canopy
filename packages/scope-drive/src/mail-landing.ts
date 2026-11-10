@@ -60,6 +60,23 @@ function folderAt(ctx: OperationContext, path: string): Folder | undefined {
   return ctx.sql.query<Folder>('SELECT id, path FROM drive_folders WHERE path = ?', [path])[0];
 }
 
+/**
+ * The folder mail files into: the one mail-in made, wherever someone has since moved or renamed
+ * it. Made on first use as `Mail`, or `Mail (2)` and on when a person's folder already holds the
+ * name, since filing into theirs would hand every message to whoever that folder is shared with.
+ */
+function mailRoot(ctx: OperationContext, rootId: string): Folder {
+  const held = ctx.sql.query<Folder>(
+    'SELECT d.id, d.path FROM drive_mail_root r JOIN drive_folders d ON d.id = r.folder_id WHERE r.id = 1',
+  )[0];
+  if (held) return held;
+  let name = MAIL_FOLDER;
+  for (let n = 2; folderAt(ctx, name); n++) name = `${MAIL_FOLDER} (${n})`;
+  const made = createFolder(ctx, rootId, '', name);
+  ctx.sql.exec('INSERT INTO drive_mail_root (id, folder_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET folder_id = excluded.folder_id', [made.id]);
+  return made;
+}
+
 function createFolder(ctx: OperationContext, parentId: string, parentPath: string, name: string): Folder {
   const id = ulid();
   const path = parentPath ? `${parentPath}/${name}` : name;
@@ -137,9 +154,13 @@ function landPart(ctx: OperationContext, message: Message, part: string, filenam
   return { ok: true };
 }
 
-/** `2026-10-26 Invoice from Acme`, from the message's date (or its arrival) and subject. */
+/**
+ * `2026-10-26 Invoice from Acme`, from the message's date (or its arrival) and subject. The
+ * contract gives `date` as an instant only when the header parses; otherwise it is the header as
+ * written (`Mon, 26 Oct 2026 …`), whose first ten characters are no day, so arrival stands in.
+ */
 function messageFolderName(date: string | null, receivedAt: string, subject: string | null): string {
-  const day = (date ?? receivedAt).slice(0, 10);
+  const day = (date && /^\d{4}-\d{2}-\d{2}/.test(date) ? date : receivedAt).slice(0, 10);
   return mailName(`${day} ${subject?.trim() || '(no subject)'}`, day, 100);
 }
 
@@ -154,7 +175,7 @@ export async function landMailChange(ctx: OperationContext, input: unknown): Pro
     refuseWhileConnected(ctx);
     const root = folderAt(ctx, '');
     if (!root || root.id !== ROOT_FOLDER_ID) throw substratError('conflict', 'the space has no root folder');
-    const mail = folderAt(ctx, MAIL_FOLDER) ?? createFolder(ctx, root.id, '', MAIL_FOLDER);
+    const mail = mailRoot(ctx, root.id);
     const wanted = messageFolderName(change.date, change.receivedAt, change.subject);
     let name = wanted;
     for (let n = 2; folderAt(ctx, `${mail.path}/${name}`); n++) name = `${wanted} (${n})`;

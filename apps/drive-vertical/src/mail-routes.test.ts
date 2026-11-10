@@ -77,6 +77,22 @@ it("answers a platform 404 as a refusal, since a 404 from this route hides the s
   expect(await res.text()).toContain('previews cannot have an address');
 });
 
+it("answers an unreachable platform or an unreadable answer as the platform's failure", async () => {
+  for (const fetchImpl of [
+    vi.fn(async () => { throw new TypeError('fetch failed'); }),
+    vi.fn(async () => Response.json({ unexpected: true })),
+  ]) {
+    const app = new Hono();
+    mountMail(app, async () => ({
+      scope: { invoke: async () => ({ principal: 'owner', connected: false, messages: 0, lastReceivedAt: null }) } as unknown as ScopeStub,
+      relay: () => ({ controlPlaneUrl: 'https://cp.example', platformSecret: 'secret', tenantId, scopeId, fetchImpl: fetchImpl as unknown as typeof fetch }),
+    }));
+    const res = await app.request('/api/mail');
+    expect(res.status).toBe(502);
+    expect(await res.text()).toContain("Could not reach the platform's mail service");
+  }
+});
+
 it.each([401, 429])("treats a %i from the platform as the platform's failure, not the user's refusal", async (status) => {
   const res = await world({ manager: true, refuse: status }).post({ action: 'request' });
   expect(res.status).toBe(502);

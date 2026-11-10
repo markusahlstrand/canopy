@@ -68,6 +68,12 @@ describe('signing in as the web app login form does', () => {
     expect(sent[1]!.body).toMatchObject({ mfaCompletionId: '', mfaStatus: 1 });
   });
 
+  it('reads a status a3doc sends as text', async () => {
+    const { client, sent } = signInWith({ errorCode: 0, mfaStatus: '0' });
+    await client.signIn();
+    expect(sent[1]!.body).toMatchObject({ mfaCompletionId: '', mfaStatus: 0 });
+  });
+
   it.each([{ mfaStatus: 2, MfaUiUrl: 'https://mfa.example' }, {}])('says so when a3doc demands MFA or will not say: %j', async (begin) => {
     const { client, sent } = signInWith({ errorCode: 0, ...begin });
     await expect(client.signIn()).rejects.toBeInstanceOf(A3docMfaRequiredError);

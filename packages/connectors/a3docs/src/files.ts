@@ -224,7 +224,10 @@ export async function bindA3docScope(
     if (prior.highWater) binding.highWater = prior.highWater;
     if (prior.lastFull) binding.lastFull = prior.lastFull;
     if (prior.lastSync) binding.lastSync = prior.lastSync;
-    if (prior.reported) binding.reported = prior.reported;
+    // The space drops its report when the folder is named differently ("Todos/Facturas" for
+    // "Facturas"), so only the same name keeps `reported`; without it the next pass reads in full
+    // and writes the report again, under the name the space now shows.
+    if (prior.reported && prior.folder === binding.folder) binding.reported = prior.reported;
     if (prior.pass) binding.pass = prior.pass;
   }
   await host.admin.putConnectorState(input.connectionId, bindingKey(input.scopeId), binding);
@@ -888,7 +891,10 @@ export async function syncA3docContext(ctx: ScopedConnectionContext, options: A3
   const resolved = contextBinding(ctx, options);
   const key = bindingKey(ctx.scope.scopeId);
   const previous = await ctx.state.get(key) as A3docBinding | undefined;
-  const binding = previous?.containerId === resolved.containerId ? { ...previous, ...resolved, boundAt: previous.boundAt } : resolved;
+  let binding: A3docBinding = previous?.containerId === resolved.containerId ? { ...previous, ...resolved, boundAt: previous.boundAt } : resolved;
+  // The same container under another name: the space dropped its report for the old name, so the
+  // next pass reads in full and reports again (see `bindA3docScope`).
+  if (previous && previous.folder !== resolved.folder && binding.reported) { const { reported: _stale, ...rest } = binding; binding = rest; }
   await ctx.state.put(key, binding);
   const admin = contextState(ctx);
   return syncFiles({ admin,
