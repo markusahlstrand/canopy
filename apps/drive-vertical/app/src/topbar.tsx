@@ -51,6 +51,11 @@ interface TopbarProps {
   onRefresh?: () => void;
   /** True while a background sync is in flight — spins the refresh icon. */
   syncing?: boolean;
+  /**
+   * Set only while signed out. On a phone the rail's login sits in the closed navigation sheet,
+   * so the topbar offers it too: signed out always shows a way to log in.
+   */
+  onSignIn?: () => void;
 }
 
 export function Topbar({
@@ -65,6 +70,7 @@ export function Topbar({
   writeBlocked,
   onRefresh,
   syncing,
+  onSignIn,
 }: TopbarProps) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:gap-3 sm:px-4">
@@ -182,6 +188,10 @@ export function Topbar({
       >
         <Icon name="upload" size={16} />
         <span className="hidden sm:inline">Upload</span>
+      </Button> : null}
+
+      {onSignIn ? <Button onClick={onSignIn} size="sm" disabled={offline} title={offline ? "You're offline" : undefined} className="shrink-0 md:hidden">
+        Log in
       </Button> : null}
     </header>
   );

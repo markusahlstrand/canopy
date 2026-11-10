@@ -1035,7 +1035,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const pinSyncing = pinBusy || (currentPin?.status === 'syncing' && !currentPinError);
   const folderActions = view === 'drive' && !offline && !linkPending && !linkListingUnavailable;
   const pageTitle = view === 'trash' ? 'Trash' : view === 'search' ? 'Search' : view === 'shared' ? 'Shared with me' : crumbs.at(-1)?.name ?? rootLabel;
-  const previewCovers = previewMode === 'full' && !(offline && !hasUnsavedDrafts());
+  /** Offline with nothing unsaved, the preview is the read-only saved copy, never full screen. */
+  const offlinePreview = offline && !hasUnsavedDrafts();
+  const previewCovers = previewMode === 'full' && !offlinePreview;
   const pageCount = showingAll ? subtreeFiles.length : view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : folders.length + files.length;
   const saveCurrentFolderOffline = async () => {
     if (!auth.principal || !cacheSpace || pinBusy) return;
@@ -1174,6 +1176,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         syncing={busy}
         offline={offline}
         writeBlocked={linkPending || linkListingUnavailable}
+        onSignIn={auth.user ? undefined : onSignIn}
       />
 
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
@@ -1465,7 +1468,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             ? 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:inset-0 md:z-40'
             : 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:relative md:inset-auto md:z-auto md:w-[var(--preview-w)] md:min-w-80 md:max-w-[calc(100vw-35rem)] md:shrink-0'}>
           {previewCovers ? null : <PreviewResizeHandle width={previewWidth} onChange={setPreviewWidth} />}
-          {offline && !hasUnsavedDrafts() ? cacheSpace && auth.principal && files.find(file => file.id === previewing) ? <OfflinePreview
+          {offlinePreview ? cacheSpace && auth.principal && files.find(file => file.id === previewing) ? <OfflinePreview
             file={files.find(file => file.id === previewing)!}
             principal={auth.principal}
             space={cacheSpace}

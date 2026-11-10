@@ -266,5 +266,15 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
     message_id TEXT NOT NULL REFERENCES drive_mail_messages(message_id), part TEXT NOT NULL,
     file_id TEXT NOT NULL REFERENCES drive_files(id), PRIMARY KEY (message_id, part)
   );` },
+  /**
+   * The folder mail-in made for itself, so mail never files into a folder a person happened to
+   * name "Mail" and shared for something else. Backfilled from where landed messages already sit.
+   */
+  { version: '0015', sql: `CREATE TABLE drive_mail_root (
+    id INTEGER PRIMARY KEY CHECK (id = 1), folder_id TEXT NOT NULL REFERENCES drive_folders(id)
+  );
+  INSERT INTO drive_mail_root (id, folder_id)
+    SELECT 1, f.parent_id FROM drive_mail_messages m JOIN drive_folders f ON f.id = m.folder_id
+    ORDER BY m.received_at LIMIT 1;` },
 
 ];
