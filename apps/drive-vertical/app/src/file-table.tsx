@@ -1,22 +1,14 @@
 import { useRef, useState, useLayoutEffect, type ReactNode, type KeyboardEvent } from "react";
-import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import type { FileItem } from './items';
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from './file-icon';
+import { FileList } from './file-list';
 import { Checkbox } from "@canopy/ui";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@canopy/ui";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
 } from "@canopy/ui";
 import { Skeleton } from "@canopy/ui";
 import { Icon } from "@canopy/ui";
@@ -397,120 +389,21 @@ export function FileTable({
   }
 
   return (
-    <div {...focusScope} className="overflow-hidden rounded-lg border">
-      <table role="grid" aria-label="Files" aria-multiselectable="true" className="w-full border-collapse text-[14px]">
-        <thead>
-          <tr className="border-b bg-muted/40">
-            <th className="w-9 px-3 py-2.5">
-              <Checkbox
-                checked={allSelected}
-                onCheckedChange={(c) =>
-                  onSelectionChange(c ? new Set(files.map((f) => f.id)) : new Set())
-                }
-              />
-            </th>
-            {COLUMNS.map((col) => {
-              const SortIcon = sort.key !== col.key ? ChevronsUpDown : sort.dir === "asc" ? ChevronUp : ChevronDown;
-              return (
-                <th key={col.key} className={cn("px-3 py-2.5", col.className)}>
-                  <button
-                    onClick={() => onSort(col.key)}
-                    className={cn(
-                      "inline-flex items-center gap-1 text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {col.label}
-                    <SortIcon size={13} className={sort.key === col.key ? "text-foreground" : "opacity-50"} />
-                  </button>
-                </th>
-              );
-            })}
-            <th className="w-10" />
-          </tr>
-        </thead>
-        <tbody>
-          {files.map((f, i) => {
-            const selected = selection.has(f.id);
-            const pluginItems = readOnly ? [] : pluginMenuItems(f.kind);
-            const actions = actionsFor(f, readOnly, trashed, mirrored);
-            return (
-              <ContextMenu key={f.id}>
-                <ContextMenuTrigger asChild>
-                  <tr
-                    {...rowFocus(i)}
-                    {...dragHandlers(f)}
-                    {...dropHandlers(f)}
-                    onClick={(e) => handleRowClick(e, i, f.id)}
-                    onDoubleClick={() => onOpen(f)}
-                    className={cn(
-                      "focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 group cursor-default border-t transition-colors",
-                      dragOverId === f.id
-                        ? "bg-primary/10 ring-2 ring-inset ring-primary"
-                        : selected
-                          ? "bg-primary/[0.06]"
-                          : "hover:bg-muted/50",
-                    )}
-                    style={{ height: "var(--row-h)" }}
-                  >
-                    <td className="px-3">
-                      <Checkbox
-                        checked={selected}
-                        onClick={(e) => e.stopPropagation()}
-                        onCheckedChange={() => {
-                          const next = new Set(selection);
-                          if (next.has(f.id)) next.delete(f.id);
-                          else next.add(f.id);
-                          onSelectionChange(next);
-                        }}
-                      />
-                    </td>
-                    <td className="min-w-0 px-3">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <FileIcon kind={f.kind} />
-                        <div className="min-w-0"><span className="block max-w-[calc(100vw-9rem)] truncate font-medium md:max-w-none">{searchQuery ? <SearchHighlight text={f.name} query={searchQuery} mode="prefix" /> : f.name}</span>
-                          {f.description ? <p className="line-clamp-2 [overflow-wrap:anywhere] text-xs text-muted-foreground">{searchQuery && f.snippet ? <SearchHighlight text={f.snippet} query={searchQuery} mode="substring" /> : f.description}</p> : null}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="hidden px-3 font-mono text-[12.5px] text-muted-foreground md:table-cell">{f.modified}</td>
-                    <td className="px-2">
-                      <RowActions file={f} onAction={onAction} readOnly={readOnly} trashed={trashed} mirrored={mirrored} />
-                    </td>
-                  </tr>
-                </ContextMenuTrigger>
-                {actions.length > 0 || pluginItems.length > 0 ? (
-                <ContextMenuContent className="w-48">
-                  {actions.map((a) =>
-                    a === "Open" ? (
-                      // Open is the double-click, so it goes straight there rather than
-                      // through `onAction` — the one item with a shorter path.
-                      <ContextMenuItem key={a} onSelect={() => onOpen(f)}>
-                        Open
-                      </ContextMenuItem>
-                    ) : (
-                      <ContextMenuItem
-                        key={a}
-                        variant={a === "Delete" ? "destructive" : undefined}
-                        onSelect={() => onAction(a, f)}
-                      >
-                        {a}
-                      </ContextMenuItem>
-                    ),
-                  )}
-                  {pluginItems.length > 0 && <ContextMenuSeparator />}
-                  {pluginItems.map((item) => (
-                    <ContextMenuItem key={item.pluginId + item.label} onSelect={() => onAction(item.label, f)}>
-                      {item.icon && <Icon name={item.icon} size={15} />}
-                      {item.label}
-                    </ContextMenuItem>
-                  ))}
-                </ContextMenuContent>
-                ) : null}
-              </ContextMenu>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <FileList
+      files={files}
+      searchQuery={searchQuery}
+      selection={selection}
+      onSelectionChange={onSelectionChange}
+      onOpen={onOpen}
+      sort={sort}
+      onSort={onSort}
+      onAction={onAction}
+      onMove={onMove}
+      pluginMenuItems={pluginMenuItems}
+      previewOpen={previewOpen}
+      readOnly={readOnly}
+      trashed={trashed}
+      mirrored={mirrored}
+    />
   );
 }

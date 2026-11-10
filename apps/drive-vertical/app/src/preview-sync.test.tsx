@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { DriveScreen } from './drive';
 import { PreviewPanel } from './preview';
 import { useUnsavedDraft } from './drafts';
+import { fileRow, rowText } from './test-table';
 vi.mock('./live-updates', () => ({ watchDriveChanges: () => () => {} }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -56,7 +57,7 @@ async function openPreview() {
 it('renames the open preview with its row', async () => {
   server();
   await openPreview();
-  fireEvent.contextMenu(screen.getByRole('row', { name: /s12a-note\.txt/ }));
+  fireEvent.contextMenu(fileRow(/s12a-note\.txt/));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'Rename file' }), { target: { value: 's12a-note-renamed.txt' } });
   fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
@@ -116,7 +117,7 @@ it('does not re-read the file while the listing agrees with the panel', async ()
 it('closes the preview when its file is moved to Trash from the row menu', async () => {
   const { fetch } = server();
   await openPreview();
-  fireEvent.contextMenu(screen.getByRole('row', { name: /s12a-note\.txt/ }));
+  fireEvent.contextMenu(fileRow(/s12a-note\.txt/));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
   await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Preview' })).toBeNull());
   expect(fetch).toHaveBeenCalledWith('/api/files/a', expect.objectContaining({ method: 'DELETE' }));
@@ -196,10 +197,10 @@ it('follows a rename made from search results', async () => {
   render(<DriveScreen auth={{ user: {} }} onError={() => {}} onSignIn={() => {}} onSignOut={() => {}} />);
   await screen.findByText('s12a-note.txt');
   fireEvent.change(screen.getByRole('textbox', { name: 'Search this space' }), { target: { value: 's12a' } });
-  await waitFor(() => expect(screen.getByRole('row', { name: /s12a-note\.txt/ }).textContent).toContain('Matched in the name'));
-  fireEvent.doubleClick(screen.getByRole('row', { name: /s12a-note\.txt/ }));
+  await waitFor(() => expect(rowText(fileRow(/s12a-note\.txt/))).toContain('Matched in the name'));
+  fireEvent.doubleClick(fileRow(/s12a-note\.txt/));
   await within(panel()).findByText('text of v2');
-  fireEvent.contextMenu(screen.getByRole('row', { name: /s12a-note\.txt/ }));
+  fireEvent.contextMenu(fileRow(/s12a-note\.txt/));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'Rename file' }), { target: { value: 's12a-note-renamed.txt' } });
   fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
@@ -238,7 +239,7 @@ it('keeps the file out of Trash when the row-menu Delete would discard a decline
   await openPreview();
   fireEvent.click(within(panel()).getByRole('button', { name: 'Edit text' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'File text' }), { target: { value: 'my draft' } });
-  fireEvent.contextMenu(screen.getByRole('row', { name: /s12a-note\.txt/ }));
+  fireEvent.contextMenu(fileRow(/s12a-note\.txt/));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
   expect(confirm).toHaveBeenCalled();
   expect(screen.getByDisplayValue('my draft')).toBeTruthy();
