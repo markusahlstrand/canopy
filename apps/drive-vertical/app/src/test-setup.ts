@@ -1,4 +1,5 @@
 import { afterEach } from 'vitest';
+import { configure } from '@testing-library/react';
 /**
  * What jsdom does not implement and the moved components need.
  *
@@ -32,3 +33,8 @@ if (typeof ElementInternals !== 'undefined' && !ElementInternals.prototype.setVa
 // The drive keeps the address bar on what it shows, so a test's folder or file would
 // otherwise open as a deep link in the next test of the file.
 afterEach(() => { window.history.replaceState(null, '', '/'); });
+
+// A first render of the whole drive (Web Awesome elements included) can take longer than
+// Testing Library's 1s default on a loaded CI runner, so a `findBy` there times out
+// before the screen has drawn. The wait is still bounded; it just fits the slow machine.
+configure({ asyncUtilTimeout: 5000 });
