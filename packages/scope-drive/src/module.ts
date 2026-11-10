@@ -103,9 +103,6 @@ function parsedOrNull(text: string): unknown {
   try { return JSON.parse(text) as unknown; } catch { return null; }
 }
 
-/** Where a connector keeps its last full read in the source journal. */
-const SYNC_REPORT_KEY = 'a3doc:sync-report';
-
 /**
  * Where a connector keeps its last full read in the source journal. The a3doc connector writes it
  * under the same key (its `SYNC_REPORT_KEY`), and `drive/journal-source-write`'s schema allows it.
