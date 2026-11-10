@@ -322,12 +322,16 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const mirrored = source !== null, canUpload = !source || source.canUpload;
   // An empty mirrored folder is a question, so it answers with what the last sync found.
   const [syncNote, setSyncNote] = useState<ReturnType<typeof sourceSyncNote>>(null);
+  // The note only shows over an empty mirrored folder, so it is read only then, and again after
+  // each pushed change while the folder stays empty: the first sync's outcome replaces "under way".
+  const [changeCount, setChangeCount] = useState(0);
+  const showsSyncNote = mirrored && view === 'drive' && !busy && folders.length === 0 && files.length === 0;
   useEffect(() => {
     let current = true;
-    setSyncNote(null);
-    if (source) getSourceStatus().then(next => { if (current) setSyncNote(sourceSyncNote(next)); }).catch(() => {});
+    if (!showsSyncNote) { setSyncNote(null); return; }
+    getSourceStatus().then(next => { if (current) setSyncNote(sourceSyncNote(next)); }).catch(() => {});
     return () => { current = false; };
-  }, [source]);
+  }, [source, showsSyncNote, changeCount]);
   const [savedSpace, setSavedSpace] = useState<string | null>(null);
   const cacheSpace = liveSpace ?? savedSpace ?? currentSite();
   const [offlinePins, setOfflinePins] = useState<FolderPin[]>([]);
@@ -710,7 +714,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         refreshing = false;
       }
     };
-    const stop = watchDriveChanges(() => { void refreshLive(); });
+    const stop = watchDriveChanges(() => { setChangeCount(n => n + 1); void refreshLive(); });
     return () => {
       active = false;
       stop();

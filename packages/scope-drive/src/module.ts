@@ -99,6 +99,15 @@ interface DetailsRow {
 }
 
 /**
+ * Where a connector keeps its last full read in the source journal. The a3doc connector writes it
+ * under the same key (its `SYNC_REPORT_KEY`), and `drive/journal-source-write`'s schema allows it.
+ */
+const SYNC_REPORT_KEY = 'a3doc:sync-report';
+/** A folder path as a connector binds it: `/Facturas/ ` and `Facturas` are one folder. */
+const sameFolder = (a: string, b: string) => normalFolder(a) === normalFolder(b);
+export const normalFolder = (path: string) => path.split('/').map(s => s.trim()).filter(Boolean).join('/');
+
+/**
  * Content search reads the KERNEL's attachment text (#169), because the kernel already
  * extracts every upload (text, HTML, Office, PDF) and keeps it in this scope's own SQLite.
  * Its public `ScopeAttachments.search` answers newest-first with no score and no snippet,
@@ -107,8 +116,6 @@ interface DetailsRow {
  * Only a file's CURRENT version can match: an old version's text is history, not content.
  * `test/search.test.ts` runs this against the real kernel, so a renamed table fails there.
  */
-/** Where a connector keeps its last full read in the source journal. */
-const SYNC_REPORT_KEY = 'a3doc:sync-report';
 const CONTENT_SEARCH_SQL = `
   SELECT f.id AS file_id, bm25(_substrat_search__attachments) AS rank
     FROM _substrat_search__attachments
@@ -336,7 +343,7 @@ const operations = {
     const row = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY])[0];
     const report = row ? sourceSyncReport.safeParse(JSON.parse(row.value)) : null;
     // A sweep can finish after a rebind; its report describes the old source, so it is not this one's.
-    const current = report?.success && report.data.connectionId === source?.connectionId && report.data.folder === source.folder;
+    const current = report?.success && report.data.connectionId === source?.connectionId && sameFolder(report.data.folder, source.folder);
     return { source, ...(current ? { report: report.data } : {}) };
   },
   'drive/source-access': async (ctx) => {
@@ -353,7 +360,7 @@ const operations = {
     }
     // The same folder again keeps its report: its cursor survives too, so no new full read will replace it.
     const prior = sourceOf(ctx);
-    if (prior?.connectionId !== input.connectionId || prior.folder !== input.folder) ctx.sql.exec('DELETE FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY]);
+    if (prior?.connectionId !== input.connectionId || !sameFolder(prior.folder, input.folder)) ctx.sql.exec('DELETE FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY]);
     const boundAt = ctx.now();
     ctx.sql.exec(`INSERT INTO drive_source (id, provider, connection_id, account, folder, can_upload, bound_at) VALUES (1, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, connection_id = excluded.connection_id, account = excluded.account,

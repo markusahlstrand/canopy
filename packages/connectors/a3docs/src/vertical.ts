@@ -1,6 +1,6 @@
 import type { ConnectorDefinition } from '@substrat-run/vertical-host/connectors';
 import { ConnectorRefusal } from '@substrat-run/kernel';
-import { bindA3docContext, dispatchA3docContext, syncA3docContext, A3DOC_FILES_EVENT, SYNC_REPORT_KEY } from './files.js';
+import { bindA3docContext, bindingKey, dispatchA3docContext, syncA3docContext, A3DOC_FILES_EVENT, SYNC_REPORT_KEY, type A3docBinding } from './files.js';
 import { probeA3docSecret } from './probe.js';
 import type { A3docOptions } from './connection.js';
 
@@ -28,7 +28,14 @@ export function a3docConnectorDefinition(
     sweep: async (ctx) => {
       const result = await syncA3docContext(ctx, options(ctx.fetch));
       // Only diagnostics: a report that cannot be kept must not fail the files that did land.
-      if (result.report && !result.superseded) await ctx.invoke(config.journalOperation, { key: SYNC_REPORT_KEY, value: result.report }).catch(() => {});
+      if (result.report && !result.superseded) {
+        await ctx.invoke(config.journalOperation, { key: SYNC_REPORT_KEY, value: result.report }).catch(async () => {
+          // The report is lost, so the binding must not claim one: the next sweep reads in full again.
+          const key = bindingKey(ctx.scope.scopeId);
+          const binding = await ctx.state.get(key) as A3docBinding | undefined;
+          if (binding?.reported) { delete binding.reported; await ctx.state.put(key, binding); }
+        }).catch(() => {});
+      }
       return { landed: result.changes, more: !result.complete };
     },
     dispatch: async (ctx, event) => {

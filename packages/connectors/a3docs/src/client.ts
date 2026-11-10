@@ -201,7 +201,9 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
     );
     if (begun.errorCode) throw new A3docError(begun.errorCode, "LoginMfaBegin", begun.errorMessage);
     const raw = begun.mfaStatus !== undefined ? begun.mfaStatus : begun.MfaStatus;
-    const mfaStatus = typeof raw === "number" ? raw : undefined;
+    // A number, or the same number as text. No status at all stays "will not say": refused below.
+    const mfaStatus = typeof raw === "number" ? raw
+      : typeof raw === "string" && /^\d+$/.test(raw.trim()) ? Number(raw) : undefined;
     if (mfaStatus !== A3DOC_MFA.NONE && mfaStatus !== A3DOC_MFA.OPTIONAL) throw new A3docMfaRequiredError(mfaStatus);
     const done = await post<Envelope & { token?: string }>(
       `${base}/LoginMfaComplete`,

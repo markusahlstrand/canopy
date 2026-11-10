@@ -73,7 +73,7 @@ export const SYNC_TIMEOUT_MS = 120_000;
 
 const KEY = 'a3doc:';
 const BINDING_PREFIX = `${KEY}binding:`;
-const bindingKey = (scope: string) => `${BINDING_PREFIX}${scope}`;
+export const bindingKey = (scope: string) => `${BINDING_PREFIX}${scope}`;
 /** Per item. Keyed by the bound container too, so a binding to another container starts clean. */
 const itemPrefix = (b: Pick<A3docBinding, 'scopeId' | 'containerId'>) => `${KEY}item:${b.scopeId}:${b.containerId}:`;
 const writeKey = (eventId: string) => `${KEY}write:${eventId}`;
@@ -224,7 +224,8 @@ export async function bindA3docScope(
     if (prior.highWater) binding.highWater = prior.highWater;
     if (prior.lastFull) binding.lastFull = prior.lastFull;
     if (prior.lastSync) binding.lastSync = prior.lastSync;
-    if (prior.reported) binding.reported = prior.reported;
+    // A report names the folder as it was bound; another spelling of it needs a new one.
+    if (prior.reported && prior.folder === binding.folder) binding.reported = prior.reported;
     if (prior.pass) binding.pass = prior.pass;
   }
   await host.admin.putConnectorState(input.connectionId, bindingKey(input.scopeId), binding);
@@ -888,7 +889,8 @@ export async function syncA3docContext(ctx: ScopedConnectionContext, options: A3
   const resolved = contextBinding(ctx, options);
   const key = bindingKey(ctx.scope.scopeId);
   const previous = await ctx.state.get(key) as A3docBinding | undefined;
-  const binding = previous?.containerId === resolved.containerId ? { ...previous, ...resolved, boundAt: previous.boundAt } : resolved;
+  const binding: A3docBinding = previous?.containerId === resolved.containerId ? { ...previous, ...resolved, boundAt: previous.boundAt } : resolved;
+  if (previous && binding.reported && previous.folder !== resolved.folder) delete binding.reported;
   await ctx.state.put(key, binding);
   const admin = contextState(ctx);
   return syncFiles({ admin,
