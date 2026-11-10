@@ -152,6 +152,18 @@ it('reads a binding from before reports existed in full on its next sweep', asyn
   expect(keptReport(w)).toBeUndefined();
 });
 
+it('reads in full again when the same folder is bound under another name, so the report follows the name', async () => {
+  const w = world();
+  w.a3.add([21], 'Invoice', 'inside');
+  await w.bind('Facturas/Recibidas');
+  await w.def.sweep!(w.ctx);
+  // The space drops its report when the folder text changes (drive/record-source).
+  w.journal.delete('a3doc:sync-report');
+  await w.bind(`${w.a3.tree[0]!.name}/Facturas/Recibidas`);
+  await w.def.sweep!(w.ctx);
+  expect(keptReport(w)).toMatchObject({ complete: true, total: 1, folder: `${w.a3.tree[0]!.name}/Facturas/Recibidas` });
+});
+
 it('takes a folder path that starts at the root name a3doc shows', async () => {
   const w = world();
   w.a3.add([21], 'Invoice', 'inside');

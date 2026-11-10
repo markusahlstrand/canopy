@@ -53,7 +53,11 @@ async function relayed<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (error) {
-    if (!(error instanceof MailInAddressError)) throw error;
+    // An unreachable platform (a fetch TypeError) or an answer that doesn't parse is the platform's
+    // failure too, so it reads as one rather than as this worker's opaque 500.
+    if (!(error instanceof MailInAddressError)) {
+      throw new HTTPException(502, { message: `Could not reach the platform's mail service: ${error instanceof Error ? error.message : String(error)}` });
+    }
     // A refusal is the user's to read (a preview cannot have an address, an allowlist too long);
     // anything else, including the platform rejecting this worker's credentials or rate-limiting
     // it, is the platform's, and says so. Never a 404: to settings that means this worker has no

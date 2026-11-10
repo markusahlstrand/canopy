@@ -98,6 +98,14 @@ interface DetailsRow {
   revision: number; updated_at: string; updated_by: string;
 }
 
+/** Stored JSON, or null when it is not: a row an older or interrupted writer left must read as absent. */
+function parsedOrNull(text: string): unknown {
+  try { return JSON.parse(text) as unknown; } catch { return null; }
+}
+
+/** Where a connector keeps its last full read in the source journal. */
+const SYNC_REPORT_KEY = 'a3doc:sync-report';
+
 /**
  * Where a connector keeps its last full read in the source journal. The a3doc connector writes it
  * under the same key (its `SYNC_REPORT_KEY`), and `drive/journal-source-write`'s schema allows it.
@@ -341,7 +349,7 @@ const operations = {
     // Only diagnostics: a report this version cannot read must not cost members the source itself.
     const source = sourceOf(ctx);
     const row = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY])[0];
-    const report = row ? sourceSyncReport.safeParse(JSON.parse(row.value)) : null;
+    const report = row ? sourceSyncReport.safeParse(parsedOrNull(row.value)) : null;
     // A sweep can finish after a rebind; its report describes the old source, so it is not this one's.
     const current = report?.success && report.data.connectionId === source?.connectionId && sameFolder(report.data.folder, source.folder);
     return { source, ...(current ? { report: report.data } : {}) };
