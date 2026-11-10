@@ -27,9 +27,10 @@ import { listOfflinePins, offlineSpace, rememberOfflineSpace, removeOfflinePin, 
 import { refreshOfflinePins, syncOfflineFolderOnce, type FolderSyncProgress } from './offline-folder-sync';
 import { OfflinePreview } from './offline-preview';
 import { watchDriveChanges } from './live-updates';
-import { PreviewPanel } from './preview';
+import { PreviewPanel, type PreviewMode } from './preview';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { Topbar } from './topbar';
+import { AccountMenu } from './account-menu';
 import { SelectionSummary } from './selection-summary';
 import { folderPath, linkedFolderId, linkedView, showInUrl, storedIndex, type DriveEntry } from './folder-links';
 import { linkedFileId } from './file-links';
@@ -249,6 +250,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [creating, setCreating] = useState(false);
   const [creatingFile, setCreatingFile] = useState<PluginCreator | null>(null);
   const [previewing, changePreview] = useState<string | null>(null);
+  // Docked beside the list, or covering the screen; remembered across files and sessions.
+  const [previewMode, changePreviewMode] = useState<PreviewMode>(() => {
+    try { return localStorage.getItem('canopy.previewMode') === 'full' ? 'full' : 'split'; } catch { return 'split'; }
+  });
+  const setPreviewMode = useCallback((mode: PreviewMode) => {
+    changePreviewMode(mode);
+    try { localStorage.setItem('canopy.previewMode', mode); } catch { /* storage unavailable: keep it for this session */ }
+  }, []);
   const previewId = useRef(previewing);
   previewId.current = previewing;
   const previewSaving = useRef(false);
@@ -1042,6 +1051,21 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     />
   );
 
+  // One menu, in the desktop rail and the phone's sheet; the sheet closes before a dialog opens.
+  const accountMenu = (compact: boolean, beforeOpen?: () => void) => {
+    const opening = (open: (value: boolean) => void) => () => { beforeOpen?.(); open(true); };
+    return <AccountMenu
+      auth={auth}
+      compact={compact}
+      offline={offline}
+      onSignIn={onSignIn}
+      onSignOut={onSignOut}
+      onOpenViewers={opening(setViewersOpen)}
+      onOpenAppPasswords={offline ? undefined : opening(setAppPasswordsOpen)}
+      onOpenPeople={canManagePeople && !offline ? opening(setPeopleOpen) : undefined}
+    />;
+  };
+
   return (
     <div className="flex min-h-0 flex-1">
       <div className="hidden md:block">
@@ -1065,6 +1089,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onSpaceSettings={() => setSpaceSettingsOpen(true)}
           onSpaceMembers={() => setPeopleOpen(true)}
           onSpacePlugins={() => setViewersOpen(true)}
+          account={compact => accountMenu(compact)}
           onRetry={siteList.retry}
         />
       </div>
@@ -1093,6 +1118,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             onSpaceSettings={() => { setMobileNavOpen(false); setSpaceSettingsOpen(true); }}
             onSpaceMembers={() => { setMobileNavOpen(false); setPeopleOpen(true); }}
             onSpacePlugins={() => { setMobileNavOpen(false); setViewersOpen(true); }}
+            account={compact => accountMenu(compact, () => setMobileNavOpen(false))}
             onRetry={siteList.retry}
           />
         </SheetContent>
@@ -1110,14 +1136,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onUpload={canUpload ? () => startWrite(() => uploadRef.current?.click()) : undefined}
         onRefresh={() => void refresh(true)}
         syncing={busy}
-        onOpenViewers={() => setViewersOpen(true)}
-        onOpenAppPasswords={offline ? undefined : () => setAppPasswordsOpen(true)}
-        onOpenPeople={canManagePeople && !offline ? () => setPeopleOpen(true) : undefined}
         offline={offline}
         writeBlocked={linkPending || linkListingUnavailable}
-        auth={auth}
-        onSignIn={onSignIn}
-        onSignOut={onSignOut}
       />
 
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
@@ -1372,7 +1392,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </FileDropZone>
 
       {previewing ? (
-        <div className="fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0">
+        <div className={previewMode === 'full' && !(offline && !hasUnsavedDrafts())
+          ? 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:inset-0 md:z-40'
+          : 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:static md:z-auto md:w-[28rem] md:shrink-0'}>
           {offline && !hasUnsavedDrafts() ? cacheSpace && auth.principal && files.find(file => file.id === previewing) ? <OfflinePreview
             file={files.find(file => file.id === previewing)!}
             principal={auth.principal}
@@ -1386,6 +1408,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             onClose={() => setPreviewing(null)}
             onError={onError}
             onSavingChange={onPreviewSaving}
+            mode={previewMode}
+            onModeChange={setPreviewMode}
           />}
         </div>
       ) : null}

@@ -99,6 +99,8 @@ export function textStatusLabel(row: FileTextRow | null): string {
   }
 }
 
+export type PreviewMode = 'split' | 'full';
+
 /** Load the current file's metadata and render only the preview surfaces the API supports. */
 export function PreviewPanel({
   fileId,
@@ -108,6 +110,8 @@ export function PreviewPanel({
   onSavingChange,
   navigation,
   listed,
+  mode = 'split',
+  onModeChange,
 }: {
   fileId: string;
   onClose: () => void;
@@ -118,6 +122,10 @@ export function PreviewPanel({
   navigation?: { previous: string | null; next: string | null; moreAvailable?: boolean; onOpen: (id: string) => void };
   /** The listing's row for this file, when it has one; absence is not removal. */
   listed?: { name: string; currentVersionId: string | null } | null;
+  /** "split" docks beside the file list; "full" covers the screen. The host owns the wrapper's layout. */
+  mode?: PreviewMode;
+  /** Absent, the panel offers no way to switch modes. */
+  onModeChange?: (mode: PreviewMode) => void;
 }) {
   const [retry, setRetry] = useState(0);
   const [savingText, setSavingText] = useState(false);
@@ -424,7 +432,7 @@ export function PreviewPanel({
   return (
     <aside
       aria-label="Preview"
-      className="flex h-full w-full flex-col border-l border-border bg-background md:w-[28rem]"
+      className={cn('flex h-full w-full flex-col bg-background', mode === 'full' ? '' : 'border-l border-border md:w-[28rem]')}
     >
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Icon name="file-text" className="size-4 text-muted-foreground" />
@@ -442,6 +450,14 @@ export function PreviewPanel({
               <Icon name="download" className="size-4" />
               Download
             </a>
+          </Button>
+        ) : null}
+        {onModeChange ? (
+          <Button variant="ghost" size="sm" className="hidden md:inline-flex"
+            onClick={() => onModeChange(mode === 'full' ? 'split' : 'full')}
+            title={mode === 'full' ? 'Dock to the side' : 'Open full screen'}
+            aria-label={mode === 'full' ? 'Dock to the side' : 'Open full screen'}>
+            <Icon name={mode === 'full' ? 'minimize' : 'maximize'} className="size-4" />
           </Button>
         ) : null}
         <Button variant="ghost" size="sm" disabled={savingText} onClick={onClose} aria-label="Close preview">
