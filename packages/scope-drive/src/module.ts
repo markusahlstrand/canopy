@@ -1176,15 +1176,25 @@ const operations = {
       ...input,
       filters: { parent_id: input.folderId },
     };
+    // `empty`: no live file anywhere at or below the folder, so a client can offer to hide it. A
+    // folder holding only empty folders is empty too. `substr`, not LIKE: a name may hold `%` or `_`.
+    const marked = (folders: FolderRow[]) => folders.map(folder => ({
+      ...folder,
+      empty: !ctx.sql.query<{ found: number }>(
+        `SELECT EXISTS (SELECT 1 FROM drive_files f JOIN drive_folders d ON d.id = f.folder_id
+           WHERE f.state = 'live' AND (d.path = ? OR substr(d.path, 1, length(?) + 1) = ? || '/')) AS found`,
+        [folder.path, folder.path, folder.path],
+      )[0]?.found,
+    }));
     const page = ctx.page<FolderRow>('folder', params) as Page<FolderRow>;
-    if (input.folderId !== ROOT_FOLDER_ID || !page.entries.some(folder => folder.id === ROOT_FOLDER_ID)) return page;
+    if (input.folderId !== ROOT_FOLDER_ID || !page.entries.some(folder => folder.id === ROOT_FOLDER_ID)) return { ...page, entries: marked(page.entries) };
     // The root row is its own parent to anchor the folder permission tree. It is
     // not a visible child folder. Fetch one replacement so even a limit=1 page
     // starts with a real folder and its cursor still advances correctly.
     const entries = page.entries.filter(folder => folder.id !== ROOT_FOLDER_ID);
-    if (!page.nextCursor) return { ...page, entries };
+    if (!page.nextCursor) return { ...page, entries: marked(entries) };
     const replacement = ctx.page<FolderRow>('folder', { ...params, cursor: page.nextCursor, limit: 1 }) as Page<FolderRow>;
-    return { ...page, entries: [...entries, ...replacement.entries], nextCursor: replacement.nextCursor };
+    return { ...page, entries: marked([...entries, ...replacement.entries]), nextCursor: replacement.nextCursor };
   },
 
   'drive/get-folder': async (ctx, input) => {

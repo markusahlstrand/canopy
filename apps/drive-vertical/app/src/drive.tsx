@@ -17,7 +17,7 @@ import { SearchMatchFilter, filterMatches, type MatchFilter } from './search-mat
  * like — but they are two reads and two entity types underneath, and the actions differ.
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
+import { Button, DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
 import { readViewPreferences, saveViewPreferences, watchViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
@@ -454,7 +454,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const unselect = (ids: string[]) => setSelection(previous => new Set([...previous].filter(id => !ids.includes(id))));
   const [savedView] = useState(readViewPreferences);
   const [layout, setLayout] = useState<'list' | 'grid'>(savedView.layout);
-  /** The flat view: every file at or below this folder, with its category and labels. */
+  const [hideEmptyFolders, setHideEmptyFolders] = useState(savedView.hideEmptyFolders === true);
+  /** The flat view: every file at or below this folder, its folders and labels as tags. */
   const [allFiles, setAllFiles] = useState(false);
   const [subtreeFiles, setSubtreeFiles] = useState<SubtreeFile[]>([]);
   const [subtreeNext, setSubtreeNext] = useState<string | null>(null);
@@ -485,7 +486,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => watchViewPreferences(value => {
     setLayout(value.layout);
     setSort(value.sort);
+    setHideEmptyFolders(value.hideEmptyFolders === true);
   }), []);
+  /** Every save carries all three, since a save replaces the stored record. */
+  const saveView = (change: Partial<{ layout: 'list' | 'grid'; sort: SortState; hideEmptyFolders: boolean }>) =>
+    saveViewPreferences({ layout, sort, ...(hideEmptyFolders ? { hideEmptyFolders } : {}), ...change });
+  // Only the online listing knows a folder is empty; a folder without the mark always shows.
+  const shownFolders = view === 'drive' && hideEmptyFolders ? folders.filter(folder => folder.empty !== true) : folders;
+  const hiddenFolders = folders.length - shownFolders.length;
   const uploads = useUploadQueue(() => refreshRef.current());
 
   const changeMatchFilter = (value: MatchFilter) => { reads.current.invalidate(); setMatchFilter(value); setSelection(new Set()); setBusy(true); };
@@ -944,7 +952,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const onSort = (key: SortKey) => {
     const next: SortState = { key, dir: sort.key === key && sort.dir === 'asc' ? 'desc' : 'asc' };
     setSort(next);
-    saveViewPreferences({ layout, sort: next });
+    saveView({ sort: next });
   };
 
   /**
@@ -1036,7 +1044,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const folderActions = view === 'drive' && !offline && !linkPending && !linkListingUnavailable;
   const pageTitle = view === 'trash' ? 'Trash' : view === 'search' ? 'Search' : view === 'shared' ? 'Shared with me' : crumbs.at(-1)?.name ?? rootLabel;
   const previewCovers = previewMode === 'full' && !(offline && !hasUnsavedDrafts());
-  const pageCount = showingAll ? subtreeFiles.length : view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : folders.length + files.length;
+  const pageCount = showingAll ? subtreeFiles.length : view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : shownFolders.length + files.length;
   const saveCurrentFolderOffline = async () => {
     if (!auth.principal || !cacheSpace || pinBusy) return;
     const pin: FolderPin = { principal: auth.principal, space: cacheSpace, folderId,
@@ -1073,6 +1081,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       : matchFilter !== 'all' && visibleHits.length === 0
         ? <EmptyList icon="search" title="No matches of this type" description="Try another match type. The selected field is searched directly, returning up to 50 files." actions={[{ label: 'Show all returned matches', onClick: () => changeMatchFilter('all') }]} />
         : <EmptyList icon="search" title={`No matches for “${term.trim()}”`} description="Try another name or phrase from a file." />
+  ) : hiddenFolders > 0 ? (
+    <EmptyList icon="folder" title="Only empty folders here"
+      description={`${hiddenFolders} empty folder${hiddenFolders === 1 ? ' is' : 's are'} hidden.`}
+      actions={[{ label: 'Show empty folders', onClick: () => { setHideEmptyFolders(false); saveView({ hideEmptyFolders: false }); } }]} />
   ) : offline ? (
     <EmptyList icon="folder" title="No saved files here" description="This folder has no file names saved for offline browsing." />
   ) : (
@@ -1316,8 +1328,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             variant={showingAll ? 'secondary' : 'outline'}
             size="sm"
             aria-pressed={showingAll}
-            aria-label="All files with categories and labels"
-            title="All files with categories and labels"
+            aria-label="Files with folders as tags"
+            title="Files with folders as tags"
             onClick={() => {
               listingDepth.current = { folder: folderId, files: 1, folders: 1 };
               setSelection(new Set());
@@ -1328,13 +1340,36 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           </Button>
         ) : null}
 
+        {view === 'drive' && !offline && !showingAll ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant={hideEmptyFolders ? 'secondary' : 'outline'} size="sm" aria-label="View options" title="View options">
+                <Icon name="filter" className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuCheckboxItem
+                checked={hideEmptyFolders}
+                onCheckedChange={(on) => {
+                  // A hidden folder must not stay selected out of sight.
+                  setSelection(new Set());
+                  setHideEmptyFolders(on);
+                  saveView({ hideEmptyFolders: on });
+                }}
+              >
+                Hide empty folders
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+
         {showingAll ? null : <Button
           variant="outline"
           size="sm"
           onClick={() => {
             const next = layout === 'list' ? 'grid' : 'list';
             setLayout(next);
-            saveViewPreferences({ layout: next, sort });
+            saveView({ layout: next });
           }}
           aria-label={layout === 'list' ? 'Switch to grid' : 'Switch to list'}
         >
@@ -1402,6 +1437,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         />
       ) : showingAll ? (
         <AllFilesTable
+          key={folderId}
+          more={subtreeNext !== null}
           files={sorted(subtreeFiles, sort).map((file) => ({ ...fileItem(file), category: file.folder_path, labels: file.labels }))}
           below={folderId === ROOT_FOLDER_ID ? null : crumbs.at(-1)?.name ?? null}
           sort={sort}
@@ -1411,7 +1448,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         />
       ) : (
         <FileTable
-          files={[...sorted(folders, sort).map(folderItem), ...sorted(files, sort).map((file) => fileItem(file))]}
+          files={[...sorted(shownFolders, sort).map(folderItem), ...sorted(files, sort).map((file) => fileItem(file))]}
           selection={selection}
           onSelectionChange={setSelection}
           onOpen={(item) => {

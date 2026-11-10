@@ -385,10 +385,10 @@ describe('an action refreshes the folder on screen, not the one it started in', 
   });
 });
 
-describe('the all-files view', () => {
-  const toggle = () => screen.getByRole('button', { name: 'All files with categories and labels' });
+describe('the files-as-tags view', () => {
+  const toggle = () => screen.getByRole('button', { name: 'Files with folders as tags' });
 
-  it('lists every file below the folder with its category and labels, and goes back', async () => {
+  it('lists every file below the folder with its folders and labels as tags, and goes back', async () => {
     await renderDrive([{ id: '01F', parent_id: 'root', name: 'Fiscal', path: 'Fiscal' }], [file('01T', 'top.txt')]);
     fireEvent.click(toggle());
     await flush();
@@ -399,11 +399,13 @@ describe('the all-files view', () => {
       { ...file('01B', 'deed.pdf'), folder_path: '', labels: [] },
     ] });
     expect(screen.getByText('modelo.pdf')).toBeTruthy();
-    expect(screen.getAllByText('Fiscal/Modelo 303').length).toBeGreaterThan(0);
-    expect(screen.getByText('tax')).toBeTruthy();
-    expect(screen.getAllByText('Top level').length).toBeGreaterThan(0);
+    const tags = within(screen.getByRole('group', { name: 'Filter by tag' }));
+    for (const tag of ['Fiscal', 'Modelo 303', 'tax', '2024']) expect(tags.getByRole('button', { name: new RegExp(`^${tag}`) })).toBeTruthy();
+    expect(screen.getAllByText('No tags').length).toBeGreaterThan(0);
     expect(screen.getByText('2 items')).toBeTruthy();
-    expect(screen.queryByText('Fiscal')).toBeNull();
+    // The folder itself is not listed: only files, its name now a tag.
+    const rows = screen.getAllByRole('row').slice(1).map(row => row.querySelector('td button')?.textContent);
+    expect(rows).toEqual(['deed.pdf', 'modelo.pdf']);
 
     fireEvent.click(toggle());
     await flush();
@@ -424,6 +426,39 @@ describe('the all-files view', () => {
     expect(screen.getByText('first.pdf')).toBeTruthy();
     expect(screen.getByText('second.pdf')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Load more files' })).toBeNull();
+  });
+});
+
+describe('hiding empty folders', () => {
+  const folders = [
+    { id: '01F', parent_id: 'root', name: 'Fiscal', path: 'Fiscal', empty: false },
+    { id: '01E', parent_id: 'root', name: 'Houses', path: 'Houses', empty: true },
+  ];
+  const hide = async () => {
+    // Radix opens its menu on pointer down, not click.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'View options' }), { button: 0, ctrlKey: false });
+    await flush();
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Hide empty folders' }));
+    await flush();
+  };
+
+  it('hides folders with nothing below them, and remembers it', async () => {
+    await renderDrive(folders, []);
+    expect(screen.getByText('Houses')).toBeTruthy();
+    await hide();
+    expect(screen.queryByText('Houses')).toBeNull();
+    expect(screen.getByText('Fiscal')).toBeTruthy();
+    expect(screen.getByText('1 item')).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem('canopy.drive.view')!).hideEmptyFolders).toBe(true);
+  });
+
+  it('says folders are hidden rather than calling the folder empty, and shows them again', async () => {
+    await renderDrive([folders[1]!], []);
+    await hide();
+    expect(screen.getByText('Only empty folders here')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Show empty folders' }));
+    await flush();
+    expect(screen.getByText('Houses')).toBeTruthy();
   });
 });
 
