@@ -825,6 +825,17 @@ export interface SourceLogin { companyCode: string; user: string; password: stri
 /** Connects the current space, or `selectedSite`: the create dialog connects a space it has not switched to yet. */
 export const connectSource = (login: SourceLogin, selectedSite = currentSite()) => call<DriveSource>('/source', { method: 'PUT', body: JSON.stringify(login) }, selectedSite);
 export const disconnectSource = () => call<void>('/source', { method: 'DELETE' });
+
+/** The space's mail address (#357), as the platform keeps it, beside what this drive has filed. */
+export interface SpaceMail {
+  address: { address: string; allowlist: string[]; createdAt: string; stats: { received: number; delivered: number; rejected: number; deadLettered: number; pending: number; lastReceivedAt: string | null; lastRejectReason: string | null } } | null;
+  connected: boolean;
+  messages: number;
+  lastReceivedAt: string | null;
+}
+export const getSpaceMail = () => call<SpaceMail>('/mail');
+export const changeSpaceMail = (body: { action: 'request' | 'rotate'; allowlist?: string[] } | { action: 'revoke' }) =>
+  call<SpaceMail>('/mail', { method: 'POST', body: JSON.stringify(body) });
 export type SourceSyncOutcome = import('../../src/source-routes').SourceSyncOutcome;
 /** **Sync now**: poll the space's a3doc binding at once; the platform allows one a minute. */
 export const syncSource = () => call<SourceSyncOutcome>('/source/sync', { method: 'POST' });

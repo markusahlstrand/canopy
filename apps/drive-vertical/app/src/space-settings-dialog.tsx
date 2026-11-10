@@ -4,6 +4,7 @@ import { currentSite, deleteSite, getSpaceSettings, selectSite, updateSpaceSetti
 import { defaultSpaceSettings, type SpaceSettings } from '../../src/space-settings';
 import { SpaceStyleFields } from './space-style-fields';
 import { SourceSettings } from './source-settings';
+import { MailSettings } from './mail-settings';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;onOpenChange:(open:boolean)=>void;onSaved:()=>void}) {
   const [settings,setSettings] = useState<SpaceSettings>(defaultSpaceSettings(''));
@@ -72,6 +73,7 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
             </label>
           </section>
           <SourceSettings disabled={busy} onChanged={onSaved} onDraftChange={setSourceDraft}/>
+          <MailSettings disabled={busy}/>
           {currentSite() ? <DeleteSpace name={JSON.parse(initial || '{}').name ?? ''} disabled={busy} onDelete={() => void remove()}/> : null}
         </form>}
       </div>

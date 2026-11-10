@@ -188,7 +188,7 @@ export const driveEntities = defineEntities({
  * never held scope-wide, so one member's folders stay unreachable to another
  * unless a grant says otherwise.
  */
-export const DRIVE_PERMISSIONS = ['drive:read', 'drive:write', 'drive:manage', 'drive:land-source'] as const;
+export const DRIVE_PERMISSIONS = ['drive:read', 'drive:write', 'drive:manage', 'drive:land-source', 'drive:receive-mail'] as const;
 
 /**
  * A person as this drive displays them: a principal, and what to call it.
@@ -308,6 +308,24 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   'drive/clear-source': {
     summary: 'Forget the file source this space was bound to', permission: 'drive:manage',
     output: z.object({ ok: z.literal(true) }),
+  },
+  /**
+   * Mail forwarded to the space's address (#357), one mail-in change per call. Only the address's
+   * own connection holds this key; `driveMailChange` parses the whole change in the handler.
+   */
+  'drive/receive-mail': {
+    summary: 'Land one change of a message forwarded to this space',
+    permission: 'drive:receive-mail',
+    input: z.object({ change: z.enum(['message', 'attachment', 'raw']), connectionId: z.string(), messageId: z.string() }).passthrough(),
+    output: z.object({ entity: z.object({ entityType: z.string(), entityId: z.string() }).optional(), raw: z.boolean().optional(), ok: z.boolean().optional() }),
+  },
+  /**
+   * The authorizing act for the space's mail address: the worker asks the platform for, rotates or
+   * revokes the address only after this answers, and shows its counts beside the drive's own.
+   */
+  'drive/mail-access': {
+    summary: 'Authorize a change to the space\'s mail address', permission: 'drive:manage',
+    output: z.object({ principal: z.string(), connected: z.boolean(), messages: z.number().int(), lastReceivedAt: z.string().nullable() }),
   },
   /**
    * The hot read, and the one S10 converts first.

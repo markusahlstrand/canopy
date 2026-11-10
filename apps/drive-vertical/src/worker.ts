@@ -5,6 +5,7 @@ import { claimSafeInvite, claimSafeInviteByCapability, unbindProtectedPrincipal,
 import { mountInviteSite } from './invite-site-route.js';
 import { mountSpaceSettings } from './space-settings-routes.js';
 import { mountSource, type DriveSource } from './source-routes.js';
+import { mountMail } from './mail-routes.js';
 import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
 import { bindSpaceCreator, reserveSpaceCreation } from './space-creation.js';
 import { importGithubPlugin } from './github-plugin-import.js';
@@ -783,6 +784,18 @@ mountSource(app, async (c) => {
     scope: await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId),
     relay: () => {
       if (!c.env.CONTROL_PLANE_URL || !c.env.PLATFORM_SECRET) throw new HTTPException(503, { message: 'Connecting a source needs the hosted platform.' });
+      return { controlPlaneUrl: c.env.CONTROL_PLANE_URL, platformSecret: c.env.PLATFORM_SECRET, tenantId: node.tenantId, scopeId: node.scopeId };
+    },
+  };
+});
+mountMail(app, async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, c.env);
+  return {
+    scope: await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId),
+    relay: () => {
+      if (!c.env.CONTROL_PLANE_URL || !c.env.PLATFORM_SECRET) throw new HTTPException(503, { message: 'Email to a space needs the hosted platform.' });
       return { controlPlaneUrl: c.env.CONTROL_PLANE_URL, platformSecret: c.env.PLATFORM_SECRET, tenantId: node.tenantId, scopeId: node.scopeId };
     },
   };

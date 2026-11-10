@@ -257,5 +257,14 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
     id INTEGER PRIMARY KEY CHECK (id = 1), provider TEXT NOT NULL, connection_id TEXT NOT NULL,
     account TEXT NOT NULL, folder TEXT NOT NULL, can_upload INTEGER NOT NULL, bound_at TEXT NOT NULL
   );` },
+  /** #357: one row per forwarded message, and one per part of it that became a file. */
+  { version: '0014', sql: `CREATE TABLE drive_mail_messages (
+    message_id TEXT PRIMARY KEY NOT NULL, connection_id TEXT NOT NULL, folder_id TEXT NOT NULL REFERENCES drive_folders(id),
+    received_at TEXT NOT NULL, attachments INTEGER NOT NULL
+  );
+  CREATE TABLE drive_mail_parts (
+    message_id TEXT NOT NULL REFERENCES drive_mail_messages(message_id), part TEXT NOT NULL,
+    file_id TEXT NOT NULL REFERENCES drive_files(id), PRIMARY KEY (message_id, part)
+  );` },
 
 ];

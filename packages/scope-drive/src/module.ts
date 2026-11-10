@@ -1,4 +1,5 @@
 import { landSourceChange } from './source-landing.js';
+import { landMailChange, mailSummary } from './mail-landing.js';
 import { searchSnippet, SNIPPET_SCAN_LIMIT } from './search-snippet.js';
 /**
  * The drive's handlers — the first canopy operations written as scope-local code.
@@ -322,6 +323,12 @@ const operations = {
     return { value: row ? JSON.parse(row.value) as unknown : null };
   },
   'drive/land-source-change': (ctx, input) => landSourceChange(ctx, fileSourceChange.parse(input)),
+  'drive/receive-mail': (ctx, input) => landMailChange(ctx, input),
+  'drive/mail-access': async (ctx) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.manage));
+    // A space that mirrors a source has no folders of its own to file mail into.
+    return { principal: ctx.principal, connected: !!sourceOf(ctx), ...mailSummary(ctx) };
+  },
   'drive/get-source': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
     // Only diagnostics: a report this version cannot read must not cost members the source itself.
