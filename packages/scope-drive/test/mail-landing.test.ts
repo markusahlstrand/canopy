@@ -7,6 +7,7 @@ import { platformActorId, principalId, scopeId, tenantId } from '@substrat-run/c
 import { ulid } from '@substrat-run/kernel';
 import { driveManifest, driveModule, DRIVE_PERM } from '../src/index.js';
 import { mailName } from '../src/mail-landing.js';
+import { ROOT_FOLDER_ID } from '../src/migrations.js';
 import { ROLES } from '../src/provision.js';
 
 const dirs: string[] = [];
@@ -89,6 +90,13 @@ it('keeps two messages with the same subject and day apart', async () => {
   expect(folder.path).toBe('Mail/2026-10-26 Invoice 1234 from Acme (2)');
 });
 
+it('names a message folder by its arrival when the Date header did not parse', async () => {
+  const w = await world();
+  const landed = await w.receive(message('raw-date', { date: 'Mon, 26 Oct 2026 10:00:00 +0100', receivedAt: '2026-10-27T08:00:00.000Z' }));
+  const folder = await w.human.invoke<{ path: string }>('drive/get-folder', { folderId: landed.entity!.entityId });
+  expect(folder.path).toBe('Mail/2026-10-27 Invoice 1234 from Acme');
+});
+
 it('lets only the address land mail, and only bytes stored on the message folder', async () => {
   const w = await world();
   await expect(w.human.invoke('drive/receive-mail', message('x'))).rejects.toThrow();
@@ -154,4 +162,15 @@ it('keeps the extension when a long name is shortened, and whole characters', ()
   expect(name.endsWith('a.pdf')).toBe(true);
   expect(mailName(`${'a'.repeat(115)}😀😀.pdf`, 'x')).toBe(`${'a'.repeat(115)}.pdf`);
   expect(mailName(`${'a'.repeat(200)}.not an extension`, 'x')).toHaveLength(120);
+});
+
+it("never files into a person's own Mail folder, and follows its own when renamed", async () => {
+  const w = await world();
+  await w.human.invoke('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Mail' });
+  const first = await w.receive(message('a'));
+  const folder = await w.human.invoke<{ path: string; parent_id: string }>('drive/get-folder', { folderId: first.entity!.entityId });
+  expect(folder.path).toBe('Mail (2)/2026-10-26 Invoice 1234 from Acme');
+  await w.human.invoke('drive/rename-folder', { folderId: folder.parent_id, name: 'Inbox' });
+  const second = await w.receive(message('b', { subject: 'Later' }));
+  expect((await w.human.invoke<{ path: string }>('drive/get-folder', { folderId: second.entity!.entityId })).path).toBe('Inbox/2026-10-26 Later');
 });

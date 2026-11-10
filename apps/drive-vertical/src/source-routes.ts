@@ -87,7 +87,8 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
       polled = await syncConnections({ ...relay(), provider: A3DOC_VERTICAL_PROVIDER });
     } catch (error) {
       if (error instanceof ConnectionRequestError && error.status === 429) {
-        throw new HTTPException(429, { message: 'This space synced less than a minute ago. Try again in a minute.' });
+        // Connecting starts a sync too, so this can be the first one, still running, not the person's own.
+        throw new HTTPException(429, { message: 'A sync started less than a minute ago. Try again in a minute.' });
       }
       return relayed(() => Promise.reject(error));
     }
