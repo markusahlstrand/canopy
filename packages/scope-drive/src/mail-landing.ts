@@ -154,9 +154,13 @@ function landPart(ctx: OperationContext, message: Message, part: string, filenam
   return { ok: true };
 }
 
-/** `2026-10-26 Invoice from Acme`, from the message's date (or its arrival) and subject. */
+/**
+ * `2026-10-26 Invoice from Acme`, from the message's date (or its arrival) and subject. The
+ * contract gives `date` as an instant only when the header parses; otherwise it is the header as
+ * written (`Mon, 26 Oct 2026 …`), whose first ten characters are no day, so arrival stands in.
+ */
 function messageFolderName(date: string | null, receivedAt: string, subject: string | null): string {
-  const day = (date ?? receivedAt).slice(0, 10);
+  const day = (date && /^\d{4}-\d{2}-\d{2}/.test(date) ? date : receivedAt).slice(0, 10);
   return mailName(`${day} ${subject?.trim() || '(no subject)'}`, day, 100);
 }
 

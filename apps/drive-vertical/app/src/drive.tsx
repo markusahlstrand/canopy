@@ -227,6 +227,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const shownUrl = useRef<string | null>(null);
   /** The navigation whose link failed for a reason a reload can fix, so it stays in the URL. */
   const retryableLink = useRef<number | null>(null);
+  /** What the screen showed while the failed link held the URL; anything else is the person moving on. */
+  const retryableShown = useRef<string | null>(null);
   const [folderRecovery, setFolderRecovery] = useState(0);
   const unavailableFolder = useRef<string | null>(null);
   const [linkListingUnavailable, setLinkListingUnavailable] = useState(false);
@@ -421,10 +423,20 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
   // A pending link is still the URL's to answer: writing now would replace it with the root.
   useEffect(() => {
-    if (linkPending || retryableLink.current === linkNavigation.current) return;
+    if (linkPending) return;
     const entry = { folderId, crumbs, view, fileId: previewing, term: view === 'search' ? term : '' };
+    // A link a reload can still open keeps the URL until the screen changes — opening a preview
+    // moves on without a navigation — and then the failed link stays one Back away.
+    let leftFailedLink = false;
+    if (retryableLink.current === linkNavigation.current) {
+      retryableShown.current ??= entryKey(entry);
+      if (retryableShown.current === entryKey(entry)) return;
+      retryableLink.current = null;
+      leftFailedLink = true;
+    }
+    retryableShown.current = null;
     const previous = shownEntry.current;
-    const moved = previous !== null && entryKey(previous) !== entryKey(entry);
+    const moved = leftFailedLink || (previous !== null && entryKey(previous) !== entryKey(entry));
     shownEntry.current = showInUrl(cacheSpace, entry, moved);
     shownUrl.current = window.location.href;
   }, [linkPending, cacheSpace, folderId, crumbs, previewing, view]);

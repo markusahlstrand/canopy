@@ -90,6 +90,13 @@ it('keeps two messages with the same subject and day apart', async () => {
   expect(folder.path).toBe('Mail/2026-10-26 Invoice 1234 from Acme (2)');
 });
 
+it('names a message folder by its arrival when the Date header did not parse', async () => {
+  const w = await world();
+  const landed = await w.receive(message('raw-date', { date: 'Mon, 26 Oct 2026 10:00:00 +0100', receivedAt: '2026-10-27T08:00:00.000Z' }));
+  const folder = await w.human.invoke<{ path: string }>('drive/get-folder', { folderId: landed.entity!.entityId });
+  expect(folder.path).toBe('Mail/2026-10-27 Invoice 1234 from Acme');
+});
+
 it('lets only the address land mail, and only bytes stored on the message folder', async () => {
   const w = await world();
   await expect(w.human.invoke('drive/receive-mail', message('x'))).rejects.toThrow();
