@@ -18,7 +18,7 @@
  * drive's: a press is reported back as `onSort`, and a changed sort hands the table a new
  * source carrying it, which is the one way to give the element a query after its first read.
  */
-import { useEffect, useMemo, useRef, useState, type DetailedHTMLProps, type HTMLAttributes } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DetailedHTMLProps, type HTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import '@substrat-run/elements/entity-table';
 import type { Column, SubEntityTable } from '@substrat-run/elements/entity-table';
@@ -127,9 +127,13 @@ export function FileList({
 }: FileListProps) {
   const table = useRef<SubEntityTable<FileItem, SortKey>>(null);
   const rows = useRef(files);
-  rows.current = files;
   const latest = useRef({ files, selection, sort, onSelectionChange, onOpen, onSort, onMove, previewOpen, trashed });
-  latest.current = { files, selection, sort, onSelectionChange, onOpen, onSort, onMove, previewOpen, trashed };
+  // Refresh after commit, before the effects below read them: a render React throws away
+  // must not leak its rows or callbacks into events on the table still on screen.
+  useLayoutEffect(() => {
+    rows.current = files;
+    latest.current = { files, selection, sort, onSelectionChange, onOpen, onSort, onMove, previewOpen, trashed };
+  });
 
   const [mounted, setMounted] = useState<ReadonlyMap<string, Mounted>>(new Map());
   const [menu, setMenu] = useState<{ file: FileItem; x: number; y: number } | null>(null);
