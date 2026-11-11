@@ -417,14 +417,14 @@ importers:
   packages/connectors/qonto:
     dependencies:
       '@substrat-run/contracts':
-        specifier: ^0.190.0
-        version: 0.190.0(zod@4.6.7)
+        specifier: ^0.191.0
+        version: 0.191.0(zod@4.6.7)
       '@substrat-run/kernel':
-        specifier: ^0.190.0
-        version: 0.190.0(zod@4.6.7)
+        specifier: ^0.191.0
+        version: 0.191.0(zod@4.6.7)
       '@substrat-run/vertical-host':
-        specifier: ^0.190.0
-        version: 0.190.0(@ai-sdk/provider@4.0.35)(zod@4.6.7)
+        specifier: ^0.191.0
+        version: 0.191.0(@ai-sdk/provider@4.0.35)(zod@4.6.7)
       zod:
         specifier: ^4.6.7
         version: 4.6.7
