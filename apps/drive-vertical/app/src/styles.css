@@ -52,3 +52,24 @@
   width: 100%;
   border-radius: var(--radius);
 }
+
+/* The file list is `<sub-entity-table>`. The drive keeps its own selection bar, at a fixed
+   height so a selection never pushes the rows down, so the element's own bar stays hidden. */
+.canopy-files {
+  --sub-table-row-height: var(--row-h);
+  --sub-table-cell-padding-inline: 0.75rem;
+  --sub-table-cell-padding-block: 0.25rem;
+  --sub-table-header-background: hsl(var(--muted) / 0.4);
+  --sub-table-row-hover: hsl(var(--muted) / 0.5);
+  --sub-table-row-selected: hsl(var(--primary) / 0.06);
+  --wa-color-surface-default: hsl(var(--background));
+  --wa-panel-border-radius: var(--radius);
+  font-size: 14px;
+}
+.canopy-files::part(bulk-bar) {
+  display: none;
+}
+.canopy-files::part(drop-target) {
+  background: hsl(var(--primary) / 0.1);
+  box-shadow: inset 0 0 0 2px hsl(var(--primary));
+}

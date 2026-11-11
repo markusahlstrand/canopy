@@ -22,6 +22,7 @@ import { pluginCatalog } from './plugin-catalog';
 import { publishPlugins } from './installed-plugins';
 import { useUnsavedDraft } from './drafts';
 import type { PluginInstall } from './api';
+import { columnHeader, fileRow, fileRows, rowCheckbox, rowText, toggleRow, toggleAll } from './test-table';
 
 /** One pending answer, and the handle a test resolves it with. */
 interface Pending {
@@ -352,7 +353,7 @@ describe('an action refreshes the folder on screen, not the one it started in', 
     await flush();
     await answer('/folders/01F/folders', []);
     await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
-    expect(screen.getByText('lease.pdf', { selector: 'td span' })).toBeTruthy();
+    expect(screen.getByText('lease.pdf', { selector: '[data-sub-cell] span' })).toBeTruthy();
 
     // A write starts in Papers. "New folder" rather than the row menu because the row's
     // menu wants real pointer events, and the race under test is about WHICH refresh an
@@ -737,18 +738,22 @@ describe('the moved table brings its own behaviour with it', () => {
 
     // The screen sorts the rows and the table renders what it is handed — the component
     // reports a sort rather than applying one, which only a test makes visible.
-    const names = () => screen.getAllByRole('row').slice(1).map((r) => r.textContent ?? '');
+    const names = () => fileRows().map(rowText);
 
     // The listing arrived beta-then-alpha; the default sort is name ascending, so the
     // order on screen is not the order the scope returned.
-    expect(names()[0]).toContain('alpha.md');
+    await flush(); expect(names()[0]).toContain('alpha.md');
+    expect(columnHeader('Name').closest('th')!.getAttribute('aria-sort')).toBe('ascending');
 
     // Clicking the column already sorted flips the direction rather than re-sorting.
-    fireEvent.click(screen.getByText('Name'));
-    expect(names()[0]).toContain('beta.md');
+    fireEvent.click(columnHeader('Name'));
+    await flush(); expect(names()[0]).toContain('beta.md');
 
-    fireEvent.click(screen.getByText('Name'));
-    expect(names()[0]).toContain('alpha.md');
+    // The table's third press would be "the read's own order"; the drive has none, so it
+    // comes back to ascending.
+    fireEvent.click(columnHeader('Name'));
+    await flush(); expect(names()[0]).toContain('alpha.md');
+    await flush(); expect(columnHeader('Name').closest('th')!.getAttribute('aria-sort')).toBe('ascending');
   });
 
   it('selects on a single click and opens on a double one', async () => {
@@ -771,7 +776,7 @@ describe('the moved table brings its own behaviour with it', () => {
     // selection's controls keeps one fixed height.
     const above = () => {
       const nodes: Element[] = [];
-      for (let node: Element | null = screen.getByRole('grid', { name: 'Files' }); node && node !== document.body; node = node.parentElement) {
+      for (let node: Element | null = document.querySelector('sub-entity-table'); node && node !== document.body; node = node.parentElement) {
         for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) nodes.push(sibling);
       }
       return nodes;
@@ -803,7 +808,7 @@ describe('the moved table brings its own behaviour with it', () => {
     fireEvent.click(screen.getByText('b.txt'), { metaKey: true });
     expect(screen.getByRole('region', { name: 'Selection' }).textContent).toContain('2 items selected');
 
-    fireEvent.contextMenu(screen.getByText('a.txt').closest('tr')!);
+    fireEvent.contextMenu(fileRow('a.txt'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
     expect(pending.find((p) => p.url.endsWith('/files/01A'))?.method).toBe('DELETE');
     await answer('/files/01A', { ...file('01A', 'a.txt'), state: 'trashed' });
@@ -817,13 +822,13 @@ describe('the moved table brings its own behaviour with it', () => {
 
   it('switches to the grid and back', async () => {
     await renderDrive([], [file('01A', 'photo.png')]);
-    // The grid has no column headers; the list does. That is the cheapest observable
-    // difference between the two, and it is the one a user notices first.
-    expect(screen.queryByText('Name')).toBeTruthy();
+    // The list is the entity table; the grid is cards.
+    expect(document.querySelector('sub-entity-table')).toBeTruthy();
     fireEvent.click(screen.getByLabelText('Switch to grid'));
-    expect(screen.queryByText('Name')).toBeNull();
+    expect(document.querySelector('sub-entity-table')).toBeNull();
+    expect(screen.getByRole('listbox', { name: 'Files' })).toBeTruthy();
     fireEvent.click(screen.getByLabelText('Switch to list'));
-    expect(screen.queryByText('Name')).toBeTruthy();
+    expect(document.querySelector('sub-entity-table')).toBeTruthy();
   });
 });
 
@@ -833,12 +838,12 @@ describe('dragging a file onto a folder moves it', () => {
       { id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' },
       { id: '01D', parent_id: 'root', name: 'Archive', path: 'Archive' },
     ]);
-    const row = screen.getByText('Papers').closest('tr')!;
+    const row = fileRow('Papers');
     const dataTransfer = { setData: () => {}, effectAllowed: 'none', dropEffect: 'none' };
     fireEvent.dragStart(row, { dataTransfer });
     fireEvent.drop(row, { dataTransfer });
     expect(pending.some((p) => p.url.endsWith('/01F/move'))).toBe(false);
-    fireEvent.drop(screen.getByText('Archive').closest('tr')!, { dataTransfer });
+    fireEvent.drop(fileRow('Archive'), { dataTransfer });
     expect(pending.find((p) => p.url.endsWith('/folders/01F/move'))?.body)
       .toBe(JSON.stringify({ parentId: '01D' }));
   });
@@ -850,8 +855,8 @@ describe('dragging a file onto a folder moves it', () => {
       [file('01A', 'lease.pdf')],
     );
 
-    const row = screen.getByText('lease.pdf').closest('tr')!;
-    const target = screen.getByText('Papers').closest('tr')!;
+    const row = fileRow('lease.pdf');
+    const target = fileRow('Papers');
 
     /**
      * A drag event carries a `DataTransfer`; `fireEvent` does not invent one, and the
@@ -924,8 +929,8 @@ describe('external file drops', () => {
 describe('move destination picker', () => {
   async function pick(items: unknown[] = [file('01A', 'lease.pdf')], selectAll = false) {
     await renderDrive([], items);
-    if (selectAll) fireEvent.click(screen.getAllByRole('checkbox')[0]!);
-    fireEvent.contextMenu(screen.getByText('lease.pdf').closest('tr')!);
+    if (selectAll) toggleAll();
+    fireEvent.contextMenu(fileRow('lease.pdf'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
     await answer('/folders/root/folders', [
       { id: '01D', parent_id: 'root', name: 'Archive', path: 'Archive' },
@@ -962,7 +967,7 @@ describe('move destination picker', () => {
     await answer('/folders/root/folders', []);
     await answer('/folders/root/files', [file('01A', 'lease.pdf')]);
     expect(within(dialog).getByLabelText('Files not moved').textContent).toContain('lease.pdf: name collision');
-    expect(screen.getByText('lease.pdf', { selector: 'td span' })).toBeTruthy();
+    expect(screen.getByText('lease.pdf', { selector: '[data-sub-cell] span' })).toBeTruthy();
   });
 
   it('moves a selection and retries only the items that failed', async () => {
@@ -1013,7 +1018,7 @@ describe('shared-folder discovery', () => {
       { id: '01N', parent_id: 'root', path: 'Reports', name: 'Reports', siteSlug: 'other', siteName: 'Other', current: false },
     ] });
 
-    fireEvent.doubleClick(screen.getByText('Other / Reports').closest('tr')!);
+    fireEvent.doubleClick(fileRow('Other / Reports'));
     expect(currentSite()).toBe('other');
     expect(window.location.search).toBe('?site=other&folder=01N');
   });
@@ -1071,7 +1076,7 @@ describe('Trash actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
     await flush();
     await answer('/api/trash', [{ ...file('01A', 'lease.pdf'), state: 'trashed' }]);
-    fireEvent.contextMenu(screen.getByText('lease.pdf').closest('tr')!);
+    fireEvent.contextMenu(fileRow('lease.pdf'));
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Restore']);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Restore' }));
     const restore = pending.find((p) => p.url.endsWith('/files/01A/restore'));
@@ -1838,8 +1843,7 @@ describe('sharing a folder', () => {
     await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
     await answer('/people/access', { canManage: true });
     // The row's own Radix menu, which answers the keyboard rather than `click`.
-    const row = screen.getByText('Papers').closest('tr') ?? screen.getByText('Papers');
-    fireEvent.keyDown(within(row as HTMLElement).getByRole('button'), { key: 'Enter' });
+        fireEvent.keyDown(screen.getByRole('button', { name: 'Actions for Papers' }), { key: 'Enter' });
     fireEvent.click(screen.getByText('Share'));
   }
 
@@ -2049,8 +2053,7 @@ describe('sharing a folder', () => {
 
     // Reopened: the link belonged to the dialog that was closed, and a late answer must not
     // restore it onto whatever folder is open now.
-    const row = screen.getByText('Papers').closest('tr') ?? screen.getByText('Papers');
-    fireEvent.keyDown(within(row as HTMLElement).getByRole('button'), { key: 'Enter' });
+        fireEvent.keyDown(screen.getByRole('button', { name: 'Actions for Papers' }), { key: 'Enter' });
     fireEvent.click(screen.getByText('Share'));
     expect(screen.queryByDisplayValue('https://drive.example/?invite=tok')).toBeNull();
   });
@@ -2192,7 +2195,7 @@ describe('folder pages', () => {
 
   it('loads additional destinations in the move picker', async () => {
     await renderDrive([], [file('01F', 'notes.md')]);
-    fireEvent.contextMenu(screen.getByText('notes.md').closest('tr')!);
+    fireEvent.contextMenu(fileRow('notes.md'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
     await answerWith('/folders/root/folders', 200, [folder('01A', 'Alpha')], { Link: `<${window.location.origin}/api/folders/root/folders?cursor=older>; rel="next"` });
     const dialog = screen.getByRole('dialog');
@@ -2251,7 +2254,7 @@ describe('Trash pages', () => {
     expect(screen.getByText('No files on this page')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Load more Trash' }));
     await answer('/api/trash?cursor=older', [file('01A', 'old.txt')]);
-    fireEvent.contextMenu(screen.getByText('old.txt').closest('tr')!);
+    fireEvent.contextMenu(fileRow('old.txt'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Restore' }));
     await answer('/files/01A/restore', file('01A', 'old.txt'));
     await answer('/api/trash', []);
@@ -2319,7 +2322,7 @@ it('bulk trash moves selected files while retaining selected folders', async () 
   await answer('/folders/root/folders', [{ id: '01F', parent_id: 'root', name: 'Folder', path: 'Folder' }]);
   await answer('/folders/root/files', []);
   expect(screen.getByText('Moved to Trash: 2 files.')).toBeTruthy();
-  expect(within(screen.getByText('Folder').closest('tr')!).getByRole('checkbox').getAttribute('aria-checked')).toBe('true');
+  expect(rowCheckbox(fileRow('Folder')).checked).toBe(true);
   expect(pending.some(p => p.method === 'DELETE' && p.url.includes('folders'))).toBe(false);
 });
 
@@ -2361,7 +2364,7 @@ it('resets the previous filter and selection when a palette query replaces an op
   fireEvent.change(screen.getByRole('combobox', { name: 'Filter search matches' }), { target: { value: 'content' } });
   await flush();
   await answer('via=content', { hits: [{ ...file('01A', 'body.txt'), via: 'content' }] });
-  fireEvent.click(within(screen.getByText('body.txt').closest('tr')!).getByRole('checkbox'));
+  toggleRow(fileRow('body.txt'));
   expect(screen.getByRole('status', { name: 'Selection status' }).textContent).toBe('1 selected');
 
   fireEvent.keyDown(window, { key: 'k', metaKey: true });
@@ -2379,7 +2382,7 @@ it('keeps the refresh when the palette repeats an open search', async () => {
   fireEvent.change(screen.getByLabelText('Search this space'), { target: { value: 'report' } });
   await flush();
   await answer('/api/search', { hits: [{ ...file('01A', 'body.txt'), via: 'content' }] });
-  fireEvent.click(within(screen.getByText('body.txt').closest('tr')!).getByRole('checkbox'));
+  toggleRow(fileRow('body.txt'));
 
   fireEvent.keyDown(window, { key: 'k', metaKey: true });
   fireEvent.change(screen.getByPlaceholderText(/Search files/), { target: { value: 'report' } });
@@ -2397,7 +2400,7 @@ it('removes earlier search hits and their selection when a refresh is refused', 
   fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'report' } });
   await flush();
   await answer('/api/search', { hits: [{ ...file('01A', 'earlier.txt'), via: 'content' }] });
-  fireEvent.click(within(screen.getByText('earlier.txt').closest('tr')!).getByRole('checkbox'));
+  toggleRow(fileRow('earlier.txt'));
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
   await answerWith('/api/search', 403, { error: 'Access denied' });
   expect(screen.queryByText('earlier.txt')).toBeNull();

@@ -29,6 +29,10 @@ if (typeof ElementInternals !== 'undefined' && !ElementInternals.prototype.setVa
   ElementInternals.prototype.setValidity = function setValidity() {};
   Object.defineProperty(ElementInternals.prototype, 'validity', { configurable: true, get: () => ({ valid: true }) });
 }
+// ...and its value, which a `wa-checkbox` (the file list's selection) sets as it renders.
+if (typeof ElementInternals !== 'undefined' && !ElementInternals.prototype.setFormValue) {
+  ElementInternals.prototype.setFormValue = function setFormValue() {};
+}
 
 // The drive keeps the address bar on what it shows, so a test's folder or file would
 // otherwise open as a deep link in the next test of the file.

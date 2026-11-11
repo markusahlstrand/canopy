@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { DriveScreen } from './drive';
+import { fileRow, toggleRow } from './test-table';
 vi.mock('./live-updates', () => ({ watchDriveChanges: () => () => {} }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 it.each([false, true])('guards only a draft on a file included in the batch (%s)', async included => {
@@ -13,7 +14,7 @@ it.each([false, true])('guards only a draft on a file included in the batch (%s)
   fireEvent.doubleClick(await screen.findByText('a.txt'));
   fireEvent.click(await screen.findByRole('button', { name: 'Edit text' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'File text' }), { target: { value: 'draft' } });
-  fireEvent.click(within(screen.getByRole('row', { name: new RegExp(included ? 'a.txt' : 'b.txt') })).getByRole('checkbox'));
+  toggleRow(fileRow(new RegExp(included ? 'a.txt' : 'b.txt')));
   fireEvent.click(screen.getByRole('button', { name: 'Move 1 selected file to Trash' }));
   fireEvent.click(screen.getByRole('button', { name: 'Confirm move to Trash' }));
   if (included) {

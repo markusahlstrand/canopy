@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DriveScreen } from './drive';
 import { selectSite } from './api';
+import { fileRow, rowCheckbox } from './test-table';
 vi.mock('./live-updates', () => ({ watchDriveChanges: () => () => {} }));
 afterEach(() => { cleanup(); selectSite(null); vi.unstubAllGlobals(); });
 it('moves selected files through the folder picker and retains selected folders', async () => {
@@ -21,5 +22,5 @@ it('moves selected files through the folder picker and retains selected folders'
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   const writes = fetcher.mock.calls.filter(([, init]) => init?.method === 'POST');
   expect(writes).toHaveLength(1); expect(writes[0]![0]).toBe('/api/files/f/move'); expect(JSON.parse(writes[0]![1]!.body as string)).toEqual({ folderId: 'dest' });
-  expect(within(screen.getByText('Selected folder').closest('tr')!).getByRole('checkbox').getAttribute('aria-checked')).toBe('true');
+  expect(rowCheckbox(fileRow('Selected folder')).checked).toBe(true);
 });

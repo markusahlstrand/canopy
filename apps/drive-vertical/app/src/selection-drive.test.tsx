@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DriveScreen } from './drive';
 import { selectSite } from './api';
+import { fileRow } from './test-table';
 const live = vi.hoisted(() => ({ changed: () => {} }));
 vi.mock('./live-updates', () => ({ watchDriveChanges: (changed: () => void) => { live.changed = changed; return () => {}; } }));
 afterEach(() => { cleanup(); selectSite(null); vi.unstubAllGlobals(); });
@@ -23,7 +24,7 @@ it('clears selection on folder/search navigation and reports only reachable sele
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Selection' })).toBeNull());
   expect(screen.getByRole('status', { name: 'Selection status' })).toBe(status); expect(status.textContent).toBe('Selection cleared');
   fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'notes' } });
-  fireEvent.click(await screen.findByRole('row', { name: /notes/ })); expect(status.textContent).toBe('1 selected');
+  fireEvent.click(await waitFor(() => fileRow(/notes/))); expect(status.textContent).toBe('1 selected');
   fireEvent.change(screen.getByPlaceholderText('Search this space'), { target: { value: 'notes2' } });
   expect(screen.queryByRole('region', { name: 'Selection' })).toBeNull(); expect(status.textContent).toBe('Selection cleared');
 });
