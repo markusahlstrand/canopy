@@ -37,8 +37,11 @@ export function AllFilesTable({ files, below, sort, onSort, onOpen, loading, mor
     for (const { tags } of tagged) for (const tag of tags) count.set(tag, (count.get(tag) ?? 0) + 1);
     return [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   }, [tagged]);
+  // A picked tag no loaded file carries any more (a re-sort or reload changed `files`) has no chip
+  // to unpick it by, and would hide every row: only the tags still on offer filter.
+  const active = useMemo(() => picked.filter(tag => counts.some(([t]) => t === tag)), [picked, counts]);
   const toggle = (tag: string) => setPicked(now => now.includes(tag) ? now.filter(t => t !== tag) : [...now, tag]);
-  const shown = picked.length ? tagged.filter(({ tags }) => picked.every(tag => tags.includes(tag))) : tagged;
+  const shown = active.length ? tagged.filter(({ tags }) => active.every(tag => tags.includes(tag))) : tagged;
 
   if (!files.length) {
     return <p role="status" className="rounded-lg border px-4 py-10 text-center text-sm text-muted-foreground">
@@ -46,8 +49,9 @@ export function AllFilesTable({ files, below, sort, onSort, onOpen, loading, mor
     </p>;
   }
   const chip = (tag: string, count?: number) => {
-    const on = picked.includes(tag);
-    return <button key={tag} type="button" aria-pressed={on} onClick={() => toggle(tag)}
+    const on = active.includes(tag);
+    // A row's chips repeat the bar's names; say what they do so a screen reader hears more than "Fiscal".
+    return <button key={tag} type="button" aria-pressed={on} aria-label={count === undefined ? `Filter by tag ${tag}` : undefined} onClick={() => toggle(tag)}
       className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <Badge variant={on ? 'default' : 'secondary'}>{tag}{count === undefined ? null : <span className="ml-1 opacity-60">{count}</span>}</Badge>
     </button>;
@@ -60,7 +64,7 @@ export function AllFilesTable({ files, below, sort, onSort, onOpen, loading, mor
   return <div className="space-y-3">
     <div role="group" aria-label="Filter by tag" className="flex flex-wrap items-center gap-1.5">
       {counts.map(([tag, count]) => chip(tag, count))}
-      {picked.length ? <Button type="button" variant="ghost" size="sm" onClick={() => setPicked([])}>Clear tags</Button> : null}
+      {active.length ? <Button type="button" variant="ghost" size="sm" onClick={() => setPicked([])}>Clear tags</Button> : null}
       {more ? <span className="text-xs text-muted-foreground">Tags cover the files loaded so far.</span> : null}
     </div>
     {shown.length ? <div className="overflow-hidden rounded-lg border">

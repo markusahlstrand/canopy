@@ -300,7 +300,10 @@ it('marks a listed folder empty when no live file sits at or below it', async ()
   await w.land(w.upsert('c4', 'A/Empty/Deeper', 'folder'));
   await w.land(w.upsert('c5', 'A/B%', 'folder'));
   await w.land(w.upsert('c6', 'A/Trashed', 'folder'));
+  // Shares Empty's name as a prefix, but is a sibling: its file is not Empty's.
+  await w.land(w.upsert('c7', 'A/Empty x', 'folder'));
   await w.land(w.upsert('f1', 'A/B/deep.txt'));
+  await w.land(w.upsert('f4', 'A/Empty x/note.txt'));
   await w.land(w.upsert('f2', 'A/B%/x.txt'));
   const gone = w.upsert('f3', 'A/Trashed/gone.txt');
   await w.land(gone);
@@ -309,7 +312,7 @@ it('marks a listed folder empty when no live file sits at or below it', async ()
   const marks = async (folderId: string) => Object.fromEntries((await w.human.invoke<Folders>('drive/list-folders', { folderId })).entries.map((f) => [f.name, f.empty]));
   // A holds a file only two levels down; Empty holds only an empty folder; Trashed only a removed file.
   expect(await marks(ROOT_FOLDER_ID)).toEqual({ A: false });
-  expect(await marks(a)).toEqual({ B: false, 'B%': false, Empty: true, Trashed: true });
+  expect(await marks(a)).toEqual({ B: false, 'B%': false, Empty: true, 'Empty x': false, Trashed: true });
 });
 
 it('lists every live file at or below a folder, with its folder path and labels', async () => {

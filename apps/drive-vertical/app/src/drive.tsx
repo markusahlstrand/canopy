@@ -1096,8 +1096,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         ? <EmptyList icon="search" title="No matches of this type" description="Try another match type. The selected field is searched directly, returning up to 50 files." actions={[{ label: 'Show all returned matches', onClick: () => changeMatchFilter('all') }]} />
         : <EmptyList icon="search" title={`No matches for “${term.trim()}”`} description="Try another name or phrase from a file." />
   ) : hiddenFolders > 0 ? (
-    <EmptyList icon="folder" title="Only empty folders here"
-      description={`${hiddenFolders} empty folder${hiddenFolders === 1 ? ' is' : 's are'} hidden.`}
+    // While folder pages remain, a later one may hold a folder with files: don't call it final. The
+    // listing's own "Load more folders" button sits below this.
+    <EmptyList icon="folder" title={foldersNext ? 'Only empty folders so far' : 'Only empty folders here'}
+      description={`${hiddenFolders} empty folder${hiddenFolders === 1 ? ' is' : 's are'} hidden.${foldersNext ? ' Load more folders to look further.' : ''}`}
       actions={[{ label: 'Show empty folders', onClick: () => { setHideEmptyFolders(false); saveView({ hideEmptyFolders: false }); } }]} />
   ) : offline ? (
     <EmptyList icon="folder" title="No saved files here" description="This folder has no file names saved for offline browsing." />

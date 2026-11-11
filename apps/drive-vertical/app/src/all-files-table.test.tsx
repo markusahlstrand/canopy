@@ -58,3 +58,19 @@ it('says when no loaded file has the picked tags, and that more may', () => {
   fireEvent.click(bar.getByRole('button', { name: /^B/ }));
   expect(screen.getByRole('status').textContent).toContain('Load more');
 });
+
+it('drops a picked tag once no loaded file carries it, rather than hiding every row', () => {
+  const first: AllFilesRow[] = [{ ...row, id: 'a', name: 'a.pdf', category: 'A', labels: [] }, { ...row, id: 'b', name: 'b.pdf', category: 'B', labels: [] }];
+  const props = { below: null, sort, onSort: () => {}, onOpen: () => {}, loading: false };
+  const view = render(<AllFilesTable files={first} {...props} />);
+  fireEvent.click(within(screen.getByRole('group', { name: 'Filter by tag' })).getByRole('button', { name: /^A/ }));
+  expect(screen.queryByText('b.pdf')).toBeNull();
+  view.rerender(<AllFilesTable files={[first[1]!]} {...props} />);
+  expect(screen.getByText('b.pdf')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Clear tags' })).toBeNull();
+});
+
+it('names a row tag by what it does', () => {
+  render(<AllFilesTable files={[{ ...row, id: 'a', category: 'Fiscal', labels: [] }]} below={null} sort={sort} onSort={() => {}} onOpen={() => {}} loading={false} />);
+  expect(screen.getAllByRole('button', { name: 'Filter by tag Fiscal' }).length).toBeGreaterThan(0);
+});

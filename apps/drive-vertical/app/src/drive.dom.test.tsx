@@ -460,6 +460,20 @@ describe('hiding empty folders', () => {
     await flush();
     expect(screen.getByText('Houses')).toBeTruthy();
   });
+
+  it('does not call the folder settled while more folder pages remain', async () => {
+    render(<DriveScreen {...shell} onError={() => {}} />);
+    await flush();
+    await answer('/api/sites', []);
+    await answerWith('/folders/root/folders', 200, [folders[1]!], { Link: `<${window.location.origin}/api/folders/root/folders?cursor=older>; rel="next"` });
+    await answer('/folders/root/files', []);
+    await hide();
+    expect(screen.getByText('Only empty folders so far')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more folders' }));
+    await answer('/folders/root/folders?cursor=older', [folders[0]!]);
+    expect(screen.getByText('Fiscal')).toBeTruthy();
+    expect(screen.queryByText('Only empty folders so far')).toBeNull();
+  });
 });
 
 describe('live refreshes', () => {

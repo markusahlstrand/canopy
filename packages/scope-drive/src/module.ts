@@ -1183,13 +1183,15 @@ const operations = {
       filters: { parent_id: input.folderId },
     };
     // `empty`: no live file anywhere at or below the folder, so a client can offer to hide it. A
-    // folder holding only empty folders is empty too. `substr`, not LIKE: a name may hold `%` or `_`.
+    // folder holding only empty folders is empty too. Descendants are the paths in [`p/`, `p0`):
+    // `0` sorts right after `/`, so the range is exactly the `p/` prefix (no LIKE, so `%` and `_`
+    // in a name stay plain), and it seeks the `path` index rather than scanning every file per folder.
     const marked = (folders: FolderRow[]) => folders.map(folder => ({
       ...folder,
       empty: !ctx.sql.query<{ found: number }>(
-        `SELECT EXISTS (SELECT 1 FROM drive_files f JOIN drive_folders d ON d.id = f.folder_id
-           WHERE f.state = 'live' AND (d.path = ? OR substr(d.path, 1, length(?) + 1) = ? || '/')) AS found`,
-        [folder.path, folder.path, folder.path],
+        `SELECT EXISTS (SELECT 1 FROM drive_folders d JOIN drive_files f ON f.folder_id = d.id
+           WHERE f.state = 'live' AND (d.path = ? OR (d.path >= ? AND d.path < ?))) AS found`,
+        [folder.path, `${folder.path}/`, `${folder.path}0`],
       )[0]?.found,
     }));
     const page = ctx.page<FolderRow>('folder', params) as Page<FolderRow>;
