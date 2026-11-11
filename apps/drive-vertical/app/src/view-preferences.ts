@@ -1,6 +1,11 @@
 import type { SortState } from './file-table';
 export const VIEW_PREFERENCES_KEY = 'canopy.drive.view';
-export interface ViewPreferences { layout: 'list' | 'grid'; sort: SortState }
+export interface ViewPreferences {
+  layout: 'list' | 'grid';
+  sort: SortState;
+  /** Leave out folders with no file at or below them. Absent means shown. */
+  hideEmptyFolders?: boolean;
+}
 const defaults = (): ViewPreferences => ({ layout: 'list', sort: { key: 'name', dir: 'asc' } });
 
 /** Presentation preferences are browser-wide and contain no file or identity data. */
@@ -14,6 +19,7 @@ export function readViewPreferences(): ViewPreferences {
         key: value.sort?.key === 'modified' ? 'modified' : 'name',
         dir: value.sort?.dir === 'desc' ? 'desc' : 'asc',
       },
+      ...(value.hideEmptyFolders === true ? { hideEmptyFolders: true } : {}),
     };
   } catch { return defaults(); }
 }

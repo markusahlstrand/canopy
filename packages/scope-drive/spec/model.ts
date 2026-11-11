@@ -769,7 +769,8 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     summary: 'The folders directly inside a folder',
     permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
     input: z.object({ folderId: z.string() }),
-    output: driveEntities.folder.fields,
+    /** `empty`: no live file at or below the folder, so a client may hide it. */
+    output: driveEntities.folder.fields.extend({ empty: z.boolean() }),
     paged: { over: { entity: 'folder', sortable: ['name'], filterable: ['parent_id'] } },
     http: { method: 'GET', path: '/folders/{folderId}/folders' },
   },

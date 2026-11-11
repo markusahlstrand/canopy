@@ -100,6 +100,8 @@ export interface DriveFolder {
   parent_id: string;
   name: string;
   path: string;
+  /** No live file at or below it. Only the online listing says; elsewhere it is unknown. */
+  empty?: boolean;
 }
 
 /** A metadata invalidation from the scope's event spine, hydrated to current state. */

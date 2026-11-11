@@ -5,6 +5,12 @@ it('round-trips supported layout and sort preferences', () => {
   saveViewPreferences({ layout: 'grid', sort: { key: 'modified', dir: 'desc' } });
   expect(readViewPreferences()).toEqual({ layout: 'grid', sort: { key: 'modified', dir: 'desc' } });
 });
+it('keeps hiding empty folders only when it was switched on', () => {
+  saveViewPreferences({ layout: 'list', sort: { key: 'name', dir: 'asc' }, hideEmptyFolders: true });
+  expect(readViewPreferences().hideEmptyFolders).toBe(true);
+  localStorage.setItem(VIEW_PREFERENCES_KEY, JSON.stringify({ version: 1, layout: 'list', hideEmptyFolders: 'yes' }));
+  expect(readViewPreferences().hideEmptyFolders).toBeUndefined();
+});
 it('uses safe defaults for corrupted, outdated or unknown values', () => {
   for (const value of ['bad JSON', JSON.stringify({ version: 9, layout: 'grid' }), JSON.stringify({ version: 1, layout: 'tiles', sort: { key: 'size', dir: 'other' } })]) {
     localStorage.setItem(VIEW_PREFERENCES_KEY, value);
