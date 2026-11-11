@@ -86,6 +86,18 @@ it('keeps a link a reload can still open, and retires one that cannot', async ()
   await waitFor(() => expect(location.search).toBe('?site=home'));
 });
 
+it('lets the address follow the screen again once the person moves on from a failed link', async () => {
+  selectSite('home'); history.replaceState(null, '', '/?site=home&folder=plans');
+  serve({ '/api/folders/plans/metadata': new Response('Down', { status: 503 }), '/api/folders/root/files': [{ ...note, folder_id: 'root' }] });
+  render(<DriveScreen {...shell} />);
+  await screen.findByText('Could not open the folder link. Reload to retry.');
+  const depth = history.length;
+  fireEvent.doubleClick(await screen.findByText('note.txt'));
+  await waitFor(() => expect(new URLSearchParams(location.search).get('file')).toBe('note'));
+  // A new entry, so Back still reaches the link a reload can open.
+  expect(history.length).toBe(depth + 1);
+});
+
 it('leaves the rest of the URL alone', async () => {
   selectSite('home'); history.replaceState(null, '', '/?keep=1#frag');
   serve(); render(<DriveScreen {...shell} />);

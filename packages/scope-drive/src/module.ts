@@ -98,6 +98,14 @@ interface DetailsRow {
   revision: number; updated_at: string; updated_by: string;
 }
 
+/** Stored JSON, or null when it is not: a row an older or interrupted writer left must read as absent. */
+function parsedOrNull(text: string): unknown {
+  try { return JSON.parse(text) as unknown; } catch { return null; }
+}
+
+/** Where a connector keeps its last full read in the source journal. */
+const SYNC_REPORT_KEY = 'a3doc:sync-report';
+
 /**
  * Content search reads the KERNEL's attachment text (#169), because the kernel already
  * extracts every upload (text, HTML, Office, PDF) and keeps it in this scope's own SQLite.
@@ -107,8 +115,6 @@ interface DetailsRow {
  * Only a file's CURRENT version can match: an old version's text is history, not content.
  * `test/search.test.ts` runs this against the real kernel, so a renamed table fails there.
  */
-/** Where a connector keeps its last full read in the source journal. */
-const SYNC_REPORT_KEY = 'a3doc:sync-report';
 const CONTENT_SEARCH_SQL = `
   SELECT f.id AS file_id, bm25(_substrat_search__attachments) AS rank
     FROM _substrat_search__attachments
@@ -335,7 +341,7 @@ const operations = {
     // Only diagnostics: a report this version cannot read must not cost members the source itself.
     const source = sourceOf(ctx);
     const row = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY])[0];
-    const report = row ? sourceSyncReport.safeParse(JSON.parse(row.value)) : null;
+    const report = row ? sourceSyncReport.safeParse(parsedOrNull(row.value)) : null;
     // A sweep can finish after a rebind; its report describes the old source, so it is not this one's.
     const current = report?.success && report.data.connectionId === source?.connectionId && report.data.folder === source.folder;
     return { source, ...(current ? { report: report.data } : {}) };

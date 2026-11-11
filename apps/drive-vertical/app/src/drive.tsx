@@ -227,6 +227,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const shownUrl = useRef<string | null>(null);
   /** The navigation whose link failed for a reason a reload can fix, so it stays in the URL. */
   const retryableLink = useRef<number | null>(null);
+  /** What the screen showed while the failed link held the URL; anything else is the person moving on. */
+  const retryableShown = useRef<string | null>(null);
   const [folderRecovery, setFolderRecovery] = useState(0);
   const unavailableFolder = useRef<string | null>(null);
   const [linkListingUnavailable, setLinkListingUnavailable] = useState(false);
@@ -421,10 +423,20 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
   // A pending link is still the URL's to answer: writing now would replace it with the root.
   useEffect(() => {
-    if (linkPending || retryableLink.current === linkNavigation.current) return;
+    if (linkPending) return;
     const entry = { folderId, crumbs, view, fileId: previewing, term: view === 'search' ? term : '' };
+    // A link a reload can still open keeps the URL until the screen changes — opening a preview
+    // moves on without a navigation — and then the failed link stays one Back away.
+    let leftFailedLink = false;
+    if (retryableLink.current === linkNavigation.current) {
+      retryableShown.current ??= entryKey(entry);
+      if (retryableShown.current === entryKey(entry)) return;
+      retryableLink.current = null;
+      leftFailedLink = true;
+    }
+    retryableShown.current = null;
     const previous = shownEntry.current;
-    const moved = previous !== null && entryKey(previous) !== entryKey(entry);
+    const moved = leftFailedLink || (previous !== null && entryKey(previous) !== entryKey(entry));
     shownEntry.current = showInUrl(cacheSpace, entry, moved);
     shownUrl.current = window.location.href;
   }, [linkPending, cacheSpace, folderId, crumbs, previewing, view]);
@@ -1035,7 +1047,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const pinSyncing = pinBusy || (currentPin?.status === 'syncing' && !currentPinError);
   const folderActions = view === 'drive' && !offline && !linkPending && !linkListingUnavailable;
   const pageTitle = view === 'trash' ? 'Trash' : view === 'search' ? 'Search' : view === 'shared' ? 'Shared with me' : crumbs.at(-1)?.name ?? rootLabel;
-  const previewCovers = previewMode === 'full' && !(offline && !hasUnsavedDrafts());
+  /** Offline with nothing unsaved, the preview is the read-only saved copy, never full screen. */
+  const offlinePreview = offline && !hasUnsavedDrafts();
+  const previewCovers = previewMode === 'full' && !offlinePreview;
   const pageCount = showingAll ? subtreeFiles.length : view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : folders.length + files.length;
   const saveCurrentFolderOffline = async () => {
     if (!auth.principal || !cacheSpace || pinBusy) return;
@@ -1174,6 +1188,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         syncing={busy}
         offline={offline}
         writeBlocked={linkPending || linkListingUnavailable}
+        onSignIn={auth.user ? undefined : onSignIn}
       />
 
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
@@ -1465,7 +1480,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             ? 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:inset-0 md:z-40'
             : 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:relative md:inset-auto md:z-auto md:w-[var(--preview-w)] md:min-w-80 md:max-w-[calc(100vw-35rem)] md:shrink-0'}>
           {previewCovers ? null : <PreviewResizeHandle width={previewWidth} onChange={setPreviewWidth} />}
-          {offline && !hasUnsavedDrafts() ? cacheSpace && auth.principal && files.find(file => file.id === previewing) ? <OfflinePreview
+          {offlinePreview ? cacheSpace && auth.principal && files.find(file => file.id === previewing) ? <OfflinePreview
             file={files.find(file => file.id === previewing)!}
             principal={auth.principal}
             space={cacheSpace}
