@@ -86,6 +86,7 @@ export const driveManifest = moduleManifest.parse({
   connections: [
     { provider: 'canopy.a3doc', operation: 'drive/land-source-change', permission: 'drive:land-source', bind: 'on-request' },
     { provider: 'canopy.s3', operation: 'drive/land-source-change', permission: 'drive:land-source', bind: 'on-request' },
+    { provider: 'canopy.qonto', operation: 'drive/land-source-change', permission: 'drive:land-source', bind: 'on-request' },
     // The platform's inbound mail (substrat#2611): an address per space, asked for from settings.
     { provider: 'mail-in', operation: 'drive/receive-mail', permission: 'drive:receive-mail' },
   ],

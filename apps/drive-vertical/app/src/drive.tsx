@@ -1093,7 +1093,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     <EmptyList
       icon="folder"
       title={folderId === ROOT_FOLDER_ID ? activeSpaceName ? `${activeSpaceName} is empty` : 'Your drive is empty' : 'This folder is empty'}
-      description={mirrored ? syncNote?.text ?? "Documents added to this a3doc folder appear here." : "Create a folder or upload files to get started."}
+      description={mirrored ? syncNote?.text ?? (source?.provider === 'canopy.qonto' ? "New Qonto transactions and documents appear here." : "Documents added to this a3doc folder appear here.") : "Create a folder or upload files to get started."}
       actions={[
         ...(mirrored ? [] : [{ label: 'New folder', onClick: () => setCreating(true) }]),
         ...(canUpload ? [{ label: 'Upload files', onClick: () => uploadRef.current?.click() }] : []),

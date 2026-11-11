@@ -20,7 +20,7 @@ it('will not save over an a3doc login still being typed',async()=>{
   fireEvent.click(await screen.findByRole('button',{name:'Connect a3doc'}));
   const save=screen.getByRole('button',{name:'Save space'})as HTMLButtonElement;expect(save.disabled).toBe(false);
   fireEvent.change(screen.getByLabelText('Password'),{target:{value:'pw'}});
-  await screen.findByText('Connect or cancel the a3doc login first.');expect(save.disabled).toBe(true);
+  await screen.findByText('Connect or cancel the source login first.');expect(save.disabled).toBe(true);
   fireEvent.submit(screen.getByLabelText('Space name').closest('form')!);
   expect(fetcher.mock.calls.some(call=>call[1]?.method==='PATCH')).toBe(false);expect(closed).not.toHaveBeenCalled();
   fireEvent.click(within(screen.getByRole('group',{name:'Connect a3doc'})).getByRole('button',{name:'Cancel'}));

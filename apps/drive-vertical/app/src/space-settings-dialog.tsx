@@ -77,7 +77,7 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
           {currentSite() ? <DeleteSpace name={JSON.parse(initial || '{}').name ?? ''} disabled={busy} onDelete={() => void remove()}/> : null}
         </form>}
       </div>
-      <DialogFooter className="border-t px-5 py-3">{sourceDraft||mailDraft?<p role="status" className="mr-auto self-center text-xs text-muted-foreground">{sourceDraft?'Connect or cancel the a3doc login first.':'Save or cancel the email senders first.'}</p>:null}<Button type="button" variant="ghost" disabled={busy} onClick={() => {if(confirmDiscardDrafts())onOpenChange(false);}}>Cancel</Button><Button type="submit" form="space-settings-form" disabled={!loaded || busy || sourceDraft || mailDraft || !settings.name.trim()}>{busy?'Saving…':'Save space'}</Button></DialogFooter>
+      <DialogFooter className="border-t px-5 py-3">{sourceDraft||mailDraft?<p role="status" className="mr-auto self-center text-xs text-muted-foreground">{sourceDraft?'Connect or cancel the source login first.':'Save or cancel the email senders first.'}</p>:null}<Button type="button" variant="ghost" disabled={busy} onClick={() => {if(confirmDiscardDrafts())onOpenChange(false);}}>Cancel</Button><Button type="submit" form="space-settings-form" disabled={!loaded || busy || sourceDraft || mailDraft || !settings.name.trim()}>{busy?'Saving…':'Save space'}</Button></DialogFooter>
     </DialogContent>
   </Dialog>;
 }

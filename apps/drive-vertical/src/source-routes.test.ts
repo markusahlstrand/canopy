@@ -139,3 +139,25 @@ it('syncs now: answers what the poll of this space did, and says when it is too 
   expect(refused.status).toBe(429);
   expect(await refused.text()).toContain('less than a minute ago');
 });
+
+it('connects a Qonto account with its API key, mirroring the whole account', async () => {
+  const w = world({ manager: true });
+  const res = await w.connect({ provider: 'canopy.qonto', login: 'acme-1234', secretKey: 'the-key' });
+  expect(res.status).toBe(200);
+  expect(w.calls[0]!.body).toMatchObject({ provider: 'canopy.qonto', label: 'Qonto acme-1234', externalAccountRef: 'acme-1234', secret: { login: 'acme-1234', secretKey: 'the-key' } });
+  expect(w.calls[1]!.body).toMatchObject({ options: { folder: '' } });
+  expect(w.calls[2]!.body).toMatchObject({ provider: 'canopy.qonto' });
+  expect(w.source()).toMatchObject({ provider: 'canopy.qonto', account: 'acme-1234' });
+  // The key goes to the relay and nowhere else.
+  expect(JSON.stringify(w.invoke.mock.calls)).not.toContain('the-key');
+});
+
+it('asks for both Qonto fields, and syncs the provider the space is on', async () => {
+  const w = world({ manager: true });
+  const res = await w.connect({ provider: 'canopy.qonto', login: 'acme-1234' });
+  expect(res.status).toBe(400);
+  expect(await res.text()).toContain('Qonto login and secret key');
+  const on = world({ manager: true, prior: { provider: 'canopy.qonto', connectionId: CONNECTION, account: 'acme-1234', folder: '', canUpload: false, boundAt: 'then' } });
+  expect((await on.app.request('/api/source/sync', { method: 'POST' })).status).toBe(200);
+  expect(on.calls.at(-1)).toMatchObject({ path: '/internal/connections/sync', body: { provider: 'canopy.qonto' } });
+});

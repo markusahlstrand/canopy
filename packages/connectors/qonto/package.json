@@ -1,0 +1,35 @@
+{
+  "name": "@canopy/connector-qonto",
+  "version": "0.1.0",
+  "description": "A Qonto business account as a read-only Substrat file source: transactions, receipts, invoices, credit notes and statements land as files in a space.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "pnpm build"
+  },
+  "dependencies": {
+    "@substrat-run/contracts": "^0.190.0",
+    "@substrat-run/kernel": "^0.190.0",
+    "@substrat-run/vertical-host": "^0.190.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "files": [
+    "dist"
+  ]
+}

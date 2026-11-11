@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@canopy/connector-a3docs": "workspace:*",
+    "@canopy/connector-qonto": "workspace:*",
     "@canopy/connector-s3": "workspace:*",
     "@canopy/core": "workspace:*",
     "@canopy/example-plugins": "workspace:*",
@@ -112,7 +113,10 @@
     "outbound": [
       "a3asesordoc-serviceaddressprovider.a3software.com",
       "*.a3software.com",
-      "*.wolterskluwer.es"
+      "*.wolterskluwer.es",
+      "thirdparty.qonto.com",
+      "*.qonto.com",
+      "*.amazonaws.com"
     ]
   }
 }
