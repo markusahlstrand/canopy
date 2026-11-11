@@ -73,7 +73,7 @@ export const SYNC_TIMEOUT_MS = 120_000;
 
 const KEY = 'a3doc:';
 const BINDING_PREFIX = `${KEY}binding:`;
-const bindingKey = (scope: string) => `${BINDING_PREFIX}${scope}`;
+export const bindingKey = (scope: string) => `${BINDING_PREFIX}${scope}`;
 /** Per item. Keyed by the bound container too, so a binding to another container starts clean. */
 const itemPrefix = (b: Pick<A3docBinding, 'scopeId' | 'containerId'>) => `${KEY}item:${b.scopeId}:${b.containerId}:`;
 const writeKey = (eventId: string) => `${KEY}write:${eventId}`;

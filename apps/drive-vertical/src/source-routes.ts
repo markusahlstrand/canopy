@@ -18,7 +18,8 @@ export interface SourceSyncOutcome { outcome: 'landed' | 'unchanged' | 'failed' 
 export type SourceRelay = ConnectionRelayAccess & { tenantId: TenantId; scopeId: ScopeId };
 
 /** The a3doc login and the folder under its root this space mirrors (`''` is the root). */
-const connectInput = a3docSecret.extend({ folder: z.string().trim().max(500) });
+// Bound and reported as `Facturas`, whatever slashes or spaces the user typed around it.
+const connectInput = a3docSecret.extend({ folder: z.string().max(500).transform(folder => folder.split('/').map(s => s.trim()).filter(Boolean).join('/')) });
 
 /** What to connect, read from the request. A body naming no provider is an a3doc login. */
 function parseConnect(body: unknown) {
@@ -74,7 +75,8 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
       // account back on its folder, or, when even that fails, record no source at all.
       if (replaced) {
         await relayed(() => bindConnection({ ...access, connectionId: connectionIdSchema.parse(replaced.connectionId), options: { folder: replaced.folder }, boundBy: principal }))
-          .catch(() => scope.invoke('drive/clear-source'));
+          // The bind's own refusal is what the user needs to read; a failed cleanup must not replace it.
+          .catch(() => scope.invoke('drive/clear-source').catch(() => {}));
       }
       throw error;
     }

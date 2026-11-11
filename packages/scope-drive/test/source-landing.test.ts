@@ -274,6 +274,16 @@ it('ignores a report from a sweep that finished after the source changed', async
   expect(await w.member.invoke('drive/get-source')).not.toHaveProperty('report');
 });
 
+it('reads a report as the same folder however the source spelled it', async () => {
+  const w = await world();
+  await w.human.invoke('drive/record-source', { provider: 'canopy.a3doc', connectionId: 'connection', account: 'ACME', folder: '/Facturas/ ', canUpload: true });
+  await w.stub.invoke('drive/source-write-journal', { key: 'a3doc:sync-report', value: report });
+  expect(await w.member.invoke('drive/get-source')).toMatchObject({ report });
+  // Re-recorded in another spelling, it is still the folder the report describes.
+  await w.human.invoke('drive/record-source', { provider: 'canopy.a3doc', connectionId: 'connection', account: 'ACME', folder: 'Facturas', canUpload: true });
+  expect(await w.member.invoke('drive/get-source')).toMatchObject({ report });
+});
+
 it('dates a landed file by when the source last changed it, through its content and later edits', async () => {
   const w = await world();
   const input = { ...w.upsert('doc@1', 'Invoice.txt'), lastModifiedAt: '2024-03-05T10:00:00.000Z' };
