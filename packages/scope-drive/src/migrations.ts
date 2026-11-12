@@ -276,5 +276,7 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
   INSERT INTO drive_mail_root (id, folder_id)
     SELECT 1, f.parent_id FROM drive_mail_messages m JOIN drive_folders f ON f.id = m.folder_id
     ORDER BY m.received_at LIMIT 1;` },
+  /** Which login a source signs in as (an a3doc user), so settings can tell two logins on one account apart. Null until connected again. */
+  { version: '0016', sql: `ALTER TABLE drive_source ADD COLUMN user_name TEXT;` },
 
 ];

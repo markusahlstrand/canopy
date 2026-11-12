@@ -161,12 +161,12 @@ function currentText(ctx: OperationContext, fileId: string) {
   return state ? { file, version: { ...version, blob_ref: version.blob_ref }, state } : null;
 }
 
-type SourceRow = { provider: string; connection_id: string; account: string; folder: string; can_upload: number; bound_at: string };
+type SourceRow = { provider: string; connection_id: string; account: string; user_name: string | null; folder: string; can_upload: number; bound_at: string };
 
 /** The source this space is bound to, or null for an ordinary space. */
 function sourceOf(ctx: OperationContext): DriveSource | null {
   const row = ctx.sql.query<SourceRow>('SELECT * FROM drive_source WHERE id = 1')[0];
-  return row ? { provider: row.provider, connectionId: row.connection_id, account: row.account, folder: row.folder, canUpload: row.can_upload === 1, boundAt: row.bound_at } : null;
+  return row ? { provider: row.provider, connectionId: row.connection_id, account: row.account, ...(row.user_name ? { user: row.user_name } : {}), folder: row.folder, canUpload: row.can_upload === 1, boundAt: row.bound_at } : null;
 }
 
 /** What a provider is called in a refusal. */
@@ -377,10 +377,10 @@ const operations = {
     const prior = sourceOf(ctx);
     if (prior?.connectionId !== input.connectionId || !sameFolder(prior.folder, input.folder)) ctx.sql.exec('DELETE FROM drive_source_writes WHERE key = ?', [SYNC_REPORT_KEY]);
     const boundAt = ctx.now();
-    ctx.sql.exec(`INSERT INTO drive_source (id, provider, connection_id, account, folder, can_upload, bound_at) VALUES (1, ?, ?, ?, ?, ?, ?)
+    ctx.sql.exec(`INSERT INTO drive_source (id, provider, connection_id, account, user_name, folder, can_upload, bound_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, connection_id = excluded.connection_id, account = excluded.account,
-        folder = excluded.folder, can_upload = excluded.can_upload, bound_at = excluded.bound_at`,
-      [input.provider, input.connectionId, input.account, input.folder, input.canUpload ? 1 : 0, boundAt]);
+        user_name = excluded.user_name, folder = excluded.folder, can_upload = excluded.can_upload, bound_at = excluded.bound_at`,
+      [input.provider, input.connectionId, input.account, input.user ?? null, input.folder, input.canUpload ? 1 : 0, boundAt]);
     return { ...input, boundAt };
   },
   'drive/clear-source': async (ctx) => {

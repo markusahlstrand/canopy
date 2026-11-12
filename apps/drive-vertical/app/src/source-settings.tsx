@@ -127,6 +127,7 @@ export function SourceSettings({ disabled, onChanged, onDraftChange }: { disable
         <div className="flex items-start gap-3"><Icon name="link" size={18} className="mt-0.5 text-muted-foreground"/>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">{sourceLabel(source.provider)} · {source.account}</p>
+            {source.user ? <p className="truncate text-xs text-muted-foreground">Signs in as {source.user}.</p> : qonto ? null : <p className="text-xs text-muted-foreground">Connect again to show which a3doc user it signs in as.</p>}
             <p className="truncate text-xs text-muted-foreground">{qonto ? 'Mirrors this Qonto account. Nothing here goes back to Qonto.' : <>Mirrors {source.folder ? `the folder ${source.folder}` : 'every folder'}. {source.canUpload ? 'Uploads go on to a3doc.' : 'This a3doc user can only read, so nothing can be uploaded here.'}</>}</p>
             <p className="text-xs text-muted-foreground">{binding?.lastSyncedAt ? `Last synced ${when(binding.lastSyncedAt)}.` : 'First sync under way.'}</p>
             {note && (note.failed || report) ? <p className={`text-xs ${note.failed ? 'text-destructive' : 'text-muted-foreground'}`}>{note.text}</p> : null}
@@ -136,7 +137,7 @@ export function SourceSettings({ disabled, onChanged, onDraftChange }: { disable
         <p className="text-xs text-muted-foreground">Folders and documents here follow {sourceLabel(source.provider)}, so they can't be renamed, moved or deleted in Canopy. Disconnecting keeps every file, and the space becomes an ordinary one.</p>
         <div className="flex gap-2">
           <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => void syncNow()}>{syncing ? 'Syncing…' : 'Sync now'}</Button>
-          <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => openForm(qonto ? { ...emptyQontoLogin, login: source.account } : { ...empty, companyCode: source.account, folder: source.folder })}>Connect again</Button>
+          <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => openForm(qonto ? { ...emptyQontoLogin, login: source.account } : { ...empty, companyCode: source.account, user: source.user ?? '', folder: source.folder })}>Connect again</Button>
           <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={() => void run(disconnectSource)}>{busy && !form ? 'Disconnecting…' : 'Disconnect'}</Button>
         </div>
       </div>
