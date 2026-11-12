@@ -17,7 +17,7 @@ it('serializes uploads, continues after failure and retries only the failed item
   act(() => finish());
   await screen.findByText('Connection lost');
   await waitFor(() => expect(upload).toHaveBeenCalledTimes(3));
-  await screen.findByText('2 of 3 uploaded');
+  await screen.findByText('2 of 3 uploaded · 1 failed');
   fireEvent.click(screen.getByRole('button', { name: 'Retry b.txt' }));
   await screen.findByText('3 of 3 uploaded');
   expect(upload.mock.calls.map(([folder, file]) => [folder, file.name])).toEqual([
@@ -139,7 +139,7 @@ it('retries only failed rows as a batch using each original space and folder', a
   await screen.findByText('Failed A');
   api.selectSite('space-b');
   act(() => enqueue('folder-b', 'B', [new File(['b'], 'b.txt'), new File(['ok'], 'ok.txt')]));
-  await screen.findByText('1 of 3 uploaded');
+  await screen.findByText('1 of 3 uploaded · 2 failed');
   api.selectSite('space-c');
   fireEvent.click(screen.getByRole('button', { name: 'Retry failed uploads' }));
   await screen.findByText('3 of 3 uploaded');
@@ -163,4 +163,21 @@ it('adds retries to an active pump without starting a concurrent transfer', asyn
   await act(async () => finish());
   await screen.findByText('2 of 2 uploaded');
   expect(upload.mock.calls.map(([, file]) => file.name)).toEqual(['a.txt', 'b.txt', 'a.txt']);
+});
+
+it('does not carry a close confirmation from a finished batch into the next one', async () => {
+  let finish!: () => void;
+  vi.spyOn(api, 'uploadFile').mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({} as api.DriveFile); }))
+    .mockImplementation(() => new Promise(() => {}));
+  let enqueue!: ReturnType<typeof useUploadQueue>['enqueue'];
+  function Harness() { const queue = useUploadQueue(async () => {}); enqueue = queue.enqueue; return queue.panel; }
+  render(<Harness />);
+  act(() => enqueue('root', 'Root', [new File(['a'], 'a.txt')]));
+  fireEvent.click(screen.getByRole('button', { name: 'Close uploads' }));
+  expect(screen.getByText('Cancel 1 upload still in progress?')).toBeTruthy();
+  await act(async () => finish());
+  await screen.findByText('1 of 1 uploaded');
+  act(() => enqueue('root', 'Root', [new File(['b'], 'b.txt')]));
+  expect(screen.queryByText(/still in progress/)).toBeNull();
+  expect(screen.getByText('b.txt')).toBeTruthy();
 });
