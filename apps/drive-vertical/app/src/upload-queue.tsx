@@ -4,7 +4,9 @@ import { useNavigationGuard } from './navigation-guards';
 import { uploadFile, currentSite } from './api';
 
 type Upload = { site: string | null; id: number; folderId: string; destination: string; name: string; file: File | null;
-  state: 'queued' | 'uploading' | 'done' | 'failed' | 'cancelled'; error?: string };
+  state: 'queued' | 'uploading' | 'done' | 'failed' | 'cancelled'; error?: string;
+  /** More folders (a3doc categories) to file the upload under too. */
+  alsoIn?: string[] };
 
 /** Files keep the destination selected when queued. One upload body is in flight at a time. */
 export function useUploadQueue(onChanged: () => Promise<void>) {
@@ -47,7 +49,7 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
         const controller = new AbortController();
         inFlight.current = { id: row.id, controller };
         try {
-          await uploadFile(row.folderId, row.file, row.site, controller.signal);
+          await uploadFile(row.folderId, row.file, row.site, controller.signal, false, { alsoIn: row.alsoIn });
           wrote = true;
           update(row.id, { state: 'done', file: null });
         } catch (e: unknown) {
@@ -66,8 +68,8 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
       if (wrote && mounted.current) await changed.current().catch(() => {});
     }
   };
-  const enqueue = (folderId: string, destination: string, files: File[]) => {
-    queue.current.push(...files.map(file => ({ site: currentSite(), id: ++sequence.current, folderId, destination, name: file.name, file, state: 'queued' as const })));
+  const enqueue = (folderId: string, destination: string, files: File[], alsoIn?: string[]) => {
+    queue.current.push(...files.map(file => ({ site: currentSite(), id: ++sequence.current, folderId, destination, name: file.name, file, state: 'queued' as const, alsoIn })));
     setWork(n => n + 1);
     publish();
     void pump();

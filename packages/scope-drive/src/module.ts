@@ -279,7 +279,16 @@ const operations = {
     if (ctx.sql.query('SELECT item_id FROM drive_source_items WHERE kind = ? AND entity_id = ?', ['file', file.id]).length) {
       throw substratError('conflict', 'a3doc cannot replace a connected file');
     }
-    const { payload, attachmentId } = sourceWrite(ctx, file, 'rename', 'a3doc');
+    const { payload: write, attachmentId } = sourceWrite(ctx, file, 'rename', 'a3doc');
+    // Folder paths, as the connector resolves `directory`; the root's is '' (the bound folder).
+    const alsoIn: string[] = [];
+    for (const id of input.alsoIn ?? []) {
+      const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [id])[0];
+      if (!folder) throw substratError('not_found', `folder not found: ${id}`);
+      assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(id)));
+      if (folder.id !== file.folder_id && !alsoIn.includes(folder.path)) alsoIn.push(folder.path);
+    }
+    const payload = { ...write, alsoIn };
     const pending = ctx.sql.query<{ attachment_id: string }>('SELECT attachment_id FROM drive_source_pending WHERE file_id = ?', [file.id])[0];
     // A repeat is harmless; a newer version is not: the earlier request's bytes are what a3doc receives.
     if (pending && pending.attachment_id !== attachmentId) {

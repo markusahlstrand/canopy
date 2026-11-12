@@ -35,7 +35,9 @@ async function world() {
   });
   /** How many events of `type` the scope has emitted. */
   const emitted = async (type: string) => (await host.admin.queryScope(staff, t, s, { sql: `SELECT COUNT(*) FROM _substrat_outbox WHERE type = '${type}'` })).rows[0]![0];
-  return { land, upsert, bytes, stub, human, member, connect, emitted };
+  /** The payload of the newest event of `type`. */
+  const lastPayload = async (type: string) => JSON.parse(String((await host.admin.queryScope(staff, t, s, { sql: `SELECT payload FROM _substrat_outbox WHERE type = '${type}' ORDER BY id DESC LIMIT 1` })).rows[0]![0])) as unknown;
+  return { land, upsert, bytes, stub, human, member, connect, emitted, lastPayload };
 }
 
 it('keeps item and version identity on redelivery and appends changed content', async () => {
@@ -130,6 +132,22 @@ it('sends a connected upload once and refuses to replace it', async () => {
   await w.stub.invoke('drive/send-source-file', { fileId: file.id });
   const two = await upload('two');
   await expect(w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: two.id } })).rejects.toThrow("can't replace a document");
+});
+
+it('files a connected upload in other folders too, by their paths, without its own folder', async () => {
+  const w = await world();
+  const facturas = await w.human.invoke<{ id: string }>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Facturas' });
+  const fiscal = await w.human.invoke<{ id: string }>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Fiscal' });
+  const file = await w.stub.invoke<{ id: string }>('drive/ensure-file', { folderId: facturas.id, name: 'Recibo.txt' });
+  const one = await w.bytes.upload({ entity: { entityType: 'file', entityId: file.id }, filename: 'Recibo.txt', contentType: 'text/plain', visibility: 'internal', body: new TextEncoder().encode('one') });
+  await w.stub.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: one.id } });
+  await w.connect();
+  await expect(w.stub.invoke('drive/send-source-file', { fileId: file.id, alsoIn: ['no-such-folder'] })).rejects.toThrow('folder not found');
+  expect(await w.emitted('a3doc.files-requested')).toBe(0);
+  const sent = await w.stub.invoke('drive/send-source-file', { fileId: file.id, alsoIn: [facturas.id, fiscal.id, fiscal.id, ROOT_FOLDER_ID] });
+  expect(sent).toMatchObject({ directory: 'Facturas', alsoIn: ['Fiscal', ''] });
+  expect(await w.emitted('a3doc.files-requested')).toBe(1);
+  expect(await w.lastPayload('a3doc.files-requested')).toMatchObject({ directory: 'Facturas', alsoIn: ['Fiscal', ''] });
 });
 
 it('refuses tree changes in a connected space and uploads its a3doc user may not make', async () => {
