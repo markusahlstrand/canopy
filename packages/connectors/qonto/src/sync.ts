@@ -9,7 +9,7 @@
  * Statements/2026/2026-11 Main account (1a2b3c4d).pdf
  * ```
  *
- * - **Names are stable.** The short id keeps a name unique without reading its siblings, and a path,
+ * - **Names are stable.** The short id (the random tail of Qonto's id) keeps a name unique without reading its siblings, and a path,
  *   once given, is kept: Qonto tidying a counterparty name never renames a landed file.
  * - **Reads are resumable.** Each page saves where the next starts. A call stops at
  *   {@link OUTBOUND_BUDGET}, under the platform's limit of 100 outbound uses, or at a 429, and the
@@ -58,7 +58,10 @@ const clean = (value: string | null | undefined, fallback: string) => {
   const text = (value ?? '').replace(/[\/\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).trim();
   return !text || text === '.' || text === '..' ? fallback : text;
 };
-const shortId = (id: string) => id.replace(/-/g, '').slice(0, 8);
+// The TAIL of the id: Qonto's ids are time-ordered UUIDs, whose head is a timestamp that items
+// made within the same minute share (two receipts uploaded together, say), so a head-cut is not
+// unique and the drive refuses the second name. The tail is the random half.
+const shortId = (id: string) => id.replace(/-/g, '').slice(-8);
 const dayOf = (iso: string | null | undefined) => /^\d{4}-\d{2}-\d{2}/.test(iso ?? '') ? iso!.slice(0, 10) : '0000-00-00';
 const monthDir = (root: string, day: string) => `${root}/${day.slice(0, 4)}/${day.slice(5, 7)}`;
 
