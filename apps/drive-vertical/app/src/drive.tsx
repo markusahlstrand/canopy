@@ -16,7 +16,7 @@ import { SearchMatchFilter, filterMatches, type MatchFilter } from './search-mat
  * Folders and files are one list, folders first, because that is what a drive looks
  * like — but they are two reads and two entity types underneath, and the actions differ.
  */
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
 import { readViewPreferences, saveViewPreferences, watchViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
@@ -31,6 +31,7 @@ import { PreviewPanel, type PreviewMode } from './preview';
 import { PreviewResizeHandle, PREVIEW_WIDTH_VAR, usePreviewWidth } from './preview-resize';
 import { AllFilesTable } from './all-files-table';
 import { FileTable, type SortKey, type SortState } from './file-table';
+import type { FolderPage, FolderTree } from './file-list';
 import { Topbar } from './topbar';
 import { AccountMenu } from './account-menu';
 import { SelectionSummary } from './selection-summary';
@@ -202,6 +203,17 @@ const fileItem = (file: DriveFile, mime?: string | null): FileItem => ({
 interface Crumb {
   id: string;
   name: string;
+}
+
+/**
+ * A row read inside a folder opened in place, with the folders between the one on screen
+ * and it: opening a nested folder walks the breadcrumbs through them.
+ */
+interface NestedRow {
+  item: FileItem;
+  folder?: DriveFolder;
+  file?: DriveFile;
+  via: Crumb[];
 }
 
 export interface DriveScreenProps {
@@ -513,6 +525,57 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   // Only the online listing knows a folder is empty; a folder without the mark always shows.
   const shownFolders = view === 'drive' && hideEmptyFolders ? folders.filter(folder => folder.empty !== true) : folders;
   const hiddenFolders = folders.length - shownFolders.length;
+
+  // Folders opened in place in the list. Their rows are remembered so that opening,
+  // selecting and acting on them works as it does for the folder's own rows.
+  const nestedRef = useRef<ReadonlyMap<string, NestedRow>>(new Map());
+  const [nested, setNested] = useState<ReadonlyMap<string, NestedRow>>(nestedRef.current);
+  useEffect(() => { nestedRef.current = new Map(); setNested(nestedRef.current); }, [folderId, view, hideEmptyFolders]);
+  const readNested = useCallback(async (parent: FileItem, levelSort: SortState, next: string | null): Promise<FolderPage> => {
+    const via = [...(nestedRef.current.get(parent.id)?.via ?? []), { id: parent.id, name: parent.name }];
+    let subfolders: DriveFolder[] = [];
+    let contents: ListingPage<DriveFile>;
+    try {
+      if (next === null) {
+        const [inside, page] = await Promise.all([
+          readLoadedPages(more => listFoldersPage(parent.id, more), Infinity, () => true),
+          listFolderPage(parent.id),
+        ]);
+        subfolders = inside.entries;
+        contents = page;
+      } else {
+        contents = await listFolderPage(parent.id, next);
+      }
+    } catch (e: unknown) {
+      // Offline, an opened folder reads from the metadata mirror, as the screen's own does.
+      const unreachable = e instanceof TypeError || (e instanceof ApiError && e.status >= 500);
+      const saved = next === null && unreachable && auth.principal
+        ? await indexedMirror.folder(auth.principal, parent.id).catch(() => null) : null;
+      if (!saved) throw e;
+      subfolders = saved.folders;
+      contents = { entries: saved.files, next: null };
+    }
+    const shown = hideEmptyFolders ? subfolders.filter(folder => folder.empty !== true) : subfolders;
+    const rows: NestedRow[] = [
+      ...sorted(shown, levelSort).map(folder => ({ item: folderItem(folder), folder, via })),
+      ...sorted(contents.entries, levelSort).map(file => ({ item: fileItem(file), file, via })),
+    ];
+    const known = new Map(nestedRef.current);
+    for (const row of rows) known.set(row.item.id, row);
+    nestedRef.current = known;
+    setNested(known);
+    return { entries: rows.map(row => row.item), next: contents.next };
+  }, [auth.principal, hideEmptyFolders]);
+  const folderTree = useMemo<FolderTree>(() => ({ read: readNested, scope: `${folderId}\n${hideEmptyFolders}` }), [readNested, folderId, hideEmptyFolders]);
+  // One array per listing: the table reloads (open folders included) when it changes, so a
+  // new one on every render would re-read each open folder whenever one finished loading.
+  const listed = useMemo(
+    () => [...sorted(shownFolders, sort).map(folderItem), ...sorted(files, sort).map((file) => fileItem(file))],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `shownFolders` is derived from these
+    [folders, files, sort, view, hideEmptyFolders],
+  );
+  const nestedItems = [...nested.values()].map(row => row.item);
+  const nestedFiles = [...nested.values()].flatMap(row => (row.file ? [row.file] : []));
   const uploads = useUploadQueue(() => refreshRef.current());
 
   const changeMatchFilter = (value: MatchFilter) => { reads.current.invalidate(); setMatchFilter(value); setSelection(new Set()); setBusy(true); };
@@ -853,7 +916,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     return () => { clear(); window.removeEventListener('keydown', onKey); };
   }, [cmdOpen, navigate, offline]);
 
-  const open = (folder: DriveFolder | SharedFolder) => {
+  const open = (folder: DriveFolder | SharedFolder, via: Crumb[] = []) => {
     const here = siteList.sites?.find(site => site.current)?.slug ?? currentSite();
     if ('siteSlug' in folder && (folder.current === false || (folder.current == null && here && folder.siteSlug !== here))) {
       openSpaceFolder(folder.siteSlug, folder.id);
@@ -875,8 +938,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       setFolderId(folder.id);
       return;
     }
-    setCrumbs((c) => [...c, { id: folder.id, name: folder.name }]);
+    setCrumbs((c) => [...c, ...via, { id: folder.id, name: folder.name }]);
     setFolderId(folder.id);
+  };
+  /** The folder a table row stands for, on screen or opened in place, and the way to it. */
+  const folderFor = (id: string): { folder: DriveFolder | SharedFolder; via: Crumb[] } | null => {
+    const top = folders.find((f) => folderItemId(f) === id);
+    if (top) return { folder: top, via: [] };
+    const inner = nestedRef.current.get(id);
+    return inner?.folder ? { folder: inner.folder, via: inner.via } : null;
   };
 
   const upTo = (index: number) => {
@@ -984,8 +1054,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const onAction = (action: string, item: FileItem) => {
     if (offline && action !== 'Open') return;
     if (action === 'Open') {
-      const folder = folders.find((f) => folderItemId(f) === item.id);
-      if (folder) open(folder);
+      const found = folderFor(item.id);
+      if (found) open(found.folder, found.via);
       else setPreviewing(item.id);
       return;
     }
@@ -1022,7 +1092,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     }
     if (action === 'Move') {
       const visible = view === 'search' ? visibleHits.map((hit) => fileItem(hit))
-        : [...folders.map(folderItem), ...files.map((file) => fileItem(file))];
+        : [...folders.map(folderItem), ...files.map((file) => fileItem(file)), ...nestedItems];
       setMoving(selection.has(item.id) ? visible.filter((row) => selection.has(row.id)) : [item]);
     }
   };
@@ -1413,14 +1483,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       {/* Always rendered at one height, so nothing above the rows appears on select: a
           selection that pushed the table down made a double-click's second click miss. */}
       <div data-selection-bar className={`mb-3 flex h-10 items-center gap-2 overflow-x-auto whitespace-nowrap rounded border px-2 text-sm ${selection.size ? 'border-border' : 'border-transparent'}`}>
-        <SelectionSummary selection={selection} items={view === 'search' ? previewFiles.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file))]} onClear={() => setSelection(new Set())} />
+        <SelectionSummary selection={selection} items={view === 'search' ? previewFiles.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file)), ...(view === 'drive' ? nestedItems : [])]} onClear={() => setSelection(new Set())} />
         <span ref={setBulkTrigger} className="contents" />
-        {(view === 'drive' || view === 'search') && !mirrored && previewFiles.some(file => selection.has(file.id)) ? <Button variant="outline" size="sm" disabled={offline || busy} onClick={() => {
-          setMoving(previewFiles.filter(file => selection.has(file.id)).map(file => fileItem(file)));
+        {(view === 'drive' || view === 'search') && !mirrored && [...previewFiles, ...(view === 'drive' ? nestedFiles : [])].some(file => selection.has(file.id)) ? <Button variant="outline" size="sm" disabled={offline || busy} onClick={() => {
+          setMoving([...previewFiles, ...(view === 'drive' ? nestedFiles : [])].filter(file => selection.has(file.id)).map(file => fileItem(file)));
         }}>Move selected files…</Button> : null}
       </div>
 
-      <BulkTrash trigger={bulkTrigger} contextKey={`${view}:${folderId}:${term}`} beforeTrash={ids => !previewId.current || !ids.includes(previewId.current) || setPreviewing(null)} visible={(view === 'drive' || view === 'search') && !mirrored} files={(view === 'search' ? visibleHits : files).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
+      <BulkTrash trigger={bulkTrigger} contextKey={`${view}:${folderId}:${term}`} beforeTrash={ids => !previewId.current || !ids.includes(previewId.current) || setPreviewing(null)} visible={(view === 'drive' || view === 'search') && !mirrored} files={(view === 'search' ? visibleHits : [...files, ...nestedFiles]).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
         unselect(ids);
         await refreshRef.current();
       }} />
@@ -1478,12 +1548,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         />
       ) : (
         <FileTable
-          files={[...sorted(shownFolders, sort).map(folderItem), ...sorted(files, sort).map((file) => fileItem(file))]}
+          files={listed}
           selection={selection}
           onSelectionChange={setSelection}
           onOpen={(item) => {
-            const folder = folders.find((f) => folderItemId(f) === item.id);
-            if (folder) open(folder);
+            const found = folderFor(item.id);
+            if (found) open(found.folder, found.via);
             else setPreviewing(item.id);
           }}
           sort={sort}
@@ -1491,6 +1561,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           view={layout}
           onAction={onAction}
           mirrored={mirrored}
+          // Shared folders belong to other spaces; only the drive's own folders open in place.
+          tree={view === 'drive' ? folderTree : undefined}
           // Drag a file onto a folder: the move the platform's relink makes safe (#75).
           onMove={offline || view !== 'drive' || mirrored ? undefined : (item, folder) => void act(async () => {
             await (item.isFolder ? moveFolder(item.id, folder.id) : moveFile(item.id, folder.id));

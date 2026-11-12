@@ -2,7 +2,7 @@ import { useRef, useState, useLayoutEffect, type ReactNode, type KeyboardEvent }
 import type { FileItem } from './items';
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from './file-icon';
-import { FileList } from './file-list';
+import { FileList, type FolderTree } from './file-list';
 import { Checkbox } from "@canopy/ui";
 import {
   DropdownMenu,
@@ -56,6 +56,8 @@ interface FileTableProps {
   mirrored?: boolean;
   /** The view owns the reason its result is empty and the useful next action. */
   empty?: ReactNode;
+  /** Folders open in place in the list view, read through this. */
+  tree?: FolderTree;
 }
 
 // Varied bar widths so skeleton rows/cards read as real names, not a grid of equals.
@@ -200,6 +202,7 @@ export function FileTable({
   trashed = false,
   mirrored = false,
   empty,
+  tree,
 }: FileTableProps) {
   const lastIndex = useRef<number | null>(null);
   // Internal file→folder drag-and-drop. The dragged file is held in a ref;
@@ -404,6 +407,7 @@ export function FileTable({
       readOnly={readOnly}
       trashed={trashed}
       mirrored={mirrored}
+      tree={tree}
     />
   );
 }

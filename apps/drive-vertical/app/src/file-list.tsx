@@ -17,6 +17,10 @@
  * table's source just serves that array, with no next page. The header's sort is the
  * drive's: a press is reported back as `onSort`, and a changed sort hands the table a new
  * source carrying it, which is the one way to give the element a query after its first read.
+ *
+ * A folder opens in place through the element's own tree (`childrenOf`): the twisty, Right/Left
+ * and the indent are the table's, and each open level is read by the drive's `tree.read` with
+ * the table's sort. Rows read that way are remembered here so their cells can draw.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DetailedHTMLProps, type HTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
@@ -48,6 +52,20 @@ declare module 'react' {
   }
 }
 
+/** One page of an open folder's rows; `next` is followed for "Load more" in that level. */
+export interface FolderPage {
+  entries: FileItem[];
+  next: string | null;
+}
+
+/** Folders open in place. */
+export interface FolderTree {
+  /** Read an open folder's rows in the given order; `next` null is the first page. */
+  read: (folder: FileItem, sort: SortState, next: string | null) => Promise<FolderPage>;
+  /** A change closes every open folder: the rows they held belonged to another listing. */
+  scope: string;
+}
+
 export interface FileListProps {
   files: FileItem[];
   searchQuery?: string;
@@ -63,6 +81,7 @@ export interface FileListProps {
   readOnly: boolean;
   trashed: boolean;
   mirrored: boolean;
+  tree?: FolderTree;
 }
 
 /** A cell the table has handed over, and the row it currently draws. */
@@ -123,19 +142,21 @@ function RowMenu({ file, onAction, readOnly, trashed, mirrored }: { file: FileIt
 
 export function FileList({
   files, searchQuery, selection, onSelectionChange, onOpen, sort, onSort, onAction, onMove,
-  pluginMenuItems, previewOpen, readOnly, trashed, mirrored,
+  pluginMenuItems, previewOpen, readOnly, trashed, mirrored, tree,
 }: FileListProps) {
   const table = useRef<SubEntityTable<FileItem, SortKey>>(null);
   const rows = useRef(files);
-  const latest = useRef({ files, selection, sort, onSelectionChange, onOpen, onSort, onMove, previewOpen, trashed });
+  const latest = useRef({ files, selection, sort, onSelectionChange, onOpen, onSort, onMove, previewOpen, trashed, tree });
   // Refresh after commit, before the effects below read them: a render React throws away
   // must not leak its rows or callbacks into events on the table still on screen.
   useLayoutEffect(() => {
     rows.current = files;
-    latest.current = { files, selection, sort, onSelectionChange, onOpen, onSort, onMove, previewOpen, trashed };
+    latest.current = { files, selection, sort, onSelectionChange, onOpen, onSort, onMove, previewOpen, trashed, tree };
   });
 
   const [mounted, setMounted] = useState<ReadonlyMap<string, Mounted>>(new Map());
+  // Rows inside open folders, by id: the drive's `files` holds only the top level.
+  const [nested, setNested] = useState<ReadonlyMap<string, FileItem>>(new Map());
   const [menu, setMenu] = useState<{ file: FileItem; x: number; y: number } | null>(null);
   const narrow = useNarrow();
 
@@ -181,11 +202,54 @@ export function FileList({
     el.source = source;
   }, [source, sort.key, sort.dir]);
 
+  // A new scope (another folder on screen) closes what was open and forgets its rows.
+  const treeOn = !!tree;
+  const scope = tree?.scope;
+  useEffect(() => {
+    if (scope === undefined) return;
+    setNested(new Map());
+    table.current!.open = [];
+  }, [scope]);
+  // Set once: a new `childrenOf` makes the element re-read every level still open.
+  useEffect(() => {
+    const el = table.current!;
+    if (!treeOn) {
+      el.childrenOf = undefined;
+      el.canExpand = undefined;
+      return;
+    }
+    el.canExpand = (f) => f.isFolder;
+    el.childrenOf = (folder) => {
+      let order: SortState = latest.current.sort;
+      const page = async (next: string | null) => {
+        const read = latest.current.tree;
+        if (!read) return { entries: [], next: null, total: null };
+        const { entries, next: following } = await read.read(folder, order, next);
+        setNested((m) => {
+          const known = new Map(m);
+          for (const row of entries) known.set(row.id, row);
+          return known;
+        });
+        return { entries, next: following, total: null };
+      };
+      return {
+        read: (query) => {
+          order = query.sort ? { key: query.sort, dir: query.order } : latest.current.sort;
+          return page(null);
+        },
+        follow: (next) => page(next),
+      };
+    };
+  }, [treeOn]);
+
   // The drive re-read or re-sorted: read the rows again, keeping the selection and focus.
   const first = useRef(true);
   useEffect(() => {
     if (first.current) { first.current = false; return; }
-    void table.current?.reload();
+    // After the element has taken any change set this commit (folders closed by a new
+    // scope above), so the reload reads only what is open now.
+    const el = table.current;
+    if (el) void el.updateComplete.then(() => el.reload());
   }, [files]);
 
   useEffect(() => {
@@ -261,7 +325,8 @@ export function FileList({
     };
   }, []);
 
-  const byId = new Map(files.map((f) => [f.id, f]));
+  const byId = new Map(nested);
+  for (const f of files) byId.set(f.id, f);
   const menuFile = menu ? byId.get(menu.file.id) ?? menu.file : null;
   const menuActions = menuFile ? actionsFor(menuFile, readOnly, trashed, mirrored) : [];
   const menuPlugins = menuFile && !readOnly ? pluginMenuItems(menuFile.kind) : [];

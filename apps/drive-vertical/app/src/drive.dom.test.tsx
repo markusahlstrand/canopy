@@ -2413,3 +2413,41 @@ it('removes earlier search hits and their selection when a refresh is refused', 
   await answer('/api/search', { hits: [{ ...file('01B', 'allowed.txt'), via: 'name' }] });
   expect(screen.getByText('allowed.txt')).toBeTruthy();
 });
+
+describe('opening a folder in place', () => {
+  /** The twisty the table draws in a folder row's first cell. */
+  const twisty = (name: string) => {
+    const button = fileRow(name).querySelector<HTMLButtonElement>('button.twisty');
+    if (!button) throw new Error(`No twisty on ${name}`);
+    return button;
+  };
+
+  it('lists a folder’s contents under it, and opens a nested folder with the folders between in the breadcrumbs', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], [file('01C', 'at-the-root.md')]);
+
+    await act(async () => { twisty('Papers').click(); });
+    await answer('/folders/01F/folders', [{ id: '01H', parent_id: '01F', name: 'Drafts', path: 'Papers/Drafts' }]);
+    await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
+
+    // Folders first within the level, the level under its folder, the root's files after it.
+    expect(fileRows().map(rowText).map((text) => text.split(" ")[0])).toEqual(['Papers', 'Drafts', 'lease.pdf', 'at-the-root.md']);
+    expect(fileRow('lease.pdf').getAttribute('aria-level')).toBe('2');
+    // A loaded level is read once: remembering its rows must not set off another read.
+    await flush();
+    expect(pending.filter((p) => p.url.includes('/folders/01F/'))).toEqual([]);
+
+    fireEvent.doubleClick(screen.getByText('Drafts', { selector: '[data-sub-cell] span' }));
+    await flush();
+    await answer('/folders/01H/folders', []);
+    await answer('/folders/01H/files', [file('01B', 'draft.md')]);
+
+    expect(fileRows().map(rowText).map((text) => text.split(" ")[0])).toEqual(['draft.md']);
+    // The trail runs through Papers, which was never on screen as a folder of its own:
+    // its parent is Papers, not the root the double-click happened in.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to parent folder' }));
+    await flush();
+    await answer('/folders/01F/folders', [{ id: '01H', parent_id: '01F', name: 'Drafts', path: 'Papers/Drafts' }]);
+    await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
+    expect(fileRows().map(rowText).map((text) => text.split(" ")[0])).toEqual(['Drafts', 'lease.pdf']);
+  });
+});
