@@ -225,6 +225,8 @@ export function FileList({
         const read = latest.current.tree;
         if (!read) return { entries: [], next: null, total: null };
         const { entries, next: following } = await read.read(folder, order, next);
+        // Another folder came on screen while this one read: its rows belong to the old scope.
+        if (latest.current.tree?.scope !== read.scope) return { entries: [], next: null, total: null };
         setNested((m) => {
           const known = new Map(m);
           for (const row of entries) known.set(row.id, row);

@@ -530,18 +530,29 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   // selecting and acting on them works as it does for the folder's own rows.
   const nestedRef = useRef<ReadonlyMap<string, NestedRow>>(new Map());
   const [nested, setNested] = useState<ReadonlyMap<string, NestedRow>>(nestedRef.current);
-  useEffect(() => { nestedRef.current = new Map(); setNested(nestedRef.current); }, [folderId, view, hideEmptyFolders]);
+  // Bumped with every new scope: a read that started under an earlier one must not land.
+  const nestedScope = useRef(0);
+  useEffect(() => { nestedScope.current++; nestedRef.current = new Map(); setNested(nestedRef.current); }, [folderId, view, hideEmptyFolders]);
   const readNested = useCallback(async (parent: FileItem, levelSort: SortState, next: string | null): Promise<FolderPage> => {
+    const scope = nestedScope.current;
     const via = [...(nestedRef.current.get(parent.id)?.via ?? []), { id: parent.id, name: parent.name }];
     let subfolders: DriveFolder[] = [];
     let contents: ListingPage<DriveFile>;
     try {
       if (next === null) {
-        const [inside, page] = await Promise.all([
-          readLoadedPages(more => listFoldersPage(parent.id, more), Infinity, () => true),
-          listFolderPage(parent.id),
-        ]);
-        subfolders = inside.entries;
+        // Every folder page, and a failed one fails the read: a partial list would drop
+        // the remaining folders with no error and nothing to resume from.
+        const allFolders = async () => {
+          let page = await listFoldersPage(parent.id);
+          let entries = page.entries;
+          while (page.next) {
+            page = await listFoldersPage(parent.id, page.next);
+            entries = appendRows(entries, page.entries);
+          }
+          return entries;
+        };
+        const [inside, page] = await Promise.all([allFolders(), listFolderPage(parent.id)]);
+        subfolders = inside;
         contents = page;
       } else {
         contents = await listFolderPage(parent.id, next);
@@ -555,12 +566,22 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       subfolders = saved.folders;
       contents = { entries: saved.files, next: null };
     }
+    // Another folder is on screen now: its rows would carry this one's breadcrumbs.
+    if (scope !== nestedScope.current) return { entries: [], next: null };
     const shown = hideEmptyFolders ? subfolders.filter(folder => folder.empty !== true) : subfolders;
     const rows: NestedRow[] = [
       ...sorted(shown, levelSort).map(folder => ({ item: folderItem(folder), folder, via })),
       ...sorted(contents.entries, levelSort).map(file => ({ item: fileItem(file), file, via })),
     ];
     const known = new Map(nestedRef.current);
+    if (next === null) {
+      // A fresh read replaces what this folder held: a row moved or trashed elsewhere is gone,
+      // and so is everything remembered below a folder that is.
+      const kept = new Set(rows.map(row => row.item.id));
+      const gone = new Set<string>();
+      for (const [id, row] of known) if (row.via.at(-1)?.id === parent.id && !kept.has(id)) gone.add(id);
+      for (const [id, row] of known) if (gone.has(id) || row.via.some(crumb => gone.has(crumb.id))) known.delete(id);
+    }
     for (const row of rows) known.set(row.item.id, row);
     nestedRef.current = known;
     setNested(known);
@@ -576,6 +597,13 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   );
   const nestedItems = [...nested.values()].map(row => row.item);
   const nestedFiles = [...nested.values()].flatMap(row => (row.file ? [row.file] : []));
+  /** A row opened in place lives in its own folder, not the one on screen. */
+  const nestedParents = new Map([...nested].flatMap(([id, row]) => {
+    const parent = row.folder?.parent_id ?? row.file?.folder_id;
+    return parent ? [[id, parent] as const] : [];
+  }));
+  /** Rows on screen plus rows opened in place, once each: a refresh can list a row in both. */
+  const listedFiles = appendRows(files, nestedFiles);
   const uploads = useUploadQueue(() => refreshRef.current());
 
   const changeMatchFilter = (value: MatchFilter) => { reads.current.invalidate(); setMatchFilter(value); setSelection(new Set()); setBusy(true); };
@@ -1092,7 +1120,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     }
     if (action === 'Move') {
       const visible = view === 'search' ? visibleHits.map((hit) => fileItem(hit))
-        : [...folders.map(folderItem), ...files.map((file) => fileItem(file)), ...nestedItems];
+        : appendRows([...folders.map(folderItem), ...files.map((file) => fileItem(file))], nestedItems);
       setMoving(selection.has(item.id) ? visible.filter((row) => selection.has(row.id)) : [item]);
     }
   };
@@ -1485,12 +1513,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <div data-selection-bar className={`mb-3 flex h-10 items-center gap-2 overflow-x-auto whitespace-nowrap rounded border px-2 text-sm ${selection.size ? 'border-border' : 'border-transparent'}`}>
         <SelectionSummary selection={selection} items={view === 'search' ? previewFiles.map(file => fileItem(file)) : view === 'trash' ? trash.map(file => fileItem(file)) : [...folders.map(folderItem), ...files.map(file => fileItem(file)), ...(view === 'drive' ? nestedItems : [])]} onClear={() => setSelection(new Set())} />
         <span ref={setBulkTrigger} className="contents" />
-        {(view === 'drive' || view === 'search') && !mirrored && [...previewFiles, ...(view === 'drive' ? nestedFiles : [])].some(file => selection.has(file.id)) ? <Button variant="outline" size="sm" disabled={offline || busy} onClick={() => {
-          setMoving([...previewFiles, ...(view === 'drive' ? nestedFiles : [])].filter(file => selection.has(file.id)).map(file => fileItem(file)));
+        {(view === 'drive' || view === 'search') && !mirrored && (view === 'drive' ? appendRows(previewFiles, nestedFiles) : previewFiles).some(file => selection.has(file.id)) ? <Button variant="outline" size="sm" disabled={offline || busy} onClick={() => {
+          setMoving((view === 'drive' ? appendRows(previewFiles, nestedFiles) : previewFiles).filter(file => selection.has(file.id)).map(file => fileItem(file)));
         }}>Move selected files…</Button> : null}
       </div>
 
-      <BulkTrash trigger={bulkTrigger} contextKey={`${view}:${folderId}:${term}`} beforeTrash={ids => !previewId.current || !ids.includes(previewId.current) || setPreviewing(null)} visible={(view === 'drive' || view === 'search') && !mirrored} files={(view === 'search' ? visibleHits : [...files, ...nestedFiles]).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
+      <BulkTrash trigger={bulkTrigger} contextKey={`${view}:${folderId}:${term}`} beforeTrash={ids => !previewId.current || !ids.includes(previewId.current) || setPreviewing(null)} visible={(view === 'drive' || view === 'search') && !mirrored} files={(view === 'search' ? visibleHits : listedFiles).filter(file => selection.has(file.id))} disabled={offline || busy} onTrashed={async ids => {
         unselect(ids);
         await refreshRef.current();
       }} />
@@ -1604,8 +1632,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             ? 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:inset-0 md:z-40'
             : 'fixed inset-x-0 bottom-0 top-14 z-20 bg-background md:relative md:inset-auto md:z-auto md:w-[var(--preview-w)] md:min-w-80 md:max-w-[calc(100vw-35rem)] md:shrink-0'}>
           {previewCovers ? null : <PreviewResizeHandle width={previewWidth} onChange={setPreviewWidth} />}
-          {offlinePreview ? cacheSpace && auth.principal && files.find(file => file.id === previewing) ? <OfflinePreview
-            file={files.find(file => file.id === previewing)!}
+          {offlinePreview ? cacheSpace && auth.principal && listedFiles.find(file => file.id === previewing) ? <OfflinePreview
+            file={listedFiles.find(file => file.id === previewing)!}
             principal={auth.principal}
             space={cacheSpace}
             onClose={() => setPreviewing(null)}
@@ -1641,6 +1669,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         onUpload={alsoIn => { uploads.enqueue(filing.folderId, filing.destination, filing.files, alsoIn); setFiling(null); }} /> : null}
 
       {moving ? <MoveDialog items={moving} sourceFolderId={view === 'drive' ? folderId : null}
+        parents={view === 'drive' ? nestedParents : undefined}
         onClose={() => setMoving(null)} onMoved={async ids => {
           unselect(ids);
           await refreshRef.current();

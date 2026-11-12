@@ -55,3 +55,23 @@ it('lets a refused file be tried in a different destination without replaying su
   fireEvent.click(screen.getByRole('button', { name: 'Move here' })); await waitFor(() => expect(close).toHaveBeenCalledOnce());
   expect(move.mock.calls.map(call => call.slice(0, 2))).toEqual([['a', 'dest'], ['b', 'dest'], ['a', 'root']]);
 });
+it('moves rows opened in place into the folder on screen, skipping those already there', async () => {
+  vi.spyOn(api, 'listFoldersPage').mockResolvedValue({ entries: [], next: null });
+  const move = vi.spyOn(api, 'moveFile').mockResolvedValue({} as api.DriveFile);
+  const close = vi.fn(), onMoved = vi.fn(async (_ids: string[]) => {});
+  // The dialog opens on the root, which is also the folder on screen: `a` is there already,
+  // `b` was opened in place inside a subfolder.
+  render(<MoveDialog items={items} sourceFolderId="root" parents={new Map([['b', 'sub']])} onClose={close} onMoved={onMoved} />);
+  await screen.findByText('No subfolders');
+  expect((screen.getByRole('button', { name: 'Move here' }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Move here' }));
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  expect(move.mock.calls.map(call => call.slice(0, 2))).toEqual([['b', 'root']]);
+  expect(onMoved).toHaveBeenCalledExactlyOnceWith(['a', 'b']);
+});
+it('refuses a destination every item is already in', async () => {
+  vi.spyOn(api, 'listFoldersPage').mockResolvedValue({ entries: [], next: null });
+  render(<MoveDialog items={items} sourceFolderId="source" parents={new Map([['a', 'root'], ['b', 'root']])} onClose={() => {}} onMoved={async () => {}} />);
+  await screen.findByText('No subfolders');
+  expect((screen.getByRole('button', { name: 'Move here' }) as HTMLButtonElement).disabled).toBe(true);
+});
