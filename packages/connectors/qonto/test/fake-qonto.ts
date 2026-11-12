@@ -3,6 +3,12 @@ import type { QontoAttachment, QontoClientInvoice, QontoCreditNote, QontoStateme
 export const API = 'https://qonto.test', FILES = 'https://files.test';
 export const LOGIN = 'acme-1234', KEY = 'secret-key';
 
+/**
+ * An id as Qonto mints them: a time-ordered UUID, so ids made close together share their head,
+ * and only the tail tells them apart. Every fake id shares one head on purpose.
+ */
+export const qontoId = (n: number, head = '019fbabc') => `${head}-1c2d-7e3f-8a4b-${n.toString(16).padStart(12, '0')}`;
+
 /** Qonto's API as far as the connector reads it. */
 export class FakeQonto {
   accounts = [{ id: 'bank-1', name: 'Main' }];
@@ -16,14 +22,14 @@ export class FakeQonto {
   status: Record<string, number> = {};
   private seq = 0;
 
-  file(name = 'receipt.pdf', type = 'application/pdf', id = `att-${++this.seq}`): QontoAttachment {
+  file(name = 'receipt.pdf', type = 'application/pdf', id = qontoId(++this.seq)): QontoAttachment {
     const a = { id, file_name: name, file_size: '7', file_content_type: type, url: `${FILES}/${id}` };
     this.attachments.set(id, a);
     return a;
   }
   tx(partial: Partial<QontoTransaction> = {}): QontoTransaction {
     const n = ++this.seq;
-    const t: QontoTransaction = { id: `${String(n).padStart(8, '0')}-0000-0000-0000-000000000000`, amount: 59.99, currency: 'EUR', side: 'debit', clean_counterparty_name: 'Adobe', settled_at: '2026-11-03T10:00:00.000Z', emitted_at: '2026-11-03T09:00:00.000Z', updated_at: `2026-11-03T10:${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}.000Z`, attachment_ids: [], attachments: [], logo: { small: 'x', medium: 'y' }, ...partial };
+    const t: QontoTransaction = { id: qontoId(n), amount: 59.99, currency: 'EUR', side: 'debit', clean_counterparty_name: 'Adobe', settled_at: '2026-11-03T10:00:00.000Z', emitted_at: '2026-11-03T09:00:00.000Z', updated_at: `2026-11-03T10:${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}.000Z`, attachment_ids: [], attachments: [], logo: { small: 'x', medium: 'y' }, ...partial };
     this.transactions.push(t);
     return t;
   }

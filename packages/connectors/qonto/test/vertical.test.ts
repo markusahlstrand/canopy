@@ -51,7 +51,7 @@ it('calls a wrong key refused and an outage inconclusive', async () => {
 
 it('lands a transaction without a receipt as its own item', async () => {
   const w = world();
-  const tx = w.q.tx({ id: '1a2b3c4d-0000-0000-0000-000000000000' });
+  const tx = w.q.tx({ id: '019fbabc-1c2d-7e3f-8a4b-00001a2b3c4d' });
   await w.sweep();
   const name = '2026-11-03 Adobe -59.99 EUR (1a2b3c4d).json';
   expect(w.files()).toEqual([`Transactions/2026/11/${name}`]);
@@ -64,16 +64,28 @@ it('lands a transaction without a receipt as its own item', async () => {
 it('lands receipts beside their transaction and never sends the key to the file host', async () => {
   const w = world();
   const a = w.q.file('Factura.PDF'), b = w.q.file('photo.jpg', 'image/jpeg');
-  w.q.tx({ id: '1a2b3c4d-0000-0000-0000-000000000000', attachments: [a, b], attachment_ids: [a.id, b.id] });
+  w.q.tx({ id: '019fbabc-1c2d-7e3f-8a4b-00001a2b3c4d', attachments: [a, b], attachment_ids: [a.id, b.id] });
   await w.sweep();
   expect(w.files()).toEqual([
     'Transactions/2026/11/2026-11-03 Adobe -59.99 EUR (1a2b3c4d).json',
     'Transactions/2026/11/2026-11-03 Adobe -59.99 EUR (1a2b3c4d).pdf',
-    `Transactions/2026/11/2026-11-03 Adobe -59.99 EUR (1a2b3c4d) (${b.id.replace(/-/g, '').slice(0, 8)}).jpg`,
+    `Transactions/2026/11/2026-11-03 Adobe -59.99 EUR (1a2b3c4d) (${b.id.replace(/-/g, '').slice(-8)}).jpg`,
   ]);
   const downloads = w.q.calls.filter((c) => c.url.startsWith(FILES));
   expect(downloads).toHaveLength(2);
   expect(downloads.every((c) => c.authorization === undefined)).toBe(true);
+});
+
+it('names receipts made in the same minute apart, by the random tail of their ids', async () => {
+  // Qonto's ids are time-ordered: receipts uploaded together share the head of their ids, which
+  // once named the second and third alike, and the drive refused the third (name occupied).
+  const w = world();
+  const a = w.q.file('a.pdf'), b = w.q.file('b.pdf'), c = w.q.file('c.pdf');
+  w.q.tx({ attachments: [a, b, c], attachment_ids: [a.id, b.id, c.id] });
+  await w.sweep();
+  const names = w.files();
+  expect(names).toHaveLength(4);
+  expect(new Set(names).size).toBe(4);
 });
 
 it('keeps expiring URLs and logos out of the saved transaction', async () => {
@@ -95,10 +107,10 @@ it('keeps expiring URLs and logos out of the saved transaction', async () => {
 it('lands invoices, credit notes and statements in their own folders', async () => {
   const w = world();
   const s = w.q.file('s.pdf'), c = w.q.file('c.pdf'), n = w.q.file('n.pdf');
-  w.q.supplier.push({ id: '11111111-x', attachment_id: s.id, supplier_name: 'Telefónica', invoice_number: 'F/12', issue_date: '2026-10-02', updated_at: '2026-10-03T00:00:00Z' });
-  w.q.client.push({ id: '22222222-x', attachment_id: c.id, number: 'INV-1', issue_date: '2026-10-05', client: { first_name: 'Ana', last_name: 'Ruiz' } });
-  w.q.credit.push({ id: '33333333-x', attachment_id: n.id, number: 'CN-1', issue_date: '2026-10-06', client: { name: 'Acme' } });
-  w.q.statements.push({ id: '44444444-x', bank_account_id: 'bank-1', period: '10-2026', file: { file_name: 'st.pdf', file_content_type: 'application/pdf', file_size: 9, file_url: `${FILES}/st` } });
+  w.q.supplier.push({ id: '019fbabc-1c2d-7e3f-8a4b-000011111111', attachment_id: s.id, supplier_name: 'Telefónica', invoice_number: 'F/12', issue_date: '2026-10-02', updated_at: '2026-10-03T00:00:00Z' });
+  w.q.client.push({ id: '019fbabc-1c2d-7e3f-8a4b-000022222222', attachment_id: c.id, number: 'INV-1', issue_date: '2026-10-05', client: { first_name: 'Ana', last_name: 'Ruiz' } });
+  w.q.credit.push({ id: '019fbabc-1c2d-7e3f-8a4b-000033333333', attachment_id: n.id, number: 'CN-1', issue_date: '2026-10-06', client: { name: 'Acme' } });
+  w.q.statements.push({ id: '019fbabc-1c2d-7e3f-8a4b-000044444444', bank_account_id: 'bank-1', period: '10-2026', file: { file_name: 'st.pdf', file_content_type: 'application/pdf', file_size: 9, file_url: `${FILES}/st` } });
   await w.sweep();
   expect(w.files()).toEqual([
     'Supplier invoices/2026/10/2026-10-02 Telefónica F 12 (11111111).pdf',
@@ -110,7 +122,7 @@ it('lands invoices, credit notes and statements in their own folders', async () 
 
 it('leaves a client invoice whose file is not generated yet, then lands it', async () => {
   const w = world();
-  const row = { id: '22222222-x', number: 'INV-1', issue_date: '2026-10-05', client: { name: 'Acme' } } as Parameters<typeof w.q.client.push>[0];
+  const row = { id: '019fbabc-1c2d-7e3f-8a4b-000022222222', number: 'INV-1', issue_date: '2026-10-05', client: { name: 'Acme' } } as Parameters<typeof w.q.client.push>[0];
   w.q.client.push(row);
   await w.sweep();
   expect(w.files()).toEqual([]);
