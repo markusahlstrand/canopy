@@ -31,6 +31,8 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
     if (!queue.current.some(row => row.state === 'queued' || row.state === 'uploading')) {
       pausedRef.current = false;
       setPaused(false);
+      // A close confirmation for a batch that has since finished must not greet the next one.
+      setConfirmClose(false);
     }
     setRows([...queue.current]);
   };
@@ -104,7 +106,7 @@ export function useUploadQueue(onChanged: () => Promise<void>) {
     <header className="flex shrink-0 items-center gap-1 bg-muted/60 py-1.5 pl-4 pr-1.5">
       <div className="min-w-0 flex-1">
         <h2 className="truncate font-medium">{title}</h2>
-        <p role="status" className="truncate text-xs text-muted-foreground">{count('done')} of {rows.length} uploaded{count('cancelled') ? ` · ${count('cancelled')} cancelled` : ''}</p>
+        <p role="status" className="truncate text-xs text-muted-foreground">{count('done')} of {rows.length} uploaded{count('cancelled') ? ` · ${count('cancelled')} cancelled` : ''}{count('failed') ? ` · ${count('failed')} failed` : ''}</p>
       </div>
       <Button size="icon" variant="ghost" className="size-8" aria-expanded={!collapsed} aria-label={collapsed ? 'Expand uploads' : 'Collapse uploads'} onClick={() => setCollapsed(c => !c)}>
         <Icon name="chevron-down" size={16} className={collapsed ? 'rotate-180 transition-transform' : 'transition-transform'} />
