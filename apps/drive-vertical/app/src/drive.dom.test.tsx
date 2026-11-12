@@ -2413,3 +2413,102 @@ it('removes earlier search hits and their selection when a refresh is refused', 
   await answer('/api/search', { hits: [{ ...file('01B', 'allowed.txt'), via: 'name' }] });
   expect(screen.getByText('allowed.txt')).toBeTruthy();
 });
+
+describe('opening a folder in place', () => {
+  /** The twisty the table draws in a folder row's first cell. */
+  const twisty = (name: string) => {
+    const button = fileRow(name).querySelector<HTMLButtonElement>('button.twisty');
+    if (!button) throw new Error(`No twisty on ${name}`);
+    return button;
+  };
+
+  it('lists a folder’s contents under it, and opens a nested folder with the folders between in the breadcrumbs', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], [file('01C', 'at-the-root.md')]);
+
+    await act(async () => { twisty('Papers').click(); });
+    await answer('/folders/01F/folders', [{ id: '01H', parent_id: '01F', name: 'Drafts', path: 'Papers/Drafts' }]);
+    await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
+
+    // Folders first within the level, the level under its folder, the root's files after it.
+    expect(fileRows().map(rowText).map((text) => text.split(" ")[0])).toEqual(['Papers', 'Drafts', 'lease.pdf', 'at-the-root.md']);
+    expect(fileRow('lease.pdf').getAttribute('aria-level')).toBe('2');
+    // A loaded level is read once: remembering its rows must not set off another read.
+    await flush();
+    expect(pending.filter((p) => p.url.includes('/folders/01F/'))).toEqual([]);
+
+    fireEvent.doubleClick(screen.getByText('Drafts', { selector: '[data-sub-cell] span' }));
+    await flush();
+    await answer('/folders/01H/folders', []);
+    await answer('/folders/01H/files', [file('01B', 'draft.md')]);
+
+    expect(fileRows().map(rowText).map((text) => text.split(" ")[0])).toEqual(['draft.md']);
+    // The trail runs through Papers, which was never on screen as a folder of its own:
+    // its parent is Papers, not the root the double-click happened in.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to parent folder' }));
+    await flush();
+    await answer('/folders/01F/folders', [{ id: '01H', parent_id: '01F', name: 'Drafts', path: 'Papers/Drafts' }]);
+    await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
+    expect(fileRows().map(rowText).map((text) => text.split(" ")[0])).toEqual(['Drafts', 'lease.pdf']);
+  });
+
+  it('forgets a row a re-read no longer lists, so actions never get it twice', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], [file('01C', 'at-the-root.md')]);
+    await act(async () => { twisty('Papers').click(); });
+    await answer('/folders/01F/folders', []);
+    await answer('/folders/01F/files', [file('01A', 'lease.pdf')]);
+    expect(fileRow('lease.pdf').getAttribute('aria-level')).toBe('2');
+
+    // Elsewhere, lease.pdf moved up to the root: the refresh lists it there and not in Papers.
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await flush();
+    await answer('/folders/root/folders', [{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }]);
+    await answer('/folders/root/files', [file('01C', 'at-the-root.md'), { ...file('01A', 'lease.pdf'), folder_id: 'root' }]);
+    await answer('/folders/01F/folders', []);
+    await answer('/folders/01F/files', []);
+    // The opened folder's placeholder row is the blank one.
+    expect(fileRows().map(rowText).map((text) => text.split(" ")[0])).toEqual(['Papers', '', 'at-the-root.md', 'lease.pdf']);
+    expect(fileRow('lease.pdf').getAttribute('aria-level')).toBe('1');
+    toggleRow(fileRow('lease.pdf'));
+    fireEvent.contextMenu(fileRow('lease.pdf'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
+    await answer('/folders/root/folders', []);
+    expect(within(screen.getByRole('dialog')).getByText('Move lease.pdf')).toBeTruthy();
+  });
+
+  it('moves a row opened in place up into the folder on screen', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
+    await act(async () => { twisty('Papers').click(); });
+    await answer('/folders/01F/folders', []);
+    await answer('/folders/01F/files', [{ ...file('01A', 'lease.pdf'), folder_id: '01F' }]);
+    fireEvent.contextMenu(fileRow('lease.pdf'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
+    await answer('/folders/root/folders', [{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }]);
+    const dialog = screen.getByRole('dialog');
+    // The root is on screen, but lease.pdf lives in Papers: moving it here changes something.
+    expect(within(dialog).getByRole('button', { name: 'Move here' }).hasAttribute('disabled')).toBe(false);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Papers' }));
+    await answer('/folders/01F/folders', []);
+    expect(within(dialog).getByRole('button', { name: 'Move here' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('drops an opened folder’s rows that arrive after another folder came on screen', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Papers', path: 'Papers' }], []);
+    await act(async () => { twisty('Papers').click(); });
+    // Enter Papers while its in-place read is still out.
+    fireEvent.doubleClick(screen.getByText('Papers', { selector: '[data-sub-cell] span' }));
+    await flush();
+    await answer('/folders/01F/folders', [{ id: '01H', parent_id: '01F', name: 'Drafts', path: 'Papers/Drafts' }]);
+    await answer('/folders/01F/files', []);
+    await answer('/folders/01F/folders', [{ id: '01H', parent_id: '01F', name: 'Drafts', path: 'Papers/Drafts' }]);
+    await answer('/folders/01F/files', []);
+    await act(async () => { twisty('Drafts').click(); });
+    await answer('/folders/01H/folders', [{ id: '01K', parent_id: '01H', name: 'Old', path: 'Papers/Drafts/Old' }]);
+    await answer('/folders/01H/files', []);
+    fireEvent.doubleClick(screen.getByText('Old', { selector: '[data-sub-cell] span' }));
+    await flush();
+    await answer('/folders/01K/folders', []);
+    await answer('/folders/01K/files', []);
+    // Papers once, not twice: the late read did not hand Drafts a trail through Papers.
+    expect((history.state as { crumbs: { name: string }[] }).crumbs.map(crumb => crumb.name)).toEqual(['Papers', 'Drafts', 'Old']);
+  });
+});

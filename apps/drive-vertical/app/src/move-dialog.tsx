@@ -6,9 +6,12 @@ import { useNavigationGuard } from './navigation-guards';
 import type { FileItem } from './items';
 
 /** Same-space destinations; the server checks source and destination permissions. */
-export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
+export function MoveDialog({ items, sourceFolderId, parents, onClose, onMoved }: {
   items: FileItem[];
+  /** The folder the items are listed in. */
   sourceFolderId: string | null;
+  /** Items that live elsewhere (opened in place under a subfolder), by id → their folder. */
+  parents?: ReadonlyMap<string, string>;
   onClose: () => void;
   onMoved: (ids: string[]) => Promise<void>;
 }) {
@@ -32,6 +35,9 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   const [failures, setFailures] = useState<{ id: string; message: string }[]>([]);
   useNavigationGuard(busy);
   const destination = trail[trail.length - 1]!;
+  const parentOf = (item: FileItem) => parents?.get(item.id) ?? sourceFolderId;
+  /** Every item left is already in the destination, so moving would change nothing. */
+  const alreadyThere = remaining.every(item => parentOf(item) === destination.id);
 
   useEffect(() => {
     const ticket = reads.take();
@@ -78,7 +84,7 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
   };
 
   const submit = async () => {
-    if (running.current || loading || foldersFailed || !remaining.length || destination.id === sourceFolderId) return;
+    if (running.current || loading || foldersFailed || !remaining.length || alreadyThere) return;
     running.current = true; cancelled.current = false; setBusy(true); setError(null);
     let left = remaining;
     const moved: string[] = [];
@@ -87,6 +93,13 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
     let stopped: string | null = null;
     for (const item of remaining) {
       if (!mounted.current || cancelled.current) break;
+      if (parentOf(item) === destination.id) {
+        // Already where it is going: nothing to ask the server.
+        moved.push(item.id); completed.current.add(item.id);
+        left = left.filter(candidate => candidate.id !== item.id);
+        attempted++;
+        continue;
+      }
       try {
         if (item.isFolder) await moveFolder(item.id, destination.id, site);
         else await moveFile(item.id, destination.id, site);
@@ -156,7 +169,7 @@ export function MoveDialog({ items, sourceFolderId, onClose, onMoved }: {
         {foldersFailed ? <Button variant="outline" disabled={busy || loading} onClick={() => setFolderRetry(value => value + 1)}>Retry destination folders</Button> : null}
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={() => { if (busy) cancelled.current = true; else onClose(); }}>{busy ? 'Cancel remaining moves' : 'Cancel'}</Button>
-          <Button disabled={busy || loading || foldersFailed || !remaining.length || destination.id === sourceFolderId}
+          <Button disabled={busy || loading || foldersFailed || !remaining.length || alreadyThere}
             onClick={() => void submit()}>{busy ? 'Moving…' : 'Move here'}</Button>
         </div>
       </DialogContent>
