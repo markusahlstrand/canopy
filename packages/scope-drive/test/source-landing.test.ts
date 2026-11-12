@@ -177,6 +177,14 @@ it('lets only a manager connect a space, and any member read what it is connecte
   expect(await w.member.invoke('drive/get-source')).toMatchObject({ source: { account: 'ACME', folder: 'Facturas', canUpload: true } });
 });
 
+it('keeps the user a source signs in as, and none for a login recorded without one', async () => {
+  const w = await world();
+  await w.human.invoke('drive/record-source', { provider: 'canopy.a3doc', connectionId: 'c', account: 'ACME', user: 'gestor@acme', folder: '', canUpload: true });
+  expect(await w.member.invoke('drive/get-source')).toMatchObject({ source: { account: 'ACME', user: 'gestor@acme' } });
+  await w.human.invoke('drive/record-source', { provider: 'canopy.a3doc', connectionId: 'c', account: 'ACME', folder: '', canUpload: true });
+  expect((await w.member.invoke<{ source: { user?: string } }>('drive/get-source')).source).not.toHaveProperty('user');
+});
+
 it('adopts a folder made here when the source reports it, but never one another item holds', async () => {
   const w = await world();
   const made = await w.human.invoke<{ id: string }>('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Made here' });

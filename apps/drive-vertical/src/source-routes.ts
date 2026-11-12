@@ -7,7 +7,7 @@ import { bindConnection, ConnectionRequestError, listBindings, syncConnections, 
 import { a3docSecret, A3DOC_VERTICAL_PROVIDER } from '@canopy/connector-a3docs';
 import { qontoSecret, QONTO_VERTICAL_PROVIDER } from '@canopy/connector-qonto';
 
-export interface DriveSource { provider: string; connectionId: string; account: string; folder: string; canUpload: boolean; boundAt: string }
+export interface DriveSource { provider: string; connectionId: string; account: string; user?: string; folder: string; canUpload: boolean; boundAt: string }
 
 /** What the connector's last full read found; see `A3docSyncReport`. */
 export interface SourceSyncReport { at: string; complete: boolean; total: number; read: number; skipped: number; skippedContainers: number[]; files: number }
@@ -26,12 +26,12 @@ function parseConnect(body: unknown) {
   if ((body as { provider?: unknown } | null)?.provider === QONTO_VERTICAL_PROVIDER) {
     const input = qontoSecret.safeParse(body);
     if (!input.success) throw new HTTPException(400, { message: 'Enter the Qonto login and secret key.' });
-    return { provider: QONTO_VERTICAL_PROVIDER, label: `Qonto ${input.data.login}`, account: input.data.login, secret: input.data, folder: '' };
+    return { provider: QONTO_VERTICAL_PROVIDER, label: `Qonto ${input.data.login}`, account: input.data.login, user: undefined, secret: input.data, folder: '' };
   }
   const input = connectInput.safeParse(body);
   if (!input.success) throw new HTTPException(400, { message: 'Enter the a3doc company code, user and password.' });
   const { folder, ...secret } = input.data;
-  return { provider: A3DOC_VERTICAL_PROVIDER, label: `a3doc ${secret.companyCode}`, account: secret.companyCode, secret, folder };
+  return { provider: A3DOC_VERTICAL_PROVIDER, label: `a3doc ${secret.companyCode}`, account: secret.companyCode, user: secret.user, secret, folder };
 }
 
 /**
@@ -55,7 +55,7 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
 
   app.put('/api/source', async (c) => {
     const { scope, relay } = await resolve(c);
-    const { provider, label, account, secret, folder } = parseConnect(await c.req.json().catch(() => null));
+    const { provider, label, account, user, secret, folder } = parseConnect(await c.req.json().catch(() => null));
     const { principal, source: prior } = await scope.invoke<{ principal: string; source: DriveSource | null }>('drive/source-access');
     const access = relay();
     const { connectionId } = await relayed(() => upsertConnection({
@@ -81,7 +81,7 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
       throw error;
     }
     const source = await scope.invoke<DriveSource>('drive/record-source', {
-      provider, connectionId, account,
+      provider, connectionId, account, ...(user ? { user } : {}),
       folder: typeof bound.options.folder === 'string' ? bound.options.folder : folder,
       canUpload: bound.options.canUpload === true,
     });

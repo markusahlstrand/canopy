@@ -223,6 +223,8 @@ export const driveSource = z.object({
   connectionId: z.string(),
   /** The provider's account (an a3doc company code); a rebind to the same one resumes identities. */
   account: z.string(),
+  /** The user it signs in as, where the account is not already one (a3doc); absent for sources connected before it was kept. */
+  user: z.string().optional(),
   folder: z.string(),
   canUpload: z.boolean(),
   boundAt: z.string(),
