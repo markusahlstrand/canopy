@@ -758,10 +758,15 @@ export const listTrash = () => call<DriveFile[]>('/trash');
  * Upload bytes and record the version that names them, in one call the worker
  * composes: ensure-file → attachment upload → record-version. The size and type the
  * version records come from the stored bytes, not from anything said here.
+ *
+ * `alsoIn` names more folders to file the document under too; only an a3doc space, whose
+ * folders are categories, takes them.
  */
-export async function uploadFile(folderId: string, file: File, selectedSite: string | null = currentSite(), signal?: AbortSignal, createOnly = false): Promise<DriveFile> {
+export async function uploadFile(folderId: string, file: File, selectedSite: string | null = currentSite(), signal?: AbortSignal, createOnly = false,
+  { alsoIn = [] }: { alsoIn?: string[] } = {}): Promise<DriveFile> {
+  const extra = alsoIn.map(id => `&alsoIn=${encodeURIComponent(id)}`).join('');
   const res = await checkedApiFetch(
-    `${API}/folders/${encodeURIComponent(folderId)}/content?name=${encodeURIComponent(file.name)}${createOnly ? '&create=only' : ''}`,
+    `${API}/folders/${encodeURIComponent(folderId)}/content?name=${encodeURIComponent(file.name)}${createOnly ? '&create=only' : ''}${extra}`,
     {
       method: 'POST',
       credentials: 'same-origin',

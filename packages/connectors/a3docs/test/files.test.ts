@@ -469,6 +469,31 @@ describe('write dispatch', () => {
     expect(w.a3.titlesIn(21)).toEqual(['Recibo.pdf', 'Recibo.pdf']);
   });
 
+  it('files one document in every alsoIn folder, the bound one for an empty path', async () => {
+    const w = await world();
+    w.a3.add([21], 'Old', 'old');
+    await w.bind();
+    const a = await w.attach('Modelo.pdf', '%PDF modelo');
+    const request = { directory: 'Facturas/Recibidas', files: [{ attachmentId: a.id, size: a.size }], conflict: 'rename', alsoIn: ['Fiscal/Modelo 303', 'Facturas/Recibidas', ''] };
+    await w.send(request as FileSourceWriteRequest);
+    const uploads = w.a3.calls.filter((c) => c.method === 'Upload');
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]!.body.containersIds).toEqual([21, 11, 1]);
+    // The ledger keeps the primary folder: a retry adopts from there.
+    expect(await w.ledgers()).toEqual([expect.objectContaining({ status: 'done' })]);
+  });
+
+  it('refuses an alsoIn folder a3doc does not have, before uploading anything', async () => {
+    const w = await world();
+    w.a3.add([21], 'Old', 'old');
+    await w.bind();
+    const a = await w.attach('Modelo.pdf', '%PDF modelo');
+    const request = { directory: 'Facturas/Recibidas', files: [{ attachmentId: a.id, size: a.size }], conflict: 'rename', alsoIn: ['Fiscal', 'Nueva carpeta'] };
+    await w.send(request as FileSourceWriteRequest);
+    expect(w.a3.calls.filter((c) => c.method === 'Upload')).toHaveLength(0);
+    expect((await w.ledgers()).every((l) => l.status !== 'done')).toBe(true);
+  });
+
   it("refuses 'replace', a read-only role, a folder a3doc does not have, and (fail) a taken name", async () => {
     const w = await world();
     w.a3.add([21], 'Taken', 'x');

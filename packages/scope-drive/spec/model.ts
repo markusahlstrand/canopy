@@ -253,10 +253,11 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   /** Stage one ordinary uploaded file for a3doc; its echo adopts this row. */
   'drive/send-source-file': {
     summary: 'Send an uploaded file to a3doc', permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
-    input: z.object({ fileId: z.string() }),
-    output: z.object({ id: z.string(), ...fileSourceWriteRequest.shape }),
+    /** `alsoIn`: other folders (ids) of this space the document is filed in too, as a3doc categories. */
+    input: z.object({ fileId: z.string(), alsoIn: z.array(z.string().min(1)).max(10).optional() }),
+    output: z.object({ id: z.string(), ...fileSourceWriteRequest.shape, alsoIn: z.array(z.string()) }),
     http: { method: 'POST', path: '/files/{fileId}/send-to-source' },
-    emits: { entity: 'file', entityIdFrom: 'id', type: 'a3doc.files-requested', schemaVersion: 1, piiClass: 'none', payload: ['directory', 'files', 'conflict'] },
+    emits: { entity: 'file', entityIdFrom: 'id', type: 'a3doc.files-requested', schemaVersion: 1, piiClass: 'none', payload: ['directory', 'files', 'conflict', 'alsoIn'] },
   },
   /** Send one uploaded file to the space's S3 bucket; its echo adopts this row. */
   'drive/send-s3-file': {

@@ -23,6 +23,7 @@
  *   title search scoped to its container, then `Download` of the document. Never a walk's silence.
  *   A folder missing from the tree is held, not deleted: a3doc offers no read about one container.
  * - **Writes** add documents; a3doc can never replace one, so `conflict: 'replace'` is refused. A
+ *   request may name `alsoIn` folders too: one document is filed in all of them (its categories). A
  *   ledger row per event records each upload as `attempted` before the call, so a retry whose
  *   answer was lost first looks for the document it may already have made and adopts it only when
  *   its bytes hash to the attachment's.
@@ -39,6 +40,7 @@ import {
   type DomainEvent,
   type FileSourceChange,
 } from '@substrat-run/contracts';
+import { z } from 'zod';
 import { bytesStream, connectorUploadBody, type ConnectorHandler, type ConnectorOptions, type ScopeHost, type SizedByteStream, type ConnectorContext, type ScopedConnectionContext } from '@substrat-run/kernel';
 import {
   A3DOC_ROOT_CONTAINER,
@@ -55,6 +57,8 @@ import { A3DOC_PROVIDER, a3docSecret, clientFor, nowOf, openA3docConnection, typ
 
 /** The event a vertical emits to put files in its bound a3doc folder. */
 export const A3DOC_FILES_EVENT = 'a3doc.files-requested';
+/** Its payload: a file-source write, plus the other folders each document is filed in. */
+export const a3docWriteRequest = fileSourceWriteRequest.extend({ alsoIn: z.array(z.string()).max(10).default([]) });
 
 /** How far behind the high-water mark an incremental pass reads again. */
 export const OVERLAP_MS = 2 * 60 * 60 * 1000;
@@ -319,7 +323,7 @@ async function dispatchFiles(
   event: DomainEvent,
   options: A3docOptions,
 ): Promise<void> {
-    const payload = fileSourceWriteRequest.parse(event.payload);
+    const payload = a3docWriteRequest.parse(event.payload);
     if (payload.conflict === 'replace') {
       throw substratError('validation_failed', "a3doc cannot replace a document: write with 'rename' or 'fail'");
     }
@@ -335,15 +339,26 @@ async function dispatchFiles(
 
     const items = await readItems(ctx, conn.id, binding);
     const client = clientFor(conn.fetch, secret, options);
-    const directory = payload.directory.replace(/^\/+|\/+$/g, '');
     // The names the sync gave folders first (they may carry a clash suffix); a folder not synced
     // yet is found in a3doc's live tree, under the bound container.
-    const containerId = !directory
-      ? binding.containerId
-      : (folderIdAt(items, directory) ??
-        folderUnder(findContainer(await client.containersTree(), binding.containerId), directory.split('/'))?.id ??
-        null);
-    if (containerId === null) throw substratError('conflict', `a3doc can't create folders, and '${directory}' does not exist there`);
+    let tree: A3Container[] | undefined;
+    const containerAt = async (path: string) => {
+      const directory = path.replace(/^\/+|\/+$/g, '');
+      const id = !directory
+        ? binding.containerId
+        : (folderIdAt(items, directory) ??
+          folderUnder(findContainer((tree ??= await client.containersTree()), binding.containerId), directory.split('/'))?.id ??
+          null);
+      if (id === null) throw substratError('conflict', `a3doc can't create folders, and '${directory}' does not exist there`);
+      return id;
+    };
+    const containerId = await containerAt(payload.directory);
+    // Every extra folder resolves before anything uploads: a document filed in fewer than asked is not undone.
+    const containerIds = [containerId];
+    for (const path of payload.alsoIn) {
+      const id = await containerAt(path);
+      if (!containerIds.includes(id)) containerIds.push(id);
+    }
     const namesHere = new Set([...items.values()].filter((e) => e.kind === 'file' && e.parentId === containerId).map((e) => e.name));
 
     const key = writeKey(event.id);
@@ -385,7 +400,7 @@ async function dispatchFiles(
         }
         row.attempted = { at: nowOf(options).toISOString(), containerId, title, sha256 };
         await ctx.admin.putConnectorState(conn.id, key, ledger);
-        documentId = await client.upload({ containerIds: [containerId], customerId, title, extension, bytes });
+        documentId = await client.upload({ containerIds, customerId, title, extension, bytes });
       }
       // Either path above left `row` in the ledger: adopted means it was attempted, uploaded means it was just pushed.
       row!.documentId = documentId;

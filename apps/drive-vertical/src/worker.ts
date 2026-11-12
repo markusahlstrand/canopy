@@ -1164,6 +1164,9 @@ app.post('/api/folders/:folderId/content', async (c) => {
   const node = await nodeFor(c.req.raw, env);
   const name = c.req.query('name');
   if (!name) throw new HTTPException(400, { message: 'name is required' });
+  // Other folders an a3doc document is filed in too; refused before anything is written.
+  const alsoIn = c.req.queries('alsoIn') ?? [];
+  if (alsoIn.length > 10) throw new HTTPException(400, { message: 'a file can be filed in at most 10 other folders' });
 
   const host = hostFor(env);
   const stub = await host.getScope(principal, node.tenantId, node.scopeId);
@@ -1197,7 +1200,7 @@ app.post('/api/folders/:folderId/content', async (c) => {
 
   // In a connected space an upload goes on to a3doc; its echo adopts this row (#358).
   const { source } = await stub.invoke<{ source: DriveSource | null }>('drive/get-source');
-  if (source) await stub.invoke('drive/send-source-file', { fileId: file.id });
+  if (source) await stub.invoke('drive/send-source-file', { fileId: file.id, ...(alsoIn.length ? { alsoIn } : {}) });
 
   if (written.current_version_id) {
     // A "New → …" starter is empty by definition; its first real save is what to describe.

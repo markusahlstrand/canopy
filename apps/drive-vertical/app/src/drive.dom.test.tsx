@@ -435,22 +435,25 @@ describe('hiding empty folders', () => {
     { id: '01F', parent_id: 'root', name: 'Fiscal', path: 'Fiscal', empty: false },
     { id: '01E', parent_id: 'root', name: 'Houses', path: 'Houses', empty: true },
   ];
+  const toggle = () => screen.getByRole('button', { name: 'Hide empty folders' });
   const hide = async () => {
-    // Radix opens its menu on pointer down, not click.
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'View options' }), { button: 0, ctrlKey: false });
-    await flush();
-    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Hide empty folders' }));
+    fireEvent.click(toggle());
     await flush();
   };
 
-  it('hides folders with nothing below them, and remembers it', async () => {
+  it('hides folders with nothing below them, remembers it, and shows them again', async () => {
     await renderDrive(folders, []);
     expect(screen.getByText('Houses')).toBeTruthy();
+    expect(toggle().getAttribute('aria-pressed')).toBe('false');
     await hide();
+    expect(toggle().getAttribute('aria-pressed')).toBe('true');
     expect(screen.queryByText('Houses')).toBeNull();
     expect(screen.getByText('Fiscal')).toBeTruthy();
     expect(screen.getByText('1 item')).toBeTruthy();
     expect(JSON.parse(localStorage.getItem('canopy.drive.view')!).hideEmptyFolders).toBe(true);
+    await hide();
+    expect(screen.getByText('Houses')).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem('canopy.drive.view')!).hideEmptyFolders).toBe(false);
   });
 
   it('says folders are hidden rather than calling the folder empty, and shows them again', async () => {

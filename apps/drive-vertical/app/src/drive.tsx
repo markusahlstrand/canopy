@@ -17,7 +17,7 @@ import { SearchMatchFilter, filterMatches, type MatchFilter } from './search-mat
  * like — but they are two reads and two entity types underneath, and the actions differ.
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Button, DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
+import { Button, Icon, Input, Sheet, SheetContent, SheetTitle } from '@canopy/ui';
 import { readViewPreferences, saveViewPreferences, watchViewPreferences } from './view-preferences';
 import { latestOnly } from './reads';
 import { confirmDiscardDrafts, hasUnsavedDrafts } from './drafts';
@@ -50,6 +50,7 @@ import { PeopleDialog } from './people-dialog';
 import { CurrentFolderShare } from './current-folder-share';
 import { ShareDialog } from './share-dialog';
 import { MoveDialog } from './move-dialog';
+import { CategoryUploadDialog } from './category-upload-dialog';
 import { NameDialog } from './name-dialog';
 import { FileDropZone } from './file-drop-zone';
 import { useUploadQueue } from './upload-queue';
@@ -253,6 +254,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [trash, setTrash] = useState<DriveFile[]>([]);
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [moving, setMoving] = useState<FileItem[] | null>(null);
+  /** Files waiting for their a3doc categories before they queue. */
+  const [filing, setFiling] = useState<{ folderId: string; path: string; destination: string; files: File[] } | null>(null);
   const [creating, setCreating] = useState(false);
   const [creatingFile, setCreatingFile] = useState<PluginCreator | null>(null);
   const [previewing, changePreview] = useState<string | null>(null);
@@ -1048,7 +1051,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const chosen = Array.from(input.files ?? []);
     input.value = '';
     if (chosen.length === 0) return;
-    if (!offline && !linkPending && !linkListingUnavailable) uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen);
+    if (!offline && !linkPending && !linkListingUnavailable) queueUpload(chosen);
+  };
+  /** An a3doc space asks which other categories the files go under first; others queue at once. */
+  const queueUpload = (chosen: File[]) => {
+    const spaceName = siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space';
+    const destination = [spaceName, ...crumbs.map(crumb => crumb.name)].join('/');
+    if (source?.provider === 'canopy.a3doc') setFiling({ folderId, path: crumbs.map(crumb => crumb.name).join('/') || spaceName, destination, files: chosen });
+    else uploads.enqueue(folderId, destination, chosen);
   };
 
   const selectedSpace = siteList.sites?.find(site => site.current);
@@ -1273,7 +1283,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <FileDropZone disabled={offline || linkPending || linkListingUnavailable || view !== 'drive'}
         destination={crumbs.at(-1)?.name ?? siteList.sites?.find(site => site.current)?.name ?? 'this space'}
         onError={onError}
-        onFiles={chosen => uploads.enqueue(folderId, [siteList.sites?.find(site => site.current)?.name ?? currentSite() ?? 'This space', ...crumbs.map(crumb => crumb.name)].join('/'), chosen)}>
+        onFiles={queueUpload}>
       {offline ? (
         <p role="status" className="mb-3 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
           Offline — showing saved names. Saved file copies can open read-only; changes and search are unavailable.
@@ -1362,26 +1372,24 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         ) : null}
 
         {view === 'drive' && !offline && !showingAll ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant={hideEmptyFolders ? 'secondary' : 'outline'} size="sm" aria-label="View options" title="View options">
-                <Icon name="filter" className="size-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuCheckboxItem
-                checked={hideEmptyFolders}
-                onCheckedChange={(on) => {
-                  // A hidden folder must not stay selected out of sight.
-                  setSelection(new Set());
-                  setHideEmptyFolders(on);
-                  saveView({ hideEmptyFolders: on });
-                }}
-              >
-                Hide empty folders
-              </DropdownMenuCheckboxItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          // One click either way, in plain sight: a setting tucked into a menu read as fixed.
+          <Button
+            variant={hideEmptyFolders ? 'secondary' : 'outline'}
+            size="sm"
+            aria-pressed={hideEmptyFolders}
+            aria-label="Hide empty folders"
+            title={hideEmptyFolders ? 'Empty folders are hidden. Click to show them.' : 'Hide folders with nothing in them'}
+            onClick={() => {
+              const on = !hideEmptyFolders;
+              // A hidden folder must not stay selected out of sight.
+              setSelection(new Set());
+              setHideEmptyFolders(on);
+              saveView({ hideEmptyFolders: on });
+            }}
+          >
+            <Icon name={hideEmptyFolders ? 'eye-off' : 'eye'} className="size-4" />
+            <span className="hidden md:inline">Empty folders</span>
+          </Button>
         ) : null}
 
         {showingAll ? null : <Button
@@ -1466,6 +1474,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onSort={onSort}
           onOpen={(id) => setPreviewing(id)}
           loading={busy}
+          onLabelsChanged={offline ? undefined : (id, labels) => setSubtreeFiles(rows => rows.map(row => row.id === id ? { ...row, labels } : row))}
         />
       ) : (
         <FileTable
@@ -1554,6 +1563,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       <PeopleDialog open={peopleOpen} onOpenChange={setPeopleOpen} />
 
       <ShareDialog folder={sharing} onClose={() => setSharing(null)} me={auth.principal} />
+
+      {filing ? <CategoryUploadDialog files={filing.files} primary={{ id: filing.folderId, path: filing.path }}
+        onCancel={() => setFiling(null)}
+        onUpload={alsoIn => { uploads.enqueue(filing.folderId, filing.destination, filing.files, alsoIn); setFiling(null); }} /> : null}
 
       {moving ? <MoveDialog items={moving} sourceFolderId={view === 'drive' ? folderId : null}
         onClose={() => setMoving(null)} onMoved={async ids => {
