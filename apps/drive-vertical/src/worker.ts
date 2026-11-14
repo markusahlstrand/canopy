@@ -1355,7 +1355,7 @@ mountFileContent(app, async (c) => {
       versionId ? 'drive/get-version' : 'drive/get-file',
       versionId ? { fileId, versionId } : { fileId },
     ),
-    openAttachment: async (id) => (await host.attachments(principal, node.tenantId, node.scopeId)).open(id),
+    openAttachment: async (id, options) => (await host.attachments(principal, node.tenantId, node.scopeId)).openStream(id, options),
   };
 });
 

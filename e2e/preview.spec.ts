@@ -1,4 +1,5 @@
-import { test, expect, type Request } from '@playwright/test';
+import { createHash } from 'node:crypto';
+import { test, expect, type APIResponse, type Request } from '@playwright/test';
 import { signIn, createFolder, action, removePluginInstalls, installFromCard } from './support';
 
 function pdf() {
@@ -168,4 +169,51 @@ test('switching files during a real delayed metadata read cannot display the pre
   await expect(panel.locator('section[aria-label="File information"]').getByText('a-first.txt', { exact: true })).toBeHidden();
   await panel.getByRole('button', { name: 'Versions', exact: true }).click();
   await expect(panel.getByRole('link', { name: /Download version/ })).toHaveCount(1);
+});
+
+test('a seek reads only the range it asks for, from the stored file', async ({ page }, info) => {
+  const folder = `${info.project.name} Preview ranges`;
+  await signIn(page);
+  await createFolder(page, folder);
+  await action(page, folder, 'Open');
+  // Larger than one stream chunk (1 MiB), so a slice past the first chunk is exercised.
+  const bytes = Buffer.alloc(3 * 1024 * 1024 + 17, 0);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31 + 7) & 0xff;
+  await page.locator('input[type=file]').setInputFiles({ name: 'acceptance-seek.mp4', mimeType: 'video/mp4', buffer: bytes });
+  await expect(page.getByRole('region', { name: 'Uploads' }).getByText('Uploaded', { exact: true })).toBeVisible();
+  let listingUrl: string | undefined = '/api/folders/root/folders';
+  let folderId: string | undefined;
+  while (listingUrl && !folderId) {
+    const response: APIResponse = await page.request.get(listingUrl);
+    folderId = (await response.json() as { name: string; id: string }[]).find(row => row.name === folder)?.id;
+    listingUrl = response.headers().link?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
+  }
+  const files: { name: string; id: string }[] = await (await page.request.get(`/api/folders/${folderId}/files`)).json();
+  const url = `/api/files/${files.find(row => row.name === 'acceptance-seek.mp4')!.id}/content`;
+
+  const whole = await page.request.get(url);
+  expect(whole.status()).toBe(200);
+  expect(whole.headers()['accept-ranges']).toBe('bytes');
+  expect(whole.headers()['content-disposition']).toMatch(/^inline;/);
+  expect(Buffer.compare(await whole.body(), bytes)).toBe(0);
+  const etag = whole.headers().etag!;
+  expect(etag).toBe(`"${createHash('sha256').update(bytes).digest('hex')}"`);
+
+  const start = 2 * 1024 * 1024 + 5;
+  const seek = await page.request.get(url, { headers: { Range: `bytes=${start}-${start + 999}` } });
+  expect(seek.status()).toBe(206);
+  expect(seek.headers()['content-range']).toBe(`bytes ${start}-${start + 999}/${bytes.length}`);
+  expect(Buffer.compare(await seek.body(), bytes.subarray(start, start + 1000))).toBe(0);
+
+  const tail = await page.request.get(url, { headers: { Range: 'bytes=-10', 'If-Range': etag } });
+  expect(tail.status()).toBe(206);
+  expect(Buffer.compare(await tail.body(), bytes.subarray(bytes.length - 10))).toBe(0);
+
+  const past = await page.request.get(url, { headers: { Range: `bytes=${bytes.length}-` } });
+  expect(past.status()).toBe(416);
+  expect(past.headers()['content-range']).toBe(`bytes */${bytes.length}`);
+
+  const head = await page.request.head(url);
+  expect(head.status()).toBe(200);
+  expect(head.headers()['content-length']).toBe(String(bytes.length));
 });
