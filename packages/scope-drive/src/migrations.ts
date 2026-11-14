@@ -278,5 +278,46 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
     ORDER BY m.received_at LIMIT 1;` },
   /** Which login a source signs in as (an a3doc user), so settings can tell two logins on one account apart. Null until connected again. */
   { version: '0016', sql: `ALTER TABLE drive_source ADD COLUMN user_name TEXT;` },
+  /**
+   * Automation: flows, Document AI for every arrival, categories, and send failures.
+   *
+   * - `drive_automation_queue`: one row per version that arrived (upload, WebDAV, a connector's
+   *   sync, mail) or per file that was classified. Written in the arrival's own transaction, so
+   *   nothing is missed; the worker's dispatcher drains it.
+   * - `drive_file_categories`: a file's category from the space's own list, kept apart from free
+   *   labels so flows match on a stable id. A person's choice is never overwritten by the AI.
+   * - `drive_flows` / `drive_flow_deliveries`: the rules, and what each did to each file version.
+   * - `drive_file_origins`: a file a flow copied in, so flows never fire on their own copies.
+   * - `drive_source_pending` gains the last send failure, so it is shown and can be retried.
+   */
+  { version: '0017', sql: `CREATE TABLE drive_automation_queue (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL, version_id TEXT,
+    trigger TEXT NOT NULL CHECK (trigger IN ('arrived', 'classified')), actor TEXT, queued_at TEXT NOT NULL
+  );
+  CREATE TABLE drive_file_categories (
+    file_id TEXT PRIMARY KEY NOT NULL REFERENCES drive_files(id), category TEXT, confidence REAL,
+    source TEXT NOT NULL CHECK (source IN ('ai', 'person')), version_id TEXT, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL
+  );
+  CREATE TABLE drive_flows (
+    id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    definition_json TEXT NOT NULL, author TEXT NOT NULL, author_sub TEXT NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_run_at TEXT,
+    failures INTEGER NOT NULL DEFAULT 0, paused_reason TEXT
+  );
+  CREATE TABLE drive_flow_deliveries (
+    flow_id TEXT NOT NULL, file_id TEXT NOT NULL, version_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('proposed', 'approved', 'running', 'done', 'failed', 'dismissed', 'skipped')),
+    detail_json TEXT NOT NULL DEFAULT '{}', attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    PRIMARY KEY (flow_id, file_id, version_id)
+  );
+  CREATE INDEX drive_flow_deliveries_recent ON drive_flow_deliveries (flow_id, updated_at);
+  CREATE TABLE drive_file_origins (
+    file_id TEXT PRIMARY KEY NOT NULL REFERENCES drive_files(id), flow_id TEXT NOT NULL,
+    source_scope TEXT NOT NULL, source_file_id TEXT NOT NULL, source_version_id TEXT NOT NULL, created_at TEXT NOT NULL
+  );
+  ALTER TABLE drive_source_pending ADD COLUMN last_error TEXT;
+  ALTER TABLE drive_source_pending ADD COLUMN failed_at TEXT;
+  ALTER TABLE drive_source_pending ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;` },
 
 ];

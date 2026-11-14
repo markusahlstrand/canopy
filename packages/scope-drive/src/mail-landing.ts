@@ -2,6 +2,7 @@ import { mailInChange, substratError } from '@substrat-run/contracts';
 import { assertAllowed, ulid, type OperationContext } from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
 import { ROOT_FOLDER_ID } from './migrations.js';
+import { queueArrival } from './automation.js';
 
 /**
  * Mail forwarded to a space's address (#357), landed by the platform's mail-in connector
@@ -151,6 +152,7 @@ function landPart(ctx: OperationContext, message: Message, part: string, filenam
   ctx.sql.exec('INSERT INTO drive_mail_parts (message_id, part, file_id) VALUES (?, ?, ?)', [message.message_id, part, fileId]);
   ctx.emit({ type: 'drive.file-created', schemaVersion: 1, entity: ref('file', fileId), piiClass: 'none', payload: { id: fileId, folder_id: message.folder_id } });
   ctx.emit({ type: 'drive.file-written', schemaVersion: 1, entity: ref('file', fileId), piiClass: 'none', payload: { id: fileId, folder_id: message.folder_id, current_version_id: versionId } });
+  queueArrival(ctx, fileId, versionId, null);
   return { ok: true };
 }
 

@@ -31,6 +31,7 @@ import { errorCodeOf } from '@substrat-run/contracts';
 import type { ExecutorRetryPolicy, JobHandler } from '@substrat-run/kernel';
 import type { ModelHost, ModelAttribution } from '@substrat-run/vertical-host/model';
 import { isLockedName } from './editable-text.js';
+import type { SpaceCategory } from '@canopy/scope-drive/spec/model';
 
 /** The job's name under the drive module; one run per file. */
 export const AUTO_LABEL_JOB = 'auto-label';
@@ -60,6 +61,21 @@ const SYSTEM =
   '- "description": one or two plain sentences saying what this document is and its key facts ' +
   '(who it is from, what it concerns, any amount or date). No links, no addresses to contact, no advice.\n' +
   'Write both values in English. Return ONLY the JSON object.';
+
+/**
+ * The instructions, with the space's categories when it has any: the model then also picks the
+ * one category the document belongs to (or none) and says how sure it is. Ids, not names, come
+ * back, so a renamed category still matches what flows ask for.
+ */
+export function systemFor(categories: readonly SpaceCategory[]): string {
+  if (!categories.length) return SYSTEM;
+  const list = categories.map((c) => `- ${c.id}: ${c.name}${c.hint ? ` (${c.hint})` : ''}`).join('\n');
+  return SYSTEM.replace('Return a JSON object with two fields:', 'Return a JSON object with four fields:')
+    .replace('Write both values in English.',
+      '- "category": the id of the ONE category below the document belongs to, or null when none fits:\n' + list + '\n' +
+      '- "confidence": how sure you are of the category, from 0 to 1.\n' +
+      'Write the label and description in English.');
+}
 
 /** The first complete JSON object in `raw`, by brace depth — trailing chatter with braces in it does not break it. */
 function firstObject(raw: string): string | null {
@@ -92,10 +108,12 @@ function clean(text: string, max: number): string {
  * Pull `{ label, description }` out of the model's reply, tolerating fences and chatter
  * around it — or null when it holds neither, which is no answer at all.
  */
-export function parseAnalysis(raw: string): { label: string | null; description: string | null } | null {
+export function parseAnalysis(raw: string): { label: string | null; description: string | null } | null;
+export function parseAnalysis(raw: string, categories: readonly SpaceCategory[]): { label: string | null; description: string | null; category: string | null; confidence: number | null } | null;
+export function parseAnalysis(raw: string, categories?: readonly SpaceCategory[]) {
   const json = firstObject(raw);
   if (!json) return null;
-  let obj: { label?: unknown; description?: unknown };
+  let obj: { label?: unknown; description?: unknown; category?: unknown; confidence?: unknown };
   try {
     obj = JSON.parse(json) as typeof obj;
   } catch {
@@ -104,7 +122,12 @@ export function parseAnalysis(raw: string): { label: string | null; description:
   const label = typeof obj.label === 'string' ? clean(obj.label, 40).replace(/^["'.\s]+|["'.\s]+$/g, '') : '';
   const description = typeof obj.description === 'string' ? clean(obj.description, 600) : '';
   if (!label && !description) return null;
-  return { label: label || null, description: description || null };
+  if (!categories) return { label: label || null, description: description || null };
+  // Only an id from the list counts: anything else (a name, a guess, an injected value) is none.
+  const category = typeof obj.category === 'string' && categories.some((c) => c.id === obj.category) ? obj.category : null;
+  const raw01 = typeof obj.confidence === 'number' ? obj.confidence : typeof obj.confidence === 'string' ? Number(obj.confidence) : NaN;
+  const confidence = category && Number.isFinite(raw01) ? Math.min(1, Math.max(0, raw01)) : null;
+  return { label: label || null, description: description || null, category, confidence };
 }
 
 interface Details { description: string; labels: string[]; revision: number; canWrite: boolean }
@@ -140,6 +163,8 @@ export type AutoLabelOutcome =
 export interface AutoLabelDeps {
   /** The scope as the uploader: the run can write nothing they could not have typed. */
   scopeFor(payload: AutoLabelPayload): Promise<AutoLabelScope>;
+  /** The space's categories for the model to choose from; none means it only labels and describes. */
+  categories?(payload: AutoLabelPayload): Promise<readonly SpaceCategory[]>;
   /** Is it still on in this space? Asked per run, so turning it off stops queued work. */
   enabled(payload: AutoLabelPayload): Promise<boolean>;
   /** The model and its attribution, or null where the runtime has none. */
@@ -307,7 +332,8 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
     // Read and ask, and keep the answer: a later failure replays this from the memo, so
     // the model is paid for once per round. A reply with no usable JSON throws, and the
     // step's retries ask again; when they run out the run fails, which closes nothing.
-    type Analysis = { skip: SkipReason | 'superseded' } | { versionId: string; label: string | null; description: string | null };
+    const categories = deps.categories ? await deps.categories(payload) : [];
+    type Analysis = { skip: SkipReason | 'superseded' } | { versionId: string; label: string | null; description: string | null; category?: string | null; confidence?: number | null };
     const analysis = await pass.step(`analyse:${round}`, async (): Promise<Analysis> => {
       try {
         // The name as it is now, not as it was when the run was queued.
@@ -335,7 +361,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
           reply = (await model.host.run({
             spec: model.spec,
             attribution: model.attribution,
-            system: SYSTEM,
+            system: systemFor(categories),
             prompt: `File name: ${name}\n\n<document>\n${fenceSafe(excerpt.text)}\n</document>`,
             temperature: 0,
             maxOutputTokens: 400,
@@ -343,7 +369,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
         } catch (error) {
           throw new Error(`${MODEL_FAILURE} ${error instanceof Error ? error.message : String(error)}`);
         }
-        const parsed = parseAnalysis(reply);
+        const parsed = categories.length ? parseAnalysis(reply, categories) : parseAnalysis(reply);
         if (!parsed) throw new Error(`${MODEL_FAILURE} the model answered without the JSON object it was asked for`);
         return { versionId: excerpt.versionId, ...parsed };
       } catch (error) {
@@ -398,6 +424,22 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
       }
     }, WORK_RETRY);
     if (outcome.status === 'superseded') return superseded(analysis.versionId);
+    // The category, beside the labels: a stable id flows can match on. A person's choice stands
+    // (the scope refuses to overwrite it), and an answer about a replaced version is dropped.
+    if (categories.length && analysis.category !== undefined) {
+      await pass.step(`categorise:${round}`, async () => {
+        try {
+          await scope.invoke('drive/set-file-category', {
+            fileId: payload.fileId, category: analysis.category ?? null, source: 'ai',
+            ...(analysis.confidence != null ? { confidence: analysis.confidence } : {}), expectedVersionId: analysis.versionId,
+          });
+          return true;
+        } catch (error) {
+          if (terminal(error) || errorCodeOf(error) === 'conflict') return false;
+          throw error;
+        }
+      }, WORK_RETRY);
+    }
     const { wrote, ...settled } = outcome;
     // Answered about this version — but a write that joined this run may have made a newer
     // one since, and this run is the only one that will describe it.

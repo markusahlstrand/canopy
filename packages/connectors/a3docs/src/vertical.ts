@@ -4,6 +4,9 @@ import { bindA3docContext, bindingKey, dispatchA3docContext, syncA3docContext, A
 import { probeA3docSecret } from './probe.js';
 import type { A3docOptions } from './connection.js';
 
+/** Where a send's failure is reported, per file: the drive keeps it on the file's pending send. */
+export const FAILED_KEY = 'a3doc:failed:';
+
 /** A vertical-owned provider; the platform distinguishes it from first-party connector slugs. */
 export const A3DOC_VERTICAL_PROVIDER = 'canopy.a3doc';
 
@@ -39,8 +42,19 @@ export function a3docConnectorDefinition(
       return { landed: result.changes, more: !result.complete };
     },
     dispatch: async (ctx, event) => {
-      if (ctx.scope.options.canUpload !== true) throw new ConnectorRefusal('This a3doc user may only read.');
-      await dispatchA3docContext(ctx, event, options(ctx.fetch), config.journalOperation);
+      // Each try's outcome goes to the file it sends, so the drive can show a failure and offer a retry.
+      // Best effort: telling the drive must never turn a send that worked into one that failed.
+      const tell = (error: string | null) => event.entity.entityType !== 'file' ? Promise.resolve() : ctx
+        .invoke(config.journalOperation, { key: `${FAILED_KEY}${event.entity.entityId}`, value: { error, eventId: event.id } })
+        .then(() => undefined, () => undefined);
+      try {
+        if (ctx.scope.options.canUpload !== true) throw new ConnectorRefusal('This a3doc user may only read.');
+        await dispatchA3docContext(ctx, event, options(ctx.fetch), config.journalOperation);
+      } catch (error) {
+        await tell(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+      await tell(null);
     },
   };
 }

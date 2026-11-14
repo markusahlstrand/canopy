@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { substratError } from '@substrat-run/contracts';
 import type { JobPassContext } from '@substrat-run/kernel';
 import type { ModelHost } from '@substrat-run/vertical-host/model';
-import { autoLabelJob, fenceSafe, MODEL_FAILURE, planRun, mergeDetails, parseAnalysis, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
+import { autoLabelJob, fenceSafe, MODEL_FAILURE, planRun, mergeDetails, parseAnalysis, systemFor, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
 
 const payload: AutoLabelPayload = { tenantId: 't', scopeId: 's', fileId: 'f1', principal: 'p' };
 const attribution = { tenant: 't', scope: 's', vertical: 'drive', version: '1', operation: 'drive/auto-label' } as never;
@@ -414,5 +414,23 @@ describe('the Document AI run', () => {
     await expect(h.pass()).rejects.toThrow(`${MODEL_FAILURE} the model answered without the JSON object`);
     expect(h.saved).toEqual([]);
     expect(h.counters).toEqual({});
+  });
+});
+
+describe('categories', () => {
+  const categories = [{ id: 'bank-statement', name: 'Bank statement', hint: 'A monthly account statement' }, { id: 'invoice', name: 'Invoice' }];
+  it('takes only an id from the list, and clamps how sure it is', () => {
+    expect(parseAnalysis('{"label":"Statement","description":"x","category":"bank-statement","confidence":1.4}', categories))
+      .toEqual({ label: 'Statement', description: 'x', category: 'bank-statement', confidence: 1 });
+    expect(parseAnalysis('{"label":"Statement","description":"x","category":"Bank statement","confidence":0.9}', categories))
+      .toMatchObject({ category: null, confidence: null });
+    expect(parseAnalysis('{"label":"Statement","description":"x","category":"invoice","confidence":"0.8"}', categories))
+      .toMatchObject({ category: 'invoice', confidence: 0.8 });
+  });
+  it('lists the categories for the model only when there are some', () => {
+    expect(systemFor([])).not.toContain('"category"');
+    const system = systemFor(categories);
+    expect(system).toContain('- bank-statement: Bank statement (A monthly account statement)');
+    expect(system).toContain('four fields');
   });
 });

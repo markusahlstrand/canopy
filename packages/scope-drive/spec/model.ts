@@ -28,6 +28,8 @@
  */
 import { defineEntities, defineOperations, emitModel, fileSourceChange, fileSourceConflict, fileSourceWriteRequest, z } from '@substrat-run/contracts';
 import { s3ItemsRequest } from '@canopy/connector-s3';
+import { categoryId, deliveryState, flowDefinition, flowDelivery, storedFlow } from './flows.js';
+export * from './flows.js';
 
 /**
  * One path segment: a folder or file name, never a path.
@@ -212,9 +214,40 @@ const driveShare = z.object({
   granted_by: z.string(),
 });
 
+/** A file's category from the space's list: the AI's (with how sure it was) or a person's. */
+export const fileCategory = z.object({
+  id: z.string().nullable(), confidence: z.number().nullable(), source: z.enum(['ai', 'person']), versionId: z.string().nullable(),
+});
+export type FileCategory = z.infer<typeof fileCategory>;
+
+/** A send to the space's source that has not come back yet, and why the last try failed. */
+export const sourceSend = z.object({
+  state: z.enum(['sending', 'failed']), error: z.string().nullable(), failedAt: z.string().nullable(), attempts: z.number().int(),
+});
+
+/** The file a flow copied this one from. */
+export const fileOrigin = z.object({ flowId: z.string(), sourceScope: z.string(), sourceFileId: z.string(), sourceVersionId: z.string(), createdAt: z.string() });
+
 export const fileDetails = z.object({
   fileId: z.string(), description: z.string(), labels: z.array(z.string()), revision: z.number().int(), canWrite: z.boolean(),
+  category: fileCategory.nullable().optional(), send: sourceSend.nullable().optional(), origin: fileOrigin.nullable().optional(),
 });
+
+/** What the automation runner needs of one file: where it is, what it is, and its bytes' handle. */
+export const fileFacts = z.object({
+  fileId: z.string(), name: z.string(), folderId: z.string(), folderPath: z.string(), state: z.string(),
+  versionId: z.string().nullable(), blobRef: z.string().nullable(), mime: z.string().nullable(), size: z.number().nullable(),
+  versionCreatedAt: z.string().nullable(),
+  labels: z.array(z.string()), category: fileCategory.nullable(), copiedByFlow: z.boolean(),
+});
+export type FileFactsRow = z.infer<typeof fileFacts>;
+
+/** A queued arrival or classification, with the file as it is now (null when it is gone). */
+export const automationItem = z.object({
+  seq: z.number().int(), fileId: z.string(), versionId: z.string().nullable(), trigger: z.enum(['arrived', 'classified']),
+  actor: z.string().nullable(), file: fileFacts.nullable(),
+});
+export type AutomationItem = z.infer<typeof automationItem>;
 
 /** `defineOperations` takes object inputs; retain the file-source union's validation. */
 /** One space, one source: a3doc is the only provider so far. */
@@ -280,7 +313,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   /** A provider upload attempt (or the ids an S3 move carries over) must survive a failed connector call. No credentials live here. */
   'drive/source-write-journal': {
     summary: 'Read or persist a connector upload attempt', permission: 'drive:land-source',
-    input: z.object({ key: z.string().regex(/^(a3doc:write:|a3doc:sync-report$|s3:moves$)/).max(200), value: z.unknown().optional() }),
+    input: z.object({ key: z.string().regex(/^(a3doc:write:|a3doc:failed:|a3doc:sync-report$|s3:moves$)/).max(200), value: z.unknown().optional() }),
     output: z.object({ value: z.unknown() }),
   },
   /** A connector lands one item at a time; people are never granted this key. */
@@ -725,6 +758,107 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       entity: 'file', entityIdFrom: 'fileId', type: 'drive.file-details-updated', schemaVersion: 1,
       piiClass: 'none', payload: ['fileId', 'revision'],
     },
+  },
+
+  /** Put a file in one of the space's categories, or none. The AI's choice never replaces a person's. */
+  'drive/set-file-category': {
+    summary: 'Set or clear a file category',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({
+      fileId: z.string(), category: categoryId.nullable(), source: z.enum(['ai', 'person']).default('person'),
+      confidence: z.number().min(0).max(1).optional(),
+      /** For the AI: refuse with `conflict` unless this is still the current version. */
+      expectedVersionId: z.string().optional(),
+    }),
+    output: z.object({ fileId: z.string(), category: fileCategory.nullable(), changed: z.boolean() }),
+    http: { method: 'PUT', path: '/files/{fileId}/category' },
+    emits: { entity: 'file', entityIdFrom: 'fileId', type: 'drive.file-classified', schemaVersion: 1, piiClass: 'none', payload: ['fileId'] },
+  },
+
+  /** Send a file whose earlier send to a3doc failed, again. Carries the failed request, so nothing is filed twice. */
+  'drive/retry-source-send': {
+    summary: 'Send a file to a3doc again after a failure', permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }),
+    output: z.object({ id: z.string(), ...fileSourceWriteRequest.shape, alsoIn: z.array(z.string()), retryOf: z.string().optional() }),
+    http: { method: 'POST', path: '/files/{fileId}/retry-send' },
+    emits: { entity: 'file', entityIdFrom: 'id', type: 'a3doc.files-requested', schemaVersion: 1, piiClass: 'none', payload: ['directory', 'files', 'conflict', 'alsoIn', 'retryOf'] },
+  },
+
+  /** The space's flows. */
+  'drive/list-flows': {
+    summary: 'List the space flows', permission: 'drive:manage',
+    output: z.object({ flows: z.array(storedFlow) }),
+    http: { method: 'GET', path: '/flows' },
+  },
+  /** Create or replace a flow. The worker passes who saved it, as a login, so it can act as them in other spaces. */
+  'drive/save-flow': {
+    summary: 'Create or replace a flow', permission: 'drive:manage',
+    input: z.object({ id: z.string().optional(), name: z.string().trim().min(1).max(100), enabled: z.boolean(), definition: flowDefinition, authorSub: z.string().min(1).max(500) }),
+    output: storedFlow,
+  },
+  'drive/delete-flow': {
+    summary: 'Delete a flow', permission: 'drive:manage',
+    input: z.object({ id: z.string() }), output: z.object({ ok: z.literal(true) }),
+    http: { method: 'DELETE', path: '/flows/{id}' },
+  },
+  /** What flows did, newest first: their history, and the proposals waiting for a decision. */
+  'drive/flow-deliveries': {
+    summary: 'List flow deliveries', permission: 'drive:manage',
+    input: z.object({ flowId: z.string().optional(), fileId: z.string().optional(), state: deliveryState.optional(), limit: z.number().int().min(1).max(200).optional() }),
+    output: z.object({ deliveries: z.array(flowDelivery) }),
+    http: { method: 'GET', path: '/flow-deliveries' },
+  },
+  /** For the runner: the flows with their author's login. Never served over HTTP. */
+  'drive/automation-flows': {
+    summary: 'Read flows for the automation runner', permission: 'drive:manage',
+    output: z.object({ flows: z.array(storedFlow.extend({ authorSub: z.string() })) }),
+  },
+  /** For the runner: whether there is anything to do — queued arrivals, or a schedule due. */
+  'drive/automation-pending': {
+    summary: 'Count queued automation work', permission: 'drive:manage',
+    output: z.object({ queued: z.number().int(), dueSchedules: z.number().int() }),
+  },
+  /** For the runner: the oldest queued items, with each file as it is now. */
+  'drive/automation-claim': {
+    summary: 'Read queued automation work', permission: 'drive:manage',
+    input: z.object({ limit: z.number().int().min(1).max(100).optional() }),
+    output: z.object({ items: z.array(automationItem) }),
+  },
+  /** For the runner: drop queued items up to and including `upTo`, once they are handled. */
+  'drive/automation-ack': {
+    summary: 'Drop handled automation work', permission: 'drive:manage',
+    input: z.object({ upTo: z.number().int() }), output: z.object({ dropped: z.number().int() }),
+  },
+  /** One file as the runner needs it. */
+  'drive/file-facts': {
+    summary: 'Read one file for the automation runner', permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }), output: fileFacts,
+  },
+  /** For a scheduled run or "run on existing files": live files whose current version arrived after `since`. */
+  'drive/flow-candidates': {
+    summary: 'List files a flow may act on', permission: 'drive:manage',
+    input: z.object({ since: z.string().nullable(), after: z.string().optional(), limit: z.number().int().min(1).max(200).optional() }),
+    output: z.object({ files: z.array(fileFacts), next: z.string().nullable() }),
+  },
+  /** Record what a flow did to one version of a file. `expect` guards the move (a proposal approved once, a run claimed once). */
+  'drive/record-flow-delivery': {
+    summary: 'Record a flow delivery', permission: 'drive:manage',
+    input: z.object({
+      flowId: z.string(), fileId: z.string(), versionId: z.string(), state: deliveryState,
+      detail: z.record(z.string(), z.unknown()).optional(), expect: z.array(deliveryState.or(z.literal('none'))).optional(),
+    }),
+    output: z.object({ delivery: flowDelivery.nullable(), changed: z.boolean(), previous: deliveryState.or(z.literal('none')) }),
+  },
+  /** A scheduled flow ran (or a backfill did): when, so the next one picks up from there. */
+  'drive/flow-ran': {
+    summary: 'Record when a flow last ran', permission: 'drive:manage',
+    input: z.object({ flowId: z.string(), at: z.string() }), output: z.object({ ok: z.literal(true) }),
+  },
+  /** A file a flow is copying in: recorded before its bytes, so its arrival never starts another flow. Again with a later version, the same flow's mark moves to it. */
+  'drive/record-file-origin': {
+    summary: 'Record which flow copied a file in', permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string(), flowId: z.string(), sourceScope: z.string(), sourceFileId: z.string(), sourceVersionId: z.string() }),
+    output: z.object({ ok: z.literal(true) }),
   },
 
   'drive/keep-version': {

@@ -189,3 +189,18 @@ it('publishes no report from a pass that began before reports existed', async ()
   await w.def.sweep!(w.ctx);
   expect(keptReport(w)).toMatchObject({ complete: true, read: 30, total: 30 });
 });
+
+it('tells the drive how each send went, and a retry of a failed request adopts what it filed', async () => {
+  const w = world(); await w.bind('Facturas/Recibidas');
+  const failed = domainEvent.parse({ id: ulid(), type: 'a3doc.files-requested', schemaVersion: 1, occurredAt: '2026-10-27T09:00:00.000Z', tenantId: w.ctx.scope.tenantId, scopeId: w.ctx.scope.scopeId, actor: ulid(), entity: w.record.entity, piiClass: 'none', payload: { conflict: 'rename', files: [{ attachmentId: w.record.id, name: 'Upload.pdf', size: 5 }] } });
+  // The upload lands in a3doc, but its answer never comes back: the request fails for good.
+  w.a3.lostAnswers.push(method => method === 'Upload');
+  await expect(w.def.dispatch!(w.ctx, failed)).rejects.toThrow('answer was lost');
+  expect(w.journal.get('a3doc:failed:file')).toEqual({ error: expect.stringContaining('answer was lost'), eventId: failed.id });
+  // A person retries: a new request naming the failed one. It finds the document, and files nothing new.
+  const retry = domainEvent.parse({ ...failed, id: ulid(), payload: { ...(failed.payload as Record<string, unknown>), retryOf: failed.id } });
+  await w.def.dispatch!(w.ctx, retry);
+  expect(w.a3.docs).toHaveLength(1);
+  expect(w.a3.calls.filter(c => c.method === 'Upload')).toHaveLength(1);
+  expect(w.journal.get('a3doc:failed:file')).toEqual({ error: null, eventId: retry.id });
+});
