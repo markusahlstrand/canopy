@@ -1,6 +1,7 @@
 import { landSourceChange } from './source-landing.js';
 import { landedMailAttachment, landMailChange, mailSummary } from './mail-landing.js';
 import { searchSnippet, SNIPPET_SCAN_LIMIT } from './search-snippet.js';
+import { automationHandlers, queueArrival, readCategory, readOrigin, readSend } from './automation.js';
 /**
  * The drive's handlers — the first canopy operations written as scope-local code.
  *
@@ -296,9 +297,32 @@ const operations = {
     }
     if (!pending) {
       ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?)', [file.id, attachmentId]);
+      // A retry after a failure sends to the same categories.
+      if (alsoIn.length) {
+        ctx.sql.exec('INSERT INTO drive_source_writes (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+          [`a3doc:also-in:${file.id}`, JSON.stringify(alsoIn)]);
+      }
       ctx.emit({ type: 'a3doc.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
     }
     return { id: file.id, ...payload };
+  },
+  'drive/retry-source-send': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
+    const file = liveFile(ctx, input.fileId);
+    sourceFor(ctx, 'canopy.a3doc');
+    const pending = ctx.sql.query<{ attachment_id: string; last_error: string | null }>('SELECT attachment_id, last_error FROM drive_source_pending WHERE file_id = ?', [file.id])[0];
+    if (!pending) throw substratError('conflict', 'this file is not waiting to be sent');
+    if (!pending.last_error) throw substratError('conflict', 'this file is still being sent; retry once it has failed');
+    const { payload, attachmentId } = sourceWrite(ctx, file, 'rename', 'a3doc');
+    if (attachmentId !== pending.attachment_id) throw substratError('conflict', 'this file changed since it was sent');
+    // The failed request's ledger: the connector looks there first, so a document it did file is adopted, not filed again.
+    const failed = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [`a3doc:failed:${file.id}`])[0];
+    const retryOf = (parsedOrNull(failed?.value ?? '') as { eventId?: unknown } | null)?.eventId;
+    const alsoIn = (parsedOrNull(ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [`a3doc:also-in:${file.id}`])[0]?.value ?? '') as string[] | null) ?? [];
+    ctx.sql.exec('UPDATE drive_source_pending SET last_error = NULL WHERE file_id = ?', [file.id]);
+    const event = { ...payload, alsoIn, ...(typeof retryOf === 'string' ? { retryOf } : {}) };
+    ctx.emit({ type: 'a3doc.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload: event });
+    return { id: file.id, ...event };
   },
   'drive/send-s3-file': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.write, fileRef(input.fileId)));
@@ -336,6 +360,23 @@ const operations = {
   },
   'drive/source-write-journal': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.landSource));
+    // A send that failed: kept on the file's pending row, where the file shows it and a retry finds it.
+    if (input.key.startsWith('a3doc:failed:')) {
+      const failure = input.value as { error?: unknown; eventId?: unknown } | undefined;
+      const fileId = input.key.slice('a3doc:failed:'.length);
+      // `error: null` is the connector saying a later try went through: the file is no longer failing.
+      if (failure && failure.error === null) ctx.sql.exec('UPDATE drive_source_pending SET last_error = NULL WHERE file_id = ?', [fileId]);
+      if (failure && typeof failure.error === 'string') {
+        ctx.sql.exec('UPDATE drive_source_pending SET last_error = ?, failed_at = ?, attempts = attempts + 1 WHERE file_id = ?',
+          [failure.error.slice(0, 500), ctx.now(), fileId]);
+        if (typeof failure.eventId === 'string') {
+          ctx.sql.exec('INSERT INTO drive_source_writes (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+            [`a3doc:failed:${fileId}`, JSON.stringify({ eventId: failure.eventId })]);
+        }
+      }
+      const row = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [input.key])[0];
+      return { value: row ? parsedOrNull(row.value) : null };
+    }
     if (input.value !== undefined) {
       const value = JSON.stringify(input.value);
       if (value.length > 64_000) throw substratError('validation_failed', 'source upload journal is too large');
@@ -708,6 +749,7 @@ const operations = {
     );
 
     const written: FileRow = { ...file, current_version_id: version.id, updated_at: now };
+    queueArrival(ctx, file.id, version.id, ctx.principal);
     ctx.emit({
       type: 'drive.file-written',
       schemaVersion: 1,
@@ -1097,6 +1139,7 @@ const operations = {
     return {
       fileId: input.fileId, description: row?.description ?? '', labels: row ? JSON.parse(row.labels_json) as string[] : [],
       revision: row?.revision ?? 0, canWrite: (await ctx.check(DRIVE_PERM.write, fileRef(input.fileId))).allowed,
+      category: readCategory(ctx, input.fileId), send: readSend(ctx, input.fileId), origin: readOrigin(ctx, input.fileId),
     };
   },
 
@@ -1632,6 +1675,7 @@ const operations = {
     }
     return { hits };
   },
+  ...automationHandlers,
 } satisfies {
   [K in keyof typeof driveOperations]: OperationHandler<
     HandlerInput<(typeof driveOperations)[K]>,

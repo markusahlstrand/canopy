@@ -16,6 +16,8 @@ import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors
 import { createModelHost } from '@substrat-run/vertical-host/model';
 import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, planRun, type AutoLabelPayload } from './document-ai.js';
 import { isLockedName } from './editable-text.js';
+import { AUTOMATION_JOB, automationJob, DISPATCH_INSTANCE, FLOW_BACKFILL_JOB, flowBackfillJob, FLOW_RUN_JOB, flowRunJob, type AutomationDeps, type Bytes } from './automation.js';
+import { mountFlows } from './flow-routes.js';
 import { DEFAULT_ASSISTANT_MODEL, mountAssistant } from './assistant.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
@@ -183,7 +185,21 @@ const sweeperConfig = {
   intervalMs: 120_000,
   host: hostFor,
   runJobs: true,
-  jobStartIntervalMs: 12 * 60 * 60 * 1000,
+  /**
+   * Before each pass drives due runs: start the space's automation dispatcher when it has queued
+   * arrivals (a connector's sync lands them with no worker code in the way) or a schedule due.
+   * A cheap count first, so a quiet space starts nothing.
+   */
+  startJobs: async (sweepHost, tenant, scope) => {
+    const host = sweepHost as unknown as CloudflareScopeHost;
+    const env = envOf.get(host);
+    if (!env) return;
+    const owner = await ownerScopeFor(env, host, { tenantId: tenant, scopeId: scope });
+    if (!owner) return;
+    const pending = await owner.invoke<{ queued: number; dueSchedules: number }>('drive/automation-pending');
+    if (pending.queued || pending.dueSchedules) await kickAutomation(host, { tenantId: tenant, scopeId: scope });
+  },
+  jobStartIntervalMs: 60_000,
 } satisfies Parameters<typeof defineScopeSweeperDO<Env>>[0];
 export const SweeperDO = defineScopeSweeperDO<Env>(sweeperConfig);
 
@@ -324,7 +340,62 @@ function hostFor(env: Env): CloudflareScopeHost {
   // Registered on every host, so whichever drives the scope's jobs — an upload's
   // `runDueJobs` or the sweeper's pass — can run a queued Document AI run.
   host.registerJob(DRIVE_MODULE_ID, AUTO_LABEL_JOB, documentAiFor(env, host));
+  const automation = automationDeps(env, host);
+  host.registerJob(DRIVE_MODULE_ID, AUTOMATION_JOB, automationJob(automation));
+  host.registerJob(DRIVE_MODULE_ID, FLOW_RUN_JOB, flowRunJob(automation));
+  host.registerJob(DRIVE_MODULE_ID, FLOW_BACKFILL_JOB, flowBackfillJob(automation));
+  envOf.set(host, env);
   return host;
+}
+
+/** The env a host was built from: the sweeper's `startJobs` is handed the host, not the env. */
+const envOf = new WeakMap<CloudflareScopeHost, Env>();
+
+/** The space as its owner of record, or null before anyone owns it. */
+async function ownerScopeFor(env: Env, host: CloudflareScopeHost, node: Node): Promise<ScopeStub | null> {
+  const owner = await identityDo(env, node).getOwnerOfRecord(node.scopeId);
+  return owner ? host.getScope(principalId.parse(owner), node.tenantId, node.scopeId) : null;
+}
+
+/** Start (or join) the space's automation dispatcher. */
+async function kickAutomation(host: CloudflareScopeHost, node: Node): Promise<void> {
+  await host.startJobRun(node.tenantId, node.scopeId, {
+    moduleId: DRIVE_MODULE_ID, job: AUTOMATION_JOB, instance: DISPATCH_INSTANCE, payload: { tenantId: node.tenantId, scopeId: node.scopeId },
+  });
+}
+
+/** What the automation jobs need, over this worker's bindings. */
+function automationDeps(env: Env, host: CloudflareScopeHost): AutomationDeps {
+  const nodeOf = (n: { tenantId: string; scopeId: string }): Node => ({ tenantId: tenantId.parse(n.tenantId), scopeId: scopeId.parse(n.scopeId) });
+  return {
+    ownerScope: (n) => ownerScopeFor(env, host, nodeOf(n)),
+    ownerPrincipal: async (n) => identityDo(env, nodeOf(n)).getOwnerOfRecord(n.scopeId),
+    principalIn: async (n, sub) => identityDo(env, nodeOf(n)).resolvePrincipal(n.scopeId, sub),
+    scopeAs: (n, principal) => host.getScope(principalId.parse(principal), nodeOf(n).tenantId, nodeOf(n).scopeId),
+    bytesAs: async (n, principal) => {
+      const attachments = await host.attachments(principalId.parse(principal), nodeOf(n).tenantId, nodeOf(n).scopeId);
+      return {
+        // A stream, so a large statement is never held whole in memory on its way across.
+        open: (blobRef) => attachments.openStream(blobRef),
+        upload: (input) => attachments.upload({ ...input, visibility: 'internal', body: input.body as Parameters<typeof attachments.upload>[0]['body'] }),
+      } satisfies Bytes;
+    },
+    spaceBySlug: async (tenant, slug) => identityDo(env, nodeOf({ tenantId: tenant, scopeId: DEV_NODE.scopeId })).resolveSiteScope(slug),
+    queueLabel: (n, principal, file) => labelSoon(env, host, nodeOf(n), principalId.parse(principal), file),
+    start: async (n, job, instance, payload) => {
+      await host.startJobRun(nodeOf(n).tenantId, nodeOf(n).scopeId, { moduleId: DRIVE_MODULE_ID, job, instance, payload });
+    },
+    model: (n) => env.AI ? modelFor(env, env.AI, {
+      spec: env.DOCUMENT_AI_MODEL || DEFAULT_DOCUMENT_AI_MODEL,
+      sent: 'The first 8,000 characters of a document a flow asks a question about, its file name and the question',
+      usageEvent: 'drive.flow.usage',
+      operation: 'drive/flow-question',
+      tenant: nodeOf(n).tenantId,
+      scope: nodeOf(n).scopeId,
+    }) : null,
+    now: () => Date.now(),
+    log: (event, fields) => console.log(event, fields),
+  };
 }
 
 const DRIVE_MODULE_ID = moduleId.parse(driveManifest.id);
@@ -352,6 +423,7 @@ function documentAiFor(env: Env, host: CloudflareScopeHost) {
   return autoLabelJob({
     scopeFor: (p) => host.getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
     enabled: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.autoLabel === true,
+    categories: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.categories ?? [],
     model: (p) => env.AI ? modelFor(env, env.AI, {
       spec: env.DOCUMENT_AI_MODEL || DEFAULT_DOCUMENT_AI_MODEL,
       sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
@@ -484,7 +556,7 @@ app.use('*', invocationLog<Env>({
   allowUnsigned: (env) => env.ALLOW_DEV_NODE === 'true',
 }));
 app.use('/api/*', async (c, next) => {
-  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|source|accept-invite|claim-owner|app-passwords|assistant)$/.test(c.req.path);
+  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|source|accept-invite|claim-owner|app-passwords|assistant|flows(?:\/preview|\/[^/]+\/run)?|flow-deliveries\/decide)$/.test(c.req.path);
   if (jsonMutation && c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HTTPException(415, {message:'Use application/json for this request.'});
   const origin = c.req.header('origin');
   if (jsonMutation && origin && origin !== new URL(c.req.url).origin) throw new HTTPException(403, {message:'Cross-origin mutations are not allowed.'});
@@ -785,6 +857,27 @@ mountSource(app, async (c) => {
     relay: () => {
       if (!c.env.CONTROL_PLANE_URL || !c.env.PLATFORM_SECRET) throw new HTTPException(503, { message: 'Connecting a source needs the hosted platform.' });
       return { controlPlaneUrl: c.env.CONTROL_PLANE_URL, platformSecret: c.env.PLATFORM_SECRET, tenantId: node.tenantId, scopeId: node.scopeId };
+    },
+  };
+});
+/** Flows: save (as the caller's login), run over existing files, decide proposals. Managers only. */
+mountFlows(app, async (c) => {
+  await requirePeopleAdmin(c);
+  const env = c.env;
+  const node = await nodeFor(c.req.raw, env);
+  const { base, sub } = await subjectOf(c.req.raw, env);
+  const host = hostFor(env);
+  const principal = (await principalFor(env, c.req.raw))!;
+  return {
+    scope: await host.getScope(principal, node.tenantId, node.scopeId),
+    sub,
+    node,
+    sites: async () => (await sitesForSubject(env, base, sub, host)).map((site) => ({ slug: site.slug, scope: site.scope })),
+    start: async (job, instance, payload) => {
+      await host.startJobRun(node.tenantId, node.scopeId, { moduleId: DRIVE_MODULE_ID, job, instance, payload });
+      await defer(c, host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
+        console.error('drive.flow.run-failed', { error: error instanceof Error ? error.message : String(error) });
+      }));
     },
   };
 });
@@ -1115,7 +1208,9 @@ async function indexSoon(
 ): Promise<void> {
   // `queue` starts any run this write owes first, so the one drive below takes it too —
   // after the extraction it waits on, which the kernel queued earlier.
-  const work = (queue ? queue() : Promise.resolve()).then(() => host.runDueJobs(node.tenantId, node.scopeId)).catch((error: unknown) => {
+  // A second drive takes the runs the first one's dispatcher started: Document AI and any flow.
+  const work = (queue ? queue() : Promise.resolve()).then(() => host.runDueJobs(node.tenantId, node.scopeId))
+    .then(() => queue ? host.runDueJobs(node.tenantId, node.scopeId) : undefined).catch((error: unknown) => {
     console.error('drive.text-index.run-failed', { error: error instanceof Error ? error.message : String(error) });
   });
   await defer(c, work);
@@ -1202,12 +1297,9 @@ app.post('/api/folders/:folderId/content', async (c) => {
   const { source } = await stub.invoke<{ source: DriveSource | null }>('drive/get-source');
   if (source) await stub.invoke('drive/send-source-file', { fileId: file.id, ...(alsoIn.length ? { alsoIn } : {}) });
 
-  if (written.current_version_id) {
-    // A "New → …" starter is empty by definition; its first real save is what to describe.
-    const starter = c.req.query('create') === 'only';
-    const versionId = written.current_version_id;
-    await indexSoon(c, host, node, starter ? undefined : () => labelSoon(env, host, node, principal, { id: file.id, name, versionId }));
-  }
+  // The write queued itself for automation (Document AI, flows); the dispatcher takes it now.
+  // A "New → …" starter is empty, so Document AI finds no text in it and settles at once.
+  if (written.current_version_id) await indexSoon(c, host, node, () => kickAutomation(host, node));
 
   return c.json(written, 201);
 });
@@ -1248,7 +1340,7 @@ mountTextContent(app, async (c) => {
     record: (fileId, blobRef, expectedCurrentVersion) => stub.invoke<{ id: string; current_version_id: string | null }>(
       'drive/record-version', { fileId, expectedCurrentVersion, location: { source: 'blob', blobRef } },
     ),
-    afterWrite: (file) => indexSoon(c, host, node, () => labelSoon(c.env, host, node, principal, file)),
+    afterWrite: () => indexSoon(c, host, node, () => kickAutomation(host, node)),
   };
 });
 
@@ -1329,8 +1421,8 @@ mountWebdav(app, async (c, password, username) => {
         upload: async (fileId: string, name: string, mime: string, body: Uint8Array) =>
           (await (await attachments()).upload({ entity: { entityType: 'file', entityId: fileId }, filename: name, contentType: mime, visibility: 'internal', body })).id,
         open: async (blobRef: string) => (await attachments()).open(blobRef),
-        afterWrite: (file: { id: string; name: string; versionId: string }) => indexSoon(c, host, { tenantId: tenant, scopeId: scope },
-          () => labelSoon(env, host, { tenantId: tenant, scopeId: scope }, site.principal, file)),
+        afterWrite: () => indexSoon(c, host, { tenantId: tenant, scopeId: scope },
+          () => kickAutomation(host, { tenantId: tenant, scopeId: scope })),
       },
     };
   });

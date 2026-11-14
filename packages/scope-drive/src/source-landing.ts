@@ -2,6 +2,7 @@ import { substratError, type FileSourceChange } from '@substrat-run/contracts';
 import { assertAllowed, ulid, type OperationContext } from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
 import { segment } from '../spec/model.js';
+import { queueArrival } from './automation.js';
 
 type Item = { entity_id: string; kind: string; status: string };
 type Folder = { id: string; parent_id: string; path: string };
@@ -63,8 +64,11 @@ export async function landSourceChange(ctx: OperationContext, change: FileSource
     // Not `updated_at`: the upsert before this set it to when the source last changed the file.
     ctx.sql.exec('UPDATE drive_files SET current_version_id = ? WHERE id = ?', [id, file.id]);
     remember(file.id);
+    const echoed = ctx.sql.query('SELECT file_id FROM drive_source_pending WHERE file_id = ?', [file.id]).length > 0;
     ctx.sql.exec('DELETE FROM drive_source_pending WHERE file_id = ?', [file.id]);
     ctx.emit({ type: 'drive.file-written', schemaVersion: 1, entity: ref('file', file.id), piiClass: 'none', payload: { id: file.id, folder_id: file.folder_id, current_version_id: id } });
+    // A file this space sent out and the source echoed back is not news; one it never held is.
+    if (!echoed) queueArrival(ctx, file.id, id, null);
     return { ok: true };
   }
   const parts = change.path.split('/');

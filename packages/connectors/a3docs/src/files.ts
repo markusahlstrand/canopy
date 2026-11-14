@@ -58,7 +58,14 @@ import { A3DOC_PROVIDER, a3docSecret, clientFor, nowOf, openA3docConnection, typ
 /** The event a vertical emits to put files in its bound a3doc folder. */
 export const A3DOC_FILES_EVENT = 'a3doc.files-requested';
 /** Its payload: a file-source write, plus the other folders each document is filed in. */
-export const a3docWriteRequest = fileSourceWriteRequest.extend({ alsoIn: z.array(z.string()).max(10).default([]) });
+export const a3docWriteRequest = fileSourceWriteRequest.extend({
+  alsoIn: z.array(z.string()).max(10).default([]),
+  /**
+   * A person's retry of a request that failed for good: its id. The retry starts from that
+   * request's ledger, so a document the failed request did file is adopted, never filed again.
+   */
+  retryOf: z.string().max(100).optional(),
+});
 
 /** How far behind the high-water mark an incremental pass reads again. */
 export const OVERLAP_MS = 2 * 60 * 60 * 1000;
@@ -362,7 +369,15 @@ async function dispatchFiles(
     const namesHere = new Set([...items.values()].filter((e) => e.kind === 'file' && e.parentId === containerId).map((e) => e.name));
 
     const key = writeKey(event.id);
-    const prior = (await ctx.admin.getConnectorState(conn.id, key)) as WriteLedger | undefined;
+    let prior = (await ctx.admin.getConnectorState(conn.id, key)) as WriteLedger | undefined;
+    if (!prior && payload.retryOf) {
+      // Its attempts and documents carry over: an `attempted` row is reconciled below, a filed one skipped.
+      const earlier = (await ctx.admin.getConnectorState(conn.id, writeKey(payload.retryOf))) as WriteLedger | undefined;
+      if (earlier) {
+        prior = structuredClone(earlier);
+        await ctx.admin.putConnectorState(conn.id, key, prior);
+      }
+    }
     if (prior?.status === 'done') {
       for (const file of prior.files) if (file.documentId) {
         await ctx.admin.putConnectorState(conn.id, requestedKey(binding.scopeId, file.documentId), { name: file.name });

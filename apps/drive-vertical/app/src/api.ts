@@ -15,6 +15,7 @@
 
 import { offlineSessionEpoch } from './offline-content';
 import type { AssistantMessage, AssistantReply } from '../../src/assistant-contract';
+import type { FlowPreview } from '../../src/flow-contract';
 
 /** Every derived route sits under `/api` — `mountOperations`' default base path. */
 const API = '/api';
@@ -607,9 +608,36 @@ export const commentPage = (fileId: string, next: string | null = null) => readP
 export const postComment = (fileId: string, body: string) => call<FileComment>(`/files/${encodeURIComponent(fileId)}/comments`, { method: 'POST', body: JSON.stringify({ body }) });
 export const deleteComment = (fileId: string, commentId: string) => call(`/files/${encodeURIComponent(fileId)}/comments/${encodeURIComponent(commentId)}`, { method: 'DELETE' });
 
+export interface FileCategory { id: string | null; confidence: number | null; source: 'ai' | 'person'; versionId: string | null }
+/** A send to the space's source still out, and how its last try went. */
+export interface SourceSend { state: 'sending' | 'failed'; error: string | null; failedAt: string | null; attempts: number }
+export interface FileOrigin { flowId: string; sourceScope: string; sourceFileId: string; createdAt: string }
 export interface FileDetails {
   fileId: string; description: string; labels: string[]; revision: number; canWrite: boolean;
+  category?: FileCategory | null; send?: SourceSend | null; origin?: FileOrigin | null;
 }
+/** Put a file in one of the space's categories, or (null) hand it back to Document AI. */
+export const setFileCategory = (fileId: string, category: string | null) =>
+  call<{ fileId: string; category: FileCategory | null; changed: boolean }>(`/files/${encodeURIComponent(fileId)}/category`, { method: 'PUT', body: JSON.stringify({ category, source: 'person' }) });
+/** Send a file whose send to a3doc failed, again. */
+export const retrySourceSend = (fileId: string) => call(`/files/${encodeURIComponent(fileId)}/retry-send`, { method: 'POST', body: '{}' });
+
+export type { FlowAction, FlowCondition, FlowDefinition, FlowDelivery, FlowTrigger, StoredFlow, DeliveryState } from '@canopy/scope-drive/spec/model';
+export const listFlows = () => call<{ flows: import('@canopy/scope-drive/spec/model').StoredFlow[] }>('/flows').then((r) => r.flows);
+export const saveFlow = (flow: { id?: string; name: string; enabled: boolean; definition: import('@canopy/scope-drive/spec/model').FlowDefinition }) =>
+  call<import('@canopy/scope-drive/spec/model').StoredFlow>('/flows', { method: 'PUT', body: JSON.stringify(flow) });
+export const deleteFlow = (id: string) => call(`/flows/${encodeURIComponent(id)}`, { method: 'DELETE' });
+/** Run a flow over the files already in the space. */
+export const runFlow = (id: string) => call<{ started: boolean }>(`/flows/${encodeURIComponent(id)}/run`, { method: 'POST', body: '{}' });
+/** Which documents already here a flow (saved or not) would act on. */
+export const previewFlow = (flow: { id?: string; definition: Pick<import('@canopy/scope-drive/spec/model').FlowDefinition, 'conditions' | 'versions'> }) =>
+  call<FlowPreview>('/flows/preview', { method: 'POST', body: JSON.stringify({ ...(flow.id ? { id: flow.id } : {}), definition: { conditions: flow.definition.conditions, versions: flow.definition.versions } }) });
+export const flowDeliveries = (query: { flowId?: string; state?: string; limit?: number } = {}) => {
+  const params = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
+  return call<{ deliveries: import('@canopy/scope-drive/spec/model').FlowDelivery[] }>(`/flow-deliveries${params.size ? `?${params}` : ''}`).then((r) => r.deliveries);
+};
+export const decideDelivery = (key: { flowId: string; fileId: string; versionId: string }, decision: 'approve' | 'dismiss' | 'retry') =>
+  call<import('@canopy/scope-drive/spec/model').FlowDelivery>('/flow-deliveries/decide', { method: 'POST', body: JSON.stringify({ flowId: key.flowId, fileId: key.fileId, versionId: key.versionId, decision }) });
 export const fileDetails = (fileId: string) => call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`);
 export const updateFileDetails = (fileId: string, description: string, labels: string[], expectedRevision: number) =>
   call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`, { method: 'PATCH', body: JSON.stringify({ description, labels, expectedRevision }) });
@@ -738,6 +766,7 @@ export const search = (term: string, limit?: number, via?: SearchHit['via']) =>
   );
 
 export type { AssistantMessage, AssistantReply, AssistantSource } from '../../src/assistant-contract';
+export type { FlowPreview, PreviewMatch } from '../../src/flow-contract';
 
 /**
  * Ask the ⌘K assistant. The whole conversation rides each request — the worker keeps no
