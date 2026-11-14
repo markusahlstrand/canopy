@@ -162,6 +162,8 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
     'drive/create-folder': { name: 'conformance' },
     'drive/request-s3-change': { request: { op: 'mkdir', path: 'conformance' } },
     'drive/ensure-file': { name: 'conformance' },
+    'drive/set-file-category': { category: 'conformance', source: 'person' },
+    'drive/record-file-origin': { flowId: 'conformance', sourceScope: 'conformance', sourceFileId: 'conformance', sourceVersionId: 'conformance' },
     // The `external` branch on purpose: a `blob` version names an attachment the
     // handler verifies, so driving that branch would mean uploading bytes to set
     // up a permission test. `external` needs no store and narrows identically.

@@ -4,6 +4,7 @@ import { Button } from '@canopy/ui';
 import { ApiError, fileDetails, updateFileDetails, type FileDetails } from './api';
 import { latestOnly } from './reads';
 import { watchDriveChanges } from './live-updates';
+import { FileAutomation } from './file-automation';
 
 /** Descriptive metadata; labels carry no access-control meaning. */
 export function FileDetailsPanel({ fileId }: { fileId: string }) {
@@ -50,7 +51,12 @@ export function FileDetailsPanel({ fileId }: { fileId: string }) {
       // Read the current draft after the await: typing can begin during this read.
       const current = state.current;
       const baseline = current.details;
-      if (!baseline || got.revision === baseline.revision) return;
+      if (!baseline) return;
+      // Category, send state and origin change without a new revision: take them as they are.
+      if (got.revision === baseline.revision) {
+        setDetails({ ...baseline, category: got.category, send: got.send, origin: got.origin });
+        return;
+      }
       const remoteLabels = got.labels.join('\n');
       const localDescription = current.description !== baseline.description;
       const localLabels = current.labels !== baseline.labels.join('\n');
@@ -114,6 +120,7 @@ export function FileDetailsPanel({ fileId }: { fileId: string }) {
   return (
     <div className="space-y-3 text-sm">
       {error ? <p role="alert">{error}</p> : null}
+      {details ? <FileAutomation details={details} onChanged={() => void refreshRef.current()} /> : null}
       {!details ? (
         error ? <Button disabled={busy} onClick={() => void load()}>Retry</Button> : <p>Loading details…</p>
       ) : details.canWrite ? (

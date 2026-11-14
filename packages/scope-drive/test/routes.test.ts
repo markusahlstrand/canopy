@@ -21,6 +21,7 @@ describe('the derived route table', () => {
     expect(mounted.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
       'DELETE /api/files/:fileId',
       'DELETE /api/files/:fileId/comments/:commentId',
+      'DELETE /api/flows/:id',
       'DELETE /api/folders/:folderId/shares',
       'DELETE /api/plugins/:id',
       'GET /api/changes',
@@ -30,6 +31,8 @@ describe('the derived route table', () => {
       'GET /api/files/:fileId/text',
       'GET /api/files/:fileId/versions',
       'GET /api/files/:fileId/versions/:versionId',
+      'GET /api/flow-deliveries',
+      'GET /api/flows',
       'GET /api/folders/:folderId/all-files',
       'GET /api/folders/:folderId/files',
       'GET /api/folders/:folderId/folders',
@@ -52,6 +55,7 @@ describe('the derived route table', () => {
       'POST /api/files/:fileId/comments',
       'POST /api/files/:fileId/move',
       'POST /api/files/:fileId/restore',
+      'POST /api/files/:fileId/retry-send',
       'POST /api/files/:fileId/send-to-s3',
       'POST /api/files/:fileId/send-to-source',
       'POST /api/files/:fileId/versions',
@@ -61,6 +65,7 @@ describe('the derived route table', () => {
       'POST /api/folders/:folderId/s3-change',
       'POST /api/folders/:folderId/shares',
       'POST /api/folders/:parentId/folders',
+      'PUT /api/files/:fileId/category',
       'PUT /api/plugins',
     ]);
   });
@@ -89,5 +94,11 @@ describe('the derived route table', () => {
     expect(operations).not.toContain('drive/record-person');
     expect(operations).not.toContain('drive/record-text');
     expect(operations).not.toContain('drive/forget-person');
+    // A flow acts as its author's login, which only the worker's session knows; the runner's
+    // reads and writes are the runner's.
+    for (const op of ['drive/save-flow', 'drive/automation-flows', 'drive/automation-claim', 'drive/automation-ack',
+      'drive/automation-pending', 'drive/record-flow-delivery', 'drive/flow-ran', 'drive/record-file-origin', 'drive/file-facts', 'drive/flow-candidates']) {
+      expect(operations).not.toContain(op);
+    }
   });
 });
