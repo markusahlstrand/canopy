@@ -14,13 +14,17 @@ export function categoryIdFor(name: string, taken: readonly string[]): string {
  * The space's categories, edited in place. Document AI picks one per document from this list,
  * and flows match on it. A hint is what the model reads to decide, so it says what belongs.
  */
-export function CategoriesEditor({ value, onChange, disabled }: { value: SpaceCategory[]; onChange: (next: SpaceCategory[]) => void; disabled?: boolean }) {
-  // Ids made in this editing session follow their name; a saved id never changes.
+export function CategoriesEditor({ value, onChange, disabled, savedIds = [] }: {
+  value: SpaceCategory[]; onChange: (next: SpaceCategory[]) => void; disabled?: boolean;
+  /** Ids already saved, which flows may reference: these never change, whatever this session made. */
+  savedIds?: readonly string[];
+}) {
+  // Ids made in this editing session follow their name until they are saved; a saved id never changes.
   const fresh = useRef(new Set<string>());
   const update = (i: number, patch: Partial<SpaceCategory>) => onChange(value.map((c, j) => {
     if (j !== i) return c;
     const next = { ...c, ...patch };
-    if (patch.name !== undefined && fresh.current.has(c.id)) {
+    if (patch.name !== undefined && fresh.current.has(c.id) && !savedIds.includes(c.id)) {
       next.id = categoryIdFor(patch.name, value.filter((_, k) => k !== i).map((o) => o.id));
       fresh.current.delete(c.id); fresh.current.add(next.id);
     }

@@ -226,7 +226,7 @@ export const sourceSend = z.object({
 });
 
 /** The file a flow copied this one from. */
-export const fileOrigin = z.object({ flowId: z.string(), sourceScope: z.string(), sourceFileId: z.string(), createdAt: z.string() });
+export const fileOrigin = z.object({ flowId: z.string(), sourceScope: z.string(), sourceFileId: z.string(), sourceVersionId: z.string(), createdAt: z.string() });
 
 export const fileDetails = z.object({
   fileId: z.string(), description: z.string(), labels: z.array(z.string()), revision: z.number().int(), canWrite: z.boolean(),
@@ -854,7 +854,7 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     summary: 'Record when a flow last ran', permission: 'drive:manage',
     input: z.object({ flowId: z.string(), at: z.string() }), output: z.object({ ok: z.literal(true) }),
   },
-  /** A file a flow is copying in: recorded before its bytes, so its arrival never starts another flow. */
+  /** A file a flow is copying in: recorded before its bytes, so its arrival never starts another flow. Again with a later version, the same flow's mark moves to it. */
   'drive/record-file-origin': {
     summary: 'Record which flow copied a file in', permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
     input: z.object({ fileId: z.string(), flowId: z.string(), sourceScope: z.string(), sourceFileId: z.string(), sourceVersionId: z.string() }),

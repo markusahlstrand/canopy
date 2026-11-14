@@ -22,10 +22,13 @@ export function FileAutomation({ details, onChanged }: { details: FileDetails; o
     try { await work(); onChanged(); } catch (e) { setError(e instanceof Error ? e.message || 'That did not work.' : String(e)); } finally { setBusy(false); }
   };
   const pick = async () => {
-    setPicking(true);
-    if (categories) return;
-    try { setCategories((await getSpaceSettings()).categories ?? []); }
-    catch { setCategories([]); setError('Only an owner of this space can see its categories.'); }
+    setError(null);
+    if (categories) { setPicking(true); return; }
+    setBusy(true);
+    try { setCategories((await getSpaceSettings()).categories ?? []); setPicking(true); }
+    // Not loaded is not "none": Change stays, to try again.
+    catch (e) { setError(e instanceof Error && e.message ? `Couldn't load this space's categories: ${e.message}` : "Couldn't load this space's categories."); }
+    finally { setBusy(false); }
   };
 
   const category = details.category ?? null;
@@ -60,7 +63,7 @@ export function FileAutomation({ details, onChanged }: { details: FileDetails; o
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               {category?.id && !categories.some((c) => c.id === category.id) ? <option value={category.id}>{prettyId(category.id)}</option> : null}
             </select>
-          ) : picking && categories && !error ? <p className="text-xs text-muted-foreground">This space has no categories yet. Add them in Space settings, under Document AI.</p> : null}
+          ) : picking && categories ? <p className="text-xs text-muted-foreground">This space has no categories yet. Add them in Space settings, under Document AI.</p> : null}
         </div>
       ) : null}
     </div>

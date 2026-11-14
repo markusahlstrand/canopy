@@ -96,6 +96,37 @@ describe('the flows dialog', () => {
     expect(calls.some((c) => c.url.endsWith('/flows/f1/run') && c.method === 'POST')).toBe(true);
   });
 
+  it('asks again before running on what is here once the conditions change', async () => {
+    const calls = server({
+      flows: [stored],
+      preview: { matches: [{ fileId: 'a', name: 'S.pdf', folderPath: 'Statements', category: null, needsAnswer: false, handled: false }], matched: 1, uncertain: 0, scanned: 1, truncated: false },
+    });
+    render(<FlowsDialog open onOpenChange={() => {}} categories={categories} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Statements' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show what it matches' }));
+    const preview = screen.getByRole('region', { name: 'Documents it matches now' });
+    await within(preview).findByText('1 document matches.');
+    fireEvent.click(within(preview).getByRole('checkbox'));
+    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'Everything' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+    await screen.findByText('Flow saved.');
+    expect(calls.some((c) => c.url.endsWith('/run'))).toBe(false);
+  });
+
+  it('keeps file types as typed', async () => {
+    server();
+    render(<FlowsDialog open onOpenChange={() => {}} categories={categories} />);
+    fireEvent.click(await screen.findByRole('button', { name: /New flow/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Add condition/ }));
+    fireEvent.change(screen.getByLabelText('Condition 1'), { target: { value: 'extension' } });
+    const types = screen.getByLabelText('File types') as HTMLInputElement;
+    fireEvent.change(types, { target: { value: 'pdf, ' } });
+    expect(types.value).toBe('pdf, ');
+    fireEvent.change(types, { target: { value: 'pdf, .XML' } });
+    fireEvent.blur(types);
+    expect(types.value).toBe('pdf, xml');
+  });
+
   it('says what a flow does in one line', () => {
     expect(describeFlow(definition, categories, sites)).toBe('When a document arrives (under Statements): copy to A3docs, after you approve.');
     expect(describeFlow({ ...definition, trigger: { on: 'classified' }, conditions: [{ field: 'category', values: ['bank-statement'], minConfidence: 0.7 }], mode: 'auto' }, categories, sites))
@@ -114,6 +145,21 @@ describe('a file’s automation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(changed).toHaveBeenCalled());
     expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith('/files/file/retry-send') && init?.method === 'POST')).toBe(true);
+  });
+
+  it('says when the categories could not be loaded, and lets a person try again', async () => {
+    let fail = true;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.endsWith('/space-settings')) return fail ? Response.json({ error: 'down' }, { status: 503 }) : Response.json({ name: 's', icon: 'folder', color: '#3b82f6', categories });
+      return Response.json({});
+    }));
+    render(<FileAutomation details={{ ...base }} onChanged={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Change' }));
+    expect((await screen.findByRole('alert')).textContent).toContain("Couldn't load");
+    expect(screen.queryByText(/no categories yet/)).toBeNull();
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Change' }));
+    expect(await screen.findByLabelText('Category')).toBeTruthy();
   });
 
   it('shows the AI’s category and lets a person change it', async () => {

@@ -105,6 +105,22 @@ describe('categories', () => {
     expect(await w.emitted('drive.file-classified')).toBe(4);
   });
 
+  it('shows flows the AI\u2019s category only for the version it read; a person\u2019s stands', async () => {
+    const w = await world();
+    const a = await w.upload('a.txt', 'one');
+    await w.human.invoke('drive/set-file-category', { fileId: a.id, category: 'bank-statement', source: 'ai', confidence: 0.9, expectedVersionId: a.versionId });
+    expect((await w.human.invoke<FileFactsRow>('drive/file-facts', { fileId: a.id })).category).toMatchObject({ id: 'bank-statement' });
+    const again = await w.upload('a.txt', 'two');
+    expect(again.versionId).not.toBe(a.versionId);
+    expect((await w.human.invoke<FileFactsRow>('drive/file-facts', { fileId: a.id })).category).toBeNull();
+    await w.human.invoke('drive/set-file-category', { fileId: a.id, category: 'invoice', source: 'person' });
+    await w.upload('a.txt', 'three');
+    expect((await w.human.invoke<FileFactsRow>('drive/file-facts', { fileId: a.id })).category).toMatchObject({ id: 'invoice', source: 'person' });
+    // Saving the description hands back the automation fields too, so the panel keeps them.
+    const saved = await w.human.invoke<{ category: unknown }>('drive/update-file-details', { fileId: a.id, description: 'd', labels: [], expectedRevision: 0 });
+    expect(saved.category).toMatchObject({ id: 'invoice' });
+  });
+
   it('refuses an AI answer about a version that has been replaced', async () => {
     const w = await world();
     const a = await w.upload('a.txt', 'one');
@@ -174,7 +190,11 @@ describe('flows', () => {
     await w.human.invoke('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef: att.id } });
     const [item] = await w.claim();
     expect(item!.file!.copiedByFlow).toBe(true);
-    expect((await w.human.invoke<{ origin: { flowId: string } }>('drive/file-details', { fileId: file.id })).origin).toMatchObject({ flowId: 'f', sourceFileId: 'x' });
+    expect((await w.human.invoke<{ origin: { flowId: string } }>('drive/file-details', { fileId: file.id })).origin).toMatchObject({ flowId: 'f', sourceFileId: 'x', sourceVersionId: 'v' });
+    // The same flow copying a later version moves its mark; another flow can't claim the file.
+    await w.human.invoke('drive/record-file-origin', { fileId: file.id, flowId: 'f', sourceScope: 's', sourceFileId: 'x', sourceVersionId: 'v2' });
+    await w.human.invoke('drive/record-file-origin', { fileId: file.id, flowId: 'g', sourceScope: 's', sourceFileId: 'y', sourceVersionId: 'v3' });
+    expect((await w.human.invoke<{ origin: { flowId: string } }>('drive/file-details', { fileId: file.id })).origin).toMatchObject({ flowId: 'f', sourceFileId: 'x', sourceVersionId: 'v2' });
   });
 });
 
@@ -189,6 +209,7 @@ describe('a3doc send failures', () => {
     expect((await w.human.invoke<{ send: unknown }>('drive/file-details', { fileId: a.id })).send).toMatchObject({ state: 'sending', error: null });
     await w.connector.invoke('drive/source-write-journal', { key: `a3doc:failed:${a.id}`, value: { error: 'a3doc said no', eventId: 'evt-1' } });
     expect((await w.human.invoke<{ send: unknown }>('drive/file-details', { fileId: a.id })).send).toMatchObject({ state: 'failed', error: 'a3doc said no', attempts: 1 });
+    // Kept by folder id, and resolved (and checked) again at the retry.
     const retried = await w.human.invoke('drive/retry-source-send', { fileId: a.id });
     expect(retried).toMatchObject({ retryOf: 'evt-1', alsoIn: ['Fiscal'] });
     expect(await w.emitted('a3doc.files-requested')).toBe(2);
@@ -226,6 +247,11 @@ describe('matching', () => {
   it('treats a pattern as literal except for * and ?', () => {
     expect(globMatches('a.b(1)*', 'A.B(1) copy')).toBe(true);
     expect(globMatches('a.b', 'axb')).toBe(false);
+    expect(globMatches('*.PDF', 'statement.pdf')).toBe(true);
+    expect(globMatches('st?t*', 'stat')).toBe(true);
+    expect(globMatches('*a*a*a*a*a*a*a*a*b', 'a'.repeat(5_000))).toBe(false);
+    expect(globMatches('', '')).toBe(true);
+    expect(globMatches('**', 'x')).toBe(true);
   });
   it('is due when never run or when the period has passed', () => {
     const now = Date.parse('2026-11-12T10:00:00Z');

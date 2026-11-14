@@ -49,6 +49,14 @@ export function readCategory(ctx: OperationContext, fileId: string): FileCategor
   return categoryOf(ctx.sql.query<CategoryRow>('SELECT * FROM drive_file_categories WHERE file_id = ?', [fileId])[0]);
 }
 
+/**
+ * The category as flows see it: Document AI's choice describes the version it read, so it does not
+ * describe a newer one until the model has read that too. A person's choice stands for the file.
+ */
+function currentCategory(category: FileCategory | null, versionId: string | null): FileCategory | null {
+  return category?.source === 'ai' && category.versionId !== versionId ? null : category;
+}
+
 type PendingRow = { file_id: string; last_error: string | null; failed_at: string | null; attempts: number };
 /** A send to the source still out, and how its last try went. */
 export function readSend(ctx: OperationContext, fileId: string) {
@@ -57,10 +65,10 @@ export function readSend(ctx: OperationContext, fileId: string) {
   return { state: row.last_error ? 'failed' as const : 'sending' as const, error: row.last_error, failedAt: row.failed_at, attempts: row.attempts };
 }
 
-type OriginRow = { flow_id: string; source_scope: string; source_file_id: string; created_at: string };
+type OriginRow = { flow_id: string; source_scope: string; source_file_id: string; source_version_id: string; created_at: string };
 export function readOrigin(ctx: OperationContext, fileId: string) {
   const row = ctx.sql.query<OriginRow>('SELECT * FROM drive_file_origins WHERE file_id = ?', [fileId])[0];
-  return row ? { flowId: row.flow_id, sourceScope: row.source_scope, sourceFileId: row.source_file_id, createdAt: row.created_at } : null;
+  return row ? { flowId: row.flow_id, sourceScope: row.source_scope, sourceFileId: row.source_file_id, sourceVersionId: row.source_version_id, createdAt: row.created_at } : null;
 }
 
 type FactsRow = {
@@ -84,7 +92,7 @@ function factsFrom(ctx: OperationContext, row: FactsRow): FileFactsRow {
   return {
     fileId: row.id, name: row.name, folderId: row.folder_id, folderPath: row.path, state: row.state,
     versionId: row.current_version_id, blobRef: row.blob_ref, mime: row.mime, size: row.size, versionCreatedAt: row.version_created_at,
-    labels, category: readCategory(ctx, row.id), copiedByFlow: row.origin !== null,
+    labels, category: currentCategory(readCategory(ctx, row.id), row.current_version_id), copiedByFlow: row.origin !== null,
   };
 }
 
@@ -306,7 +314,8 @@ export const automationHandlers = {
     const file = ctx.sql.query<{ state: string }>('SELECT state FROM drive_files WHERE id = ?', [input.fileId])[0];
     if (!file || file.state !== 'live') throw substratError('not_found', `file not found: ${input.fileId}`);
     ctx.sql.exec(`INSERT INTO drive_file_origins (file_id, flow_id, source_scope, source_file_id, source_version_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(file_id) DO NOTHING`,
+      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET source_version_id = excluded.source_version_id
+      WHERE drive_file_origins.flow_id = excluded.flow_id AND drive_file_origins.source_file_id = excluded.source_file_id`,
     [input.fileId, input.flowId, input.sourceScope, input.sourceFileId, input.sourceVersionId, ctx.now()]);
     return { ok: true as const };
   },

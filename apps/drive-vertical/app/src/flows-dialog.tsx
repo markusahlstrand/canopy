@@ -58,6 +58,9 @@ const STATE_TEXT: Record<FlowDelivery['state'], string> = {
   proposed: 'Waiting for you', approved: 'Approved', running: 'Running', done: 'Done', failed: 'Failed', dismissed: 'Dismissed', skipped: 'Skipped',
 };
 
+/** How often an open flows list looks for new proposals and results. */
+const FLOWS_REFRESH_MS = 10_000;
+
 /** The space's flows: list, edit, run on existing files, and decide what they propose. */
 export function FlowsDialog({ open, onOpenChange, categories }: { open: boolean; onOpenChange: (open: boolean) => void; categories: SpaceCategory[] }) {
   const [flows, setFlows] = useState<StoredFlow[] | null>(null);
@@ -84,6 +87,13 @@ export function FlowsDialog({ open, onOpenChange, categories }: { open: boolean;
     return () => { generation.current++; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  // Runs finish in the background: while the list is showing, look again now and then for what they proposed or did.
+  useEffect(() => {
+    if (!open || editing || busy) return;
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load(); }, FLOWS_REFRESH_MS);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editing, busy]);
 
   const act = async (work: () => Promise<unknown>, done?: string) => {
     setBusy(true); setError(null); setNotice(null);
@@ -109,6 +119,8 @@ export function FlowsDialog({ open, onOpenChange, categories }: { open: boolean;
               onCancel={() => setEditing(null)}
               onSave={(draft, runExisting) => void act(async () => {
                 const saved = await saveFlow(draft);
+                // Saved now: should the run fail to start, saving again updates this flow rather than making another.
+                setEditing({ ...draft, id: saved.id });
                 if (runExisting) await runFlow(saved.id);
                 setEditing(null);
               }, !runExisting ? 'Flow saved.' : draft.definition.mode === 'ask'
@@ -202,7 +214,9 @@ export function FlowEditor({ draft: initial, categories, sites, busy, onSave, on
   draft: Draft; categories: readonly SpaceCategory[]; sites: readonly Site[]; busy: boolean; onSave: (draft: Draft, runExisting: boolean) => void; onCancel: () => void;
 }) {
   const [draft, setDraft] = useState<Draft>(initial);
-  const [runExisting, setRunExisting] = useState(false);
+  // Consent to run on what is here is for one preview: the conditions it showed, as they were.
+  const [runExisting, setRunExisting] = useState<string | null>(null);
+  const previewKey = JSON.stringify([draft.definition.conditions, draft.definition.versions]);
   const d = draft.definition;
   const setDef = (patch: Partial<FlowDefinition>) => setDraft({ ...draft, definition: { ...d, ...patch } });
   const setCondition = (i: number, c: FlowCondition) => setDef({ conditions: d.conditions.map((x, j) => (j === i ? c : x)) });
@@ -213,7 +227,7 @@ export function FlowEditor({ draft: initial, categories, sites, busy, onSave, on
     || d.conditions.some((c) => (c.field === 'name' || c.field === 'label') ? !c.value.trim() : c.field === 'ask' ? c.question.trim().length < 3 : c.field === 'category' || c.field === 'extension' ? !c.values.length : false);
 
   return (
-    <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (!incomplete) onSave(draft, runExisting && canRunExisting); }}>
+    <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (!incomplete) onSave(draft, runExisting === previewKey && canRunExisting); }}>
       <label className="block space-y-1"><span className="text-xs font-medium text-muted-foreground">Name</span>
         <Input value={draft.name} maxLength={100} placeholder="Statements to the gestoría" disabled={busy} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
 
@@ -275,7 +289,7 @@ export function FlowEditor({ draft: initial, categories, sites, busy, onSave, on
       </fieldset>
 
       <MatchPreview draft={draft} categories={categories} busy={busy}
-        runExisting={canRunExisting ? runExisting : null} onRunExisting={setRunExisting} />
+        runExisting={canRunExisting ? runExisting === previewKey : null} onRunExisting={(on) => setRunExisting(on ? previewKey : null)} />
 
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
@@ -361,6 +375,21 @@ function MatchPreview({ draft, categories, busy, runExisting, onRunExisting }: {
   );
 }
 
+const parseExtensions = (text: string) => [...new Set(text.split(',').map((v) => v.trim().replace(/^\./, '').toLowerCase()).filter(Boolean))];
+
+/** File types as typed ("pdf, xml"): the text stays as written, and the list follows it. */
+function ExtensionsField({ values, busy, onChange }: { values: string[]; busy: boolean; onChange: (values: string[]) => void }) {
+  const [text, setText] = useState(values.join(', '));
+  // A change from outside (a different condition loaded here) replaces the text; typing doesn't.
+  useEffect(() => {
+    if (parseExtensions(text).join() !== values.join()) setText(values.join(', '));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values]);
+  return <Input aria-label="File types" className="w-48" placeholder="pdf, xml" value={text} disabled={busy}
+    onChange={(e) => { setText(e.target.value); onChange(parseExtensions(e.target.value)); }}
+    onBlur={() => setText(values.join(', '))} />;
+}
+
 function ConditionFields({ condition: c, categories, busy, onChange }: { condition: FlowCondition; categories: readonly SpaceCategory[]; busy: boolean; onChange: (c: FlowCondition) => void }) {
   const select = 'rounded border bg-background p-1.5';
   switch (c.field) {
@@ -379,8 +408,7 @@ function ConditionFields({ condition: c, categories, busy, onChange }: { conditi
         <Input aria-label="Name text" className="w-48" value={c.value} disabled={busy} onChange={(e) => onChange({ ...c, value: e.target.value })} />
       </>;
     case 'extension':
-      return <Input aria-label="File types" className="w-48" placeholder="pdf, xml" value={c.values.join(', ')} disabled={busy}
-        onChange={(e) => onChange({ ...c, values: e.target.value.split(',').map((v) => v.trim().replace(/^\./, '')).filter(Boolean) })} />;
+      return <ExtensionsField values={c.values} busy={busy} onChange={(values) => onChange({ ...c, values })} />;
     case 'category':
       return categories.length ? <span className="flex flex-wrap items-center gap-2">
         {categories.map((cat) => (

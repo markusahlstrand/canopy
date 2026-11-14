@@ -125,10 +125,21 @@ export interface FileFacts {
   category: { id: string | null; confidence: number | null; source: 'ai' | 'person' } | null;
 }
 
-/** `*` any run, `?` one character; everything else literal. Whole-name, any case. */
+/**
+ * `*` any run, `?` one character; everything else literal. Whole-name, any case. A greedy matcher
+ * that backtracks only to the last `*`, so it runs in time linear-times-pattern, never exponential.
+ */
 export function globMatches(pattern: string, name: string): boolean {
-  const re = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
-  return new RegExp(`^${re}$`, 'i').test(name);
+  const p = pattern.toLowerCase(), n = name.toLowerCase();
+  let i = 0, j = 0, star = -1, mark = 0;
+  while (j < n.length) {
+    if (i < p.length && (p[i] === '?' || (p[i] !== '*' && p[i] === n[j]))) { i++; j++; }
+    else if (i < p.length && p[i] === '*') { star = i++; mark = j; }
+    else if (star >= 0) { i = star + 1; j = ++mark; }
+    else return false;
+  }
+  while (p[i] === '*') i++;
+  return i === p.length;
 }
 
 export const extensionOf = (name: string) => {

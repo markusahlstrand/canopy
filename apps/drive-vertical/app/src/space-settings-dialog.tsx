@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Checkbox, Input, Icon, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@canopy/ui';
 import { currentSite, deleteSite, getSpaceSettings, selectSite, updateSpaceSettings } from './api';
 import { defaultSpaceSettings, type SpaceSettings } from '../../src/space-settings';
@@ -54,8 +54,12 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
       if (generation.current === ticket) { setError(error instanceof Error ? error.message || 'Could not delete this space.' : String(error)); setBusy(false); }
     }
   };
+  // Flows reference categories by id, so they see only the saved list: an unsaved category's id can still change.
+  const savedCategories = useMemo<NonNullable<SpaceSettings['categories']>>(() => {
+    try { return (JSON.parse(initial || '{}') as SpaceSettings).categories ?? []; } catch { return []; }
+  }, [initial]);
   return <>
-  <FlowsDialog open={flowsOpen} onOpenChange={setFlowsOpen} categories={settings.categories ?? []}/>
+  <FlowsDialog open={flowsOpen} onOpenChange={setFlowsOpen} categories={savedCategories}/>
   <Dialog open={open} onOpenChange={next => {if(!busy && (next || confirmDiscardDrafts()))onOpenChange(next);}}>
     <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[480px]">
       <DialogHeader className="px-5 pt-5"><DialogTitle>Space settings</DialogTitle><DialogDescription>Choose how this space appears to its members.</DialogDescription></DialogHeader>
@@ -78,7 +82,7 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
             <div className="space-y-1 pt-1">
               <h4 className="text-xs font-medium">Categories</h4>
               <p className="text-xs text-muted-foreground">Document AI also puts each document in one of these, and flows can act on the category. A category someone picks by hand is never changed.</p>
-              <CategoriesEditor value={settings.categories ?? []} disabled={busy} onChange={categories=>setSettings({...settings,categories:categories.length?categories:undefined})}/>
+              <CategoriesEditor value={settings.categories ?? []} savedIds={savedCategories.map(c=>c.id)} disabled={busy} onChange={categories=>setSettings({...settings,categories:categories.length?categories:undefined})}/>
             </div>
           </section>
           <section className="space-y-2"><h3 className="text-xs font-medium text-muted-foreground">Flows</h3>

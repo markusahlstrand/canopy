@@ -64,9 +64,9 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
         const site = sites.find((s) => s.slug === action.space);
         if (!site) throw new HTTPException(400, { message: `You can't add files to the space '${action.space}'.` });
         for (const folderId of [action.folderId, ...action.alsoIn]) {
-          // A read of the folder as the author there: it exists, and they may see it.
-          const folder = await site.scope.invoke<{ id: string }>('drive/get-folder', { folderId }).catch(() => null);
-          if (!folder) throw new HTTPException(400, { message: `A folder this flow copies to is not one you can reach in '${action.space}'.` });
+          // The folder as the author sees it there: it exists, and they may add files to it.
+          const folder = await site.scope.invoke<{ id: string; canWrite?: boolean }>('drive/get-folder', { folderId }).catch(() => null);
+          if (!folder?.canWrite) throw new HTTPException(400, { message: `A folder this flow copies to is not one you can add files to in '${action.space}'.` });
         }
       }
     }
@@ -129,13 +129,37 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
     const parsed = decideInput.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) throw new HTTPException(400, { message: 'Say which delivery, and approve, dismiss or retry.' });
     const { flowId, fileId, versionId, decision } = parsed.data;
-    const from = decision === 'retry' ? ['failed'] : ['proposed'];
-    const state = decision === 'dismiss' ? 'dismissed' : 'approved';
-    const moved = await access.scope.invoke<{ changed: boolean; delivery: FlowDelivery | null; previous: string }>('drive/record-flow-delivery', {
-      flowId, fileId, versionId, state, expect: from,
-    });
-    if (!moved.changed) throw new HTTPException(409, { message: moved.previous === 'none' ? 'There is no such delivery.' : 'Someone already decided this one.' });
-    if (state === 'approved') await access.start(FLOW_RUN_JOB, `${flowId}:${fileId}:${versionId}`, { ...access.node, flowId, fileId, versionId, approved: true });
-    return c.json(moved.delivery);
+    const key = { flowId, fileId, versionId };
+    const move = (state: string, expect: string[]) =>
+      access.scope.invoke<{ changed: boolean; delivery: FlowDelivery | null; previous: string }>('drive/record-flow-delivery', { ...key, state, expect });
+    const refuse = (previous: string): never => {
+      throw new HTTPException(409, { message: previous === 'none' ? 'There is no such delivery.' : 'Someone already decided this one.' });
+    };
+    if (decision === 'dismiss') {
+      const moved = await move('dismissed', ['proposed']);
+      if (!moved.changed) refuse(moved.previous);
+      return c.json(moved.delivery);
+    }
+    // A retry acts at once only when the delivery's conditions all held before it failed (a person
+    // approved it, or it failed in an action). One that failed asking its question asks again.
+    let matched = true;
+    if (decision === 'retry') {
+      const { deliveries } = await access.scope.invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId, fileId, limit: 200 });
+      const delivery = deliveries.find((d) => d.versionId === versionId);
+      if (!delivery || delivery.state !== 'failed') return refuse(delivery?.state ?? 'none');
+      matched = delivery.detail.matched === true;
+    }
+    const from = decision === 'retry' ? 'failed' : 'proposed';
+    // Unmatched, it stays failed: the run claims (or proposes) from there once its question is answered.
+    const moved = matched ? await move('approved', [from]) : null;
+    if (moved && !moved.changed) refuse(moved.previous);
+    try {
+      await access.start(FLOW_RUN_JOB, `${flowId}:${fileId}:${versionId}`, { ...access.node, ...key, approved: matched });
+    } catch (error) {
+      // No run is coming: put the delivery back, so it can be decided again rather than sit approved for good.
+      if (matched) await move(from, ['approved']).catch(() => {});
+      throw error;
+    }
+    return c.json(moved?.delivery ?? { ...key, state: 'failed' });
   });
 }

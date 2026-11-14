@@ -154,17 +154,12 @@ export function automationJob(deps: AutomationDeps): JobHandler {
     const now = deps.now();
     for (const flow of flows) {
       if (!live(flow) || !scheduleDue(flow.definition.trigger, flow.lastRunAt, now)) continue;
+      // Paged by the backfill job, a pass per page; the mark moves only once the last page is done,
+      // so a run cut short leaves the rest for the next one. Until then this joins the same run.
       await pass.step(`schedule:${flow.id}`, async () => {
-        const at = new Date(now).toISOString();
-        let after: string | undefined, offered = 0;
-        for (let page = 0; page < 20; page++) {
-          const { files, next } = await owner.invoke<{ files: FileFactsRow[]; next: string | null }>('drive/flow-candidates', { since: flow.lastRunAt, limit: PAGE, ...(after ? { after } : {}) });
-          for (const file of files) if (await offer(deps, node, owner, flow, file)) offered++;
-          if (!next) break;
-          after = next;
-        }
-        await owner.invoke('drive/flow-ran', { flowId: flow.id, at });
-        return offered;
+        const payload: BackfillPayload = { ...node, flowId: flow.id, since: flow.lastRunAt, markAt: new Date(now).toISOString() };
+        await deps.start(node, FLOW_BACKFILL_JOB, flow.id, payload as unknown as Record<string, unknown>);
+        return true;
       });
     }
     return items.length === CLAIM_LIMIT ? { cursor: { more: true } } : { done: true };
@@ -239,7 +234,8 @@ export function flowRunJob(deps: AutomationDeps): JobHandler {
     }
 
     if (flow.definition.mode === 'ask' && !p.approved) {
-      const proposed = await pass.step('propose', () => record('proposed', {}, ['none']));
+      // From `failed` too: a retry of a delivery whose question could not be asked proposes once it is answered.
+      const proposed = await pass.step('propose', () => record('proposed', {}, ['none', 'failed']));
       return finish(pass, proposed.changed ? 'proposed' : 'taken');
     }
 
@@ -272,7 +268,8 @@ export function flowRunJob(deps: AutomationDeps): JobHandler {
       targets.push(result);
     }
     if (failure !== null) {
-      await pass.step('record-failed', () => record('failed', { error: failure, targets }));
+      // The conditions held (questions included) before any action ran: a retry may act without asking again.
+      await pass.step('record-failed', () => record('failed', { error: failure, targets, matched: true }));
       deps.log?.('drive.flow.failed', { flowId: p.flowId, fileId: p.fileId, error: failure });
       return finish(pass, 'failed');
     }
@@ -319,17 +316,25 @@ async function copy(
   if (!writer) throw substratError('forbidden', `whoever saved the flow is not a member of '${action.space}'`);
   const there = await deps.scopeAs(target, writer);
 
-  let fileId: string | null = null, name = facts.name;
+  const origin = { flowId: flow.id, sourceScope: node.scopeId, sourceFileId: facts.fileId, sourceVersionId: facts.versionId };
+  let fileId: string | null = null, name = facts.name, earlier = false;
   for (let n = 1; n <= 20 && !fileId; n++) {
     name = candidateName(facts.name, n);
     const file = await there.invoke<{ id: string; current_version_id: string | null }>('drive/ensure-file', { folderId: action.folderId, name });
-    const details = await there.invoke<{ origin?: { flowId: string; sourceFileId: string } | null }>('drive/file-details', { fileId: file.id });
+    const details = await there.invoke<{ origin?: { flowId: string; sourceFileId: string; sourceVersionId?: string | null } | null }>('drive/file-details', { fileId: file.id });
     const ours = details.origin?.flowId === flow.id && details.origin.sourceFileId === facts.fileId;
-    if (ours && file.current_version_id) return { space: action.space, fileId: file.id, name, already: true };
-    if (ours || (!file.current_version_id && !details.origin)) fileId = file.id;
+    if (ours && file.current_version_id && details.origin!.sourceVersionId === facts.versionId) {
+      // The bytes made it on an earlier try; what may not have is the send on to a3doc.
+      const sent = await forward(there, file.id, action.alsoIn);
+      return { space: action.space, fileId: file.id, name, already: true, ...(sent === null ? {} : { sent }) };
+    }
+    if (ours) { fileId = file.id; earlier = Boolean(file.current_version_id); }
+    else if (!file.current_version_id && !details.origin) fileId = file.id;
   }
   if (!fileId) throw substratError('conflict', `no free name for '${facts.name}' in that folder`);
-  await there.invoke('drive/record-file-origin', { fileId, flowId: flow.id, sourceScope: node.scopeId, sourceFileId: facts.fileId, sourceVersionId: facts.versionId });
+  // A new file is marked as a flow's copy before its bytes, so its arrival never starts a flow.
+  // A copy that already has bytes is marked already; its mark moves to this version after them.
+  if (!earlier) await there.invoke('drive/record-file-origin', { fileId, ...origin });
 
   const opened = await (await deps.bytesAs(node, author)).open(facts.blobRef);
   if (!opened) throw substratError('not_found', 'the file\'s bytes are gone');
@@ -337,16 +342,28 @@ async function copy(
     entity: { entityType: 'file', entityId: fileId }, filename: name, contentType: opened.contentType || facts.mime || 'application/octet-stream', body: opened.body,
   });
   await there.invoke('drive/record-version', { fileId, location: { source: 'blob', blobRef: attachment.id } });
-  // A space connected to a3doc files what arrives there, as an upload does.
-  const { source } = await there.invoke<{ source: { provider: string; canUpload: boolean } | null }>('drive/get-source');
-  let sent = false;
-  if (source?.provider === 'canopy.a3doc' && source.canUpload) {
-    await there.invoke('drive/send-source-file', { fileId, ...(action.alsoIn.length ? { alsoIn: action.alsoIn } : {}) });
-    sent = true;
-  }
+  if (earlier) await there.invoke('drive/record-file-origin', { fileId, ...origin });
+  const sent = await forward(there, fileId, action.alsoIn, true);
   // The target's own automation sees the copy now rather than at the next sweep.
   await deps.start(target, AUTOMATION_JOB, DISPATCH_INSTANCE, target as unknown as Record<string, unknown>).catch(() => {});
-  return { space: action.space, fileId, name, sent };
+  return { space: action.space, fileId, name, sent: sent ?? false };
+}
+
+/**
+ * A space connected to a3doc files what arrives there, as an upload does. Null when the space
+ * has no a3doc to send to. Sending is idempotent here: a request already pending for these bytes
+ * is not sent twice, and a3doc refuses a file it already holds, so on a resumed copy (`fresh`
+ * false) that refusal means an earlier try got it there.
+ */
+async function forward(there: Scope, fileId: string, alsoIn: string[], fresh = false): Promise<boolean | null> {
+  const { source } = await there.invoke<{ source: { provider: string; canUpload: boolean } | null }>('drive/get-source');
+  if (source?.provider !== 'canopy.a3doc' || !source.canUpload) return null;
+  try {
+    await there.invoke('drive/send-source-file', { fileId, ...(alsoIn.length ? { alsoIn } : {}) });
+  } catch (error) {
+    if (fresh || errorCodeOf(error) !== 'conflict') throw error;
+  }
+  return true;
 }
 
 const QUESTION_SYSTEM =
@@ -366,6 +383,8 @@ async function ask(deps: AutomationDeps, node: Node, scope: Scope, facts: FileFa
   const excerpt = await scope.invoke<{ versionId: string; text: string } | null>('drive/file-text-excerpt', { fileId: facts.fileId, maxChars: QUESTION_TEXT_CHARS });
   // No text yet: extraction may still be running, so this retries; a document with none answers no.
   if (!excerpt) throw new Error('the document text is not indexed yet');
+  // The question is about this version: text from another one could let the answer approve bytes it never read.
+  if (excerpt.versionId !== facts.versionId) throw new Error('the text of this version is not indexed yet');
   if (!excerpt.text.trim()) return false;
   const name = facts.name.replace(/[\p{Cc}\p{Cf}<>]/gu, ' ').slice(0, 200);
   const reply = (await model.host.run({
@@ -378,9 +397,15 @@ async function ask(deps: AutomationDeps, node: Node, scope: Scope, facts: FileFa
   return answer;
 }
 
-export interface BackfillPayload extends Node { flowId: string }
+export interface BackfillPayload extends Node {
+  flowId: string;
+  /** A scheduled run: only files whose current version arrived after this. */
+  since?: string | null;
+  /** A scheduled run: when it started, recorded as the flow's last run once every page is done. */
+  markAt?: string;
+}
 
-/** Offer every file already in the space to one flow, a page per pass. */
+/** Offer the files already in the space (or, for a scheduled run, what arrived since the last) to one flow, a page per pass. */
 export function flowBackfillJob(deps: AutomationDeps): JobHandler {
   return async (pass) => {
     const p = pass.payload as BackfillPayload;
@@ -391,13 +416,15 @@ export function flowBackfillJob(deps: AutomationDeps): JobHandler {
     const page = await pass.step('page', async () => {
       const flow = (await owner.invoke<{ flows: StoredFlow[] }>('drive/automation-flows')).flows.find((f) => f.id === p.flowId);
       if (!flow || !live(flow)) return { offered: 0, next: null };
-      const { files, next } = await owner.invoke<{ files: FileFactsRow[]; next: string | null }>('drive/flow-candidates', { since: null, limit: PAGE, ...(after ? { after } : {}) });
+      const { files, next } = await owner.invoke<{ files: FileFactsRow[]; next: string | null }>('drive/flow-candidates', { since: p.since ?? null, limit: PAGE, ...(after ? { after } : {}) });
       let offered = 0;
       for (const file of files) if (await offer(deps, node, owner, flow, file)) offered++;
       return { offered, next };
     }, WORK_RETRY);
     pass.count('offered', page.offered);
-    return page.next ? { cursor: { after: page.next } } : { done: true };
+    if (page.next) return { cursor: { after: page.next } };
+    if (p.markAt) await pass.step('mark', () => owner.invoke('drive/flow-ran', { flowId: p.flowId, at: p.markAt }));
+    return { done: true };
   };
 }
 

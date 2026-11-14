@@ -11,7 +11,8 @@ function app(over: Partial<FlowAccess> = {}, here: Partial<Record<string, unknow
     throw new Error(`unexpected ${op}`);
   });
   const target: FlowScope = { invoke: vi.fn(async (_op: string, input?: Record<string, unknown>) => {
-    if (input?.folderId === 'bancos') return { id: 'bancos' };
+    if (input?.folderId === 'bancos') return { id: 'bancos', canWrite: true };
+    if (input?.folderId === 'read-only') return { id: 'read-only', canWrite: false };
     throw new Error('not_found');
   }) as FlowScope['invoke'] };
   const start = vi.fn(async () => {});
@@ -36,6 +37,7 @@ describe('saving a flow', () => {
     const a = app();
     expect((await a.call('PUT', '/api/flows', { name: 'x', enabled: true, definition: { ...definition, actions: [{ type: 'copy', space: 'nope', folderId: 'bancos' }] } })).status).toBe(400);
     expect((await a.call('PUT', '/api/flows', { name: 'x', enabled: true, definition: { ...definition, actions: [{ type: 'copy', space: 'a3docs', folderId: 'other' }] } })).status).toBe(400);
+    expect((await a.call('PUT', '/api/flows', { name: 'x', enabled: true, definition: { ...definition, actions: [{ type: 'copy', space: 'a3docs', folderId: 'read-only' }] } })).status).toBe(400);
     expect((await a.call('PUT', '/api/flows', { name: 'x', enabled: true, definition: { trigger: { on: 'arrived' }, actions: [] } })).status).toBe(400);
     expect(a.invoke).not.toHaveBeenCalledWith('drive/save-flow', expect.anything());
   });
@@ -53,9 +55,28 @@ describe('deciding a delivery', () => {
     expect(b.start).not.toHaveBeenCalled();
   });
   it('retries only a failed delivery, and says when someone already decided', async () => {
-    const a = app({}, { 'drive/record-flow-delivery': { changed: false, delivery: null, previous: 'done' } });
+    const a = app({}, { 'drive/flow-deliveries': { deliveries: [{ ...key, state: 'done', detail: {} }] } });
     expect((await a.call('POST', '/api/flow-deliveries/decide', { ...key, decision: 'retry' })).status).toBe(409);
-    expect(a.invoke).toHaveBeenCalledWith('drive/record-flow-delivery', expect.objectContaining({ expect: ['failed'] }));
+    expect(a.start).not.toHaveBeenCalled();
+  });
+  it('retries without asking again only what had matched before it failed', async () => {
+    const matched = app({}, {
+      'drive/flow-deliveries': { deliveries: [{ ...key, state: 'failed', detail: { matched: true } }] },
+      'drive/record-flow-delivery': { changed: true, delivery: { state: 'approved' }, previous: 'failed' },
+    });
+    expect((await matched.call('POST', '/api/flow-deliveries/decide', { ...key, decision: 'retry' })).status).toBe(200);
+    expect(matched.invoke).toHaveBeenCalledWith('drive/record-flow-delivery', expect.objectContaining({ state: 'approved', expect: ['failed'] }));
+    expect(matched.start).toHaveBeenCalledWith('flow-run', 'f1:file:v1', expect.objectContaining({ approved: true }));
+    // Its question was never answered: it stays failed, and the run asks again.
+    const unasked = app({}, { 'drive/flow-deliveries': { deliveries: [{ ...key, state: 'failed', detail: { error: "Couldn't ask the model" } }] } });
+    expect((await unasked.call('POST', '/api/flow-deliveries/decide', { ...key, decision: 'retry' })).status).toBe(200);
+    expect(unasked.invoke).not.toHaveBeenCalledWith('drive/record-flow-delivery', expect.anything());
+    expect(unasked.start).toHaveBeenCalledWith('flow-run', 'f1:file:v1', expect.objectContaining({ approved: false }));
+  });
+  it('puts an approval back when its run cannot be started', async () => {
+    const a = app({ start: vi.fn(async () => { throw new Error('no runner'); }) }, { 'drive/record-flow-delivery': { changed: true, delivery: { state: 'approved' }, previous: 'proposed' } });
+    expect((await a.call('POST', '/api/flow-deliveries/decide', { ...key, decision: 'approve' })).status).toBe(500);
+    expect(a.invoke).toHaveBeenLastCalledWith('drive/record-flow-delivery', expect.objectContaining({ state: 'proposed', expect: ['approved'] }));
   });
 });
 

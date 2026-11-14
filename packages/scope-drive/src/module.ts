@@ -297,10 +297,12 @@ const operations = {
     }
     if (!pending) {
       ctx.sql.exec('INSERT INTO drive_source_pending (file_id, attachment_id) VALUES (?, ?)', [file.id, attachmentId]);
-      // A retry after a failure sends to the same categories.
-      if (alsoIn.length) {
+      // A retry after a failure sends to the same categories: kept as folder ids, and checked again then.
+      if (input.alsoIn?.length) {
         ctx.sql.exec('INSERT INTO drive_source_writes (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-          [`a3doc:also-in:${file.id}`, JSON.stringify(alsoIn)]);
+          [`a3doc:also-in:${file.id}`, JSON.stringify(input.alsoIn)]);
+      } else {
+        ctx.sql.exec('DELETE FROM drive_source_writes WHERE key = ?', [`a3doc:also-in:${file.id}`]);
       }
       ctx.emit({ type: 'a3doc.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload });
     }
@@ -318,7 +320,14 @@ const operations = {
     // The failed request's ledger: the connector looks there first, so a document it did file is adopted, not filed again.
     const failed = ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [`a3doc:failed:${file.id}`])[0];
     const retryOf = (parsedOrNull(failed?.value ?? '') as { eventId?: unknown } | null)?.eventId;
-    const alsoIn = (parsedOrNull(ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [`a3doc:also-in:${file.id}`])[0]?.value ?? '') as string[] | null) ?? [];
+    // The other categories as they are now: a folder gone, or one the caller can no longer write, is left out.
+    const alsoInIds = (parsedOrNull(ctx.sql.query<{ value: string }>('SELECT value FROM drive_source_writes WHERE key = ?', [`a3doc:also-in:${file.id}`])[0]?.value ?? '') as string[] | null) ?? [];
+    const alsoIn: string[] = [];
+    for (const id of alsoInIds) {
+      const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [id])[0];
+      if (!folder || !(await ctx.check(DRIVE_PERM.write, folderRef(id))).allowed) continue;
+      if (folder.id !== file.folder_id && !alsoIn.includes(folder.path)) alsoIn.push(folder.path);
+    }
     ctx.sql.exec('UPDATE drive_source_pending SET last_error = NULL WHERE file_id = ?', [file.id]);
     const event = { ...payload, alsoIn, ...(typeof retryOf === 'string' ? { retryOf } : {}) };
     ctx.emit({ type: 'a3doc.files-requested', schemaVersion: 1, entity: fileRef(file.id), piiClass: 'none', payload: event });
@@ -1165,7 +1174,10 @@ const operations = {
     ctx.link({ entityType: 'file_details', entityId: input.fileId }, fileRef(input.fileId));
     ctx.emit({ type: 'drive.file-details-updated', schemaVersion: 1, entity: fileRef(input.fileId), piiClass: 'none',
       payload: { fileId: input.fileId, revision } });
-    return { fileId: input.fileId, description: input.description, labels, revision, canWrite: true };
+    return {
+      fileId: input.fileId, description: input.description, labels, revision, canWrite: true,
+      category: readCategory(ctx, input.fileId), send: readSend(ctx, input.fileId), origin: readOrigin(ctx, input.fileId),
+    };
   },
 
   'drive/keep-version': async (ctx, input) => {

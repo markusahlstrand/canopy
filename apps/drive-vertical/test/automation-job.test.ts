@@ -219,6 +219,26 @@ describe('flows across spaces', () => {
     expect(JSON.parse(String(sent.rows[0]![0]))).toMatchObject({ directory: 'Bancos', alsoIn: ['Fiscal'], files: [{ name: 'Extracto 11.txt' }] });
   });
 
+  it('copies each new version into the same file when a flow acts on every version', async () => {
+    const archive = await folder(elsewhere, 'Archive');
+    const flow = await saveFlow(source, 'Every version', {
+      trigger: { on: 'arrived' }, mode: 'auto', versions: 'every',
+      conditions: [{ field: 'name', op: 'contains', value: 'Ledger' }],
+      actions: [{ type: 'copy', space: 'elsewhere', folderId: archive, alsoIn: [] }],
+    });
+    const first = await upload(source, statements, 'Ledger.txt', 'one');
+    await settle(source, elsewhere);
+    const second = await upload(source, statements, 'Ledger.txt', 'two');
+    await settle(source, elsewhere);
+    const copies = await filesIn(elsewhere, archive);
+    expect(copies.map((f) => f.name)).toEqual(['Ledger.txt']);
+    const details = await (await scopeOf(elsewhere)).invoke<{ origin: { sourceVersionId: string } }>('drive/file-details', { fileId: copies[0]!.id });
+    expect(details.origin.sourceVersionId).toBe(second.versionId);
+    const done = (await deliveries(source, flow.id)).filter((d) => d.state === 'done').map((d) => d.versionId).sort();
+    expect(done).toEqual([first.versionId, second.versionId].sort());
+    await (await scopeOf(source)).invoke('drive/delete-flow', { id: flow.id });
+  });
+
   it('runs a scheduled flow over what arrived since it last ran', async () => {
     const flow = await saveFlow(elsewhere, 'Daily', {
       trigger: { on: 'schedule', every: 'day' }, mode: 'auto', actions: [{ type: 'label', value: 'Seen' }],
