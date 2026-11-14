@@ -374,7 +374,7 @@ async function dispatchFiles(
       // Its attempts and documents carry over: an `attempted` row is reconciled below, a filed one skipped.
       const earlier = (await ctx.admin.getConnectorState(conn.id, writeKey(payload.retryOf))) as WriteLedger | undefined;
       if (earlier) {
-        prior = structuredClone(earlier);
+        prior = JSON.parse(JSON.stringify(earlier)) as WriteLedger;
         await ctx.admin.putConnectorState(conn.id, key, prior);
       }
     }
