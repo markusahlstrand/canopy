@@ -1,13 +1,14 @@
 /**
- * Flows: rules a space runs on the files that arrive in it — When → If → Then.
+ * The parts flows are made of: categories, conditions and actions, and what a flow did to a file.
+ * Flows themselves are graphs (`flow-graph.ts`) kept by the install, not by a space.
  *
- * A flow lives in its SOURCE space, beside the files it watches, so matching is a local
- * query. What it does elsewhere (a copy into another space) names that space by id and is
- * checked when the flow runs, as the person who saved it: a flow can never do anything its
- * author could not have done by hand.
+ * A flow acts as the person who saved it last: it can never do anything its author could not
+ * have done by hand.
  *
- * Shared by the drive module (which stores and validates), the worker (which matches and
- * runs) and the app (which edits). Pure data and pure functions only.
+ * `legacyFlowDefinition` is the shape flows had while each lived in its space (`drive_flows`);
+ * the runner reads such rows once, turns them into graphs and moves them out.
+ *
+ * Shared by the drive module, the worker and the app. Pure data and pure functions only.
  */
 import { z } from '@substrat-run/contracts';
 
@@ -25,7 +26,7 @@ export type SpaceCategory = z.infer<typeof spaceCategory>;
 export const spaceCategories = z.array(spaceCategory).max(30)
   .refine((list) => new Set(list.map((c) => c.id)).size === list.length, 'Each category needs its own id');
 
-/** When a flow looks at a file. */
+/** When a space-local flow looked at a file. */
 export const flowTrigger = z.discriminatedUnion('on', [
   /** A version arrived: uploaded, saved, synced from a connector, or mailed in. */
   z.object({ on: z.literal('arrived') }),
@@ -55,25 +56,26 @@ export const flowCondition = z.discriminatedUnion('field', [
 ]);
 export type FlowCondition = z.infer<typeof flowCondition>;
 
-/** What a flow does to a file that matches. */
+/**
+ * Copy the file into a folder of a space. In a space connected to a source that takes uploads
+ * (a3doc, S3), the copy goes on to the source like any upload; `alsoIn` files an a3doc document
+ * in more categories (folder ids of that space).
+ */
+export const copyFields = {
+  space: z.string().min(1).max(64),
+  folderId: z.string().min(1).max(64),
+  alsoIn: z.array(z.string().min(1)).max(10).default([]),
+};
+
+/** What a space-local flow did to a file that matched. */
 export const flowAction = z.discriminatedUnion('type', [
-  /**
-   * Copy the file into a folder of another space (or this one). In a space connected to a
-   * source that takes uploads (a3doc, S3), the copy goes on to the source like any upload;
-   * `alsoIn` files an a3doc document in more categories (folder ids of that space).
-   */
-  z.object({
-    type: z.literal('copy'),
-    space: z.string().min(1).max(64),
-    folderId: z.string().min(1).max(64),
-    alsoIn: z.array(z.string().min(1)).max(10).default([]),
-  }),
+  z.object({ type: z.literal('copy'), ...copyFields }),
   /** Add a label to the file here. */
   z.object({ type: z.literal('label'), value: z.string().trim().min(1).max(100) }),
 ]);
 export type FlowAction = z.infer<typeof flowAction>;
 
-export const flowDefinition = z.object({
+export const legacyFlowDefinition = z.object({
   trigger: flowTrigger,
   conditions: z.array(flowCondition).max(10).default([]),
   actions: z.array(flowAction).min(1).max(5),
@@ -82,22 +84,14 @@ export const flowDefinition = z.object({
   /** `first`: act on a file once. `every`: again for each new version. */
   versions: z.enum(['first', 'every']).default('first'),
 });
-export type FlowDefinition = z.infer<typeof flowDefinition>;
+export type LegacyFlowDefinition = z.infer<typeof legacyFlowDefinition>;
 
-/** A flow as the app reads it. */
-export const storedFlow = z.object({
-  id: z.string(),
-  name: z.string(),
-  enabled: z.boolean(),
-  definition: flowDefinition,
-  author: z.string(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  lastRunAt: z.string().nullable(),
-  failures: z.number().int(),
-  pausedReason: z.string().nullable(),
+/** A space-local flow row, as the runner reads it to move it out. Its definition is checked there. */
+export const legacyFlow = z.object({
+  id: z.string(), name: z.string(), enabled: z.boolean(), definition: z.unknown(), author: z.string(), authorSub: z.string(),
+  createdAt: z.string(), updatedAt: z.string(), lastRunAt: z.string().nullable(), failures: z.number().int(), pausedReason: z.string().nullable(),
 });
-export type StoredFlow = z.infer<typeof storedFlow>;
+export type LegacyFlow = z.infer<typeof legacyFlow>;
 
 export const deliveryState = z.enum(['proposed', 'approved', 'running', 'done', 'failed', 'dismissed', 'skipped']);
 export type DeliveryState = z.infer<typeof deliveryState>;
@@ -173,32 +167,4 @@ export function conditionHolds(condition: FlowCondition, facts: FileFacts): bool
     case 'ask':
       return 'ask';
   }
-}
-
-/**
- * Whether a flow matches, without model questions: `false` as soon as one plain condition
- * fails, else `true`, or `'ask'` when the rest hinges on questions only the runner asks.
- */
-export function flowMatches(definition: Pick<FlowDefinition, 'conditions'>, facts: FileFacts): boolean | 'ask' {
-  let ask = false;
-  for (const condition of definition.conditions) {
-    const held = conditionHolds(condition, facts);
-    if (held === false) return false;
-    if (held === 'ask') ask = true;
-  }
-  return ask ? 'ask' : true;
-}
-
-/** Whether a trigger reacts to a queued arrival or classification. */
-export function triggerReacts(trigger: FlowTrigger, event: 'arrived' | 'classified'): boolean {
-  return trigger.on === event;
-}
-
-const PERIOD_MS = { hour: 3_600_000, day: 86_400_000, week: 7 * 86_400_000, month: 30 * 86_400_000 } as const;
-
-/** Whether a scheduled flow is due at `now`, given when it last ran (never ⇒ due). */
-export function scheduleDue(trigger: FlowTrigger, lastRunAt: string | null, now: number): boolean {
-  if (trigger.on !== 'schedule') return false;
-  if (!lastRunAt) return true;
-  return now - Date.parse(lastRunAt) >= PERIOD_MS[trigger.every];
 }

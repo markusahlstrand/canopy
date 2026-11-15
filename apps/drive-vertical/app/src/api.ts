@@ -622,22 +622,30 @@ export const setFileCategory = (fileId: string, category: string | null) =>
 /** Send a file whose send to a3doc failed, again. */
 export const retrySourceSend = (fileId: string) => call(`/files/${encodeURIComponent(fileId)}/retry-send`, { method: 'POST', body: '{}' });
 
-export type { FlowAction, FlowCondition, FlowDefinition, FlowDelivery, FlowTrigger, StoredFlow, DeliveryState } from '@canopy/scope-drive/spec/model';
-export const listFlows = () => call<{ flows: import('@canopy/scope-drive/spec/model').StoredFlow[] }>('/flows').then((r) => r.flows);
-export const saveFlow = (flow: { id?: string; name: string; enabled: boolean; definition: import('@canopy/scope-drive/spec/model').FlowDefinition }) =>
-  call<import('@canopy/scope-drive/spec/model').StoredFlow>('/flows', { method: 'PUT', body: JSON.stringify(flow) });
+export type {
+  FlowCondition, FlowDelivery, FlowEdge, FlowGraph, FlowNode, FlowNodeType, StoredFlow, DeliveryState, GraphProblem,
+} from '@canopy/scope-drive/spec/model';
+export type { DeliveryDecision, DeliveryDetail, DeliveryView, FlowList, FlowSave, FlowSpace, FlowView } from '../../src/flow-contract';
+
+// Flows belong to the install, not to the space this tab is in: these routes ignore the selected space.
+
+/** The flows the caller sees (they own every space each touches), and the spaces they may use in one. */
+export const listFlows = () => call<import('../../src/flow-contract').FlowList>('/flows');
+export const saveFlow = (flow: import('../../src/flow-contract').FlowSave) =>
+  call<import('../../src/flow-contract').FlowView>('/flows', { method: 'PUT', body: JSON.stringify(flow) });
 export const deleteFlow = (id: string) => call(`/flows/${encodeURIComponent(id)}`, { method: 'DELETE' });
-/** Run a flow over the files already in the space. */
+/** Run a flow over the documents already in the spaces it watches. */
 export const runFlow = (id: string) => call<{ started: boolean }>(`/flows/${encodeURIComponent(id)}/run`, { method: 'POST', body: '{}' });
-/** Which documents already here a flow (saved or not) would act on. */
-export const previewFlow = (flow: { id?: string; definition: Pick<import('@canopy/scope-drive/spec/model').FlowDefinition, 'conditions' | 'versions'> }) =>
-  call<FlowPreview>('/flows/preview', { method: 'POST', body: JSON.stringify({ ...(flow.id ? { id: flow.id } : {}), definition: { conditions: flow.definition.conditions, versions: flow.definition.versions } }) });
+/** Which documents already in the watched spaces a flow (saved or not) would reach, and how many reach each step. */
+export const previewFlow = (flow: { id?: string; graph: import('@canopy/scope-drive/spec/model').FlowGraph }) =>
+  call<FlowPreview>('/flows/preview', { method: 'POST', body: JSON.stringify({ ...(flow.id ? { id: flow.id } : {}), graph: flow.graph }) });
+/** What flows did, newest first, across the spaces of the flows the caller sees. */
 export const flowDeliveries = (query: { flowId?: string; state?: string; limit?: number } = {}) => {
   const params = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
-  return call<{ deliveries: import('@canopy/scope-drive/spec/model').FlowDelivery[] }>(`/flow-deliveries${params.size ? `?${params}` : ''}`).then((r) => r.deliveries);
+  return call<{ deliveries: import('../../src/flow-contract').DeliveryView[] }>(`/flow-deliveries${params.size ? `?${params}` : ''}`).then((r) => r.deliveries);
 };
-export const decideDelivery = (key: { flowId: string; fileId: string; versionId: string }, decision: 'approve' | 'dismiss' | 'retry') =>
-  call<import('@canopy/scope-drive/spec/model').FlowDelivery>('/flow-deliveries/decide', { method: 'POST', body: JSON.stringify({ flowId: key.flowId, fileId: key.fileId, versionId: key.versionId, decision }) });
+export const decideDelivery = (key: { space: string; flowId: string; fileId: string; versionId: string }, decision: 'approve' | 'dismiss' | 'retry') =>
+  call<import('@canopy/scope-drive/spec/model').FlowDelivery>('/flow-deliveries/decide', { method: 'POST', body: JSON.stringify({ ...key, decision }) });
 export const fileDetails = (fileId: string) => call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`);
 export const updateFileDetails = (fileId: string, description: string, labels: string[], expectedRevision: number) =>
   call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`, { method: 'PATCH', body: JSON.stringify({ description, labels, expectedRevision }) });
@@ -853,7 +861,8 @@ export interface SpaceRequest { id: string; slug: string; name: string; status: 
 export const requestSpace = (name: string, slug: string, settings?: import('../../src/space-settings').SpaceSettings) => call<{ id: string; slug: string; name: string }>('/sites', { method: 'POST', body: JSON.stringify({ name, slug, settings }) });
 export const spaceRequests = () => call<{ requests: SpaceRequest[] }>('/site-requests');
 
-export const getSpaceSettings = () => call<import('../../src/space-settings').SpaceSettings>('/space-settings');
+/** The selected space's settings, or (for a flow's categories) another space's the caller can read. */
+export const getSpaceSettings = (selectedSite = site) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', undefined, selectedSite);
 export const updateSpaceSettings = (settings: import('../../src/space-settings').SpaceSettings) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', {method:'PATCH',body:JSON.stringify(settings)});
 export type DriveSource = import('../../src/source-routes').DriveSource;
 /** The a3doc folder a space mirrors, or null; any member may read it, to know what the space allows. */
