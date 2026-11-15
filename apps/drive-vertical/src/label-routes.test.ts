@@ -11,9 +11,11 @@ function app(o: { unavailable?: string | null; canWrite?: boolean; entries?: Ent
     if (op === 'drive/get-file') return { file: { id: input!.fileId, name: o.fileName ?? 'a.pdf' }, canWrite: o.canWrite ?? true };
     if (op === 'drive/get-folder') return { id: input!.folderId, canWrite: o.canWrite ?? true };
     if (op === 'drive/list-subtree-files') {
-      const start = input!.after ? Number(input!.after) : 0;
-      const end = start + (input!.limit as number);
-      return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null };
+      // Ordered by id, `after` exclusive — as the drive's listing is.
+      const start = input!.after ? entries.findIndex((e) => e.id === input!.after) + 1 : 0;
+      const page = entries.slice(start, start + (input!.limit as number));
+      const end = start + page.length;
+      return { entries: page, next: end < entries.length ? page.at(-1)!.id : null };
     }
     throw new Error(`unexpected ${op}`);
   });
@@ -26,7 +28,7 @@ function app(o: { unavailable?: string | null; canWrite?: boolean; entries?: Ent
   return { call, queue, invoke };
 }
 
-const entry = (i: number, labels: string[] = []): Entry => ({ id: `f${i}`, name: `doc-${i}.pdf`, labels });
+const entry = (i: number, labels: string[] = []): Entry => ({ id: `f${String(i).padStart(4, '0')}`, name: `doc-${i}.pdf`, labels });
 
 describe('labelling on request', () => {
   it('queues one file the caller can write', async () => {
@@ -60,7 +62,7 @@ describe('labelling on request', () => {
     const a = app({ entries: [entry(1), entry(2, ['Invoice']), { id: 'f3', name: 'x.locked', labels: [] }, entry(4)] });
     const res = await a.call({ folderId: 'd' });
     expect(await res.json()).toEqual({ queued: 2, skipped: 2, more: false });
-    expect(a.queue.mock.calls[0]![0].map((f) => f.id)).toEqual(['f1', 'f4']);
+    expect(a.queue.mock.calls[0]![0].map((f) => f.id)).toEqual(['f0001', 'f0004']);
   });
 
   it('takes labelled files too when asked to relabel', async () => {
@@ -70,7 +72,16 @@ describe('labelling on request', () => {
 
   it('caps one request and says more are waiting', async () => {
     const a = app({ entries: Array.from({ length: LABEL_FOLDER_MAX + 700 }, (_, i) => entry(i)) });
-    expect(await (await a.call({ folderId: 'd' })).json()).toEqual({ queued: LABEL_FOLDER_MAX, skipped: 0, more: true });
+    expect(await (await a.call({ folderId: 'd' })).json()).toEqual({ queued: LABEL_FOLDER_MAX, skipped: 0, more: true, next: entry(LABEL_FOLDER_MAX - 1).id });
+  });
+
+  it('picks up after the last file taken, so a re-label of every file gets through all of them', async () => {
+    const all = Array.from({ length: LABEL_FOLDER_MAX + 1 }, (_, i) => entry(i, ['Invoice']));
+    const a = app({ entries: all });
+    const first = await (await a.call({ folderId: 'd', relabel: true })).json() as { next: string };
+    const second = await (await a.call({ folderId: 'd', relabel: true, after: first.next })).json();
+    expect(second).toEqual({ queued: 1, skipped: 0, more: false });
+    expect(a.queue.mock.calls[1]![0].map((f) => f.id)).toEqual([all.at(-1)!.id]);
   });
 
   it('refuses a folder the caller cannot write into, and queues nothing for an empty one', async () => {

@@ -281,7 +281,7 @@ describe('what a label request says it did', () => {
     const { labelNoticeFor } = await import('./drive');
     expect(labelNoticeFor({ name: 'a.pdf', isFolder: false }, { queued: 1, skipped: 0, more: false })).toMatch(/^Labelling “a\.pdf”/);
     expect(labelNoticeFor({ name: 'Invoices', isFolder: true }, { queued: 3, skipped: 1, more: true }))
-      .toBe('Labelling 3 files in “Invoices”. 1 file already had labels or can’t be read. More are waiting: run it again once these are done.');
+      .toBe('Labelling 3 files in “Invoices”. 1 file already had labels or can’t be read. More are waiting: continue to queue the next batch.');
     expect(labelNoticeFor({ name: 'Invoices', isFolder: true }, { queued: 0, skipped: 2, more: false })).toContain('Re-label all with AI');
     expect(labelNoticeFor({ name: 'Empty', isFolder: true }, { queued: 0, skipped: 0, more: false })).toBe('“Empty” has no files to label.');
   });

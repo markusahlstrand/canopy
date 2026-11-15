@@ -166,7 +166,16 @@ export interface AutoLabelPayload {
 export const manualInstance = (fileId: string) => `${fileId}#manual`;
 
 /** The label and description a run left on a file as its own — null where it wrote none. */
-export interface Wrote { label: string | null; description: string | null }
+export interface Wrote {
+  label: string | null;
+  description: string | null;
+  /**
+   * When the write happened. A run that writes nothing carries the last write forward in its
+   * cursor and may end after a newer write by another run, so the latest write is the one
+   * written last, not the one carried by the run that ended last. Absent on older runs.
+   */
+  at?: string;
+}
 
 export type AutoLabelOutcome =
   | { status: 'labelled'; label: string | null; described: boolean }
@@ -260,9 +269,14 @@ export function settledBy(runs: readonly PastRun[], versionId: string): { wrote?
   return wrote ? { wrote } : {};
 }
 
-/** What the latest labelling run left on the file as Document AI's own — for the next run to replace. */
+/**
+ * What Document AI last wrote on the file as its own — for the next run to replace. Ordered by
+ * when the write happened (`Wrote.at`), falling back to when the run ended for runs from before
+ * writes were stamped: a run that only carried an older write forward must not make it newest.
+ */
 export function latestWrote(runs: readonly PastRun[]): Wrote | undefined {
-  const run = [...runs].filter((r) => cursorOf(r).wrote).sort((x, y) => ended(y) - ended(x))[0];
+  const when = (r: PastRun) => { const at = cursorOf(r).wrote?.at; return at ? Date.parse(at) : ended(r); };
+  const run = [...runs].filter((r) => cursorOf(r).wrote).sort((x, y) => when(y) - when(x))[0];
   return run ? cursorOf(run).wrote : undefined;
 }
 
@@ -454,10 +468,13 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
           // died before its memo did. What is on the file now that matches this answer is
           // Document AI's, either way.
           const has = (label: string | null) => !!label && now.labels.some((l) => l.toLowerCase() === label.toLowerCase());
+          const ownNow = has(analysis.label) || (!!now.description && now.description === analysis.description);
           const wrote: Wrote = {
             label: has(analysis.label) ? analysis.label : has(previous?.label ?? null) ? previous!.label : null,
             description: now.description && (now.description === analysis.description || now.description === previous?.description)
               ? now.description : null,
+            // This answer's own write, if that is what is on the file; else the earlier one, as old as it was.
+            ...(ownNow ? { at: new Date(deps.now()).toISOString() } : previous?.at ? { at: previous.at } : {}),
           };
           return { status: 'skipped', reason: 'nothing-new', wrote };
         }
@@ -468,7 +485,7 @@ export function autoLabelJob(deps: AutoLabelDeps): JobHandler {
           expectedRevision: now.revision,
           expectedVersionId: analysis.versionId,
         });
-        return { status: 'labelled', label: merged.label, described: merged.described, wrote: merged.wrote };
+        return { status: 'labelled', label: merged.label, described: merged.described, wrote: { ...merged.wrote, at: new Date(deps.now()).toISOString() } };
       } catch (error) {
         const reason = terminal(error);
         if (reason) return { status: 'skipped', reason };

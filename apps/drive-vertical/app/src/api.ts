@@ -862,9 +862,9 @@ export const requestSpace = (name: string, slug: string, settings?: import('../.
 export const spaceRequests = () => call<{ requests: SpaceRequest[] }>('/site-requests');
 
 /** What a request to label a file or folder with Document AI queued (`POST /api/label`). */
-export interface LabelResult { queued: number; skipped: number; more: boolean }
+export interface LabelResult { queued: number; skipped: number; more: boolean; next?: string }
 /** Label one file now, or the files under a folder — those without labels, or all with `relabel`. */
-export const labelWithAi = (target: { fileId: string } | { folderId: string; relabel?: boolean }) =>
+export const labelWithAi = (target: { fileId: string } | { folderId: string; relabel?: boolean; after?: string }) =>
   call<LabelResult>('/label', { method: 'POST', body: JSON.stringify(target) });
 /** The selected space's settings, or (for a flow's categories) another space's the caller can read. */
 export const getSpaceSettings = (selectedSite = site) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', undefined, selectedSite);

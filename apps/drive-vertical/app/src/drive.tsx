@@ -349,11 +349,17 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   useEffect(() => {
     let current = true;
     setAiLabel(false);
-    getSpaceSettings().then(settings => { if (current) setAiLabel(settings.autoLabel === true); }).catch(() => {});
+    // Read again when the screen reconnects: a read that failed offline must not hide the items for good.
+    if (!offline) getSpaceSettings().then(settings => { if (current) setAiLabel(settings.autoLabel === true); }).catch(() => {});
     return () => { current = false; };
-  }, [liveSpace, sourceTick]);
-  /** What the last "Label with AI" queued, shown above the list until the next one. */
-  const [labelNotice, setLabelNotice] = useState<string | null>(null);
+  }, [liveSpace, sourceTick, offline]);
+  /** What the last "Label with AI" queued, shown above the list until the next one — and how to go on when a folder had more. */
+  const [labelNotice, setLabelNotice] = useState<{ text: string; more?: () => void } | null>(null);
+  const labelItem = (item: FileItem, relabel: boolean, after?: string) => void act(async () => {
+    const result = await labelWithAi(item.isFolder ? { folderId: item.id, relabel, ...(after ? { after } : {}) } : { fileId: item.id });
+    const next = result.next;
+    setLabelNotice({ text: labelNoticeFor(item, result), ...(next ? { more: () => labelItem(item, relabel, next) } : {}) });
+  });
   // An empty mirrored folder is a question, so it answers with what the last sync found.
   const [syncNote, setSyncNote] = useState<ReturnType<typeof sourceSyncNote>>(null);
   // The note only shows over an empty mirrored folder, so it is read only then, and again after
@@ -1099,10 +1105,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const onAction = (action: string, item: FileItem) => {
     if (offline && action !== 'Open') return;
     if (action === LABEL_WITH_AI || action === RELABEL_WITH_AI) {
-      void act(async () => {
-        const result = await labelWithAi(item.isFolder ? { folderId: item.id, relabel: action === RELABEL_WITH_AI } : { fileId: item.id });
-        setLabelNotice(labelNoticeFor(item, result));
-      });
+      labelItem(item, action === RELABEL_WITH_AI);
       return;
     }
     if (action === 'Open') {
@@ -1533,8 +1536,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'partial' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</p> : null}
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'error' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</p> : null}
       {labelNotice ? <p role="status" className="-mt-2 mb-3 flex items-center gap-2 text-xs text-muted-foreground">
-        <Icon name="sparkles" className="size-3.5" />{labelNotice}
-        <button type="button" className="ml-auto underline" onClick={() => setLabelNotice(null)}>Dismiss</button>
+        <Icon name="sparkles" className="size-3.5" />{labelNotice.text}
+        {labelNotice.more ? <button type="button" className="ml-auto underline" disabled={offline} onClick={labelNotice.more}>Continue</button> : null}
+        <button type="button" className={labelNotice.more ? 'underline' : 'ml-auto underline'} onClick={() => setLabelNotice(null)}>Dismiss</button>
       </p> : null}
       {pinBusy && pinProgress ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Saving {pinProgress.files} files in {pinProgress.folders} folders for offline reading…</p> : null}
       {currentPinError ? <p role="alert" className="-mt-2 mb-3 text-xs text-destructive">Offline copy incomplete: {currentPinError}</p> : null}
@@ -1770,7 +1774,7 @@ export function labelNoticeFor(item: { name: string; isFolder: boolean }, result
   }
   return `Labelling ${files(result.queued)} in “${item.name}”.`
     + (result.skipped ? ` ${files(result.skipped)} already had labels or can’t be read.` : '')
-    + (result.more ? ' More are waiting: run it again once these are done.' : '');
+    + (result.more ? ' More are waiting: continue to queue the next batch.' : '');
 }
 
 function EmptyList({ icon, title, description, actions = [] }: {

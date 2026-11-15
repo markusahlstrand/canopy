@@ -22,7 +22,7 @@ const PAGE = 500;
 
 const input = z.union([
   z.object({ fileId: z.string().min(1) }).strict(),
-  z.object({ folderId: z.string().min(1), relabel: z.boolean().optional() }).strict(),
+  z.object({ folderId: z.string().min(1), relabel: z.boolean().optional(), after: z.string().min(1).optional() }).strict(),
 ]);
 
 export interface LabelResult {
@@ -32,6 +32,8 @@ export interface LabelResult {
   skipped: number;
   /** More files are waiting under the folder than one request queues. */
   more: boolean;
+  /** Where the next request picks up (`after`) — present exactly when `more` is. */
+  next?: string;
 }
 
 interface SubtreeEntry { id: string; name: string; labels: string[] }
@@ -44,7 +46,7 @@ interface SubtreeEntry { id: string; name: string; labels: string[] }
  * cooldown and answers again about a version already answered, which is what asking means.
  *
  * A folder queues the files under it that have no labels yet — or all of them with `relabel` —
- * up to `LABEL_FOLDER_MAX` per request. The run itself checks each file can still be written
+ * up to `LABEL_FOLDER_MAX` per request; `next` names where the following request (`after`) picks up. The run itself checks each file can still be written
  * as the caller, so a file they may only read is skipped there, not here.
  */
 export function mountLabel<E extends Env>(app: Hono<E>, resolve: (c: Context<E>) => Promise<LabelAccess>) {
@@ -66,12 +68,12 @@ export function mountLabel<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
     }
 
     const { folderId, relabel } = parsed.data;
+    let after = parsed.data.after;
     const folder = await access.scope.invoke<{ canWrite: boolean }>('drive/get-folder', { folderId });
     if (!folder.canWrite) throw new HTTPException(403, { message: 'You can’t change files in this folder.' });
     const picked: SubtreeEntry[] = [];
     let skipped = 0;
     let more = false;
-    let after: string | undefined;
     do {
       const page = await access.scope.invoke<{ entries: SubtreeEntry[]; next: string | null }>(
         'drive/list-subtree-files', { folderId, limit: PAGE, ...(after ? { after } : {}) },
@@ -85,6 +87,9 @@ export function mountLabel<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
     } while (after && !more);
     if (after) more = true;
     if (picked.length) await access.queue(picked);
-    return c.json({ queued: picked.length, skipped, more } satisfies LabelResult, 202);
+    // The listing is ordered by file id, so the last file taken is where the next request starts:
+    // without it a re-label of every file would take the same first files each time.
+    const next = more ? picked.at(-1)?.id ?? after : undefined;
+    return c.json({ queued: picked.length, skipped, more, ...(next ? { next } : {}) } satisfies LabelResult, 202);
   });
 }

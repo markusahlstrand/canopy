@@ -198,9 +198,15 @@ describe('mergeDetails', () => {
 });
 
 describe('the Document AI run', () => {
+  it('stamps what it wrote with when it wrote it', async () => {
+    const h = harness();
+    const result = await h.pass();
+    expect(result).toMatchObject({ cursor: { wrote: { label: 'Invoice', at: new Date(NOW).toISOString() } } });
+  });
+
   it('fills an empty label and description, tied to the version the model read', async () => {
     const h = harness();
-    expect(await h.pass()).toEqual({ done: true, cursor: { round: 0, versionId: 'v1', outcome: 'labelled', wrote: { label: 'Invoice', description: 'An invoice from ACME Ltd for 120 EUR.' } } });
+    expect(await h.pass()).toEqual({ done: true, cursor: { round: 0, versionId: 'v1', outcome: 'labelled', wrote: { label: 'Invoice', description: 'An invoice from ACME Ltd for 120 EUR.', at: new Date(NOW).toISOString() } } });
     expect(h.saved).toEqual([{ fileId: 'f1', description: 'An invoice from ACME Ltd for 120 EUR.', labels: ['Invoice'], expectedRevision: 3, expectedVersionId: 'v1' }]);
     expect(h.counters).toEqual({ labelled: 1 });
   });
@@ -491,5 +497,11 @@ describe('settledBy and latestWrote', () => {
       run({ wrote: { label: 'New', description: null } }, '2026-06-01T11:00:00Z'),
     ])).toEqual({ label: 'New', description: null });
     expect(latestWrote([])).toBeUndefined();
+  });
+  it('orders by when the write happened, not by a later run that only carried an older one forward', () => {
+    const manual = run({ wrote: { label: 'B', description: null, at: '2026-06-01T10:30:00Z' } }, '2026-06-01T10:30:00Z');
+    // An automatic run queued before it, carrying A, that ended later without writing.
+    const carried = run({ outcome: 'skipped:disabled', wrote: { label: 'A', description: null, at: '2026-06-01T09:00:00Z' } }, '2026-06-01T11:00:00Z');
+    expect(latestWrote([carried, manual])?.label).toBe('B');
   });
 });
