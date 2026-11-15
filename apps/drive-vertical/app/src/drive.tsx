@@ -31,6 +31,7 @@ import { PreviewPanel, type PreviewMode } from './preview';
 import { PreviewResizeHandle, PREVIEW_WIDTH_VAR, usePreviewWidth } from './preview-resize';
 import { AllFilesTable } from './all-files-table';
 import { FileTable, type SortKey, type SortState } from './file-table';
+import { AiLabelContext, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
 import type { FolderPage, FolderTree } from './file-list';
 import { Topbar } from './topbar';
 import { AccountMenu } from './account-menu';
@@ -88,7 +89,10 @@ import {
   restoreFile,
   search,
   trashFile,
+  labelWithAi,
+  getSpaceSettings,
   type DriveFile,
+  type LabelResult,
   type DriveFolder,
   type ListingPage,
   type SharedFolder,
@@ -105,6 +109,7 @@ import {
  */
 export const DRIVE_ICONS = [
   'folder',
+  'sparkles',
   'file-text',
   'chevron-right',
   'trash',
@@ -337,6 +342,16 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     return () => { current = false; };
   }, [liveSpace, sourceTick]);
   const mirrored = source !== null, canUpload = !source || source.canUpload;
+  // Whether this space runs Document AI: the menus offer "Label with AI" only where it does.
+  const [aiLabel, setAiLabel] = useState(false);
+  useEffect(() => {
+    let current = true;
+    setAiLabel(false);
+    getSpaceSettings().then(settings => { if (current) setAiLabel(settings.autoLabel === true); }).catch(() => {});
+    return () => { current = false; };
+  }, [liveSpace, sourceTick]);
+  /** What the last "Label with AI" queued, shown above the list until the next one. */
+  const [labelNotice, setLabelNotice] = useState<string | null>(null);
   // An empty mirrored folder is a question, so it answers with what the last sync found.
   const [syncNote, setSyncNote] = useState<ReturnType<typeof sourceSyncNote>>(null);
   // The note only shows over an empty mirrored folder, so it is read only then, and again after
@@ -1081,6 +1096,13 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
    */
   const onAction = (action: string, item: FileItem) => {
     if (offline && action !== 'Open') return;
+    if (action === LABEL_WITH_AI || action === RELABEL_WITH_AI) {
+      void act(async () => {
+        const result = await labelWithAi(item.isFolder ? { folderId: item.id, relabel: action === RELABEL_WITH_AI } : { fileId: item.id });
+        setLabelNotice(labelNoticeFor(item, result));
+      });
+      return;
+    }
     if (action === 'Open') {
       const found = folderFor(item.id);
       if (found) open(found.folder, found.via);
@@ -1243,6 +1265,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   };
 
   return (
+    <AiLabelContext.Provider value={aiLabel && !offline}>
     <div className="flex min-h-0 flex-1">
       <div className="hidden md:block">
         <Sidebar
@@ -1505,6 +1528,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             </div>
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'partial' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</p> : null}
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'error' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</p> : null}
+      {labelNotice ? <p role="status" className="-mt-2 mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+        <Icon name="sparkles" className="size-3.5" />{labelNotice}
+        <button type="button" className="ml-auto underline" onClick={() => setLabelNotice(null)}>Dismiss</button>
+      </p> : null}
       {pinBusy && pinProgress ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Saving {pinProgress.files} files in {pinProgress.folders} folders for offline reading…</p> : null}
       {currentPinError ? <p role="alert" className="-mt-2 mb-3 text-xs text-destructive">Offline copy incomplete: {currentPinError}</p> : null}
 
@@ -1725,7 +1752,20 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         />
       ) : null}
     </div>
+    </AiLabelContext.Provider>
   );
+}
+
+/** What a "Label with AI" request did, in words: labels show up as each run finishes. */
+export function labelNoticeFor(item: { name: string; isFolder: boolean }, result: LabelResult): string {
+  if (!item.isFolder) return `Labelling “${item.name}”. Its label and description appear in a minute or so.`;
+  const files = (n: number) => `${n} ${n === 1 ? 'file' : 'files'}`;
+  if (result.queued === 0) {
+    return result.skipped ? `Every file in “${item.name}” already has a label. Use “${RELABEL_WITH_AI}” to label them again.` : `“${item.name}” has no files to label.`;
+  }
+  return `Labelling ${files(result.queued)} in “${item.name}”.`
+    + (result.skipped ? ` ${files(result.skipped)} already had labels or can’t be read.` : '')
+    + (result.more ? ' More are waiting: run it again once these are done.' : '');
 }
 
 function EmptyList({ icon, title, description, actions = [] }: {

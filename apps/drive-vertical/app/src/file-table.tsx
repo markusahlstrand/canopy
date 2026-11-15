@@ -1,5 +1,6 @@
-import { useRef, useState, useLayoutEffect, type ReactNode, type KeyboardEvent } from "react";
+import { useContext, useRef, useState, useLayoutEffect, type ReactNode, type KeyboardEvent } from "react";
 import type { FileItem } from './items';
+import { AiLabelContext, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from './file-icon';
 import { FileList, type FolderTree } from './file-list';
@@ -144,19 +145,20 @@ const COLUMNS: { key: SortKey; label: string; className: string }[] = [
  * is the same one the rest of this UI follows: an item that does nothing is worse than an
  * item that is absent.
  */
-export function actionsFor(file: FileItem, readOnly = false, trashed = false, mirrored = false): string[] {
+export function actionsFor(file: FileItem, readOnly = false, trashed = false, mirrored = false, aiLabel = false): string[] {
   if (readOnly) return ['Open'];
   if (mirrored) return trashed ? [] : file.isFolder ? ['Open', 'Share'] : ['Open', 'Download'];
   if (trashed) return ['Restore'];
   // Share is a FOLDER action and only a folder action: a grant narrows onto a folder and
   // reaches what is under it, so there is no such thing as sharing one file here.
+  // The AI items only where the space turned Document AI on: anywhere else they would do nothing.
   return file.isFolder
-    ? ['Open', 'Share', 'Rename', 'Move']
-    : ['Open', 'Download', 'Rename', 'Move', 'Delete'];
+    ? ['Open', 'Share', 'Rename', 'Move', ...(aiLabel ? [LABEL_WITH_AI, RELABEL_WITH_AI] : [])]
+    : ['Open', 'Download', 'Rename', 'Move', ...(aiLabel ? [LABEL_WITH_AI] : []), 'Delete'];
 }
 
 function RowActions({ file, onAction, readOnly, trashed, mirrored }: { file: FileItem; onAction: (action: string, f: FileItem) => void; readOnly: boolean; trashed?: boolean; mirrored?: boolean }) {
-  const actions = actionsFor(file, readOnly, trashed, mirrored);
+  const actions = actionsFor(file, readOnly, trashed, mirrored, useContext(AiLabelContext));
   if (actions.length === 0) return null;
   return (
     <DropdownMenu>

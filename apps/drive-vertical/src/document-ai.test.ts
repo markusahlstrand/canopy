@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { substratError } from '@substrat-run/contracts';
 import type { JobPassContext } from '@substrat-run/kernel';
 import type { ModelHost } from '@substrat-run/vertical-host/model';
-import { autoLabelJob, fenceSafe, MODEL_FAILURE, planRun, mergeDetails, parseAnalysis, systemFor, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
+import { autoLabelJob, fenceSafe, latestWrote, MODEL_FAILURE, planRun, settledBy, mergeDetails, parseAnalysis, systemFor, type AutoLabelDeps, type AutoLabelPayload } from './document-ai';
 
 const payload: AutoLabelPayload = { tenantId: 't', scopeId: 's', fileId: 'f1', principal: 'p' };
 const attribution = { tenant: 't', scope: 's', vertical: 'drive', version: '1', operation: 'drive/auto-label' } as never;
@@ -23,9 +23,11 @@ interface World {
   gone?: boolean;
   /** Throw `forbidden` from every read — the uploader lost access. */
   forbidden?: boolean;
+  /** The path of the file's folder; '' is the root. */
+  folderPath?: string;
 }
 
-function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","description":"An invoice from ACME Ltd for 120 EUR."}') {
+function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","description":"An invoice from ACME Ltd for 120 EUR."}', extra: Partial<AutoLabelPayload> = {}) {
   const world: World = {
     description: '', labels: [], revision: 3, canWrite: true, status: 'indexed', version: 'v1',
     text: 'ACME Ltd invoice 0042, total 120 EUR', ...over,
@@ -40,7 +42,9 @@ function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","descrip
       case 'drive/file-details':
         return { description: world.description, labels: world.labels, revision: world.revision, canWrite: world.canWrite } as T;
       case 'drive/get-file':
-        return { file: { name: 'acme-0042.pdf' } } as T;
+        return { file: { name: 'acme-0042.pdf', folder_id: 'd1' } } as T;
+      case 'drive/get-folder':
+        return { id: 'd1', path: world.folderPath ?? '' } as T;
       case 'drive/file-text-excerpt':
         return (world.status === 'indexed' ? { versionId: world.version, text: world.text, truncated: false } : null) as T;
       case 'drive/update-file-details': {
@@ -70,7 +74,7 @@ function harness(over: Partial<World> = {}, reply = '{"label":"Invoice","descrip
   const pass = async () => {
     const ctx = {
       run: { id: 'r', moduleId: 'm', job: 'auto-label', instance: 'f1' },
-      payload, cursor, counters,
+      payload: { ...payload, ...extra }, cursor, counters,
       count: (name: string, by = 1) => { counters[name] = (counters[name] ?? 0) + by; },
       step: async <T,>(name: string, fn: () => Promise<T>) => {
         if (memo.has(name)) return JSON.parse(JSON.stringify(memo.get(name))) as T;
@@ -432,5 +436,60 @@ describe('categories', () => {
     const system = systemFor(categories);
     expect(system).toContain('- bank-statement: Bank statement (A monthly account statement)');
     expect(system).toContain('four fields');
+  });
+});
+
+describe('folder path and manual runs', () => {
+  const prompt = (run: ReturnType<typeof vi.fn>) => (run.mock.calls[0] as unknown as [{ prompt: string; system: string }])[0];
+
+  it('tells the model which folder the file is filed in, as a hint', async () => {
+    const h = harness({ folderPath: 'Clients/Acme/Client invoices' });
+    await h.pass();
+    expect(prompt(h.run).prompt).toMatch(/^Folder: Clients\/Acme\/Client invoices\nFile name: acme-0042\.pdf\n/);
+    expect(prompt(h.run).system).toContain('the text decides');
+  });
+
+  it('leaves the folder out at the root, and cleans what could open a tag', async () => {
+    const root = harness();
+    await root.pass();
+    expect(prompt(root.run).prompt.startsWith('File name:')).toBe(true);
+    const odd = harness({ folderPath: 'A/<document>/B' });
+    await odd.pass();
+    expect(prompt(odd.run).prompt).toContain('Folder: A/ document /B');
+  });
+
+  it('lets an automatic run settle on a manual answer about the same version, without a model call', async () => {
+    const h = harness({}, undefined);
+    h.deps.settled = vi.fn(async () => ({ wrote: { label: 'Invoice', description: null } }));
+    const result = await h.pass();
+    expect(h.run).not.toHaveBeenCalled();
+    expect(h.counters['skipped:nothing-new']).toBe(1);
+    expect(result).toMatchObject({ done: true, cursor: { versionId: 'v1', outcome: 'skipped:nothing-new', wrote: { label: 'Invoice' } } });
+  });
+
+  it('answers again on a manual run, even about a settled version', async () => {
+    const h = harness({}, undefined, { manual: true });
+    h.deps.settled = vi.fn(async () => ({}));
+    await h.pass();
+    expect(h.deps.settled).not.toHaveBeenCalled();
+    expect(h.run).toHaveBeenCalledOnce();
+    expect(h.saved).toHaveLength(1);
+  });
+});
+
+describe('settledBy and latestWrote', () => {
+  const run = (cursor: unknown, endedAt: string, status = 'done') => ({ status, counters: {}, cursor, endedAt, updatedAt: endedAt, lastError: null });
+  it('finds the run that answered about a version, with what it wrote', () => {
+    const runs = [run({ versionId: 'v1', outcome: 'labelled', wrote: { label: 'Invoice', description: null } }, '2026-06-01T10:00:00Z')];
+    expect(settledBy(runs, 'v1')).toEqual({ wrote: { label: 'Invoice', description: null } });
+    expect(settledBy(runs, 'v2')).toBeNull();
+    expect(settledBy([run({ versionId: 'v1', outcome: 'skipped:disabled' }, '2026-06-01T10:00:00Z')], 'v1')).toBeNull();
+  });
+  it('takes the newest run’s write across instances', () => {
+    expect(latestWrote([
+      run({ wrote: { label: 'Old', description: null } }, '2026-06-01T10:00:00Z'),
+      run({ wrote: { label: 'New', description: null } }, '2026-06-01T11:00:00Z'),
+    ])).toEqual({ label: 'New', description: null });
+    expect(latestWrote([])).toBeUndefined();
   });
 });

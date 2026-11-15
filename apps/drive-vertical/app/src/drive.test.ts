@@ -11,6 +11,7 @@ import { hasIcon } from '@canopy/ui';
 import { DRIVE_ICONS } from './drive';
 import { SIDEBAR_ICONS } from './sidebar';
 import { actionsFor } from './file-table';
+import { LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
 import { latestOnly } from './reads';
 import {
   ApiError,
@@ -257,5 +258,31 @@ describe('history page continuations', () => {
       await expect(fileVersionsPage('01A', next)).rejects.toThrow('Invalid version-history continuation');
     }
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('the AI labelling items', () => {
+  const file = { id: '01A', name: 'a.pdf', kind: 'pdf', modified: 'today', size: '1 kB', isFolder: false } as const;
+  const folder = { id: '01F', name: 'Invoices', kind: 'folder', modified: '—', size: '—', isFolder: true } as const;
+  it('appear only where the space runs Document AI', () => {
+    expect(actionsFor(file)).not.toContain(LABEL_WITH_AI);
+    expect(actionsFor(file, false, false, false, true)).toEqual(['Open', 'Download', 'Rename', 'Move', LABEL_WITH_AI, 'Delete']);
+    expect(actionsFor(folder, false, false, false, true)).toEqual(['Open', 'Share', 'Rename', 'Move', LABEL_WITH_AI, RELABEL_WITH_AI]);
+  });
+  it('stay off read-only, mirrored and trashed rows', () => {
+    expect(actionsFor(file, true, false, false, true)).toEqual(['Open']);
+    expect(actionsFor(file, false, false, true, true)).not.toContain(LABEL_WITH_AI);
+    expect(actionsFor(file, false, true, false, true)).toEqual(['Restore']);
+  });
+});
+
+describe('what a label request says it did', () => {
+  it('names the file, or counts what a folder queued and skipped', async () => {
+    const { labelNoticeFor } = await import('./drive');
+    expect(labelNoticeFor({ name: 'a.pdf', isFolder: false }, { queued: 1, skipped: 0, more: false })).toMatch(/^Labelling “a\.pdf”/);
+    expect(labelNoticeFor({ name: 'Invoices', isFolder: true }, { queued: 3, skipped: 1, more: true }))
+      .toBe('Labelling 3 files in “Invoices”. 1 file already had labels or can’t be read. More are waiting: run it again once these are done.');
+    expect(labelNoticeFor({ name: 'Invoices', isFolder: true }, { queued: 0, skipped: 2, more: false })).toContain('Re-label all with AI');
+    expect(labelNoticeFor({ name: 'Empty', isFolder: true }, { queued: 0, skipped: 0, more: false })).toBe('“Empty” has no files to label.');
   });
 });

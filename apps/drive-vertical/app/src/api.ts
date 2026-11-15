@@ -853,6 +853,11 @@ export interface SpaceRequest { id: string; slug: string; name: string; status: 
 export const requestSpace = (name: string, slug: string, settings?: import('../../src/space-settings').SpaceSettings) => call<{ id: string; slug: string; name: string }>('/sites', { method: 'POST', body: JSON.stringify({ name, slug, settings }) });
 export const spaceRequests = () => call<{ requests: SpaceRequest[] }>('/site-requests');
 
+/** What a request to label a file or folder with Document AI queued (`POST /api/label`). */
+export interface LabelResult { queued: number; skipped: number; more: boolean }
+/** Label one file now, or the files under a folder — those without labels, or all with `relabel`. */
+export const labelWithAi = (target: { fileId: string } | { folderId: string; relabel?: boolean }) =>
+  call<LabelResult>('/label', { method: 'POST', body: JSON.stringify(target) });
 export const getSpaceSettings = () => call<import('../../src/space-settings').SpaceSettings>('/space-settings');
 export const updateSpaceSettings = (settings: import('../../src/space-settings').SpaceSettings) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', {method:'PATCH',body:JSON.stringify(settings)});
 export type DriveSource = import('../../src/source-routes').DriveSource;
