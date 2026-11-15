@@ -41,8 +41,12 @@ const folderPath = z.string().max(1000).transform((p) => p.split('/').map((s) =>
 
 /** What a file must be for a flow to act on it. Every condition must hold. */
 export const flowCondition = z.discriminatedUnion('field', [
-  /** In this folder, or (`under`) anywhere beneath it. '' is the space's root. */
-  z.object({ field: z.literal('folder'), op: z.enum(['is', 'under']), path: folderPath }),
+  /**
+   * In this folder, or (`under`) anywhere beneath it. '' is the space's root. `matches` is a
+   * pattern for the whole path, a level at a time: a level is a name, `*` (any one folder), or a
+   * `{name}` that takes the folder's name for later steps to use (`Client invoices/{year}/{month}`).
+   */
+  z.object({ field: z.literal('folder'), op: z.enum(['is', 'under', 'matches']), path: folderPath }),
   /** The file name contains this text (any case), or matches a `*`/`?` pattern. */
   z.object({ field: z.literal('name'), op: z.enum(['contains', 'matches']), value: z.string().trim().min(1).max(200) }),
   /** The extension, without the dot, is one of these (any case). */
@@ -60,12 +64,88 @@ export type FlowCondition = z.infer<typeof flowCondition>;
  * Copy the file into a folder of a space. In a space connected to a source that takes uploads
  * (a3doc, S3), the copy goes on to the source like any upload; `alsoIn` files an a3doc document
  * in more categories (folder ids of that space).
+ *
+ * `subfolder` goes on below the chosen folder, and `alsoInPaths` names more categories by their
+ * path from the top of the space. Both may hold `{name}`s a folder pattern took earlier on the
+ * way, so one flow files each document by its own year and month. A folder they name that is
+ * not there yet is made: in an a3doc space it is made here and taken up by a3doc's own folder
+ * when the document is filed there (a3doc refuses a folder it does not have).
  */
 export const copyFields = {
   space: z.string().min(1).max(64),
   folderId: z.string().min(1).max(64),
   alsoIn: z.array(z.string().min(1)).max(10).default([]),
+  subfolder: z.string().max(500).optional(),
+  alsoInPaths: z.array(z.string().max(500)).max(10).optional(),
 };
+
+/** At most this many categories besides the folder itself, picked and typed together. */
+export const MAX_ALSO_IN = 10;
+
+// ── folder patterns and path templates ──────────────────────────────────────
+
+/** A `{name}` a pattern takes and a template uses. */
+const TOKEN = /\{([^{}]*)\}/g;
+export const TOKEN_NAME = /^[a-z][a-z0-9_]{0,19}$/;
+
+/** The `{name}`s in a pattern or template, in order, each once. */
+export function tokensOf(text: string): string[] {
+  return [...new Set([...text.matchAll(TOKEN)].map((m) => m[1]!))];
+}
+
+/** What is wrong with a folder pattern, in words; null when it is fine. */
+export function patternProblem(pattern: string): string | null {
+  const taken = new Set<string>();
+  for (const level of pattern.split('/').filter(Boolean)) {
+    const whole = /^\{([^{}]*)\}$/.exec(level);
+    if (!whole) {
+      if (/[{}]/.test(level)) return `A {name} takes a whole folder level: '${level}' mixes it with text.`;
+      continue;
+    }
+    const name = whole[1]!;
+    if (!TOKEN_NAME.test(name)) return `'{${name}}' needs a short lowercase name, like {year}.`;
+    if (taken.has(name)) return `'{${name}}' is taken twice.`;
+    taken.add(name);
+  }
+  return null;
+}
+
+/** What is wrong with a path template, in words; null when it is fine. */
+export function templateProblem(template: string): string | null {
+  if (/[{}]/.test(template.replace(TOKEN, ''))) return `'${template}' has a { or } without its pair.`;
+  for (const name of tokensOf(template)) if (!TOKEN_NAME.test(name)) return `'{${name}}' needs a short lowercase name, like {year}.`;
+  for (const level of template.split('/').map((s) => s.trim())) if (level === '.' || level === '..') return `'${template}' can't use . or .. as a folder.`;
+  return null;
+}
+
+/**
+ * The names a folder pattern takes from a folder path, or null when the path doesn't fit it.
+ * Every level must fit: the pattern says how deep the folder is. Names compare as `is` does.
+ */
+export function folderCaptures(pattern: string, folderPath: string): Record<string, string> | null {
+  const want = pattern.split('/').filter(Boolean), have = folderPath.split('/').filter(Boolean);
+  if (want.length !== have.length) return null;
+  const captures: Record<string, string> = {};
+  for (let i = 0; i < want.length; i++) {
+    const level = want[i]!, name = /^\{([a-z][a-z0-9_]{0,19})\}$/.exec(level)?.[1];
+    if (name) captures[name] = have[i]!;
+    else if (level !== '*' && level !== have[i]) return null;
+  }
+  return captures;
+}
+
+/**
+ * A template with its `{name}`s filled in, as a clean path ('' for the folder itself). Throws,
+ * naming the first, when a name has no value: the flow can't say where the document goes.
+ */
+export function fillTemplate(template: string, captures: Readonly<Record<string, string>>): string {
+  const missing = tokensOf(template).find((name) => captures[name] === undefined);
+  if (missing !== undefined) throw new Error(`nothing on this document's way took {${missing}}`);
+  const filled = template.replace(TOKEN, (_, name: string) => captures[name]!);
+  const levels = filled.split('/').map((s) => s.trim()).filter(Boolean);
+  if (levels.some((l) => l === '.' || l === '..')) throw new Error(`'${filled}' is not a folder path`);
+  return levels.join('/');
+}
 
 /** What a space-local flow did to a file that matched. */
 export const flowAction = z.discriminatedUnion('type', [
@@ -148,6 +228,7 @@ export const extensionOf = (name: string) => {
 export function conditionHolds(condition: FlowCondition, facts: FileFacts): boolean | 'ask' {
   switch (condition.field) {
     case 'folder':
+      if (condition.op === 'matches') return folderCaptures(condition.path, facts.folderPath) !== null;
       return condition.op === 'is'
         ? facts.folderPath === condition.path
         : condition.path === '' || facts.folderPath === condition.path || facts.folderPath.startsWith(`${condition.path}/`);

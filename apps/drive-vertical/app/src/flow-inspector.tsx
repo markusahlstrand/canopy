@@ -182,10 +182,11 @@ export function ConditionFields({ condition: c, categories, categoriesError, bus
   switch (c.field) {
     case 'folder':
       return <div className="space-y-2">
-        <select aria-label="Folder match" className={select} disabled={busy} value={c.op} onChange={(e) => onChange({ ...c, op: e.target.value as 'is' | 'under' })}>
-          <option value="under">is in or under</option><option value="is">is exactly</option>
+        <select aria-label="Folder match" className={select} disabled={busy} value={c.op} onChange={(e) => onChange({ ...c, op: e.target.value as 'is' | 'under' | 'matches' })}>
+          <option value="under">is in or under</option><option value="is">is exactly</option><option value="matches">matches a pattern</option>
         </select>
-        <Input aria-label="Folder path" placeholder="Statements (empty: top level)" value={c.path} disabled={busy} onChange={(e) => onChange({ ...c, path: e.target.value })} />
+        <Input aria-label="Folder path" placeholder={c.op === 'matches' ? 'Client invoices/{year}/{month}' : 'Statements (empty: top level)'} value={c.path} disabled={busy} onChange={(e) => onChange({ ...c, path: e.target.value })} />
+        {c.op === 'matches' ? <p className="text-xs text-muted-foreground">One folder per level. <code>*</code> is any folder; <code>{'{year}'}</code> takes that folder’s name, for a copy after this check to use.</p> : null}
       </div>;
     case 'name':
       return <div className="space-y-2">
@@ -239,7 +240,7 @@ function CopyFields({ node, spaces, busy, onChange }: { node: Extract<FlowNode, 
   const a3doc = spaces.some((s) => s.slug === node.space && s.a3doc);
   return (
     <div className="space-y-2">
-      <select aria-label="Space to copy to" className={select} disabled={busy} value={node.space} onChange={(e) => onChange({ ...node, space: e.target.value, folderId: '', alsoIn: [] })}>
+      <select aria-label="Space to copy to" className={select} disabled={busy} value={node.space} onChange={(e) => onChange({ ...node, space: e.target.value, folderId: '', alsoIn: [], alsoInPaths: [] })}>
         <option value="">Choose a space…</option>
         {shown.map((s) => <option key={s.slug} value={s.slug}>{s.name}</option>)}
       </select>
@@ -250,12 +251,25 @@ function CopyFields({ node, spaces, busy, onChange }: { node: Extract<FlowNode, 
           <option value="">Choose a folder…</option>
           {folders.map((f) => <option key={f.id} value={f.id}>{folderLabel(f.path)}</option>)}
         </select>
+        {node.folderId ? (
+          <label className="block space-y-1"><span className="text-xs text-muted-foreground">Then into (optional)</span>
+            <Input aria-label="Subfolder" placeholder="{year}/{month}" value={node.subfolder ?? ''} disabled={busy}
+              onChange={(e) => onChange({ ...node, subfolder: e.target.value })} />
+            <span className="block text-xs text-muted-foreground">A path below that folder. Use what a “folder matches” check took, like <code>{'{year}'}</code>; a folder that isn’t there yet is made.</span>
+          </label>
+        ) : null}
+        {a3doc && node.folderId ? (
+          <label className="block space-y-1"><span className="text-xs text-muted-foreground">Also file it in, by path (a3doc categories)</span>
+            <ListField label="Categories by path" placeholder="Facturas/{year}, Clientes" values={node.alsoInPaths ?? []} busy={busy}
+              onChange={(alsoInPaths) => onChange({ ...node, alsoInPaths })} />
+          </label>
+        ) : null}
         {a3doc && node.folderId && folders.length > 2 ? (
           <details className="text-xs">
             <summary className="cursor-pointer text-muted-foreground">Also file it in (a3doc categories){node.alsoIn.length ? `: ${node.alsoIn.length}` : ''}</summary>
             <div className="mt-1 max-h-40 space-y-1 overflow-y-auto">
               {folders.filter((f) => f.id !== node.folderId && f.id !== ROOT_FOLDER_ID).map((f) => (
-                <label key={f.id} className="flex items-center gap-2"><Checkbox checked={node.alsoIn.includes(f.id)} disabled={busy || (!node.alsoIn.includes(f.id) && node.alsoIn.length >= 10)}
+                <label key={f.id} className="flex items-center gap-2"><Checkbox checked={node.alsoIn.includes(f.id)} disabled={busy || (!node.alsoIn.includes(f.id) && node.alsoIn.length + (node.alsoInPaths?.length ?? 0) >= 10)}
                   onCheckedChange={(on) => onChange({ ...node, alsoIn: on === true ? [...node.alsoIn, f.id] : node.alsoIn.filter((x) => x !== f.id) })} />{f.path}</label>
               ))}
             </div>

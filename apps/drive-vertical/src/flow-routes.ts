@@ -1,7 +1,7 @@
 import type { Context, Env, Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
-import { flowGraph, isAction, reach, spacesOf, type FileFactsRow, type FlowDelivery } from '@canopy/scope-drive/spec/model';
+import { capturesOn, copyPaths, flowGraph, isAction, reach, spacesOf, walk, type FileFactsRow, type FlowDelivery, type FlowGraph } from '@canopy/scope-drive/spec/model';
 import type { DeliveryDetail, DeliveryView, FlowList, FlowPreview, FlowSpace, FlowView, PreviewMatch } from './flow-contract.js';
 import { alreadyHandled, FLOW_BACKFILL_JOB, FLOW_RUN_JOB } from './automation.js';
 import type { DirectoryFlow, FlowScopes, SaveFlow } from './flow-directory.js';
@@ -128,7 +128,8 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
     for (const node of input.graph.nodes) {
       if (node.type !== 'copy') continue;
       const site = bySlug.get(node.space)!;
-      for (const folderId of [node.folderId, ...node.alsoIn]) {
+      // Categories named by path are made below the top folder when missing: the author must be able to add there.
+      for (const folderId of [node.folderId, ...node.alsoIn, ...(node.alsoInPaths?.some((t) => t.trim()) ? ['root'] : [])]) {
         // The folder as the author sees it there: it exists, and they may add files to it.
         const folder = await site.scope.invoke<{ id: string; canWrite?: boolean }>('drive/get-folder', { folderId }).catch(() => null);
         if (!folder?.canWrite) throw new HTTPException(400, { message: `A folder this flow copies to is not one you can add files to in '${node.space}'.` });
@@ -198,10 +199,15 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
       if (truncated) break;
     }
     const flow = id ? { id, graph } : null;
-    const matches = await Promise.all(found.map(async ({ site, file, needsAnswer }): Promise<PreviewMatch> => ({
-      space: site.slug, fileId: file.fileId, name: file.name, folderPath: file.folderPath, category: file.category?.id ?? null, needsAnswer,
-      handled: flow ? await alreadyHandled(site.scope, flow, file.fileId, file.versionId!) : false,
-    })));
+    const filing = filedIn(graph, bySlug);
+    const matches = await Promise.all(found.map(async ({ site, file, needsAnswer }): Promise<PreviewMatch> => {
+      const where = await filing(file);
+      return {
+        space: site.slug, fileId: file.fileId, name: file.name, folderPath: file.folderPath, category: file.category?.id ?? null, needsAnswer,
+        handled: flow ? await alreadyHandled(site.scope, flow, file.fileId, file.versionId!) : false,
+        ...(where.length ? { filedIn: where } : {}),
+      };
+    }));
     return c.json({ matches, matched, uncertain, reach: counts, maybe: maybes, scanned, truncated } satisfies FlowPreview);
   });
 
@@ -284,3 +290,43 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
   });
 }
 
+/**
+ * Where a flow's copies would file a document, for the copies whose folder or categories it works
+ * out from the document's own folders: 'space › path' each, or why it can't tell. Only the copies
+ * the document surely reaches (no model question before them).
+ */
+function filedIn(graph: FlowGraph, bySlug: Map<string, FlowSite>) {
+  const bases = new Map<string, Promise<string | null>>();
+  const baseOf = (space: string, folderId: string) => {
+    const key = `${space}\n${folderId}`;
+    let pending = bases.get(key);
+    if (!pending) {
+      const site = bySlug.get(space);
+      pending = site
+        ? site.scope.invoke<{ path: string } | null>('drive/get-folder', { folderId }).then((f) => f?.path ?? null, () => null)
+        : Promise.resolve(null);
+      bases.set(key, pending);
+    }
+    return pending;
+  };
+  return async (file: FileFactsRow): Promise<string[]> => {
+    const { path } = walk(graph, file);
+    const captures = capturesOn(graph, path, file);
+    const out: string[] = [];
+    for (const id of path) {
+      const node = graph.nodes.find((n) => n.id === id);
+      if (node?.type !== 'copy' || (!node.subfolder?.trim() && !node.alsoInPaths?.some((t) => t.trim()))) continue;
+      const space = bySlug.get(node.space)?.name ?? node.space;
+      try {
+        const { subfolder, alsoInPaths } = copyPaths(node, captures);
+        const base = await baseOf(node.space, node.folderId);
+        const join = (a: string | null, b: string) => [a ?? '', b].filter(Boolean).join('/');
+        out.push(`${space} › ${join(base, subfolder) || 'Top level'}`);
+        for (const extra of alsoInPaths) out.push(`${space} › ${extra || 'Top level'}`);
+      } catch (error) {
+        out.push(`${space} › can't tell: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return out;
+  };
+}

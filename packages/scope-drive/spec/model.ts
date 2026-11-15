@@ -404,6 +404,28 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
 
   /**
+   * The folder at a path below another, made level by level where it is missing. What a flow
+   * that files by year and month uses. In an a3doc space a folder made here stands in for the
+   * a3doc folder of that path, which takes it up when the space syncs; a space connected to
+   * anything else refuses, as `create-folder` does.
+   */
+  'drive/ensure-folder-path': {
+    summary: 'The folder at a path below another, made where missing',
+    permission: { key: 'drive:write', entity: 'folder', idFrom: 'parentId' },
+    input: z.object({ parentId: z.string(), path: z.string().min(1).max(1000) }),
+    output: driveEntities.folder.fields,
+    http: { method: 'POST', path: '/folders/{parentId}/ensure-path' },
+    emits: {
+      entity: 'folder',
+      entityIdFrom: 'id',
+      type: 'drive.folder-created',
+      schemaVersion: 1,
+      piiClass: 'none',
+      payload: ['id', 'parent_id', 'path'],
+    },
+  },
+
+  /**
    * Metadata only: the bytes do not ride `invoke`. Substrat learned this on the
    * attachment surface and canopy learned it in the blob store — a structured-clone
    * pipe with per-scope serialization is the wrong path for megabytes. The version

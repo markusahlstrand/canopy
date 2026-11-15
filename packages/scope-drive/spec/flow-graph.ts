@@ -13,7 +13,10 @@
  * Pure data and pure functions, shared by the worker (stores, runs), and the app (edits, previews).
  */
 import { z } from '@substrat-run/contracts';
-import { conditionHolds, copyFields, flowCondition, type FileFacts, type FlowCondition, type LegacyFlowDefinition } from './flows.js';
+import {
+  conditionHolds, copyFields, fillTemplate, flowCondition, folderCaptures, MAX_ALSO_IN, patternProblem, templateProblem, tokensOf,
+  type FileFacts, type FlowCondition, type LegacyFlowDefinition,
+} from './flows.js';
 
 export const flowNodeId = z.string().regex(/^[A-Za-z0-9_-]{1,40}$/, 'Use letters, digits, - and _');
 /** A space, by the slug people see in its address. */
@@ -90,6 +93,21 @@ export function graphProblems(graph: Pick<FlowGraph, 'nodes' | 'edges'>): GraphP
     if (new Set(t.spaces).size !== t.spaces.length) problems.push({ message: 'A space is listed twice.', node: t.id });
   }
   if (!graph.nodes.some(isAction)) problems.push({ message: 'A flow needs at least one action: copy or label.' });
+  for (const node of graph.nodes) {
+    if (node.type === 'check' && node.condition.field === 'folder' && node.condition.op === 'matches') {
+      const problem = patternProblem(node.condition.path);
+      if (problem) problems.push({ message: problem, node: node.id });
+    }
+    if (node.type === 'copy') {
+      for (const template of [node.subfolder ?? '', ...(node.alsoInPaths ?? [])]) {
+        const problem = templateProblem(template);
+        if (problem) problems.push({ message: problem, node: node.id });
+      }
+      if (node.alsoIn.length + (node.alsoInPaths?.length ?? 0) > MAX_ALSO_IN) {
+        problems.push({ message: `A document goes in at most ${MAX_ALSO_IN} more categories.`, node: node.id });
+      }
+    }
+  }
 
   const out = new Map<string, FlowEdge[]>();
   for (const edge of graph.edges) {
@@ -135,8 +153,76 @@ export function graphProblems(graph: Pick<FlowGraph, 'nodes' | 'edges'>): GraphP
     for (const node of graph.nodes) {
       if (!state.has(node.id)) problems.push({ message: 'This step is not connected to the trigger.', node: node.id });
     }
+    if (!looped) {
+      const taken = capturedBefore(graph);
+      for (const node of graph.nodes) {
+        if (node.type !== 'copy' || !state.has(node.id)) continue;
+        const have = taken.get(node.id) ?? new Set<string>();
+        const used = tokensOf([node.subfolder ?? '', ...(node.alsoInPaths ?? [])].join('/'));
+        const missing = used.filter((name) => !have.has(name));
+        if (missing.length) {
+          problems.push({ message: `Nothing takes {${missing[0]}} on every way here: put a check "folder matches", like Invoices/{year}/{month}, before this step, on its Yes side.`, node: node.id });
+        }
+      }
+    }
   }
   return problems;
+}
+
+/** The names a check's folder pattern takes, when it is one; none otherwise. */
+const patternTokens = (node: FlowNode): string[] =>
+  node.type === 'check' && node.condition.field === 'folder' && node.condition.op === 'matches' ? tokensOf(node.condition.path) : [];
+
+/**
+ * By node: the names every way from the trigger to it has taken. A folder pattern takes its names
+ * on its Yes exit only (on No, the path did not fit). For a graph without loops.
+ */
+export function capturedBefore(graph: Pick<FlowGraph, 'nodes' | 'edges'>): Map<string, Set<string>> {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const into = new Map<string, FlowEdge[]>();
+  for (const edge of graph.edges) if (byId.has(edge.from) && byId.has(edge.to)) into.set(edge.to, [...(into.get(edge.to) ?? []), edge]);
+  const memo = new Map<string, Set<string>>();
+  const open = new Set<string>();
+  const at = (id: string): Set<string> => {
+    const known = memo.get(id);
+    if (known) return known;
+    if (open.has(id)) return new Set();
+    open.add(id);
+    let have: Set<string> | undefined;
+    for (const edge of into.get(id) ?? []) {
+      const came = new Set<string>(at(edge.from));
+      if (edge.branch === 'yes') for (const name of patternTokens(byId.get(edge.from)!)) came.add(name);
+      const before: Set<string> | undefined = have;
+      have = before === undefined ? came : new Set<string>([...before].filter((name) => came.has(name)));
+    }
+    open.delete(id);
+    const result = have ?? new Set<string>();
+    memo.set(id, result);
+    return result;
+  };
+  for (const node of graph.nodes) at(node.id);
+  return memo;
+}
+
+/**
+ * The names the folder patterns on a document's path took from it. A pattern that did not fit
+ * took nothing (the path went on by No).
+ */
+export function capturesOn(graph: Pick<FlowGraph, 'nodes'>, path: readonly string[], facts: FileFacts): Record<string, string> {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const captures: Record<string, string> = {};
+  for (const id of path) {
+    const node = byId.get(id);
+    if (node?.type !== 'check' || node.condition.field !== 'folder' || node.condition.op !== 'matches') continue;
+    Object.assign(captures, folderCaptures(node.condition.path, facts.folderPath) ?? {});
+  }
+  return captures;
+}
+
+/** Where a copy files one document: below its folder, and in which more categories by path. Throws when a name has no value. */
+export function copyPaths(node: Extract<FlowNode, { type: 'copy' }>, captures: Readonly<Record<string, string>>): { subfolder: string; alsoInPaths: string[] } {
+  const alsoInPaths = [...new Set((node.alsoInPaths ?? []).filter((t) => t.trim()).map((t) => fillTemplate(t, captures)))];
+  return { subfolder: fillTemplate(node.subfolder ?? '', captures), alsoInPaths };
 }
 
 /** The trigger of a graph that passed `graphProblems`. */

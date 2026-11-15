@@ -51,7 +51,7 @@ import {
   type OperationHandler,
 } from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
-import { driveOperations, installedPluginManifest, sourceSyncReport, type DriveSource } from '../spec/model.js';
+import { driveOperations, installedPluginManifest, segment, sourceSyncReport, type DriveSource } from '../spec/model.js';
 import { driveManifest } from './manifest.js';
 import { driveMigrations, ROOT_FOLDER_ID } from './migrations.js';
 
@@ -270,6 +270,45 @@ function sourceWrite(ctx: OperationContext, file: { id: string; folder_id: strin
   const folder = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [file.folder_id])[0]!;
   const payload = fileSourceWriteRequest.parse({ directory: folder.path, files: [{ attachmentId: version.blob_ref, name: file.name, size: version.size }], conflict });
   return { payload, attachmentId: version.blob_ref };
+}
+
+/** A new folder below `parent`, linked for the permission walk; a path already taken is a conflict. */
+function insertFolder(ctx: OperationContext, parent: FolderRow, name: string): FolderRow {
+  // A path is the parent's path plus the name. It stays a derived column rather
+  // than the identity: canopy addressed a file BY path, which made a rename a
+  // rewrite of every descendant. Here the edge is the parent id and the path is
+  // what the UI reads.
+  const path = parent.path === '' ? name : `${parent.path}/${name}`;
+  if (ctx.sql.query<FolderRow>('SELECT id FROM drive_folders WHERE path = ?', [path])[0]) {
+    throw substratError('conflict', `a folder already exists at ${path}`);
+  }
+
+  const row: FolderRow = {
+    id: ulid(),
+    parent_id: parent.id,
+    path,
+    name: name,
+    created_at: ctx.now(),
+    created_by: ctx.principal,
+  };
+  ctx.sql.exec(
+    'INSERT INTO drive_folders (id, parent_id, path, name, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+    [row.id, row.parent_id, row.path, row.name, row.created_at, row.created_by],
+  );
+  // The edge the permission walk follows. Declaring `parents` in the model says
+  // the edge MAY exist; `ctx.link` is what makes this folder's actual parent a
+  // fact the checker can walk. Without it a grant on the root reaches nothing
+  // below it — which is precisely how canopy's `pathRole` walk gets replaced:
+  // the ancestor chain stops being recomputed from a path string on every read.
+  ctx.link(folderRef(row.id), folderRef(parent.id));
+  ctx.emit({
+    type: 'drive.folder-created',
+    schemaVersion: 1,
+    entity: { entityType: 'folder', entityId: row.id },
+    piiClass: 'none',
+    payload: { id: row.id, parent_id: row.parent_id, path: row.path },
+  });
+  return row;
 }
 
 const operations = {
@@ -570,42 +609,30 @@ const operations = {
     ])[0];
     if (!parent) throw substratError('not_found', `folder not found: ${input.parentId}`);
     refuseInConnected(ctx, 'create folders');
+    return insertFolder(ctx, parent, input.name);
+  },
 
-    // A path is the parent's path plus the name. It stays a derived column rather
-    // than the identity: canopy addressed a file BY path, which made a rename a
-    // rewrite of every descendant. Here the edge is the parent id and the path is
-    // what the UI reads.
-    const path = parent.path === '' ? input.name : `${parent.path}/${input.name}`;
-    if (ctx.sql.query<FolderRow>('SELECT id FROM drive_folders WHERE path = ?', [path])[0]) {
-      throw substratError('conflict', `a folder already exists at ${path}`);
+  'drive/ensure-folder-path': async (ctx, input) => {
+    assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(input.parentId)));
+    const start = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE id = ?', [input.parentId])[0];
+    if (!start) throw substratError('not_found', `folder not found: ${input.parentId}`);
+    let at: FolderRow = start;
+    const levels = input.path.split('/').map((level) => level.trim()).filter(Boolean);
+    for (const level of levels) {
+      if (!segment.safeParse(level).success || level === '.' || level === '..') throw substratError('validation_failed', `'${level}' is not a folder name`);
     }
-
-    const row: FolderRow = {
-      id: ulid(),
-      parent_id: parent.id,
-      path,
-      name: input.name,
-      created_at: ctx.now(),
-      created_by: ctx.principal,
-    };
-    ctx.sql.exec(
-      'INSERT INTO drive_folders (id, parent_id, path, name, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [row.id, row.parent_id, row.path, row.name, row.created_at, row.created_by],
-    );
-    // The edge the permission walk follows. Declaring `parents` in the model says
-    // the edge MAY exist; `ctx.link` is what makes this folder's actual parent a
-    // fact the checker can walk. Without it a grant on the root reaches nothing
-    // below it — which is precisely how canopy's `pathRole` walk gets replaced:
-    // the ancestor chain stops being recomputed from a path string on every read.
-    ctx.link(folderRef(row.id), folderRef(parent.id));
-    ctx.emit({
-      type: 'drive.folder-created',
-      schemaVersion: 1,
-      entity: { entityType: 'folder', entityId: row.id },
-      piiClass: 'none',
-      payload: { id: row.id, parent_id: row.parent_id, path: row.path },
-    });
-    return row;
+    for (const name of levels) {
+      const path: string = at.path === '' ? name : `${at.path}/${name}`;
+      const there: FolderRow | undefined = ctx.sql.query<FolderRow>('SELECT * FROM drive_folders WHERE path = ?', [path])[0];
+      if (there) { at = there; continue; }
+      // a3doc can't make folders, but its folder at this path takes this one up when it lands.
+      const source = sourceOf(ctx);
+      if (source && !(source.provider === 'canopy.a3doc' && source.canUpload)) refuseInConnected(ctx, 'create folders');
+      at = insertFolder(ctx, at, name);
+    }
+    // Where the caller is about to write: the folder it ends at may carry a narrower share.
+    assertAllowed(await ctx.check(DRIVE_PERM.write, folderRef(at.id)));
+    return at;
   },
 
   'drive/ensure-file': async (ctx, input) => {
