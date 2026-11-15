@@ -59,7 +59,7 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
     try { return (JSON.parse(initial || '{}') as SpaceSettings).categories ?? []; } catch { return []; }
   }, [initial]);
   return <>
-  <FlowsDialog open={flowsOpen} onOpenChange={setFlowsOpen} categories={savedCategories}/>
+  <FlowsDialog open={flowsOpen} onOpenChange={setFlowsOpen} space={currentSite()}/>
   <Dialog open={open} onOpenChange={next => {if(!busy && (next || confirmDiscardDrafts()))onOpenChange(next);}}>
     <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[480px]">
       <DialogHeader className="px-5 pt-5"><DialogTitle>Space settings</DialogTitle><DialogDescription>Choose how this space appears to its members.</DialogDescription></DialogHeader>
@@ -87,7 +87,7 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
           </section>
           <section className="space-y-2"><h3 className="text-xs font-medium text-muted-foreground">Flows</h3>
             <div className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5">
-              <span><span className="block text-sm font-medium">Act on documents as they arrive</span><span className="block text-xs text-muted-foreground">For example: copy every bank statement that arrives here into your gestoría's a3doc space.</span></span>
+              <span><span className="block text-sm font-medium">Act on documents as they arrive</span><span className="block text-xs text-muted-foreground">For example: copy every bank statement that arrives here into your gestoría's a3doc space. A flow can watch several spaces and copy into others; this shows the ones that use this space.</span></span>
               <Button type="button" variant="outline" size="sm" disabled={busy} onClick={()=>setFlowsOpen(true)}>Flows…</Button>
             </div>
           </section>

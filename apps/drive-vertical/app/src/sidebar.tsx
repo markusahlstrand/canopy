@@ -63,6 +63,7 @@ export const SIDEBAR_ICONS = [
   'folder',
   'upload',
   'users',
+  'model',
 ] as const;
 
 /** Collapsed-or-not outlives a reload, the way it did in the portal's settings. */
@@ -114,6 +115,8 @@ interface SidebarProps {
   onSpacePlugins?: () => void;
   /** The account control, told whether the rail is collapsed. */
   account?: (compact: boolean) => ReactNode;
+  /** Opens the flows workspace: flows belong to the install, so this is no view of a space. */
+  onFlows?: () => void;
 }
 
 /**
@@ -227,7 +230,7 @@ function NavRow({
   return row;
 }
 
-export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = [], onCreate, offline = false, writeBlocked = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin, account }: SidebarProps) {
+export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = [], onCreate, offline = false, writeBlocked = false, sites, failed, onRetry, mobile = false, onSpaces, onCreateSpace, canManageSpace = false, onSpaceSettings, onSpaceMembers, onSpacePlugins, pluginApps = [], activePluginId = null, onOpenPlugin, account, onFlows }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [spaceQuery, setSpaceQuery] = useState('');
   const narrow = mobile ? false : collapsed;
@@ -309,6 +312,7 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = 
               onClick={() => onNavigate(n.id)}
             />
           ))}
+          {onFlows ? <NavRow icon="model" label="Flows" active={false} collapsed={narrow} disabled={offline} onClick={onFlows} /> : null}
         </nav>
 
         {/*

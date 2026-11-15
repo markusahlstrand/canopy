@@ -28,8 +28,9 @@
  */
 import { defineEntities, defineOperations, emitModel, fileSourceChange, fileSourceConflict, fileSourceWriteRequest, z } from '@substrat-run/contracts';
 import { s3ItemsRequest } from '@canopy/connector-s3';
-import { categoryId, deliveryState, flowDefinition, flowDelivery, storedFlow } from './flows.js';
+import { categoryId, deliveryState, flowDelivery, legacyFlow } from './flows.js';
 export * from './flows.js';
+export * from './flow-graph.js';
 
 /**
  * One path segment: a folder or file name, never a path.
@@ -784,39 +785,29 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     emits: { entity: 'file', entityIdFrom: 'id', type: 'a3doc.files-requested', schemaVersion: 1, piiClass: 'none', payload: ['directory', 'files', 'conflict', 'alsoIn', 'retryOf'] },
   },
 
-  /** The space's flows. */
-  'drive/list-flows': {
-    summary: 'List the space flows', permission: 'drive:manage',
-    output: z.object({ flows: z.array(storedFlow) }),
-    http: { method: 'GET', path: '/flows' },
-  },
-  /** Create or replace a flow. The worker passes who saved it, as a login, so it can act as them in other spaces. */
-  'drive/save-flow': {
-    summary: 'Create or replace a flow', permission: 'drive:manage',
-    input: z.object({ id: z.string().optional(), name: z.string().trim().min(1).max(100), enabled: z.boolean(), definition: flowDefinition, authorSub: z.string().min(1).max(500) }),
-    output: storedFlow,
-  },
+  /**
+   * Forget a space-local flow: once the runner has moved it out (`deliveries: false`, its history
+   * stays), or when the flow is deleted (its history here goes too).
+   */
   'drive/delete-flow': {
-    summary: 'Delete a flow', permission: 'drive:manage',
-    input: z.object({ id: z.string() }), output: z.object({ ok: z.literal(true) }),
-    http: { method: 'DELETE', path: '/flows/{id}' },
+    summary: 'Delete a flow record', permission: 'drive:manage',
+    input: z.object({ id: z.string(), deliveries: z.boolean().default(true) }), output: z.object({ ok: z.literal(true) }),
   },
-  /** What flows did, newest first: their history, and the proposals waiting for a decision. */
+  /** What flows did to files here, newest first: their history, and the proposals waiting for a decision. */
   'drive/flow-deliveries': {
     summary: 'List flow deliveries', permission: 'drive:manage',
     input: z.object({ flowId: z.string().optional(), fileId: z.string().optional(), state: deliveryState.optional(), limit: z.number().int().min(1).max(200).optional() }),
     output: z.object({ deliveries: z.array(flowDelivery) }),
-    http: { method: 'GET', path: '/flow-deliveries' },
   },
-  /** For the runner: the flows with their author's login. Never served over HTTP. */
-  'drive/automation-flows': {
-    summary: 'Read flows for the automation runner', permission: 'drive:manage',
-    output: z.object({ flows: z.array(storedFlow.extend({ authorSub: z.string() })) }),
+  /** For the runner: flows still kept in this space from before flows moved out of spaces. Never served over HTTP. */
+  'drive/legacy-flows': {
+    summary: 'Read space-local flows to move them out', permission: 'drive:manage',
+    output: z.object({ flows: z.array(legacyFlow) }),
   },
-  /** For the runner: whether there is anything to do — queued arrivals, or a schedule due. */
+  /** For the runner: whether there is anything to do here — queued arrivals, or space-local flows to move out. */
   'drive/automation-pending': {
     summary: 'Count queued automation work', permission: 'drive:manage',
-    output: z.object({ queued: z.number().int(), dueSchedules: z.number().int() }),
+    output: z.object({ queued: z.number().int(), legacyFlows: z.number().int() }),
   },
   /** For the runner: the oldest queued items, with each file as it is now. */
   'drive/automation-claim': {
@@ -848,11 +839,6 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       detail: z.record(z.string(), z.unknown()).optional(), expect: z.array(deliveryState.or(z.literal('none'))).optional(),
     }),
     output: z.object({ delivery: flowDelivery.nullable(), changed: z.boolean(), previous: deliveryState.or(z.literal('none')) }),
-  },
-  /** A scheduled flow ran (or a backfill did): when, so the next one picks up from there. */
-  'drive/flow-ran': {
-    summary: 'Record when a flow last ran', permission: 'drive:manage',
-    input: z.object({ flowId: z.string(), at: z.string() }), output: z.object({ ok: z.literal(true) }),
   },
   /** A file a flow is copying in: recorded before its bytes, so its arrival never starts another flow. Again with a later version, the same flow's mark moves to it. */
   'drive/record-file-origin': {

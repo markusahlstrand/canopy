@@ -21,7 +21,6 @@ describe('the derived route table', () => {
     expect(mounted.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
       'DELETE /api/files/:fileId',
       'DELETE /api/files/:fileId/comments/:commentId',
-      'DELETE /api/flows/:id',
       'DELETE /api/folders/:folderId/shares',
       'DELETE /api/plugins/:id',
       'GET /api/changes',
@@ -31,8 +30,6 @@ describe('the derived route table', () => {
       'GET /api/files/:fileId/text',
       'GET /api/files/:fileId/versions',
       'GET /api/files/:fileId/versions/:versionId',
-      'GET /api/flow-deliveries',
-      'GET /api/flows',
       'GET /api/folders/:folderId/all-files',
       'GET /api/folders/:folderId/files',
       'GET /api/folders/:folderId/folders',
@@ -94,10 +91,9 @@ describe('the derived route table', () => {
     expect(operations).not.toContain('drive/record-person');
     expect(operations).not.toContain('drive/record-text');
     expect(operations).not.toContain('drive/forget-person');
-    // A flow acts as its author's login, which only the worker's session knows; the runner's
-    // reads and writes are the runner's.
-    for (const op of ['drive/save-flow', 'drive/automation-flows', 'drive/automation-claim', 'drive/automation-ack',
-      'drive/automation-pending', 'drive/record-flow-delivery', 'drive/flow-ran', 'drive/record-file-origin', 'drive/file-facts', 'drive/flow-candidates']) {
+    // Flows belong to the install, so the worker serves them; the runner's reads and writes are the runner's.
+    for (const op of ['drive/delete-flow', 'drive/flow-deliveries', 'drive/legacy-flows', 'drive/automation-claim', 'drive/automation-ack',
+      'drive/automation-pending', 'drive/record-flow-delivery', 'drive/record-file-origin', 'drive/file-facts', 'drive/flow-candidates']) {
       expect(operations).not.toContain(op);
     }
   });
