@@ -1,0 +1,25 @@
+{
+  "$schema": "../../../documentation/canopy-plugin.schema.json",
+  "id": "eml-viewer",
+  "name": "Email Viewer",
+  "version": "0.1.0",
+  "description": "Shows .eml messages as a readable email (sender, recipients, subject, date, attachments and body) inside a sandboxed preview. Loads the postal-mime parser from a CDN and falls back to the raw message offline.",
+  "icon": "mail",
+  "color": "217 91% 60%",
+  "entry": "index.js",
+  "capabilities": [{ "kind": "item:read" }],
+  "contributes": {
+    "viewers": [
+      {
+        "id": "eml",
+        "title": "Email",
+        "match": ["message/rfc822", ".eml"],
+        "fill": true
+      }
+    ],
+    "store": {
+      "category": "Productivity",
+      "tagline": "Read saved and forwarded emails without opening a mail app."
+    }
+  }
+}
