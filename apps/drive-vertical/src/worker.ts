@@ -14,7 +14,8 @@ import { normalizeNpmRegistry } from '@canopy/plugin-sources';
 import { signPluginImport, verifyPluginImport } from './plugin-import-attestation.js';
 import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors';
 import { createModelHost } from '@substrat-run/vertical-host/model';
-import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, MAX_TEXT_CHARS, planRun, type AutoLabelPayload } from './document-ai.js';
+import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, latestWrote, manualInstance, MAX_TEXT_CHARS, planRun, settledBy, type AutoLabelPayload } from './document-ai.js';
+import { mountLabel } from './label-routes.js';
 import { isLockedName } from './editable-text.js';
 import { AUTOMATION_JOB, automationJob, DISPATCH_INSTANCE, FLOW_BACKFILL_JOB, flowBackfillJob, FLOW_RUN_JOB, flowRunJob, type AutomationDeps, type Bytes } from './automation.js';
 import { mountFlows } from './flow-routes.js';
@@ -480,6 +481,7 @@ function documentAiFor(env: Env, host: CloudflareScopeHost) {
     scopeFor: (p) => host.getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
     enabled: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.autoLabel === true,
     categories: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.categories ?? [],
+    settled: async (p, versionId) => settledBy(await labelRuns(host, nodeOf(p), p.fileId), versionId),
     model: (p) => env.AI ? modelFor(env, env.AI, {
       spec: env.DOCUMENT_AI_MODEL || DEFAULT_DOCUMENT_AI_MODEL,
       sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
@@ -621,7 +623,7 @@ app.use('*', invocationLog<Env>({
   allowUnsigned: (env) => env.ALLOW_DEV_NODE === 'true',
 }));
 app.use('/api/*', async (c, next) => {
-  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|source|accept-invite|claim-owner|app-passwords|assistant|flows(?:\/preview|\/[^/]+\/run)?|flow-deliveries\/decide)$/.test(c.req.path);
+  const jsonMutation = ['POST','PUT','PATCH'].includes(c.req.method) && /^\/api\/(sites|space-settings|plugins(?:\/[^/]+)?|plugin-import\/(?:github|npm)|invites|source|accept-invite|claim-owner|app-passwords|assistant|flows(?:\/preview|\/[^/]+\/run)?|flow-deliveries\/decide|label)$/.test(c.req.path);
   if (jsonMutation && c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HTTPException(415, {message:'Use application/json for this request.'});
   const origin = c.req.header('origin');
   if (jsonMutation && origin && origin !== new URL(c.req.url).origin) throw new HTTPException(403, {message:'Cross-origin mutations are not allowed.'});
@@ -955,6 +957,38 @@ mountFlows(app, async (c) => {
       await host.startJobRun(node.tenantId, node.scopeId, { moduleId: DRIVE_MODULE_ID, job, instance, payload });
       await defer(c, host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
         console.error('drive.flow.run-failed', { error: error instanceof Error ? error.message : String(error) });
+      }));
+    },
+  };
+});
+mountLabel(app, async (c) => {
+  const env = c.env;
+  const principal = await principalFor(env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, env);
+  const host = hostFor(env);
+  return {
+    scope: await host.getScope(principal, node.tenantId, node.scopeId),
+    unavailable: async () => {
+      if (!env.AI) return 'Document AI isn’t available here.';
+      if (!(await identityDo(env, node).readSpaceSettings(node.scopeId))?.autoLabel) {
+        return 'Document AI is off in this space. An administrator can turn it on in space settings.';
+      }
+      return null;
+    },
+    queue: async (files) => {
+      // A few at a time: each file is two run reads and a start against the scope.
+      for (let i = 0; i < files.length; i += 10) {
+        await Promise.all(files.slice(i, i + 10).map(async (file) => {
+          const previous = latestWrote(await labelRuns(host, node, file.id));
+          const payload: AutoLabelPayload = {
+            tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, principal, manual: true, ...(previous ? { previous } : {}),
+          };
+          await host.startJobRun(node.tenantId, node.scopeId, { moduleId: DRIVE_MODULE_ID, job: AUTO_LABEL_JOB, instance: manualInstance(file.id), payload });
+        }));
+      }
+      await defer(c, host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
+        console.error('drive.document-ai.run-failed', { error: error instanceof Error ? error.message : String(error) });
       }));
     },
   };
@@ -1311,13 +1345,24 @@ async function labelSoon(
   try {
     if (!(await identityDo(env, node).readSpaceSettings(node.scopeId))?.autoLabel) return;
     const key = { moduleId: DRIVE_MODULE_ID, job: AUTO_LABEL_JOB, instance: file.id };
-    const plan = planRun(await host.jobRuns(node.tenantId, node.scopeId, key), file.versionId, Date.now());
+    // Manual runs count too: one that answered about this version settles it, and starts the cooldown.
+    const plan = planRun(await labelRuns(host, node, file.id), file.versionId, Date.now());
     if (!plan) return;
     const payload: AutoLabelPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, principal, ...plan };
     await host.startJobRun(node.tenantId, node.scopeId, { ...key, payload });
   } catch (error) {
     console.error('drive.document-ai.queue-failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) });
   }
+}
+
+/** Every Document AI run of a file: its automatic instance and its manual one. */
+async function labelRuns(host: CloudflareScopeHost, node: Node, fileId: string) {
+  const key = (instance: string) => ({ moduleId: DRIVE_MODULE_ID, job: AUTO_LABEL_JOB, instance });
+  const [auto, manual] = await Promise.all([
+    host.jobRuns(node.tenantId, node.scopeId, key(fileId)),
+    host.jobRuns(node.tenantId, node.scopeId, key(manualInstance(fileId))),
+  ]);
+  return [...auto, ...manual];
 }
 
 /**
