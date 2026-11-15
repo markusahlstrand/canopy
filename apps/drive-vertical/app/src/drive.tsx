@@ -1,4 +1,5 @@
 import { SpaceSettingsDialog } from './space-settings-dialog';
+import { FlowsDialog } from './flows-dialog';
 import { BulkRestore } from './bulk-restore';
 import { BulkTrash } from './bulk-trash';
 import { SearchMatchFilter, filterMatches, type MatchFilter } from './search-match-filter';
@@ -299,6 +300,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [cmdOpen, setCmdOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false);
+  const [flowsOpen, setFlowsOpen] = useState(false);
   const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
   const [spacesOpen, setSpacesOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
@@ -1286,6 +1288,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           onCreateSpace={canManagePeople && !offline ? () => setCreateSpaceOpen(true) : undefined}
           canManageSpace={canManagePeople}
           onSpaceSettings={() => setSpaceSettingsOpen(true)}
+          onFlows={() => setFlowsOpen(true)}
           onSpaceMembers={() => setPeopleOpen(true)}
           onSpacePlugins={() => setViewersOpen(true)}
           account={compact => accountMenu(compact)}
@@ -1315,6 +1318,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             onCreateSpace={canManagePeople && !offline ? () => { setMobileNavOpen(false); setCreateSpaceOpen(true); } : undefined}
             canManageSpace={canManagePeople}
             onSpaceSettings={() => { setMobileNavOpen(false); setSpaceSettingsOpen(true); }}
+            onFlows={() => { setMobileNavOpen(false); setFlowsOpen(true); }}
             onSpaceMembers={() => { setMobileNavOpen(false); setPeopleOpen(true); }}
             onSpacePlugins={() => { setMobileNavOpen(false); setViewersOpen(true); }}
             account={compact => accountMenu(compact, () => setMobileNavOpen(false))}
@@ -1681,6 +1685,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
 
+      <FlowsDialog open={flowsOpen} onOpenChange={setFlowsOpen} here={liveSpace} />
       <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={() => { siteList.retry(); setSourceTick(tick => tick + 1); }} />
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
       <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />

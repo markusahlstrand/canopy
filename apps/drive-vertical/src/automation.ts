@@ -2,14 +2,18 @@
  * The worker side of automation: three kernel jobs that drain a space's automation queue,
  * run flows, and run a flow over files already there.
  *
+ * Flows belong to the install (`flow-directory.ts`); each names the spaces it watches. Every job
+ * here runs IN the space of the document, so a flow watching three spaces runs in each of them.
+ *
  *  - **`automation`** (one per space, instance `dispatch`) reads the queue every arrival writes
  *    (`drive_automation_queue`), starts Document AI for each new version where the space has it
- *    on, and starts a `flow-run` for each flow whose trigger and plain conditions match. It also
- *    fires scheduled flows. Started after an upload, and by the sweeper whenever the space has
- *    queued work or a schedule due, so a connector's sync is picked up within a sweep.
- *  - **`flow-run`** (one per flow, file and version) checks the flow again against the file as
- *    it is now, asks the flow's model questions, then either proposes the match or acts.
- *  - **`flow-backfill`** (one per flow) offers every file already in the space to a flow.
+ *    on, and starts a `flow-run` for each flow watching the space whose trigger fits and that the
+ *    document could reach an action in. It also fires scheduled flows, and moves flows a space
+ *    still keeps from before flows moved out of spaces into the install's directory.
+ *  - **`flow-run`** (one per flow, file and version) walks the flow's graph for the document as it
+ *    is now: plain checks from the facts, model questions asked once per check and version. It
+ *    acts along the path, pausing once at a wait for approval when the path has one.
+ *  - **`flow-backfill`** (one per flow and space) offers every file already in the space to a flow.
  *
  * **A flow acts as its author.** Its author is kept as a login, and resolved to that login's
  * principal in each space it touches when it runs: in the source space to read, in a target
@@ -17,24 +21,32 @@
  * the moment its author loses access, with that reason on its record.
  *
  * **Nothing is sent twice.** Each (flow, file, version) has one delivery row, moved only from
- * the states a step expects; a copy records its origin on the new file before its bytes, so a
- * retried copy finds its own file, and flows never fire on a copy a flow made.
+ * the states a step expects. It keeps the path taken, the model's answers and what each action
+ * did, so a retry or an approval resumes rather than repeats. A copy records its origin on the
+ * new file before its bytes, so a retried copy finds its own file, and flows never fire on a copy
+ * a flow made.
  */
 import { errorCodeOf, substratError } from '@substrat-run/contracts';
 import type { ExecutorRetryPolicy, JobHandler, JobPassContext } from '@substrat-run/kernel';
 import type { ModelAttribution, ModelHost } from '@substrat-run/vertical-host/model';
 import {
-  conditionHolds,
-  flowMatches,
+  graphMatches,
+  isAction,
+  legacyFlowDefinition,
+  legacyToGraph,
   scheduleDue,
-  triggerReacts,
+  spacesOf,
+  triggerOf,
+  walk,
+  type ActionNode,
   type AutomationItem,
   type FileFactsRow,
-  type FlowCondition,
   type FlowDelivery,
-  type StoredFlow,
+  type LegacyFlow,
 } from '@canopy/scope-drive/spec/model';
 import { fenceSafe } from './document-ai.js';
+import type { DirectoryFlow, FlowScopes, SaveFlow } from './flow-directory.js';
+import type { DeliveryDetail } from './flow-contract.js';
 
 export const AUTOMATION_JOB = 'automation';
 export const FLOW_RUN_JOB = 'flow-run';
@@ -64,7 +76,21 @@ export interface Bytes {
   upload(input: { entity: { entityType: string; entityId: string }; filename: string; contentType: string; body: unknown }): Promise<{ id: string }>;
 }
 
+/** The install's flows, as the jobs reach them (the tenant's identity DO). */
+export interface FlowDirectoryPort {
+  /** The flows that watch a space. */
+  flowsWatching(scope: string): Promise<DirectoryFlow[]>;
+  recordOutcome(id: string, outcome: { ok: true } | { ok: false; error: string }): Promise<void>;
+  lastRun(id: string, scope: string): Promise<string | null>;
+  markRan(id: string, scope: string, at: string): Promise<void>;
+  importFlow(input: SaveFlow & { createdAt: string; failures: number; pausedReason: string | null; lastRunAt: string | null }): Promise<boolean>;
+  /** A space's slug by scope id, or null when the install no longer lists it. */
+  slugOf(scope: string): Promise<string | null>;
+}
+
 export interface AutomationDeps {
+  /** The install's flows. */
+  directory(tenantId: string): FlowDirectoryPort;
   /** The space as its owner: the runner's own reads and records. Null when the space has no owner yet. */
   ownerScope(node: Node): Promise<Scope | null>;
   /** The space owner's principal: whose name Document AI runs under for a sync or mail. */
@@ -102,24 +128,59 @@ function spent(error: unknown): boolean {
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 500);
 
 /** Whether a flow has already done (or is doing, or was told not to do) what this file would ask of it. */
-export async function alreadyHandled(owner: Scope, flow: { id: string; definition: Pick<StoredFlow['definition'], 'versions'> }, fileId: string, versionId: string): Promise<boolean> {
+export async function alreadyHandled(owner: Scope, flow: { id: string; graph: { versions: 'first' | 'every' } }, fileId: string, versionId: string): Promise<boolean> {
   const { deliveries } = await owner.invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId: flow.id, fileId, limit: 200 });
   const settled = (d: FlowDelivery) => !['failed', 'skipped'].includes(d.state);
-  return flow.definition.versions === 'first'
+  return flow.graph.versions === 'first'
     ? deliveries.some(settled)
     : deliveries.some((d) => d.versionId === versionId && settled(d));
 }
 
 /** Offer one file to one flow: start its run when the flow could still act on it. */
-async function offer(deps: AutomationDeps, node: Node, owner: Scope, flow: StoredFlow, file: FileFactsRow): Promise<boolean> {
+async function offer(deps: AutomationDeps, node: Node, owner: Scope, flow: DirectoryFlow, file: FileFactsRow): Promise<boolean> {
   if (!file.versionId || file.state !== 'live' || file.copiedByFlow) return false;
-  if (flowMatches(flow.definition, file) === false) return false;
+  if (graphMatches(flow.graph, file) === false) return false;
   if (await alreadyHandled(owner, flow, file.fileId, file.versionId)) return false;
   await deps.start(node, FLOW_RUN_JOB, `${flow.id}:${file.fileId}:${file.versionId}`, { ...node, flowId: flow.id, fileId: file.fileId, versionId: file.versionId });
   return true;
 }
 
-const live = (flow: StoredFlow) => flow.enabled && !flow.pausedReason;
+const live = (flow: DirectoryFlow) => flow.enabled && !flow.pausedReason;
+
+/**
+ * Move the flows this space still keeps from before flows moved out of spaces into the install's
+ * directory, as graphs watching this space, under the same ids so their history here stays theirs.
+ * A row whose definition no longer parses can never run: it is dropped, its history kept.
+ */
+export async function moveLegacyFlows(deps: AutomationDeps, node: Node, owner: Scope): Promise<number> {
+  const { flows } = await owner.invoke<{ flows: LegacyFlow[] }>('drive/legacy-flows');
+  if (!flows.length) return 0;
+  const directory = deps.directory(node.tenantId);
+  const slug = await directory.slugOf(node.scopeId);
+  if (!slug) return 0;
+  let moved = 0;
+  for (const old of flows) {
+    const definition = legacyFlowDefinition.safeParse(old.definition);
+    if (definition.success) {
+      const graph = legacyToGraph(definition.data, slug);
+      const write: string[] = [];
+      for (const space of spacesOf(graph).write) {
+        const scope = await deps.spaceBySlug(node.tenantId, space);
+        if (scope) write.push(scope);
+      }
+      const scopes: FlowScopes = { watch: [node.scopeId], write };
+      const now = new Date(deps.now()).toISOString();
+      if (await directory.importFlow({
+        id: old.id, name: old.name, enabled: old.enabled, graph, author: old.author, authorSub: old.authorSub, scopes, now,
+        createdAt: old.createdAt, failures: old.failures, pausedReason: old.pausedReason, lastRunAt: old.lastRunAt,
+      })) moved++;
+    } else {
+      deps.log?.('drive.flow.legacy-dropped', { flowId: old.id, scopeId: node.scopeId });
+    }
+    await owner.invoke('drive/delete-flow', { id: old.id, deliveries: false });
+  }
+  return moved;
+}
 
 /** The dispatcher: queue in, Document AI and flow runs out. */
 export function automationJob(deps: AutomationDeps): JobHandler {
@@ -127,7 +188,10 @@ export function automationJob(deps: AutomationDeps): JobHandler {
     const node = pass.payload as Node;
     const owner = await deps.ownerScope(node);
     if (!owner) return { done: true };
-    const flows = await pass.step('flows', async () => (await owner.invoke<{ flows: (StoredFlow & { authorSub: string })[] }>('drive/automation-flows')).flows);
+    const directory = deps.directory(node.tenantId);
+    const pending = await pass.step('pending', () => owner.invoke<{ queued: number; legacyFlows: number }>('drive/automation-pending'));
+    if (pending.legacyFlows) pass.count('flows-moved', await pass.step('move-legacy', () => moveLegacyFlows(deps, node, owner)));
+    const flows = await pass.step('flows', () => directory.flowsWatching(node.scopeId));
     const items = await pass.step('claim', async () => (await owner.invoke<{ items: AutomationItem[] }>('drive/automation-claim', { limit: CLAIM_LIMIT })).items);
 
     for (const item of items) {
@@ -141,7 +205,7 @@ export function automationJob(deps: AutomationDeps): JobHandler {
         }
         let started = 0;
         for (const flow of flows) {
-          if (!live(flow) || !triggerReacts(flow.definition.trigger, item.trigger)) continue;
+          if (!live(flow) || triggerOf(flow.graph).on !== item.trigger) continue;
           if (await offer(deps, node, owner, flow, file)) started++;
         }
         pass.count('flow-runs', started);
@@ -150,15 +214,23 @@ export function automationJob(deps: AutomationDeps): JobHandler {
     }
     if (items.length) await pass.step('ack', () => owner.invoke('drive/automation-ack', { upTo: items[items.length - 1]!.seq }));
 
-    // Scheduled flows: each due one offers what arrived since it last ran, then moves its mark.
+    // Scheduled flows: each one due here offers what arrived here since it last ran here, then moves its mark.
     const now = deps.now();
-    for (const flow of flows) {
-      if (!live(flow) || !scheduleDue(flow.definition.trigger, flow.lastRunAt, now)) continue;
+    const due = await pass.step('schedules', async () => {
+      const out: { flowId: string; since: string | null }[] = [];
+      for (const flow of flows) {
+        if (!live(flow) || triggerOf(flow.graph).on !== 'schedule') continue;
+        const since = await directory.lastRun(flow.id, node.scopeId);
+        if (scheduleDue(flow.graph, since, now)) out.push({ flowId: flow.id, since });
+      }
+      return out;
+    });
+    for (const { flowId, since } of due) {
       // Paged by the backfill job, a pass per page; the mark moves only once the last page is done,
       // so a run cut short leaves the rest for the next one. Until then this joins the same run.
-      await pass.step(`schedule:${flow.id}`, async () => {
-        const payload: BackfillPayload = { ...node, flowId: flow.id, since: flow.lastRunAt, markAt: new Date(now).toISOString() };
-        await deps.start(node, FLOW_BACKFILL_JOB, flow.id, payload as unknown as Record<string, unknown>);
+      await pass.step(`schedule:${flowId}`, async () => {
+        const payload: BackfillPayload = { ...node, flowId, since, markAt: new Date(now).toISOString() };
+        await deps.start(node, FLOW_BACKFILL_JOB, flowId, payload as unknown as Record<string, unknown>);
         return true;
       });
     }
@@ -170,36 +242,43 @@ export interface FlowRunPayload extends Node {
   flowId: string;
   fileId: string;
   versionId: string;
-  /** A person approved this delivery's proposal: act, without asking again. */
+  /** A person approved this delivery at its wait: go past it without proposing again. */
   approved?: boolean;
 }
 
 export type FlowRunOutcome = 'done' | 'proposed' | 'skipped' | 'failed' | 'not-matching' | 'taken';
 
-/** One flow, one file version: check, ask, propose or act, and record what happened. */
+/**
+ * One flow, one file version: walk the graph, ask what the path asks, act along it, pause once at
+ * a wait for approval, and record what happened. What an earlier run of this delivery found (the
+ * model's answers) and did (each action's result) is read back first, so nothing is asked or done twice.
+ */
 export function flowRunJob(deps: AutomationDeps): JobHandler {
   return async (pass) => {
     const p = pass.payload as FlowRunPayload;
     const node: Node = { tenantId: p.tenantId, scopeId: p.scopeId };
     const owner = await deps.ownerScope(node);
     if (!owner) return finish(pass, 'skipped');
-    const record = (state: string, detail?: Record<string, unknown>, expect?: string[]) =>
+    const directory = deps.directory(node.tenantId);
+    const record = (state: string, detail?: DeliveryDetail, expect?: string[]) =>
       owner.invoke<{ changed: boolean; delivery: FlowDelivery | null }>('drive/record-flow-delivery', {
         flowId: p.flowId, fileId: p.fileId, versionId: p.versionId, state, ...(detail ? { detail } : {}), ...(expect ? { expect } : {}),
       });
 
-    // The flow, its author here, and the file as the author sees it now.
-    type Loaded = { skip: string } | { flow: StoredFlow & { authorSub: string }; author: string; facts: FileFactsRow };
+    // The flow, its author here, the file as the author sees it now, and what earlier runs of this delivery left.
+    type Loaded = { skip: string } | { flow: DirectoryFlow; author: string; facts: FileFactsRow; prior: DeliveryDetail };
     const loaded = await pass.step('load', async (): Promise<Loaded> => {
-      const flow = (await owner.invoke<{ flows: (StoredFlow & { authorSub: string })[] }>('drive/automation-flows')).flows.find((f) => f.id === p.flowId);
-      if (!flow || !live(flow)) return { skip: 'the flow is off, paused or gone' };
+      const flow = (await directory.flowsWatching(node.scopeId)).find((f) => f.id === p.flowId);
+      if (!flow || !live(flow)) return { skip: 'the flow is off, paused, gone, or no longer watches this space' };
       const author = await deps.principalIn(node, flow.authorSub);
       if (!author) return { skip: 'whoever saved the flow is no longer in this space' };
       try {
         const facts = await (await deps.scopeAs(node, author)).invoke<FileFactsRow>('drive/file-facts', { fileId: p.fileId });
         if (facts.state !== 'live') return { skip: 'the file is gone' };
         if (facts.versionId !== p.versionId) return { skip: 'the file has a newer version' };
-        return { flow, author, facts };
+        const { deliveries } = await owner.invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId: p.flowId, fileId: p.fileId, limit: 200 });
+        const prior = (deliveries.find((d) => d.versionId === p.versionId)?.detail ?? {}) as DeliveryDetail;
+        return { flow, author, facts, prior };
       } catch (error) {
         if (terminal(error)) return { skip: `the flow's author can't read this file (${messageOf(error)})` };
         throw error;
@@ -211,72 +290,103 @@ export function flowRunJob(deps: AutomationDeps): JobHandler {
       deps.log?.('drive.flow.skipped', { flowId: p.flowId, fileId: p.fileId, reason: loaded.skip });
       return finish(pass, 'skipped');
     }
-    const { flow, author, facts } = loaded;
-    if (flowMatches(flow.definition, facts) === false) {
-      if (p.approved) await pass.step('record-unmatched', () => record('skipped', { reason: 'the file no longer matches' }, ['approved']));
+    const { flow, author, facts, prior } = loaded;
+    const byId = new Map(flow.graph.nodes.map((n) => [n.id, n] as const));
+
+    // The path, asking each model question on it once (an answer an earlier run got stands).
+    const answers: Record<string, boolean> = { ...(prior.answers ?? {}) };
+    let route = walk(flow.graph, facts, answers);
+    while (route.needs) {
+      const check = byId.get(route.needs);
+      const question = check?.type === 'check' && check.condition.field === 'ask' ? check.condition.question : null;
+      if (!question) break;
+      const id = route.needs;
+      const answer = await pass.step(`ask:${id}`, async () => ask(deps, node, await deps.scopeAs(node, author), facts, question), WORK_RETRY)
+        .catch(async (error: unknown) => {
+          if (!spent(error)) throw error;
+          await record('failed', { error: `Couldn't ask the model: ${messageOf(error)}`, answers, path: route.path });
+          await directory.recordOutcome(flow.id, { ok: false, error: messageOf(error) });
+          return null;
+        });
+      if (answer === null) return finish(pass, 'failed');
+      answers[id] = answer;
+      route = walk(flow.graph, facts, answers);
+    }
+    const path = route.path;
+    const actions = path.map((id) => byId.get(id)).filter((n): n is ActionNode => !!n && isAction(n));
+    if (!actions.length) {
+      if (p.approved) await pass.step('record-unmatched', () => record('skipped', { reason: 'the document no longer reaches an action', path, answers }, ['approved']));
       return finish(pass, 'not-matching');
     }
+    const wait = path.find((id) => byId.get(id)?.type === 'approval');
+    const beforeWait = wait ? actions.filter((a) => path.indexOf(a.id) < path.indexOf(wait)) : actions;
+    const done: Record<string, Record<string, unknown>> = { ...(prior.done ?? {}) };
+    const pending = (list: ActionNode[]) => list.filter((a) => !done[a.id]);
 
-    // Model questions, before anyone is asked to approve: a proposal is a match, not a maybe.
-    const questions = flow.definition.conditions.filter((c): c is Extract<FlowCondition, { field: 'ask' }> => c.field === 'ask');
-    if (questions.length && !p.approved) {
-      const answers = await pass.step('ask', async () => {
-        const out: { question: string; answer: boolean }[] = [];
-        for (const q of questions) out.push({ question: q.question, answer: await ask(deps, node, await deps.scopeAs(node, author), facts, q.question) });
-        return out;
-      }, WORK_RETRY).catch(async (error: unknown) => {
-        if (!spent(error)) throw error;
-        await record('failed', { error: `Couldn't ask the model: ${messageOf(error)}` });
-        return null;
-      });
-      if (!answers) return finish(pass, 'failed');
-      if (answers.some((a) => !a.answer)) return finish(pass, 'not-matching');
-    }
-
-    if (flow.definition.mode === 'ask' && !p.approved) {
+    if (wait && !p.approved) {
+      // What comes before the wait runs now; what comes after waits for a person.
+      if (pending(beforeWait).length) {
+        const claim = await pass.step('claim', () => record('running', { path, answers, done, at: wait }, ['none', 'failed']));
+        if (!claim.changed) return finish(pass, 'taken');
+        const failure = await act(pass, deps, node, flow, author, facts, pending(beforeWait), done);
+        if (failure !== null) return fail(failure, { at: wait });
+        const proposed = await pass.step('propose', () => record('proposed', { path, answers, done, at: wait }, ['running']));
+        return finish(pass, proposed.changed ? 'proposed' : 'taken');
+      }
       // From `failed` too: a retry of a delivery whose question could not be asked proposes once it is answered.
-      const proposed = await pass.step('propose', () => record('proposed', {}, ['none', 'failed']));
+      const proposed = await pass.step('propose', () => record('proposed', { path, answers, done, at: wait }, ['none', 'failed']));
       return finish(pass, proposed.changed ? 'proposed' : 'taken');
     }
 
     // Claim the delivery, once: a second run for the same version finds it taken.
-    const claim = await pass.step('claim', () => record('running', {}, p.approved ? ['approved'] : ['none', 'failed']));
+    const approved = Boolean(wait && p.approved);
+    const claim = await pass.step('claim', () => record('running', { path, answers, done, approved }, p.approved ? ['approved'] : ['none', 'failed']));
     if (!claim.changed) return finish(pass, 'taken');
+    const failure = await act(pass, deps, node, flow, author, facts, pending(actions), done);
+    if (failure !== null) return fail(failure, { approved });
+    await pass.step('record-done', () => record('done', { path, answers, done, approved }));
+    await pass.step('outcome', () => directory.recordOutcome(flow.id, { ok: true }));
+    deps.log?.('drive.flow.done', { flowId: p.flowId, fileId: p.fileId, actions: Object.keys(done).length });
+    return finish(pass, 'done');
 
-    const targets: Record<string, unknown>[] = [];
-    let failure: string | null = null;
-    for (const [i, action] of flow.definition.actions.entries()) {
-      let result: Record<string, unknown>;
-      try {
-        result = await pass.step(`act:${i}`, async (): Promise<Record<string, unknown>> => {
-          try {
-            if (action.type === 'label') return await addLabel(await deps.scopeAs(node, author), p.fileId, action.value);
-            return await copy(deps, node, flow, author, facts, action);
-          } catch (error) {
-            // Refused for good: no retry will change the answer, so it is this delivery's answer.
-            if (terminal(error)) return { error: messageOf(error) };
-            throw error;
-          }
-        }, WORK_RETRY);
-      } catch (error) {
-        // The last try failed: say so on the delivery before the run itself fails. Anything else
-        // (a retry still to come, the runtime asking to wait) is the driver's.
-        if (!spent(error)) throw error;
-        result = { error: messageOf(error) };
-      }
-      if ('error' in result) { failure = String(result.error); break; }
-      targets.push(result);
-    }
-    if (failure !== null) {
-      // The conditions held (questions included) before any action ran: a retry may act without asking again.
-      await pass.step('record-failed', () => record('failed', { error: failure, targets, matched: true }));
-      deps.log?.('drive.flow.failed', { flowId: p.flowId, fileId: p.fileId, error: failure });
+    /** Say why on the delivery (the answers and finished actions stay, for a retry), and count it against the flow. */
+    async function fail(error: string, extra: DeliveryDetail) {
+      await pass.step('record-failed', () => record('failed', { error, path, answers, done, ...extra }));
+      await pass.step('outcome', () => directory.recordOutcome(flow.id, { ok: false, error }));
+      deps.log?.('drive.flow.failed', { flowId: p.flowId, fileId: p.fileId, error });
       return finish(pass, 'failed');
     }
-    await pass.step('record-done', () => record('done', { targets }));
-    deps.log?.('drive.flow.done', { flowId: p.flowId, fileId: p.fileId, targets: targets.length });
-    return finish(pass, 'done');
   };
+}
+
+/** Run actions in path order, each once (its result lands in `done`). The first failure stops them, and is returned. */
+async function act(
+  pass: JobPassContext, deps: AutomationDeps, node: Node, flow: DirectoryFlow, author: string, facts: FileFactsRow,
+  actions: ActionNode[], done: Record<string, Record<string, unknown>>,
+): Promise<string | null> {
+  for (const action of actions) {
+    let result: Record<string, unknown>;
+    try {
+      result = await pass.step(`act:${action.id}`, async (): Promise<Record<string, unknown>> => {
+        try {
+          if (action.type === 'label') return await addLabel(await deps.scopeAs(node, author), facts.fileId, action.value);
+          return await copy(deps, node, flow, author, facts, action);
+        } catch (error) {
+          // Refused for good: no retry will change the answer, so it is this delivery's answer.
+          if (terminal(error)) return { error: messageOf(error) };
+          throw error;
+        }
+      }, WORK_RETRY);
+    } catch (error) {
+      // The last try failed: say so on the delivery before the run itself fails. Anything else
+      // (a retry still to come, the runtime asking to wait) is the driver's.
+      if (!spent(error)) throw error;
+      result = { error: messageOf(error) };
+    }
+    if ('error' in result) return String(result.error);
+    done[action.id] = result;
+  }
+  return null;
 }
 
 function finish(pass: JobPassContext, outcome: FlowRunOutcome) {
@@ -305,7 +415,7 @@ function candidateName(name: string, n: number): string {
  * never made twice; a name someone else's file holds gets a numbered sibling.
  */
 async function copy(
-  deps: AutomationDeps, node: Node, flow: StoredFlow & { authorSub: string }, author: string, facts: FileFactsRow,
+  deps: AutomationDeps, node: Node, flow: DirectoryFlow, author: string, facts: FileFactsRow,
   action: { space: string; folderId: string; alsoIn: string[] },
 ) {
   if (!facts.blobRef || !facts.versionId) throw substratError('conflict', 'this file has no stored bytes to copy');
@@ -401,7 +511,7 @@ export interface BackfillPayload extends Node {
   flowId: string;
   /** A scheduled run: only files whose current version arrived after this. */
   since?: string | null;
-  /** A scheduled run: when it started, recorded as the flow's last run once every page is done. */
+  /** A scheduled run: when it started, recorded as the flow's last run here once every page is done. */
   markAt?: string;
 }
 
@@ -412,9 +522,10 @@ export function flowBackfillJob(deps: AutomationDeps): JobHandler {
     const node: Node = { tenantId: p.tenantId, scopeId: p.scopeId };
     const owner = await deps.ownerScope(node);
     if (!owner) return { done: true };
+    const directory = deps.directory(node.tenantId);
     const after = (pass.cursor as { after?: string } | null)?.after;
     const page = await pass.step('page', async () => {
-      const flow = (await owner.invoke<{ flows: StoredFlow[] }>('drive/automation-flows')).flows.find((f) => f.id === p.flowId);
+      const flow = (await directory.flowsWatching(node.scopeId)).find((f) => f.id === p.flowId);
       if (!flow || !live(flow)) return { offered: 0, next: null };
       const { files, next } = await owner.invoke<{ files: FileFactsRow[]; next: string | null }>('drive/flow-candidates', { since: p.since ?? null, limit: PAGE, ...(after ? { after } : {}) });
       let offered = 0;
@@ -423,10 +534,8 @@ export function flowBackfillJob(deps: AutomationDeps): JobHandler {
     }, WORK_RETRY);
     pass.count('offered', page.offered);
     if (page.next) return { cursor: { after: page.next } };
-    if (p.markAt) await pass.step('mark', () => owner.invoke('drive/flow-ran', { flowId: p.flowId, at: p.markAt }));
+    if (p.markAt) await pass.step('mark', () => directory.markRan(p.flowId, node.scopeId, p.markAt!));
     return { done: true };
   };
 }
 
-/** Whether a condition list asks the model anything — the app warns that such a flow costs a call per match. */
-export const asksModel = (conditions: readonly FlowCondition[]) => conditions.some((c) => conditionHolds(c, { name: '', folderPath: '', labels: [], category: null }) === 'ask');

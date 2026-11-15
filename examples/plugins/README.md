@@ -6,6 +6,7 @@ Reference plugins for Canopy. Each folder is a real, working plugin you can copy
 |---|---|---|
 | [`image-viewer`](image-viewer) | viewer | Minimal binary viewer — render bytes as an `<img>`. |
 | [`pdf-viewer`](pdf-viewer) | viewer | CDN library (pdf.js) → `<canvas>`, with an offline fallback. |
+| [`eml-viewer`](eml-viewer) | viewer | Parse a format with a CDN library (postal-mime), a script-less nested frame for untrusted HTML, raw fallback. |
 | [`markdown-editor`](markdown-editor) | viewer + editor | `item:write`, the save handshake, CDN editor with a plain-text fallback. |
 | [`hello`](hello) | server hook | A tiny `enrichItem` hook (manifest + capability shape). |
 

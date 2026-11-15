@@ -7,9 +7,10 @@ import { platformActorId, principalId, scopeId, tenantId } from '@substrat-run/c
 import { ulid } from '@substrat-run/kernel';
 import { driveManifest, driveModule, DRIVE_PERM, ROOT_FOLDER_ID } from '../src/index.js';
 import { ROLES } from '../src/provision.js';
+import { DatabaseSync } from 'node:sqlite';
 import {
-  conditionHolds, flowDefinition, flowMatches, globMatches, scheduleDue,
-  type AutomationItem, type FileFactsRow, type FlowDelivery, type StoredFlow,
+  conditionHolds, globMatches,
+  type AutomationItem, type FileFactsRow, type FlowDelivery, type LegacyFlow,
 } from '../spec/model.js';
 
 const dirs: string[] = [];
@@ -40,14 +41,22 @@ async function world() {
   const claim = async () => (await human.invoke<{ items: AutomationItem[] }>('drive/automation-claim', {})).items;
   const emitted = async (type: string) => (await host.admin.queryScope(staff, t, s, { sql: `SELECT COUNT(*) FROM _substrat_outbox WHERE type = '${type}'` })).rows[0]![0];
   const lastPayload = async (type: string) => JSON.parse(String((await host.admin.queryScope(staff, t, s, { sql: `SELECT payload FROM _substrat_outbox WHERE type = '${type}' ORDER BY id DESC LIMIT 1` })).rows[0]![0])) as Record<string, unknown>;
-  return { host, human, member, connector, bytes, connectorBytes, upload, claim, emitted, lastPayload, owner, t, s };
+  /** A flow row as a space kept it before flows moved out: only old installs still have them. */
+  const legacyRow = (id: string, definition: unknown) => {
+    const db = new DatabaseSync(join(dir, `${t}__${s}.sqlite`));
+    db.prepare(`INSERT INTO drive_flows (id, name, enabled, definition_json, author, author_sub, created_at, updated_at, last_run_at, failures, paused_reason)
+      VALUES (?, 'Statements', 1, ?, ?, 'sub-1', '2026-11-14T00:00:00Z', '2026-11-14T00:00:00Z', NULL, 0, NULL)`).run(id, JSON.stringify(definition), owner);
+    db.close();
+  };
+  return { host, human, member, connector, bytes, connectorBytes, upload, claim, emitted, lastPayload, legacyRow, owner, t, s };
 }
 
-const definition = flowDefinition.parse({
+const definition = {
   trigger: { on: 'arrived' },
   conditions: [{ field: 'folder', op: 'under', path: 'Statements' }],
-  actions: [{ type: 'copy', space: 'other', folderId: 'f1' }],
-});
+  actions: [{ type: 'copy', space: 'other', folderId: 'f1', alsoIn: [] }],
+  mode: 'ask', versions: 'first',
+};
 
 describe('the automation queue', () => {
   it('queues each uploaded version with the person who wrote it, and drains in order', async () => {
@@ -60,7 +69,7 @@ describe('the automation queue', () => {
       [b.id, b.versionId, 'arrived', w.owner],
     ]);
     expect(items[0]!.file).toMatchObject({ name: 'a.txt', folderPath: '', versionId: a.versionId, copiedByFlow: false });
-    expect(await w.human.invoke('drive/automation-pending')).toEqual({ queued: 2, dueSchedules: 0 });
+    expect(await w.human.invoke('drive/automation-pending')).toEqual({ queued: 2, legacyFlows: 0 });
     expect(await w.human.invoke('drive/automation-ack', { upTo: items[0]!.seq })).toEqual({ dropped: 1 });
     expect((await w.claim()).map((i) => i.fileId)).toEqual([b.id]);
   });
@@ -80,7 +89,8 @@ describe('the automation queue', () => {
   it('is only for managers', async () => {
     const w = await world();
     await expect(w.member.invoke('drive/automation-claim', {})).rejects.toThrow();
-    await expect(w.member.invoke('drive/list-flows')).rejects.toThrow();
+    await expect(w.member.invoke('drive/legacy-flows')).rejects.toThrow();
+    await expect(w.member.invoke('drive/flow-deliveries', {})).rejects.toThrow();
   });
 });
 
@@ -129,53 +139,44 @@ describe('categories', () => {
 });
 
 describe('flows', () => {
-  it('saves, lists, replaces and deletes a flow; the author login stays off the public read', async () => {
+  it('hands its space-local flows to the runner, and forgets one with or without its history', async () => {
     const w = await world();
-    const saved = await w.human.invoke<StoredFlow>('drive/save-flow', { name: 'Statements', enabled: true, definition, authorSub: 'sub-1' });
-    expect(saved).toMatchObject({ name: 'Statements', enabled: true, author: w.owner, failures: 0, pausedReason: null });
-    expect(saved).not.toHaveProperty('authorSub');
-    const listed = await w.human.invoke<{ flows: StoredFlow[] }>('drive/list-flows');
-    expect(listed.flows.map((f) => f.id)).toEqual([saved.id]);
-    const inner = await w.human.invoke<{ flows: (StoredFlow & { authorSub: string })[] }>('drive/automation-flows');
-    expect(inner.flows[0]!.authorSub).toBe('sub-1');
-    await w.human.invoke('drive/save-flow', { id: saved.id, name: 'Renamed', enabled: false, definition, authorSub: 'sub-2' });
-    expect((await w.human.invoke<{ flows: StoredFlow[] }>('drive/list-flows')).flows[0]).toMatchObject({ name: 'Renamed', enabled: false });
-    await w.human.invoke('drive/delete-flow', { id: saved.id });
-    expect((await w.human.invoke<{ flows: StoredFlow[] }>('drive/list-flows')).flows).toEqual([]);
+    w.legacyRow('old-1', definition);
+    expect((await w.human.invoke<{ legacyFlows: number }>('drive/automation-pending')).legacyFlows).toBe(1);
+    const { flows } = await w.human.invoke<{ flows: LegacyFlow[] }>('drive/legacy-flows');
+    expect(flows).toEqual([expect.objectContaining({ id: 'old-1', name: 'Statements', enabled: true, authorSub: 'sub-1', definition })]);
+    const a = await w.upload('a.txt', 'one');
+    await w.human.invoke('drive/record-flow-delivery', { flowId: 'old-1', fileId: a.id, versionId: a.versionId, state: 'proposed' });
+    // Moved out: the row goes, its history stays.
+    await w.human.invoke('drive/delete-flow', { id: 'old-1', deliveries: false });
+    expect((await w.human.invoke<{ flows: LegacyFlow[] }>('drive/legacy-flows')).flows).toEqual([]);
+    expect((await w.human.invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId: 'old-1' })).deliveries).toHaveLength(1);
+    // Deleted: its history here goes too.
+    await w.human.invoke('drive/delete-flow', { id: 'old-1' });
+    expect((await w.human.invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId: 'old-1' })).deliveries).toEqual([]);
   });
 
-  it('moves a delivery only from the states it expects, and pauses a flow that keeps failing', async () => {
+  it('moves a delivery only from the states it expects', async () => {
     const w = await world();
-    const flow = await w.human.invoke<StoredFlow>('drive/save-flow', { name: 'F', enabled: true, definition, authorSub: 'sub' });
     const a = await w.upload('a.txt', 'one');
     type Recorded = { delivery: FlowDelivery | null; changed: boolean; previous: string };
     const record = (state: string, expect?: string[], detail?: Record<string, unknown>) =>
-      w.human.invoke<Recorded>('drive/record-flow-delivery', { flowId: flow.id, fileId: a.id, versionId: a.versionId, state, ...(expect ? { expect } : {}), ...(detail ? { detail } : {}) });
+      w.human.invoke<Recorded>('drive/record-flow-delivery', { flowId: 'flow-1', fileId: a.id, versionId: a.versionId, state, ...(expect ? { expect } : {}), ...(detail ? { detail } : {}) });
     expect((await record('proposed', ['none'])).changed).toBe(true);
     expect((await record('proposed', ['none'])).changed).toBe(false);
     const approved = await record('approved', ['proposed']);
     expect(approved).toMatchObject({ changed: true, previous: 'proposed', delivery: { state: 'approved', fileName: 'a.txt' } });
     expect((await record('approved', ['proposed'])).changed).toBe(false);
     expect((await record('running', ['approved'])).delivery!.attempts).toBe(1);
-    for (let i = 0; i < 5; i++) await record('failed', undefined, { error: `boom ${i}` });
-    const [paused] = (await w.human.invoke<{ flows: StoredFlow[] }>('drive/list-flows')).flows;
-    expect(paused!.failures).toBe(5);
-    expect(paused!.pausedReason).toContain('boom 4');
-    const deliveries = await w.human.invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId: flow.id });
+    const failed = await record('failed', undefined, { error: 'boom' });
+    expect(failed.delivery).toMatchObject({ state: 'failed', detail: { error: 'boom' } });
+    const deliveries = await w.human.invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId: 'flow-1' });
     expect(deliveries.deliveries).toHaveLength(1);
-    // Saving again is taking it on: it starts over unpaused.
-    await w.human.invoke('drive/save-flow', { id: flow.id, name: 'F', enabled: true, definition, authorSub: 'sub' });
-    expect((await w.human.invoke<{ flows: StoredFlow[] }>('drive/list-flows')).flows[0]).toMatchObject({ failures: 0, pausedReason: null });
   });
 
-  it('counts a scheduled flow as due until it has run, and lists candidates after a time', async () => {
+  it('lists candidates after a time', async () => {
     const w = await world();
-    const scheduled = flowDefinition.parse({ ...definition, trigger: { on: 'schedule', every: 'day' } });
-    const flow = await w.human.invoke<StoredFlow>('drive/save-flow', { name: 'Daily', enabled: true, definition: scheduled, authorSub: 'sub' });
     const a = await w.upload('a.txt', 'one');
-    expect((await w.human.invoke<{ dueSchedules: number }>('drive/automation-pending')).dueSchedules).toBe(1);
-    await w.human.invoke('drive/flow-ran', { flowId: flow.id, at: new Date().toISOString() });
-    expect((await w.human.invoke<{ dueSchedules: number }>('drive/automation-pending')).dueSchedules).toBe(0);
     const all = await w.human.invoke<{ files: FileFactsRow[] }>('drive/flow-candidates', { since: null });
     expect(all.files.map((f) => f.fileId)).toEqual([a.id]);
     const later = await w.human.invoke<{ files: FileFactsRow[] }>('drive/flow-candidates', { since: new Date(Date.now() + 60_000).toISOString() });
@@ -239,11 +240,6 @@ describe('matching', () => {
     expect(conditionHolds({ field: 'category', values: ['bank-statement'], minConfidence: 0.99 }, { ...facts, category: { id: 'bank-statement', confidence: null, source: 'person' } })).toBe(true);
     expect(conditionHolds({ field: 'ask', question: 'Is it?' }, facts)).toBe('ask');
   });
-  it('fails fast on a plain condition, and leaves questions to the runner', () => {
-    expect(flowMatches({ conditions: [{ field: 'ask', question: 'Is it?' }, { field: 'label', value: 'nope' }] }, facts)).toBe(false);
-    expect(flowMatches({ conditions: [{ field: 'ask', question: 'Is it?' }, { field: 'label', value: 'bank' }] }, facts)).toBe('ask');
-    expect(flowMatches({ conditions: [] }, facts)).toBe(true);
-  });
   it('treats a pattern as literal except for * and ?', () => {
     expect(globMatches('a.b(1)*', 'A.B(1) copy')).toBe(true);
     expect(globMatches('a.b', 'axb')).toBe(false);
@@ -252,12 +248,5 @@ describe('matching', () => {
     expect(globMatches('*a*a*a*a*a*a*a*a*b', 'a'.repeat(5_000))).toBe(false);
     expect(globMatches('', '')).toBe(true);
     expect(globMatches('**', 'x')).toBe(true);
-  });
-  it('is due when never run or when the period has passed', () => {
-    const now = Date.parse('2026-11-12T10:00:00Z');
-    expect(scheduleDue({ on: 'schedule', every: 'day' }, null, now)).toBe(true);
-    expect(scheduleDue({ on: 'schedule', every: 'day' }, '2026-11-12T00:00:00Z', now)).toBe(false);
-    expect(scheduleDue({ on: 'schedule', every: 'hour' }, '2026-11-12T08:59:00Z', now)).toBe(true);
-    expect(scheduleDue({ on: 'arrived' }, null, now)).toBe(false);
   });
 });

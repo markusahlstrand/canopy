@@ -1,6 +1,7 @@
 /**
- * The scope side of automation: the queue every arrival writes, file categories, flows and
- * what they did. Everything that runs a model, crosses to another space or moves bytes is the
+ * The scope side of automation: the queue every arrival writes, file categories, and what flows
+ * did to files here. Flows themselves belong to the install (the worker's flow directory); the
+ * `drive_flows` rows left from when each space kept its own are read once and moved out. Everything that runs a model, crosses to another space or moves bytes is the
  * worker's (`apps/drive-vertical/src/automation.ts`); this file only keeps the records, so each
  * of them changes in one scope transaction.
  *
@@ -14,14 +15,12 @@ import { substratError, type HandlerInput, type HandlerOutput } from '@substrat-
 import { assertAllowed, ulid, type OperationContext, type OperationHandler } from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
 import {
-  flowDefinition,
-  scheduleDue,
   type driveOperations,
   type DeliveryState,
   type FileCategory,
   type FileFactsRow,
   type FlowDelivery,
-  type StoredFlow,
+  type LegacyFlow,
 } from '../spec/model.js';
 
 const fileRef = (id: string) => ({ entityType: 'file', entityId: id }) as const;
@@ -106,21 +105,17 @@ type FlowRow = {
   created_at: string; updated_at: string; last_run_at: string | null; failures: number; paused_reason: string | null;
 };
 
-/** A stored flow, or null when its definition no longer parses (an older shape): it is shown as broken, never run. */
-function flowFrom(row: FlowRow): (StoredFlow & { authorSub: string }) | null {
-  let raw: unknown;
-  try { raw = JSON.parse(row.definition_json); } catch { return null; }
-  const definition = flowDefinition.safeParse(raw);
-  if (!definition.success) return null;
+/** A space-local flow row, its definition as stored: the runner checks and converts it. */
+function legacyFrom(row: FlowRow): LegacyFlow {
+  let definition: unknown = null;
+  try { definition = JSON.parse(row.definition_json); } catch { definition = null; }
   return {
-    id: row.id, name: row.name, enabled: row.enabled === 1, definition: definition.data, author: row.author,
-    createdAt: row.created_at, updatedAt: row.updated_at, lastRunAt: row.last_run_at, failures: row.failures,
-    pausedReason: row.paused_reason, authorSub: row.author_sub,
+    id: row.id, name: row.name, enabled: row.enabled === 1, definition, author: row.author, authorSub: row.author_sub,
+    createdAt: row.created_at, updatedAt: row.updated_at, lastRunAt: row.last_run_at, failures: row.failures, pausedReason: row.paused_reason,
   };
 }
 
 const flowRows = (ctx: OperationContext) => ctx.sql.query<FlowRow>('SELECT * FROM drive_flows ORDER BY created_at, id');
-const publicFlow = ({ authorSub: _sub, ...flow }: StoredFlow & { authorSub: string }): StoredFlow => flow;
 
 type DeliveryRow = {
   flow_id: string; file_id: string; version_id: string; state: DeliveryState; detail_json: string;
@@ -135,14 +130,11 @@ const deliveryFrom = (row: DeliveryRow): FlowDelivery => {
   };
 };
 
-/** After this many failures in a row a flow stops itself, and says why. */
-export const FLOW_FAILURE_LIMIT = 5;
-
 type Ops = typeof driveOperations;
 type AutomationOp =
-  | 'drive/set-file-category' | 'drive/list-flows' | 'drive/save-flow' | 'drive/delete-flow' | 'drive/flow-deliveries'
-  | 'drive/automation-flows' | 'drive/automation-pending' | 'drive/automation-claim' | 'drive/automation-ack'
-  | 'drive/file-facts' | 'drive/flow-candidates' | 'drive/record-flow-delivery' | 'drive/flow-ran' | 'drive/record-file-origin';
+  | 'drive/set-file-category' | 'drive/delete-flow' | 'drive/flow-deliveries'
+  | 'drive/legacy-flows' | 'drive/automation-pending' | 'drive/automation-claim' | 'drive/automation-ack'
+  | 'drive/file-facts' | 'drive/flow-candidates' | 'drive/record-flow-delivery' | 'drive/record-file-origin';
 
 export const automationHandlers = {
   'drive/set-file-category': async (ctx, input) => {
@@ -176,35 +168,9 @@ export const automationHandlers = {
     return { fileId: input.fileId, category: after, changed: true };
   },
 
-  'drive/list-flows': async (ctx) => {
-    assertAllowed(await ctx.check(DRIVE_PERM.manage));
-    return { flows: flowRows(ctx).map(flowFrom).filter((f): f is NonNullable<typeof f> => !!f).map(publicFlow) };
-  },
-
-  'drive/save-flow': async (ctx, input) => {
-    assertAllowed(await ctx.check(DRIVE_PERM.manage));
-    const now = ctx.now();
-    const definition = JSON.stringify(input.definition);
-    let id = input.id;
-    if (id) {
-      const prior = ctx.sql.query<FlowRow>('SELECT * FROM drive_flows WHERE id = ?', [id])[0];
-      if (!prior) throw substratError('not_found', `flow not found: ${id}`);
-      // Saving is taking it on: the flow acts as whoever saved it last, and starts over unpaused.
-      ctx.sql.exec(`UPDATE drive_flows SET name = ?, enabled = ?, definition_json = ?, author = ?, author_sub = ?, updated_at = ?,
-        failures = 0, paused_reason = NULL WHERE id = ?`, [input.name, input.enabled ? 1 : 0, definition, ctx.principal, input.authorSub, now, id]);
-    } else {
-      if (flowRows(ctx).length >= 50) throw substratError('conflict', 'a space holds at most 50 flows');
-      id = ulid();
-      ctx.sql.exec(`INSERT INTO drive_flows (id, name, enabled, definition_json, author, author_sub, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [id, input.name, input.enabled ? 1 : 0, definition, ctx.principal, input.authorSub, now, now]);
-    }
-    const row = ctx.sql.query<FlowRow>('SELECT * FROM drive_flows WHERE id = ?', [id])[0]!;
-    return publicFlow(flowFrom(row)!);
-  },
-
   'drive/delete-flow': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
-    ctx.sql.exec('DELETE FROM drive_flow_deliveries WHERE flow_id = ?', [input.id]);
+    if (input.deliveries !== false) ctx.sql.exec('DELETE FROM drive_flow_deliveries WHERE flow_id = ?', [input.id]);
     ctx.sql.exec('DELETE FROM drive_flows WHERE id = ?', [input.id]);
     return { ok: true as const };
   },
@@ -223,18 +189,16 @@ export const automationHandlers = {
     return { deliveries: rows.map(deliveryFrom) };
   },
 
-  'drive/automation-flows': async (ctx) => {
+  'drive/legacy-flows': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
-    return { flows: flowRows(ctx).map(flowFrom).filter((f): f is NonNullable<typeof f> => !!f) };
+    return { flows: flowRows(ctx).map(legacyFrom) };
   },
 
   'drive/automation-pending': async (ctx) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
     const queued = ctx.sql.query<{ n: number }>('SELECT COUNT(*) AS n FROM drive_automation_queue')[0]?.n ?? 0;
-    const now = Date.parse(ctx.now());
-    const dueSchedules = flowRows(ctx).map(flowFrom)
-      .filter((f) => f && f.enabled && !f.pausedReason && scheduleDue(f.definition.trigger, f.lastRunAt, now)).length;
-    return { queued, dueSchedules };
+    const legacyFlows = ctx.sql.query<{ n: number }>('SELECT COUNT(*) AS n FROM drive_flows')[0]?.n ?? 0;
+    return { queued, legacyFlows };
   },
 
   'drive/automation-claim': async (ctx, input) => {
@@ -273,8 +237,6 @@ export const automationHandlers = {
 
   'drive/record-flow-delivery': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.manage));
-    const flow = ctx.sql.query<FlowRow>('SELECT * FROM drive_flows WHERE id = ?', [input.flowId])[0];
-    if (!flow) throw substratError('not_found', `flow not found: ${input.flowId}`);
     const key = [input.flowId, input.fileId, input.versionId];
     const prior = ctx.sql.query<DeliveryRow>('SELECT * FROM drive_flow_deliveries WHERE flow_id = ? AND file_id = ? AND version_id = ?', key)[0];
     const previous = prior?.state ?? 'none';
@@ -292,21 +254,7 @@ export const automationHandlers = {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(flow_id, file_id, version_id) DO UPDATE SET
       state = excluded.state, detail_json = excluded.detail_json, attempts = excluded.attempts, updated_at = excluded.updated_at`,
     [...key, input.state, detail, attempts, now, now]);
-    if (input.state === 'done') ctx.sql.exec('UPDATE drive_flows SET failures = 0 WHERE id = ?', [input.flowId]);
-    if (input.state === 'failed') {
-      const failures = flow.failures + 1;
-      const paused = failures >= FLOW_FAILURE_LIMIT
-        ? `Paused after ${failures} failures in a row. Last: ${String((input.detail as { error?: unknown } | undefined)?.error ?? 'unknown error').slice(0, 300)}`
-        : null;
-      ctx.sql.exec('UPDATE drive_flows SET failures = ?, paused_reason = COALESCE(paused_reason, ?) WHERE id = ?', [failures, paused, input.flowId]);
-    }
     return { delivery: read(), changed: true, previous };
-  },
-
-  'drive/flow-ran': async (ctx, input) => {
-    assertAllowed(await ctx.check(DRIVE_PERM.manage));
-    ctx.sql.exec('UPDATE drive_flows SET last_run_at = ? WHERE id = ?', [input.at, input.flowId]);
-    return { ok: true as const };
   },
 
   'drive/record-file-origin': async (ctx, input) => {

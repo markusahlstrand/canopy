@@ -5,6 +5,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqliteScopeHost } from '@substrat-run/adapter-sqlite';
@@ -14,7 +15,9 @@ import { ulid } from '@substrat-run/kernel';
 import type { ModelHost } from '@substrat-run/vertical-host/model';
 import { ROOT_FOLDER_ID, driveManifest, driveModule } from '@canopy/scope-drive';
 import { ROLES } from '@canopy/scope-drive/provision';
-import { flowDefinition, type FlowDelivery, type FlowDefinition, type StoredFlow } from '@canopy/scope-drive/spec/model';
+import { legacyFlowDefinition, legacyToGraph, spacesOf, type FlowDelivery, type FlowGraph } from '@canopy/scope-drive/spec/model';
+import * as directory from '../src/flow-directory';
+import type { DirectorySql } from '../src/space-creation';
 import { AUTO_LABEL_JOB, autoLabelJob, type AutoLabelPayload } from '../src/document-ai';
 import {
   AUTOMATION_JOB, automationJob, DISPATCH_INSTANCE, FLOW_BACKFILL_JOB, flowBackfillJob, FLOW_RUN_JOB, flowRunJob, parseAnswer,
@@ -32,9 +35,28 @@ const ada = { [source]: principalId.parse(ulid()), [target]: principalId.parse(u
 const bob = principalId.parse(ulid());
 const SLUGS: Record<string, ScopeId> = { qonto: source, a3docs: target, elsewhere };
 let modelReply = '{"label":"Bank statement","description":"A statement.","category":"bank-statement","confidence":0.92}';
-const run = vi.fn(async (input: { system: string }) => ({ text: input.system.includes('yes/no') ? '{"answer":"yes"}' : modelReply }));
+let answer = 'yes';
+const run = vi.fn(async (input: { system: string }) => ({ text: input.system.includes('yes/no') ? `{"answer":"${answer}"}` : modelReply }));
+
+/** The install's flow directory, as the identity DO keeps it: the real functions over an in-memory database. */
+const db = new DatabaseSync(':memory:');
+const sql: DirectorySql = {
+  exec: (query, ...values) => {
+    const stmt = db.prepare(query);
+    return stmt.columns().length ? stmt.all(...values) as Record<string, unknown>[] : (stmt.run(...values), []);
+  },
+};
+const slugOf = (scope: string) => Object.entries(SLUGS).find(([, s]) => s === scope)?.[0] ?? null;
 
 const deps: AutomationDeps = {
+  directory: () => ({
+    flowsWatching: async (scope) => directory.flowsWatching(sql, scope),
+    recordOutcome: async (id, outcome) => directory.recordOutcome(sql, id, outcome),
+    lastRun: async (id, scope) => directory.lastRun(sql, id, scope),
+    markRan: async (id, scope, at) => directory.markRan(sql, id, scope, at),
+    importFlow: async (input) => directory.importFlow(sql, input),
+    slugOf: async (scope) => slugOf(scope),
+  }),
   ownerScope: async (n) => host.getScope(ada[n.scopeId]!, tenant, scopeId.parse(n.scopeId)),
   ownerPrincipal: async (n) => ada[n.scopeId] ?? null,
   principalIn: async (n, sub) => (sub === 'ada' ? ada[n.scopeId] ?? null : sub === 'bob' && n.scopeId === source ? bob : null),
@@ -80,9 +102,23 @@ async function settle(...spaces: ScopeId[]) {
   }
 }
 
-async function saveFlow(s: ScopeId, name: string, definition: Partial<FlowDefinition> & Pick<FlowDefinition, 'trigger' | 'actions'>, sub = 'ada') {
-  return (await scopeOf(s)).invoke<StoredFlow>('drive/save-flow', { name, enabled: true, definition: flowDefinition.parse(definition), authorSub: sub });
+/** Save a flow as the routes do: its spaces read off the graph, by scope id. */
+function saveGraph(name: string, graph: FlowGraph, sub = 'ada') {
+  const { watch, write } = spacesOf(graph);
+  const saved = directory.saveFlow(sql, {
+    id: ulid(), name, enabled: true, graph, author: sub, authorSub: sub, now: new Date().toISOString(),
+    scopes: { watch: watch.map((slug) => SLUGS[slug]!), write: write.map((slug) => SLUGS[slug]!) },
+  }, true);
+  if ('error' in saved) throw new Error(saved.error);
+  return saved;
 }
+
+/** A straight flow, in the shape flows had before graphs: its conditions in a row, then its actions. */
+function saveFlow(s: ScopeId, name: string, definition: Record<string, unknown>, sub = 'ada') {
+  return saveGraph(name, legacyToGraph(legacyFlowDefinition.parse(definition), slugOf(s)!), sub);
+}
+
+const stored = (id: string) => directory.getFlow(sql, id)!.flow;
 
 const deliveries = async (s: ScopeId, flowId: string) =>
   (await (await scopeOf(s)).invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId })).deliveries;
@@ -140,7 +176,7 @@ describe('flows across spaces', () => {
     const details = await (await scopeOf(target)).invoke<{ origin: { flowId: string; sourceFileId: string } }>('drive/file-details', { fileId: copied[0]!.id });
     expect(details.origin).toMatchObject({ flowId: flow.id, sourceFileId: file.id, sourceScope: source });
     const [delivery] = await deliveries(source, flow.id);
-    expect(delivery).toMatchObject({ fileId: file.id, versionId: file.versionId, state: 'done', detail: { targets: [{ space: 'a3docs', fileId: copied[0]!.id }] } });
+    expect(delivery).toMatchObject({ fileId: file.id, versionId: file.versionId, state: 'done', detail: { path: ['trigger', 'check-1', 'action-1'], done: { 'action-1': { space: 'a3docs', fileId: copied[0]!.id } } } });
     expect(await deliveries(target, back.id)).toEqual([]);
     expect((await filesIn(source, inbox)).map((f) => f.name)).toEqual(['Other.txt']);
 
@@ -148,8 +184,8 @@ describe('flows across spaces', () => {
     await deps.start(node(source), FLOW_BACKFILL_JOB, flow.id, { ...node(source), flowId: flow.id });
     await settle(source, target);
     expect((await filesIn(target, bancos)).length).toBe(1);
-    await (await scopeOf(source)).invoke('drive/delete-flow', { id: flow.id });
-    await (await scopeOf(target)).invoke('drive/delete-flow', { id: back.id });
+    directory.deleteFlow(sql, flow.id);
+    directory.deleteFlow(sql, back.id);
   });
 
   it('proposes a match in ask mode, and acts once it is approved', async () => {
@@ -168,7 +204,7 @@ describe('flows across spaces', () => {
     await settle(source, target);
     expect(await deliveries(source, flow.id)).toMatchObject([{ state: 'done' }]);
     expect((await filesIn(target, bancos)).map((f) => f.name)).toContain('Invoice 7.txt');
-    await (await scopeOf(source)).invoke('drive/delete-flow', { id: flow.id });
+    directory.deleteFlow(sql, flow.id);
   });
 
   it('fires on the category Document AI chose, and on a yes to its question', async () => {
@@ -185,7 +221,7 @@ describe('flows across spaces', () => {
     expect(details.labels).toEqual(expect.arrayContaining(['Bank statement', 'Sent to gestoría']));
     expect(await deliveries(source, flow.id)).toMatchObject([{ fileId: file.id, state: 'done' }]);
     expect(run.mock.calls.some(([input]) => (input as { system: string }).system.includes('yes/no'))).toBe(true);
-    await (await scopeOf(source)).invoke('drive/delete-flow', { id: flow.id });
+    directory.deleteFlow(sql, flow.id);
   });
 
   it('fails a delivery with the reason when its author cannot write there, and keeps nothing half-made', async () => {
@@ -199,8 +235,8 @@ describe('flows across spaces', () => {
     await settle(source, target);
     const [delivery] = await deliveries(source, flow.id);
     expect(delivery).toMatchObject({ state: 'failed', detail: { error: expect.stringContaining('not a member') } });
-    expect((await (await scopeOf(source)).invoke<{ flows: StoredFlow[] }>('drive/list-flows')).flows.find((f) => f.id === flow.id)!.failures).toBe(1);
-    await (await scopeOf(source)).invoke('drive/delete-flow', { id: flow.id });
+    expect(stored(flow.id).failures).toBe(1);
+    directory.deleteFlow(sql, flow.id);
   });
 
   it('copies into an a3doc space and sends the copy on to a3doc, in the categories asked', async () => {
@@ -214,7 +250,8 @@ describe('flows across spaces', () => {
     const file = await upload(source, statements, 'Extracto 11.txt', 'Extracto noviembre');
     await settle(source, target);
     const [delivery] = await deliveries(source, flow.id);
-    expect(delivery).toMatchObject({ fileId: file.id, state: 'done', detail: { targets: [{ sent: true }] } });
+    expect(delivery).toMatchObject({ fileId: file.id, state: 'done', detail: { done: { 'action-1': { sent: true } } } });
+    directory.deleteFlow(sql, flow.id);
     const sent = await host.admin.queryScope(staff, tenant, target, { sql: "SELECT payload FROM _substrat_outbox WHERE type = 'a3doc.files-requested' ORDER BY id DESC LIMIT 1" });
     expect(JSON.parse(String(sent.rows[0]![0]))).toMatchObject({ directory: 'Bancos', alsoIn: ['Fiscal'], files: [{ name: 'Extracto 11.txt' }] });
   });
@@ -236,7 +273,7 @@ describe('flows across spaces', () => {
     expect(details.origin.sourceVersionId).toBe(second.versionId);
     const done = (await deliveries(source, flow.id)).filter((d) => d.state === 'done').map((d) => d.versionId).sort();
     expect(done).toEqual([first.versionId, second.versionId].sort());
-    await (await scopeOf(source)).invoke('drive/delete-flow', { id: flow.id });
+    directory.deleteFlow(sql, flow.id);
   });
 
   it('runs a scheduled flow over what arrived since it last ran', async () => {
@@ -246,9 +283,131 @@ describe('flows across spaces', () => {
     const file = await upload(elsewhere, ROOT_FOLDER_ID, 'note.txt', 'hello');
     await settle(elsewhere);
     expect(await deliveries(elsewhere, flow.id)).toMatchObject([{ fileId: file.id, state: 'done' }]);
-    const ran = (await (await scopeOf(elsewhere)).invoke<{ flows: StoredFlow[] }>('drive/list-flows')).flows[0]!;
-    expect(ran.lastRunAt).not.toBeNull();
-    expect((await (await scopeOf(elsewhere)).invoke<{ dueSchedules: number }>('drive/automation-pending')).dueSchedules).toBe(0);
+    expect(directory.lastRun(sql, flow.id, elsewhere)).not.toBeNull();
+    // It ran here, not in a space it does not watch.
+    expect(directory.lastRun(sql, flow.id, source)).toBeNull();
+    directory.deleteFlow(sql, flow.id);
+  });
+});
+
+describe('branching flows', () => {
+  it('sends a document down Yes or No, asking the model only on its own path', async () => {
+    const triage = await folder(elsewhere, 'Triage');
+    const flow = saveGraph('Triage', {
+      versions: 'first',
+      nodes: [
+        { id: 't', type: 'trigger', on: 'arrived', spaces: ['qonto'] },
+        { id: 'is-invoice', type: 'check', condition: { field: 'name', op: 'contains', value: 'Factura' } },
+        { id: 'monthly', type: 'check', condition: { field: 'ask', question: 'Is this a monthly invoice?' } },
+        { id: 'to-a3doc', type: 'copy', space: 'a3docs', folderId: bancos, alsoIn: [] },
+        { id: 'one-off', type: 'label', value: 'One-off' },
+        { id: 'to-triage', type: 'copy', space: 'elsewhere', folderId: triage, alsoIn: [] },
+      ],
+      edges: [
+        { from: 't', to: 'is-invoice', branch: 'next' },
+        { from: 'is-invoice', to: 'monthly', branch: 'yes' },
+        { from: 'is-invoice', to: 'to-triage', branch: 'no' },
+        { from: 'monthly', to: 'to-a3doc', branch: 'yes' },
+        { from: 'monthly', to: 'one-off', branch: 'no' },
+      ],
+    });
+    run.mockClear();
+    answer = 'no';
+    const invoice = await upload(source, inbox, 'Factura 12.txt', 'Factura de diciembre');
+    const other = await upload(source, inbox, 'Receipt 3.txt', 'Taxi');
+    await settle(source, target, elsewhere);
+    answer = 'yes';
+    const byFile = new Map((await deliveries(source, flow.id)).map((d) => [d.fileId, d]));
+    expect(byFile.get(invoice.id)).toMatchObject({ state: 'done', detail: { path: ['t', 'is-invoice', 'monthly', 'one-off'], answers: { monthly: false } } });
+    expect(byFile.get(other.id)).toMatchObject({ state: 'done', detail: { path: ['t', 'is-invoice', 'to-triage'] } });
+    // The question was asked for the invoice only.
+    expect(run.mock.calls.filter(([input]) => (input as { system: string }).system.includes('yes/no'))).toHaveLength(1);
+    expect((await filesIn(elsewhere, triage)).map((f) => f.name)).toEqual(['Receipt 3.txt']);
+    expect((await filesIn(target, bancos)).map((f) => f.name)).not.toContain('Factura 12.txt');
+    directory.deleteFlow(sql, flow.id);
+  });
+
+  it('acts before a wait at once, and after it only once a person approves', async () => {
+    const flow = saveGraph('Label, then ask', {
+      versions: 'first',
+      nodes: [
+        { id: 't', type: 'trigger', on: 'arrived', spaces: ['qonto'] },
+        { id: 'is-contract', type: 'check', condition: { field: 'name', op: 'contains', value: 'Contract' } },
+        { id: 'mark', type: 'label', value: 'Contract' },
+        { id: 'wait', type: 'approval' },
+        { id: 'file-it', type: 'copy', space: 'a3docs', folderId: bancos, alsoIn: [] },
+      ],
+      edges: [
+        { from: 't', to: 'is-contract', branch: 'next' },
+        { from: 'is-contract', to: 'mark', branch: 'yes' },
+        { from: 'mark', to: 'wait', branch: 'next' },
+        { from: 'wait', to: 'file-it', branch: 'next' },
+      ],
+    });
+    const file = await upload(source, inbox, 'Contract ACME.txt', 'Contract');
+    await settle(source, target);
+    const [proposed] = await deliveries(source, flow.id);
+    expect(proposed).toMatchObject({ state: 'proposed', detail: { at: 'wait', done: { mark: { label: 'Contract' } } } });
+    expect((await (await scopeOf(source)).invoke<{ labels: string[] }>('drive/file-details', { fileId: file.id })).labels).toContain('Contract');
+    expect((await filesIn(target, bancos)).map((f) => f.name)).not.toContain('Contract ACME.txt');
+
+    await (await scopeOf(source)).invoke('drive/record-flow-delivery', { flowId: flow.id, fileId: file.id, versionId: file.versionId, state: 'approved', expect: ['proposed'] });
+    await deps.start(node(source), FLOW_RUN_JOB, `${flow.id}:${file.id}:${file.versionId}`, { ...node(source), flowId: flow.id, fileId: file.id, versionId: file.versionId, approved: true });
+    await settle(source, target);
+    const [done] = await deliveries(source, flow.id);
+    expect(done).toMatchObject({ state: 'done', detail: { approved: true, done: { mark: { label: 'Contract' }, 'file-it': { space: 'a3docs' } } } });
+    expect((await filesIn(target, bancos)).map((f) => f.name)).toContain('Contract ACME.txt');
+    directory.deleteFlow(sql, flow.id);
+  });
+
+  it('watches several spaces, and keeps what it did in the space of each document', async () => {
+    const flow = saveGraph('Everywhere', {
+      versions: 'first',
+      nodes: [
+        { id: 't', type: 'trigger', on: 'arrived', spaces: ['qonto', 'elsewhere'] },
+        { id: 'tag', type: 'check', condition: { field: 'name', op: 'contains', value: 'multi-space' } },
+        { id: 'seen', type: 'label', value: 'Seen everywhere' },
+      ],
+      edges: [{ from: 't', to: 'tag', branch: 'next' }, { from: 'tag', to: 'seen', branch: 'yes' }],
+    });
+    const here = await upload(source, inbox, 'multi-space a.txt', 'a');
+    const there = await upload(elsewhere, ROOT_FOLDER_ID, 'multi-space b.txt', 'b');
+    await upload(target, bancos, 'multi-space c.txt', 'c');
+    await settle(source, elsewhere, target);
+    expect((await deliveries(source, flow.id)).map((d) => d.fileId)).toEqual([here.id]);
+    expect((await deliveries(elsewhere, flow.id)).map((d) => d.fileId)).toEqual([there.id]);
+    expect(await deliveries(target, flow.id)).toEqual([]);
+    directory.deleteFlow(sql, flow.id);
+  });
+});
+
+describe('flows a space kept before flows moved out', () => {
+  it('moves them to the install as graphs, under the same id, keeping their history', async () => {
+    const id = ulid();
+    const old = {
+      trigger: { on: 'arrived' }, conditions: [{ field: 'name', op: 'contains', value: 'Legacy' }],
+      actions: [{ type: 'label', value: 'Moved' }], mode: 'auto', versions: 'first',
+    };
+    const before = await upload(source, inbox, 'Legacy 1.txt', 'one');
+    await settle(source);
+    const scopeDb = new DatabaseSync(join(dir, `${tenant}__${source}.sqlite`));
+    scopeDb.prepare(`INSERT INTO drive_flows (id, name, enabled, definition_json, author, author_sub, created_at, updated_at, last_run_at, failures, paused_reason)
+      VALUES (?, 'Old one', 1, ?, ?, 'ada', '2026-11-14T00:00:00Z', '2026-11-14T00:00:00Z', NULL, 2, NULL)`).run(id, JSON.stringify(old), ada[source]!);
+    scopeDb.prepare(`INSERT INTO drive_flow_deliveries (flow_id, file_id, version_id, state, detail_json, attempts, created_at, updated_at)
+      VALUES (?, ?, ?, 'done', '{}', 1, '2026-11-14T00:00:00Z', '2026-11-14T00:00:00Z')`).run(id, before.id, before.versionId);
+    scopeDb.close();
+
+    const after = await upload(source, inbox, 'Legacy 2.txt', 'two');
+    await settle(source);
+    const moved = directory.getFlow(sql, id)!;
+    expect(moved.flow).toMatchObject({ name: 'Old one', enabled: true, authorSub: 'ada', failures: 0 });
+    expect(moved.scopes).toEqual({ watch: [source], write: [] });
+    expect(moved.flow.graph.nodes[0]).toMatchObject({ type: 'trigger', spaces: ['qonto'] });
+    expect((await (await scopeOf(source)).invoke<{ flows: unknown[] }>('drive/legacy-flows')).flows).toEqual([]);
+    const states = new Map((await deliveries(source, id)).map((d) => [d.fileId, d.state]));
+    expect(states.get(before.id)).toBe('done');
+    expect(states.get(after.id)).toBe('done');
+    directory.deleteFlow(sql, id);
   });
 });
 

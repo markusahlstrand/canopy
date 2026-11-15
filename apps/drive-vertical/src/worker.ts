@@ -19,6 +19,9 @@ import { mountLabel } from './label-routes.js';
 import { isLockedName } from './editable-text.js';
 import { AUTOMATION_JOB, automationJob, DISPATCH_INSTANCE, FLOW_BACKFILL_JOB, flowBackfillJob, FLOW_RUN_JOB, flowRunJob, type AutomationDeps, type Bytes } from './automation.js';
 import { mountFlows } from './flow-routes.js';
+import * as flowDirectory from './flow-directory.js';
+import type { DirectoryFlow, FlowScopes, SaveFlow } from './flow-directory.js';
+import { scheduleDue, triggerOf } from '@canopy/scope-drive/spec/model';
 import { DEFAULT_ASSISTANT_MODEL, mountAssistant } from './assistant.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
@@ -174,6 +177,34 @@ export class IdentityDO extends PlatformIdentityDO {
   async verifyAppPassword(tokenHash: string): Promise<string | null> {
     return verifyAppPassword(this.ctx.storage.sql, tokenHash, Date.now());
   }
+  // Flows belong to the install, so they live here beside its spaces (`flow-directory.ts`).
+  async listFlows(): Promise<{ flow: DirectoryFlow; scopes: FlowScopes }[]> {
+    return flowDirectory.listFlows(this.ctx.storage.sql);
+  }
+  async flowsWatching(scope: string): Promise<DirectoryFlow[]> {
+    return flowDirectory.flowsWatching(this.ctx.storage.sql, scope);
+  }
+  async saveFlow(input: SaveFlow, create: boolean): Promise<DirectoryFlow | { error: 'limit' | 'not_found' }> {
+    return this.ctx.storage.transactionSync(() => flowDirectory.saveFlow(this.ctx.storage.sql, input, create));
+  }
+  async importFlow(input: Parameters<typeof flowDirectory.importFlow>[1]): Promise<boolean> {
+    return this.ctx.storage.transactionSync(() => flowDirectory.importFlow(this.ctx.storage.sql, input));
+  }
+  async deleteFlow(id: string): Promise<void> {
+    this.ctx.storage.transactionSync(() => flowDirectory.deleteFlow(this.ctx.storage.sql, id));
+  }
+  async recordFlowOutcome(id: string, outcome: { ok: true } | { ok: false; error: string }): Promise<void> {
+    flowDirectory.recordOutcome(this.ctx.storage.sql, id, outcome);
+  }
+  async flowLastRun(id: string, scope: string): Promise<string | null> {
+    return flowDirectory.lastRun(this.ctx.storage.sql, id, scope);
+  }
+  async markFlowRan(id: string, scope: string, at: string): Promise<void> {
+    flowDirectory.markRan(this.ctx.storage.sql, id, scope, at);
+  }
+  async forgetFlowScope(scope: string): Promise<void> {
+    this.ctx.storage.transactionSync(() => flowDirectory.forgetScope(this.ctx.storage.sql, scope));
+  }
 }
 
 /**
@@ -188,8 +219,9 @@ const sweeperConfig = {
   runJobs: true,
   /**
    * Before each pass drives due runs: start the space's automation dispatcher when it has queued
-   * arrivals (a connector's sync lands them with no worker code in the way) or a schedule due.
-   * A cheap count first, so a quiet space starts nothing.
+   * arrivals (a connector's sync lands them with no worker code in the way), flows of its own to
+   * move out to the install, or a flow watching it whose schedule is due here.
+   * Cheap counts first, so a quiet space starts nothing.
    */
   startJobs: async (sweepHost, tenant, scope) => {
     const host = sweepHost as unknown as CloudflareScopeHost;
@@ -197,8 +229,10 @@ const sweeperConfig = {
     if (!env) return;
     const owner = await ownerScopeFor(env, host, { tenantId: tenant, scopeId: scope });
     if (!owner) return;
-    const pending = await owner.invoke<{ queued: number; dueSchedules: number }>('drive/automation-pending');
-    if (pending.queued || pending.dueSchedules) await kickAutomation(host, { tenantId: tenant, scopeId: scope });
+    const pending = await owner.invoke<{ queued: number; legacyFlows: number }>('drive/automation-pending');
+    if (pending.queued || pending.legacyFlows || await scheduleDueIn(env, { tenantId: tenant, scopeId: scope })) {
+      await kickAutomation(host, { tenantId: tenant, scopeId: scope });
+    }
   },
   jobStartIntervalMs: 60_000,
 } satisfies Parameters<typeof defineScopeSweeperDO<Env>>[0];
@@ -358,6 +392,17 @@ async function ownerScopeFor(env: Env, host: CloudflareScopeHost, node: Node): P
   return owner ? host.getScope(principalId.parse(owner), node.tenantId, node.scopeId) : null;
 }
 
+/** Whether a flow watching this space is due to run on its schedule here. */
+async function scheduleDueIn(env: Env, node: Node): Promise<boolean> {
+  const directory = identityDo(env, node);
+  const now = Date.now();
+  for (const flow of await directory.flowsWatching(node.scopeId)) {
+    if (!flow.enabled || flow.pausedReason || triggerOf(flow.graph).on !== 'schedule') continue;
+    if (scheduleDue(flow.graph, await directory.flowLastRun(flow.id, node.scopeId), now)) return true;
+  }
+  return false;
+}
+
 /** Start (or join) the space's automation dispatcher. */
 async function kickAutomation(host: CloudflareScopeHost, node: Node): Promise<void> {
   await host.startJobRun(node.tenantId, node.scopeId, {
@@ -369,6 +414,17 @@ async function kickAutomation(host: CloudflareScopeHost, node: Node): Promise<vo
 function automationDeps(env: Env, host: CloudflareScopeHost): AutomationDeps {
   const nodeOf = (n: { tenantId: string; scopeId: string }): Node => ({ tenantId: tenantId.parse(n.tenantId), scopeId: scopeId.parse(n.scopeId) });
   return {
+    directory: (tenant) => {
+      const directory = identityDo(env, nodeOf({ tenantId: tenant, scopeId: DEV_NODE.scopeId }));
+      return {
+        flowsWatching: (scope) => directory.flowsWatching(scope),
+        recordOutcome: (id, outcome) => directory.recordFlowOutcome(id, outcome),
+        lastRun: (id, scope) => directory.flowLastRun(id, scope),
+        markRan: (id, scope, at) => directory.markFlowRan(id, scope, at),
+        importFlow: (input) => directory.importFlow(input),
+        slugOf: async (scope) => (await directory.listSites()).find((site) => site.scopeId === scope)?.slug ?? null,
+      };
+    },
     ownerScope: (n) => ownerScopeFor(env, host, nodeOf(n)),
     ownerPrincipal: async (n) => identityDo(env, nodeOf(n)).getOwnerOfRecord(n.scopeId),
     principalIn: async (n, sub) => identityDo(env, nodeOf(n)).resolvePrincipal(n.scopeId, sub),
@@ -465,6 +521,15 @@ type SiteRegistry = {
   listAppPasswords(subject: string): Promise<AppPassword[]>;
   revokeAppPassword(subject: string, id: string): Promise<boolean>;
   verifyAppPassword(tokenHash: string): Promise<string | null>;
+  listFlows(): Promise<{ flow: DirectoryFlow; scopes: FlowScopes }[]>;
+  flowsWatching(scope: string): Promise<DirectoryFlow[]>;
+  saveFlow(input: SaveFlow, create: boolean): Promise<DirectoryFlow | { error: 'limit' | 'not_found' }>;
+  importFlow(input: Parameters<typeof flowDirectory.importFlow>[1]): Promise<boolean>;
+  deleteFlow(id: string): Promise<void>;
+  recordFlowOutcome(id: string, outcome: { ok: true } | { ok: false; error: string }): Promise<void>;
+  flowLastRun(id: string, scope: string): Promise<string | null>;
+  markFlowRan(id: string, scope: string, at: string): Promise<void>;
+  forgetFlowScope(scope: string): Promise<void>;
 };
 
 const identityDo = (env: Env, node: Node): IdentityStub & SiteRegistry =>
@@ -862,20 +927,33 @@ mountSource(app, async (c) => {
     },
   };
 });
-/** Flows: save (as the caller's login), run over existing files, decide proposals. Managers only. */
+/**
+ * Flows belong to the install: a caller sees and edits those whose every space they own. Each
+ * route reaches the spaces as the caller, and a flow saved acts as the caller's login.
+ */
 mountFlows(app, async (c) => {
-  await requirePeopleAdmin(c);
   const env = c.env;
-  const node = await nodeFor(c.req.raw, env);
-  const { base, sub } = await subjectOf(c.req.raw, env);
+  const { base, sub, label } = await subjectOf(c.req.raw, env);
   const host = hostFor(env);
-  const principal = (await principalFor(env, c.req.raw))!;
+  const directory = identityDo(env, base);
   return {
-    scope: await host.getScope(principal, node.tenantId, node.scopeId),
     sub,
-    node,
-    sites: async () => (await sitesForSubject(env, base, sub, host)).map((site) => ({ slug: site.slug, scope: site.scope })),
-    start: async (job, instance, payload) => {
+    author: label,
+    tenantId: base.tenantId,
+    sites: async () => Promise.all((await sitesForSubject(env, base, sub, host)).map(async (site) => ({
+      slug: site.slug, name: site.name, scopeId: site.scopeId, scope: site.scope,
+      // An owner manages the space's people; that is who may automate it.
+      manages: await site.scope.invoke<{ canManage: boolean }>('drive/people-access').then((a) => a.canManage, () => false),
+    }))),
+    store: {
+      list: () => directory.listFlows(),
+      save: (input, create) => directory.saveFlow(input, create),
+      delete: (id) => directory.deleteFlow(id),
+    },
+    newId: () => ulid(),
+    now: () => new Date().toISOString(),
+    start: async (scope, job, instance, payload) => {
+      const node = { tenantId: base.tenantId, scopeId: scopeId.parse(scope) };
       await host.startJobRun(node.tenantId, node.scopeId, { moduleId: DRIVE_MODULE_ID, job, instance, payload });
       await defer(c, host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
         console.error('drive.flow.run-failed', { error: error instanceof Error ? error.message : String(error) });
@@ -1028,7 +1106,7 @@ async function subjectOf(request: Request, env: Env) {
   // a fourth got 401 from the very endpoint that would have let them leave it.
   const subject = await (await providerFor(env, base)).resolve(request.headers);
   if (!subject) throw new HTTPException(401, { message: 'unauthorized' });
-  return { base, sub: subject.sub };
+  return { base, sub: subject.sub, label: subject.name || subject.email || subject.sub };
 }
 
 /** The spaces one login can enter, each with its principal and stub there. */
@@ -1131,6 +1209,8 @@ app.delete('/api/sites/:slug', async (c) => {
   const directory = identityDo(c.env, base);
   await directory.forgetSite(site.scopeId);
   await directory.deleteSpaceSettings(site.scopeId);
+  // Flows stop watching it and copying into it; one left with no spaces at all can no longer run.
+  await directory.forgetFlowScope(site.scopeId);
   return c.body(null, 204);
 });
 
