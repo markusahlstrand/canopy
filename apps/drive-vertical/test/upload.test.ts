@@ -169,6 +169,18 @@ describe('drive_upload-file', () => {
     await expect((await w.as('files', 'vic')).invoke('drive/ensure-file', { folderId: w.inFiles.id, name: 'x.pdf' })).rejects.toThrow();
   });
 
+  it('checks who may write before it decodes or looks at the bytes', async () => {
+    const w = await world();
+    // Bytes that would fail decoding: the refusal a viewer or non-member gets is about access, not about them.
+    const viewer = await w.tool('vic', 'drive_upload-file', { space: 'files', folderId: w.inFiles.id, name: 'a.pdf', contentBase64: '***' });
+    expect(viewer.isError).toBe(true);
+    expect(viewer.text).toContain('owner or editor');
+    const stranger = await w.tool('mallory', 'drive_upload-file', { space: 'files', folderId: w.inFiles.id, name: 'a.pdf', contentBase64: '***' });
+    expect(stranger.text).toMatch(/no space 'files' that you can open/);
+    // The same bytes from an owner are judged on what they are.
+    expect((await w.tool('ada', 'drive_upload-file', { space: 'files', folderId: w.inFiles.id, name: 'a.pdf', contentBase64: '***' })).text).toContain('not valid base64');
+  });
+
   it('refuses a space the login is not a member of', async () => {
     const w = await world();
     const refused = await w.tool('mallory', 'drive_upload-file', { space: 'files', folderId: w.inFiles.id, name: 'a.pdf', contentBase64: b64(PDF) });

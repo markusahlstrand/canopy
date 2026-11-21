@@ -465,11 +465,12 @@ async function runAssistant(access: AssistantAccess, operation: AssistantOperati
     case 'drive/upload-file': {
       const { space, folderId, name, contentBase64, alsoIn } = parsed(uploadFileInput, input);
       uploadTypeOf(name);
-      const bytes = decodeBase64(contentBase64);
-      const mime = checkedUpload(name, bytes);
+      // Who may write here, before the bytes are decoded or looked at: a refused caller costs no copy of them.
       const target = await access.uploadTarget(space);
       if (!target) throw notThere(space);
       await uploadPreflight(target.scope, { folderId, alsoIn });
+      const bytes = decodeBase64(contentBase64);
+      const mime = checkedUpload(name, bytes);
       return uploadResult(await uploadToFolder(target, { folderId, name, mime, body: async () => bytes, alsoIn, existing: 'keep' }));
     }
     case 'drive/create-upload-link': {
