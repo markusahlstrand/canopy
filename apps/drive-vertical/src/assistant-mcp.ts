@@ -142,7 +142,7 @@ const decideInput = z.object({
 const FLOW_GRAPH_GUIDE = [
   'A flow belongs to the install, not to a space: its trigger watches one or more spaces and its copy steps may write into others.',
   'It acts as the login that saved it last, so it can never do more than you could by hand.',
-  'You may only save a flow if you own every space it names (canManage in drive_list-spaces); a flow is only listed to someone who owns all its spaces.',
+  'You may only save a flow if you own every space it names (role "owner" in drive_list-spaces); a flow is only listed to someone who owns all its spaces.',
   '',
   'graph = { nodes, edges, versions }. `versions`: "first" acts on a document once, "every" again for each new version.',
   'Nodes (each needs a unique `id` of letters, digits, - or _; `position` is optional and only for the app\'s canvas):',
