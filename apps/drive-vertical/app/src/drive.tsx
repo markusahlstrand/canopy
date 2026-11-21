@@ -43,7 +43,8 @@ import { linkedFileId } from './file-links';
 import { CopyFolderLink } from './copy-folder-link';
 import { Sidebar, useSites, type NavId } from './sidebar';
 import { CreateSpaceDialog } from './create-space-dialog';
-import { sourceSyncNote } from './source-settings';
+import { sourceLabel, sourceSyncNote } from './source-settings';
+import { FolderFreshness, useFolderFreshness } from './folder-freshness';
 import { followSpace, openSpace, openSpaceFolder, spaceLabel } from './space-navigation';
 import { SpacesDialog } from './spaces-dialog';
 import { PluginManagement } from './plugin-management';
@@ -529,6 +530,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   // Only files already loaded in the active listing participate. Match its sort
   // order, and use the same draft boundary as table and palette navigation.
   const showingAll = allFiles && view === 'drive' && !offline;
+  // A mirrored folder is checked against its source when it is opened (and on demand): the
+  // listing shows what is indexed at once, and a check that lands changes re-reads it quietly.
+  const freshness = useFolderFreshness(folderId, mirrored && view === 'drive' && !allFiles && !offline, () => void refreshRef.current(false, true));
   const driveRows: DriveFile[] = showingAll ? subtreeFiles : files;
   const previewFiles = offline ? [] : view === 'drive' ? sorted(driveRows, sort) : view === 'search' ? sorted(visibleHits, sort) : [];
   const previewIndex = previewFiles.findIndex(file => file.id === previewing);
@@ -1554,6 +1558,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             </div>
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'partial' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</p> : null}
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'error' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</p> : null}
+      {mirrored && view === 'drive' && !allFiles && !offline ? <FolderFreshness refresh={freshness.refresh} asking={freshness.asking} label={sourceLabel(source?.provider)} onCheck={freshness.check} /> : null}
       {labelNotice ? <p role="status" className="-mt-2 mb-3 flex items-center gap-2 text-xs text-muted-foreground">
         <Icon name="sparkles" className="size-3.5" />{labelNotice.text}
         {labelNotice.more ? <button type="button" className="ml-auto underline" disabled={offline} onClick={labelNotice.more}>Continue</button> : null}

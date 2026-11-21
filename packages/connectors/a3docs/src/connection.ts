@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { tenantId as tenantIdSchema } from '@substrat-run/contracts';
 import { deadlineFetch, settleConnectionUse, type FetchLike, type HostAdmin } from '@substrat-run/kernel';
-import { createA3docClient, type A3docClient } from './client.js';
+import { createA3docClient, type A3docClient, type A3docSession } from './client.js';
 
 /** The provider slug: what connection rows, dispatch kinds and grants are keyed by. */
 export const A3DOC_PROVIDER = 'a3doc';
@@ -37,10 +37,11 @@ export type ConnectionRef = { id: string; tenantId: string; vertical: string };
 export const nowOf = (o: Pick<A3docOptions, 'now'>) => (o.now ? o.now() : new Date());
 
 /** A client over `fetch` for this credential. */
-export function clientFor(fetchImpl: FetchLike, secret: A3docSecret, options: A3docOptions): A3docClient {
+export function clientFor(fetchImpl: FetchLike, secret: A3docSecret, options: A3docOptions, session?: A3docSession): A3docClient {
   return createA3docClient({
     credentials: { companyCode: secret.companyCode, user: secret.user, password: secret.password },
     fetch: fetchImpl,
+    ...(session ? { session } : {}),
     ...(options.apiBase ? { apiBase: options.apiBase } : {}),
     ...(options.addressProvider ? { addressProvider: options.addressProvider } : {}),
   });

@@ -82,14 +82,23 @@ export class FakeS3 {
     const prefix = q.get('prefix') ?? '';
     const after = q.get('continuation-token') ?? q.get('start-after') ?? '';
     const max = Number(q.get('max-keys') ?? 1000);
-    const keys = [...this.objects.keys()].filter((k) => k.startsWith(prefix) && k > after).sort();
+    const delimiter = q.get('delimiter');
+    // With a delimiter, everything below the next one collapses into its common prefix, as S3 does.
+    const entries = new Map<string, boolean>();
+    for (const k of [...this.objects.keys()].filter((k) => k.startsWith(prefix)).sort()) {
+      const cut = delimiter ? k.indexOf(delimiter, prefix.length) : -1;
+      if (cut >= 0) entries.set(k.slice(0, cut + 1), true);
+      else entries.set(k, false);
+    }
+    const keys = [...entries.keys()].filter((k) => k > after).sort();
     const page = keys.slice(0, max);
     const truncated = keys.length > max;
-    const contents = page.map((k) => {
+    const contents = page.filter((k) => !entries.get(k)).map((k) => {
       const o = this.objects.get(k)!;
       return `<Contents><Key>${xml(k)}</Key><LastModified>${o.modified}</LastModified><ETag>&quot;${o.etag}&quot;</ETag><Size>${o.body.length}</Size></Contents>`;
     });
-    const body = `<?xml version="1.0"?><ListBucketResult><IsTruncated>${truncated}</IsTruncated>${contents.join('')}${truncated ? `<NextContinuationToken>${xml(page.at(-1)!)}</NextContinuationToken>` : ''}</ListBucketResult>`;
+    const prefixes = page.filter((k) => entries.get(k)).map((k) => `<CommonPrefixes><Prefix>${xml(k)}</Prefix></CommonPrefixes>`);
+    const body = `<?xml version="1.0"?><ListBucketResult><IsTruncated>${truncated}</IsTruncated>${contents.join('')}${prefixes.join('')}${truncated ? `<NextContinuationToken>${xml(page.at(-1)!)}</NextContinuationToken>` : ''}</ListBucketResult>`;
     return new Response(body, { status: 200 });
   }
 }

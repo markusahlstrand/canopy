@@ -49,6 +49,7 @@ import {
   parseA3Date,
   type A3Container,
   type A3docClient,
+  type A3docSession,
   type A3Document,
 } from './client.js';
 import { A3DOC_PROVIDER, a3docSecret, clientFor, nowOf, openA3docConnection, type A3docOptions } from './connection.js';
@@ -79,6 +80,14 @@ export const SYNC_PAGES_PER_CALL = 20;
 export const SYNC_VERIFY_PER_CALL = 50;
 /** A sync's per-request timeout: long enough to download a file at the cap. */
 export const SYNC_TIMEOUT_MS = 120_000;
+/** Pages of one folder's own documents a folder check reads; newest first, so new ones come first. */
+export const FOLDER_PAGES_PER_CHECK = 4;
+/** Documents one call downloads while checking folders; the rest are left to the next call. */
+export const FOLDER_DOWNLOADS_PER_CALL = 15;
+/** Held documents a folder check asks about one by one when the folder no longer lists them. */
+export const FOLDER_VERIFY_PER_CHECK = 5;
+/** How long a signed-in session is reused across calls before the connector signs in afresh. */
+export const SESSION_REUSE_MS = 30 * 60 * 1000;
 
 // ── state ────────────────────────────────────────────────────────────────────
 
@@ -511,7 +520,29 @@ export interface A3docSyncResult {
   superseded?: true;
   /** Set for a full pass. A later incremental pass reads only what changed, so it says nothing about the folder. */
   report?: A3docSyncReport;
+  /** Set when the call checked folders instead of continuing the pass: what each check found. */
+  folders?: A3docFolderCheck[];
 }
+
+/** One folder checked against a3doc: its own documents read again, and the ones gone from it asked about. */
+export interface A3docFolderCheck {
+  /** The folder's path in the space, as asked (`''` is the bound folder itself). */
+  path: string;
+  /** Changes landed for this folder. */
+  changes: number;
+  /** False when a budget stopped the check: what is left is the ordinary pass's to find. */
+  complete: boolean;
+  /** Set when a3doc's tree no longer has a folder at this path. */
+  missing?: true;
+  /** Set when this folder's check failed: a3doc's own words. */
+  error?: string;
+}
+
+type SyncFilesOptions = A3docOptions & {
+  maxPages?: number; maxVerify?: number; pageSize?: number;
+  /** Check these folders (paths in the space) instead of continuing the pass. */
+  folders?: string[]; maxDownloads?: number; folderPages?: number; folderVerify?: number;
+};
 
 /**
  * Sync ONE bound scope: folders from the tree, then documents newest-modified first, landing each
@@ -540,7 +571,7 @@ async function syncFiles(
   },
   connectionId: ConnectionId,
   binding: A3docBinding,
-  options: A3docOptions & { maxPages?: number; maxVerify?: number; pageSize?: number },
+  options: SyncFilesOptions,
   client: A3docClient,
 ): Promise<A3docSyncResult> {
   if (binding.folderMissing) throw folderMissingError();
@@ -687,6 +718,25 @@ async function syncFiles(
   await walkFolders(binding.containerId, '', bound.children);
 
   // ── documents ──
+  /** Every document's bytes go through here, so a folder check can stop at its budget. */
+  let downloads = 0;
+  const download = (documentId: string) => { downloads++; return client.download(documentId); };
+  /** A placement held for this document that its own record no longer lists has moved out. */
+  const landMovedOut = async (doc: A3Document, placements: number[]) => {
+    if (doc.ContainersId === undefined) return;
+    for (const id of [...(itemsByDocument.get(doc.Id) ?? [])]) {
+      const e = index.get(id)!;
+      if (!placements.includes(e.parentId)) await landDelete(id, e, 'moved-out');
+    }
+  };
+  /** A held file the listing did not present: deleted only on an answer about that one document. */
+  const verifyHeld = async (id: string) => {
+    const e = index.get(id);
+    if (!e || e.kind !== 'file' || !e.documentId) return;
+    const here = await client.findByTitle({ containerId: e.parentId, children: false, title: e.title ?? '' });
+    if (here.some((d) => d.Id === e.documentId)) return;
+    await landDelete(id, e, (await client.download(e.documentId)) ? 'moved-out' : 'deleted');
+  };
   const landDoc = async (doc: A3Document, containerId: number) => {
     await landFolder(containerId);
     const id = `${doc.Id}@${containerId}`;
@@ -715,7 +765,7 @@ async function syncFiles(
       !prior || prior.dateModified !== doc.DateModified || prior.size !== doc.Size || (!prior.attachmentId && !prior.tooLarge);
     // A wall-clock time that happened twice cannot tell two edits apart: compare the bytes instead.
     if (!contentChanged && pass.full && prior?.ambiguous && !tooLarge) {
-      bytes = await client.download(doc.Id);
+      bytes = await download(doc.Id);
       if (bytes && (await sha256Hex(bytes)) !== prior.sha256) contentChanged = true;
     }
     if (prior?.dated && prior.path === path && !contentChanged && !!prior.tooLarge === tooLarge) {
@@ -759,7 +809,7 @@ async function syncFiles(
     if (content === 'follows') {
       const target = fileSourceUpsertAnswer.safeParse(answer);
       if (target.success && target.data.entity) {
-        bytes ??= await client.download(doc.Id);
+        bytes ??= await download(doc.Id);
         // Gone between the listing and the download: the next pass answers about it.
         if (bytes) {
           attachments ??= await host.getConnectorAttachments(connectionId, scopeRef);
@@ -779,8 +829,55 @@ async function syncFiles(
     await put(id, entry);
   };
 
-  const pageBudget = options.maxPages ?? SYNC_PAGES_PER_CALL;
   const pageSize = options.pageSize ?? PAGE_SIZE;
+
+  // ── folder checks: a folder's own documents, instead of the pass ──
+  // The pass and its cursor are left as they are: a check only lands what it reads, and the pass
+  // picks up wherever it was on the next call. The root container ignores `children: false` and
+  // lists everything, which is still right for a check of the root: just more of it.
+  if (options.folders) {
+    const containerAt = new Map([...folderPath].map(([id, path]) => [path, id] as const));
+    const maxDownloads = options.maxDownloads ?? FOLDER_DOWNLOADS_PER_CALL;
+    const checks: A3docFolderCheck[] = [];
+    let pages = 0;
+    for (const path of options.folders) {
+      const before = changes;
+      const containerId = containerAt.get(path);
+      if (containerId === undefined) { checks.push({ path, changes: 0, complete: true, missing: true }); continue; }
+      try {
+        const presented = new Set<string>();
+        let listed = false, stopped = false;
+        for (let page = 0; page < (options.folderPages ?? FOLDER_PAGES_PER_CHECK) && !listed && !stopped; page++) {
+          const { documents } = await client.listDocuments({ containerId, children: false, pageIndex: page, pageSize });
+          pages++;
+          for (const doc of documents) {
+            if (downloads >= maxDownloads) { stopped = true; break; }
+            presented.add(doc.Id);
+            const placements = (doc.ContainersId ?? [containerId]).filter((c) => folderPath.has(c));
+            for (const c of placements) await landDoc(doc, c);
+            await landMovedOut(doc, placements);
+          }
+          listed = !stopped && documents.length < pageSize;
+        }
+        // Only a complete listing says which held documents the folder no longer has.
+        let complete = listed;
+        if (listed) {
+          const gone = [...index.entries()]
+            .filter(([, e]) => e.kind === 'file' && e.parentId === containerId && e.documentId && !presented.has(e.documentId))
+            .map(([id]) => id);
+          const budget = options.folderVerify ?? FOLDER_VERIFY_PER_CHECK;
+          for (const id of gone.slice(0, budget)) await verifyHeld(id);
+          complete = gone.length <= budget;
+        }
+        checks.push({ path, changes: changes - before, complete });
+      } catch (err) {
+        checks.push({ path, changes: changes - before, complete: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { scopeId: binding.scopeId, changes, full: false, pages, complete: true, folders: checks };
+  }
+
+  const pageBudget = options.maxPages ?? SYNC_PAGES_PER_CALL;
   const floor = !pass.full && binding.highWater ? Date.parse(binding.highWater) - OVERLAP_MS : null;
   let pages = 0;
   let listed = pass.verify !== undefined;
@@ -805,13 +902,7 @@ async function syncFiles(
         }
       }
       for (const c of placements) await landDoc(doc, c);
-      // A placement held for this document that its own record no longer lists has moved out.
-      if (doc.ContainersId !== undefined) {
-        for (const id of [...(itemsByDocument.get(doc.Id) ?? [])]) {
-          const e = index.get(id)!;
-          if (!placements.includes(e.parentId)) await landDelete(id, e, 'moved-out');
-        }
-      }
+      await landMovedOut(doc, placements);
     }
     pass.page++;
     listed = reachedFloor || documents.length < pageSize;
@@ -829,13 +920,8 @@ async function syncFiles(
   const queue = pass.verify ?? [];
   let checked = 0;
   while (queue.length && checked < verifyBudget) {
-    const id = queue.shift()!;
-    const e = index.get(id);
     checked++;
-    if (!e || e.kind !== 'file' || !e.documentId) continue;
-    const here = await client.findByTitle({ containerId: e.parentId, children: false, title: e.title ?? '' });
-    if (here.some((d) => d.Id === e.documentId)) continue;
-    await landDelete(id, e, (await client.download(e.documentId)) ? 'moved-out' : 'deleted');
+    await verifyHeld(queue.shift()!);
   }
   pass.changes += changes;
   if (queue.length) {
@@ -918,6 +1004,20 @@ export async function bindA3docContext(ctx: ScopedConnectionContext, options: A3
 
 /** Adapt a capability scoped by the platform to the shared state and sync engine. */
 export async function syncA3docContext(ctx: ScopedConnectionContext, options: A3docOptions): Promise<A3docSyncResult> {
+  return runInContext(ctx, options, { maxPages: 1, maxVerify: 5, pageSize: 25 });
+}
+
+/**
+ * The folder-check capability: read each folder's own documents from a3doc again (adds, edits,
+ * and ones gone from it, each asked about on its own), within one call's outbound budget. One
+ * sign-in serves every folder of the call, and the session is kept for the next call.
+ */
+export async function checkA3docFoldersContext(ctx: ScopedConnectionContext, paths: string[], options: A3docOptions): Promise<A3docFolderCheck[]> {
+  const result = await runInContext(ctx, options, { pageSize: 25, folders: paths });
+  return result.folders ?? [];
+}
+
+async function runInContext(ctx: ScopedConnectionContext, options: A3docOptions, mode: Omit<SyncFilesOptions, keyof A3docOptions>): Promise<A3docSyncResult> {
   const resolved = contextBinding(ctx, options);
   const key = bindingKey(ctx.scope.scopeId);
   const previous = await ctx.state.get(key) as A3docBinding | undefined;
@@ -927,10 +1027,38 @@ export async function syncA3docContext(ctx: ScopedConnectionContext, options: A3
   if (previous && previous.folder !== resolved.folder && binding.reported) { const { reported: _stale, ...rest } = binding; binding = rest; }
   await ctx.state.put(key, binding);
   const admin = contextState(ctx);
-  return syncFiles({ admin,
+  const { client, keep } = await sessionClient(ctx, options);
+  const result = await syncFiles({ admin,
     getConnectorScope: async () => ({ invoke: async <O>(operation: string, input?: unknown) => ctx.invoke<O>(operation, input) }),
     getConnectorAttachments: async () => ({ upload: ctx.attachments.upload }),
-  }, ctx.connection.id, binding, { ...options, maxPages: 1, maxVerify: 5, pageSize: 25 }, clientFor(ctx.fetch, a3docSecret.parse(ctx.secret), options));
+  }, ctx.connection.id, binding, { ...options, ...mode }, client);
+  await keep();
+  return result;
+}
+
+/** Where a call keeps the a3doc session it signed in for, in the platform's connector state for this scope. */
+export const SESSION_KEY = `${KEY}session`;
+interface KeptSession extends A3docSession { login: string; signedInAt: string }
+
+/**
+ * A client that starts from the session an earlier call kept, for the same login and for at most
+ * {@link SESSION_REUSE_MS}, so a call signs in (`LoginMfaBegin` + `LoginMfaComplete`) only when it
+ * has to. The token lives where the credential already does, in the platform's connector state,
+ * never in a scope row; a3doc refusing it as expired makes the client sign in once more.
+ */
+async function sessionClient(ctx: ScopedConnectionContext, options: A3docOptions) {
+  const secret = a3docSecret.parse(ctx.secret);
+  const login = `${secret.companyCode}\u0000${secret.user}`;
+  const kept = await ctx.state.get(SESSION_KEY) as KeptSession | undefined;
+  const now = nowOf(options).getTime();
+  const reuse = kept && kept.login === login && now - Date.parse(kept.signedInAt) < SESSION_REUSE_MS ? kept : undefined;
+  const client = clientFor(ctx.fetch, secret, options, reuse ? { apiBase: reuse.apiBase, token: reuse.token } : undefined);
+  const keep = async () => {
+    const session = client.session();
+    if (!session || (reuse && reuse.token === session.token && reuse.apiBase === session.apiBase)) return;
+    await ctx.state.put(SESSION_KEY, { ...session, login, signedInAt: nowOf(options).toISOString() } satisfies KeptSession);
+  };
+  return { client, keep };
 }
 
 /** Connection ids are already fenced by the platform; state keys stay scope-local. */

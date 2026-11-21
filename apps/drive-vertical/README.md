@@ -233,6 +233,19 @@ when a frame arrives. It also polls once a minute and on returning to a visible
 tab, covering disconnected sockets, unsupported network paths, and changes that
 cannot be pushed after a permission is revoked.
 
+## Checking a connected folder
+
+Opening a folder in a space connected to a source (a3doc, S3, Qonto) checks it against the
+source without holding up the listing. `POST /api/source/folders/{folderId}/refresh` asks
+`drive/request-folder-refresh`, which needs only read access to the folder and answers `fresh`
+(checked within `SOURCE_FOLDER_REFRESH_MS`, default a minute), `joined` (a check is under way)
+or `start`. Only `start` polls the source, through the platform's `syncConnections`, which
+itself polls a binding at most once a minute. A connector with the folder-check capability
+(`src/folder-checks.ts`: a3doc and S3) takes the request at the start of that sweep, reads just
+the folder's own children, lands what changed like any sync, and records the outcome; for Qonto
+the poll is its ordinary pass. Each outcome emits `drive.folder-checked`, so open pages get a
+live frame. A failure is the folder's state ("Couldn't check a3doc: …"), never an error.
+
 ## Moving files and folders
 
 Move opens a same-space destination picker for one item or a selection. Files and

@@ -65,6 +65,12 @@ export const PAGE_SIZE = 100;
 export const SYNC_DOWNLOADS_PER_CALL = 20;
 /** Held items one call checks on their own after a pass did not present them. */
 export const SYNC_VERIFY_PER_CALL = 20;
+/** Pages of one folder's own keys (delimited) a folder check lists. */
+export const FOLDER_PAGES_PER_CHECK = 3;
+/** Objects one call downloads while checking folders; the rest wait for the next check or pass. */
+export const FOLDER_DOWNLOADS_PER_CALL = 15;
+/** Held children a folder check asks about one by one when the folder no longer lists them. */
+export const FOLDER_VERIFY_PER_CHECK = 10;
 /** Objects a folder move may hold: each is a copy and a delete, inside one call's outbound ceiling. */
 export const MAX_MOVE_OBJECTS = 40;
 /** Objects one delivery of a folder delete removes; a bigger folder finishes over retries. */
@@ -198,11 +204,38 @@ export interface S3SyncResult {
   changes: number;
   /** False when the call stopped at a budget; the next call resumes where it stopped. */
   complete: boolean;
+  /** Set when the call checked folders instead of continuing the pass. */
+  folders?: S3FolderCheck[];
+}
+
+/** One folder checked against the bucket: its own keys listed again (one level), and the gone asked about. */
+export interface S3FolderCheck {
+  /** The folder's path in the space (`''` is the bound prefix itself). */
+  path: string;
+  changes: number;
+  /** False when a budget stopped the check: what is left is the next check's or the pass's to find. */
+  complete: boolean;
+  /** Set for a path the bucket cannot hold. */
+  missing?: true;
+  /** Set when this folder's check failed: the bucket's own words. */
+  error?: string;
+}
+
+/**
+ * The folder-check capability: list each folder's own keys (`delimiter: '/'`, so one level, never
+ * the subtree) and land what was added, changed or removed there, in one call.
+ */
+export async function checkS3FoldersContext(
+  ctx: ScopedConnectionContext,
+  paths: string[],
+  config: { journalOperation: string } & S3Options,
+): Promise<S3FolderCheck[]> {
+  return (await syncS3Context(ctx, { ...config, folders: paths })).folders ?? [];
 }
 
 export async function syncS3Context(
   ctx: ScopedConnectionContext,
-  config: { journalOperation: string } & S3Options & { pageSize?: number; maxDownloads?: number; maxVerify?: number },
+  config: { journalOperation: string } & S3Options & { pageSize?: number; maxDownloads?: number; maxVerify?: number; folders?: string[] },
 ): Promise<S3SyncResult> {
   const prefix = prefixOf(ctx);
   const io: Io = { ctx, client: clientFor(ctx.fetch, s3Secret.parse({ ...ctx.secret }), config), prefix, journalOperation: config.journalOperation, options: config };
@@ -246,7 +279,7 @@ export async function syncS3Context(
   };
 
   let downloads = 0;
-  const maxDownloads = config.maxDownloads ?? SYNC_DOWNLOADS_PER_CALL;
+  const maxDownloads = config.maxDownloads ?? (config.folders ? FOLDER_DOWNLOADS_PER_CALL : SYNC_DOWNLOADS_PER_CALL);
   /** Land one object; false (and nothing done) when its bytes would go over this call's budget. */
   const landFile = async (obj: S3Object, path: string): Promise<boolean> => {
     const held = items.get(obj.key);
@@ -313,6 +346,63 @@ export async function syncS3Context(
     await ctx.state.put(BINDING, binding);
   };
 
+  /** A held item a listing did not present: removed only on an answer about that key itself. */
+  const verifyHeld = async (key: string) => {
+    const e = items.get(key);
+    if (!e) return;
+    const present = e.kind === 'file' ? (await io.client.head(key)) !== null : (await io.client.list({ prefix: key, maxKeys: 1 })).objects.length > 0;
+    if (present) return;
+    await land({ change: 'delete', connectionId: ctx.connection.id, itemId: e.itemId, kind: e.kind, path: e.path, name: e.name, reason: 'deleted' });
+    await put(key, null);
+    changes++;
+  };
+
+  // ── folder checks: one level of a folder, instead of the pass ──
+  // The pass keeps its cursor: a check lands only what it lists, and is never saved as progress.
+  if (config.folders) {
+    const checks: S3FolderCheck[] = [];
+    const dirOf = (path: string) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+    for (const path of config.folders) {
+      const before = changes;
+      if (path && !validPath(path)) { checks.push({ path, changes: 0, complete: true, missing: true }); continue; }
+      try {
+        const keyPrefix = path ? `${prefix}${path}/` : prefix;
+        const presented = new Set<string>();
+        let token: string | undefined, listed = false, stopped = false;
+        for (let page = 0; page < FOLDER_PAGES_PER_CHECK && !listed && !stopped; page++) {
+          const res = await io.client.list({ prefix: keyPrefix, delimiter: '/', maxKeys: config.pageSize ?? PAGE_SIZE, ...(token ? { continuationToken: token } : {}) });
+          for (const sub of res.prefixes) {
+            const rel = sub.slice(prefix.length, -1);
+            if (!rel || !validPath(rel)) continue;
+            presented.add(sub);
+            await ensureFolder(rel);
+          }
+          for (const obj of res.objects) {
+            const rel = obj.key.slice(prefix.length);
+            // The folder's own marker object (`path/`): the folder itself, not a child of it.
+            if (!rel || rel.endsWith('/') || !validPath(rel)) continue;
+            if (path) await ensureFolder(path);
+            if (!(await landFile(obj, rel))) { stopped = true; break; }
+            presented.add(obj.key);
+          }
+          token = res.nextContinuationToken;
+          listed = !stopped && !res.truncated;
+        }
+        let complete = listed;
+        // Only a complete listing says which held children the folder no longer has.
+        if (listed) {
+          const gone = [...items.entries()].filter(([key, e]) => !e.previousPath && dirOf(e.path) === path && e.path !== path && !presented.has(key)).map(([key]) => key);
+          for (const key of gone.slice(0, FOLDER_VERIFY_PER_CHECK)) await verifyHeld(key);
+          complete = gone.length <= FOLDER_VERIFY_PER_CHECK;
+        }
+        checks.push({ path, changes: changes - before, complete });
+      } catch (err) {
+        checks.push({ path, changes: changes - before, complete: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { changes, complete: true, folders: checks };
+  }
+
   // ── the listing ──
   if (!pass.verify) {
     const res = await io.client.list({ prefix, ...(pass.startAfter ? { startAfter: pass.startAfter } : {}), maxKeys: config.pageSize ?? PAGE_SIZE });
@@ -354,14 +444,9 @@ export async function syncS3Context(
   let checked = 0;
   while (queue.length && checked < (config.maxVerify ?? SYNC_VERIFY_PER_CALL)) {
     const key = queue.shift()!;
-    const e = items.get(key);
-    if (!e) continue;
+    if (!items.has(key)) continue;
     checked++;
-    const present = e.kind === 'file' ? (await io.client.head(key)) !== null : (await io.client.list({ prefix: key, maxKeys: 1 })).objects.length > 0;
-    if (present) continue;
-    await land({ change: 'delete', connectionId: ctx.connection.id, itemId: e.itemId, kind: e.kind, path: e.path, name: e.name, reason: 'deleted' });
-    await put(key, null);
-    changes++;
+    await verifyHeld(key);
   }
   pass.changes += changes;
   if (queue.length) {

@@ -915,6 +915,15 @@ export const changeSpaceMail = (body: { action: 'request' | 'rotate'; allowlist?
 export type SourceSyncOutcome = import('../../src/source-routes').SourceSyncOutcome;
 /** **Sync now**: poll the space's a3doc binding at once; the platform allows one a minute. */
 export const syncSource = () => call<SourceSyncOutcome>('/source/sync', { method: 'POST' });
+export type FolderRefresh = import('../../src/source-routes').FolderRefresh;
+export type FolderRefreshAnswer = import('../../src/source-routes').FolderRefreshAnswer;
+/**
+ * Check one folder of a connected space against its source: asked on opening it, and with `force`
+ * by its refresh button. Cheap to repeat: the server asks the source only when the folder is not
+ * fresh and no check is under way, and answers the folder's state either way.
+ */
+export const refreshSourceFolder = (folderId: string, force = false) =>
+  call<FolderRefreshAnswer>(`/source/folders/${encodeURIComponent(folderId)}/refresh`, { method: 'POST', body: JSON.stringify({ force }) });
 export interface PluginInstall { id: string; plugin_id: string; principal: string; manifest_json: string; source?: string; source_kind?: string; source_ref?: string; resolved?: string; source_sha256?: string; granted_capabilities?: string; enabled: number; updated_at: string }
 export const listPlugins = () => call<{ plugins: PluginInstall[] }>('/plugins');
 export type PluginProvenance = { kind: 'inline' | 'github' | 'npm' | 'zip' | 'bundled'; ref: string; resolved: string; token?: string };

@@ -1,6 +1,7 @@
 import type { ConnectorDefinition } from '@substrat-run/vertical-host/connectors';
+import type { ScopedConnectionContext } from '@substrat-run/kernel';
 import { ConnectorRefusal } from '@substrat-run/kernel';
-import { bindA3docContext, bindingKey, dispatchA3docContext, syncA3docContext, A3DOC_FILES_EVENT, SYNC_REPORT_KEY, type A3docBinding } from './files.js';
+import { bindA3docContext, bindingKey, checkA3docFoldersContext, dispatchA3docContext, syncA3docContext, A3DOC_FILES_EVENT, SYNC_REPORT_KEY, type A3docBinding, type A3docFolderCheck } from './files.js';
 import { probeA3docSecret } from './probe.js';
 import type { A3docOptions } from './connection.js';
 
@@ -57,4 +58,15 @@ export function a3docConnectorDefinition(
       await tell(null);
     },
   };
+}
+
+/**
+ * The folder-check capability, for a vertical that checks a folder when someone opens it: each
+ * path's own documents are read from a3doc again and adds, edits and removals land, all in one
+ * call that signs in at most once. Paths are the space's (`''` is the bound folder).
+ */
+export function a3docFolderChecks(
+  config: Partial<Pick<A3docOptions, 'apiBase' | 'addressProvider' | 'now'>> = {},
+): (ctx: ScopedConnectionContext, paths: string[]) => Promise<A3docFolderCheck[]> {
+  return (ctx, paths) => checkA3docFoldersContext(ctx, paths, { ...config, fetch: ctx.fetch });
 }

@@ -356,4 +356,17 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
   CREATE INDEX graph_claims_file ON graph_claims (file_id, status);
   CREATE INDEX graph_claims_open ON graph_claims (status, confidence);` },
 
+  /**
+   * A connected space's folders, checked against their source when someone opens them
+   * (`src/folder-refresh.ts`). One row per folder that was ever asked about: when it was asked
+   * (`requested_at`), when the connector took the request (`taken_at`), and when the last check
+   * ended (`checked_at`), with the source's reason when it failed. Diagnostics only: no file
+   * depends on a row here, so a folder's row goes with the folder.
+   */
+  { version: '0019', sql: `CREATE TABLE drive_source_refresh (
+    folder_id TEXT PRIMARY KEY NOT NULL REFERENCES drive_folders(id) ON DELETE CASCADE,
+    requested_at TEXT, taken_at TEXT, checked_at TEXT, error TEXT,
+    changes INTEGER NOT NULL DEFAULT 0
+  );` },
+
 ];

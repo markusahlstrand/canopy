@@ -64,6 +64,17 @@ export interface A3docClientConfig {
   /** `…/WebAPI/v1`. Resolved from the company code via the address provider when absent. */
   apiBase?: string;
   addressProvider?: string;
+  /**
+   * A session an earlier call signed in for: its endpoint and token. Calls start with it instead of
+   * signing in, and sign in again only when a3doc answers that the token is no longer valid.
+   */
+  session?: A3docSession;
+}
+
+/** A signed-in a3doc session: what a later call needs to skip `Address` and the MFA login. */
+export interface A3docSession {
+  apiBase: string;
+  token: string;
 }
 
 export class A3docError extends Error {
@@ -150,6 +161,8 @@ export interface A3docClient {
   download(documentId: string): Promise<Uint8Array | null>;
   /** Adds a NEW document (a3doc never replaces one) and returns its id. */
   upload(input: UploadInput): Promise<string>;
+  /** The session this client holds now (possibly one it signed in for), or null before it has one. */
+  session(): A3docSession | null;
 }
 
 /** Roles the web app hides its upload page from (`userRol` 1 and 6). */
@@ -163,8 +176,9 @@ interface Envelope {
 export function createA3docClient(config: A3docClientConfig): A3docClient {
   const doFetch = config.fetch;
   const { companyCode, user, password } = config.credentials;
-  let apiBase = config.apiBase?.replace(/\/+$/, "") ?? null;
-  let token: string | null = null;
+  let apiBase = config.apiBase?.replace(/\/+$/, "") ?? config.session?.apiBase ?? null;
+  // A session for another endpoint (a configured `apiBase` that moved) is not this one's.
+  let token: string | null = config.session && (!config.apiBase || config.session.apiBase === apiBase) ? config.session.token : null;
 
   async function post<T>(url: string, body: unknown, what: string): Promise<T> {
     const res = await doFetch(url, {
@@ -245,6 +259,10 @@ export function createA3docClient(config: A3docClientConfig): A3docClient {
   return {
     async signIn() {
       await signIn();
+    },
+
+    session() {
+      return apiBase && token ? { apiBase, token } : null;
     },
 
     async userInfo() {

@@ -22,7 +22,8 @@ function space(provider: string | null) {
     if (init?.method === 'POST') return Response.json({ id: 'up', name: 'a.pdf' });
     return Response.json(url === '/api/source' ? { source } : url.endsWith('/access') ? { canManage: false } : folders[url] ?? []);
   }));
-  return { uploads: () => calls.filter(call => call.method === 'POST').map(call => call.url) };
+  // Uploads only: opening an a3doc folder also POSTs its check against a3doc.
+  return { uploads: () => calls.filter(call => call.method === 'POST' && call.url.includes('/content')).map(call => call.url) };
 }
 
 /** The listing is up and the space's source answer has landed. */
