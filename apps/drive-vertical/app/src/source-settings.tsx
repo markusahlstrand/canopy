@@ -61,14 +61,15 @@ const documents = (count: number) => `${count} ${count === 1 ? 'document' : 'doc
 /**
  * What a full read found, said so the numbers add up. `files` counts what the source holds HERE,
  * one file per placement: a3doc files one document in several folders (its categories), and each
- * placement is its own file, so a space can hold more files than a3doc has documents. Files only
+ * placement is its own file, so a space usually holds more files than a3doc has documents. Files only
  * in Canopy (a flow's copies, uploads still on their way) are not in either number.
  */
 export function fullReadSummary(report: Pick<SourceSyncReport, 'total' | 'read' | 'skipped' | 'files'>): string {
   const read = report.read === report.total ? `all ${documents(report.total)} read` : `${report.read} of ${documents(report.total)} read`;
   const landed = report.read - report.skipped;
   const files = `${report.files} ${report.files === 1 ? 'file' : 'files'} here`;
-  if (report.files > landed) return `${read}, ${files}, since a document filed in more than one a3doc folder shows in each`;
+  // A likely reason, not a proven one: a held document can also outlive a read that missed it.
+  if (report.files > landed) return `${read}, ${files}: a document can sit in more than one a3doc folder, and shows in each`;
   if (report.files === landed) return `${read}, one file here for each`;
   return `${read}, ${files}`;
 }

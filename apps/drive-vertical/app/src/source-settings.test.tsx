@@ -155,7 +155,7 @@ it('says what a sync found, a current failure first', () => {
   expect(sourceSyncNote(status({ report: read }))?.text).toContain('all 2 documents read, one file here for each.');
   // One document a3doc files in two folders is two files here, and the line says why.
   expect(sourceSyncNote(status({ report: { ...read, total: 280, read: 280, files: 283 } }))?.text)
-    .toContain('all 280 documents read, 283 files here, since a document filed in more than one a3doc folder shows in each.');
+    .toContain('all 280 documents read, 283 files here: a document can sit in more than one a3doc folder, and shows in each.');
   expect(fullReadSummary({ total: 3, read: 2, skipped: 0, files: 1 })).toBe('2 of 3 documents read, 1 file here');
   expect(sourceSyncNote(status({ report: read, binding: { status: 'active', lastSyncedAt: null, lastError: { at: '2026-11-06T22:05:00.000Z', message: 'a3doc refused' } } }))).toMatchObject({ failed: true, text: expect.stringContaining('a3doc refused') });
 });

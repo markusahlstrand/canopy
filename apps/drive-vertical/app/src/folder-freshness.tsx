@@ -7,6 +7,8 @@ import { refreshSourceFolder, type FolderRefresh } from './api';
  * of its own (it sends `recheckWindowMs`, derived from how long it keeps a request under way).
  */
 export const DEFAULT_RECHECK_WINDOW_MS = 4 * 60_000 + 5_000;
+/** How soon a recheck that could not reach the worker is tried again, while the window lasts. */
+const RETRY_FAILED_MS = 5_000;
 /** A check this recent that landed changes is this ask's own, so the listing is read again. */
 const JUST_CHECKED_MS = 15_000;
 /** How often the "Checked 2 min ago" wording moves on. */
@@ -49,7 +51,11 @@ export function useFolderFreshness(folderId: string, enabled: boolean, onChecked
   const [stalled, setStalled] = useState(false);
   /** When the current run of "Checking…" answers began, so the page knows when to stop asking. */
   const since = useRef<number | null>(null);
+  /** The window the server named for the current run of "Checking…". */
+  const windowMs = useRef(DEFAULT_RECHECK_WINDOW_MS);
   const generation = useRef(0);
+  /** Which ask is the latest: an answer to any earlier one is superseded and dropped. */
+  const latestAsk = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const checked = useRef(onChecked);
   checked.current = onChecked;
@@ -57,11 +63,18 @@ export function useFolderFreshness(folderId: string, enabled: boolean, onChecked
   const ask = useCallback(async (force: boolean, gen: number) => {
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     if (force) since.current = null;
+    const mine = ++latestAsk.current;
+    const current = () => gen === generation.current && mine === latestAsk.current;
+    /** Ask again after `delay` while the window lasts; past it, stop spinning and let the person ask. */
+    const again = (delay: number) => {
+      if (since.current !== null && Date.now() + delay <= since.current + windowMs.current) timer.current = setTimeout(() => void ask(false, gen), delay);
+      else setStalled(true);
+    };
     setStalled(false);
     setAsking(true);
     try {
       const answer = await refreshSourceFolder(folderId, force);
-      if (gen !== generation.current) return;
+      if (!current()) return;
       const previous = latest.current;
       latest.current = answer.refresh;
       setRefresh(answer.refresh);
@@ -71,18 +84,20 @@ export function useFolderFreshness(folderId: string, enabled: boolean, onChecked
       if (ended && (previous?.state === 'checking' || justLanded)) checked.current();
       if (answer.refresh?.state === 'checking' && answer.retryAfterMs) {
         since.current ??= Date.now();
-        const deadline = since.current + (answer.recheckWindowMs ?? DEFAULT_RECHECK_WINDOW_MS);
+        windowMs.current = answer.recheckWindowMs ?? DEFAULT_RECHECK_WINDOW_MS;
         // Past the window the server would have answered or started over: stop spinning, and let
         // the person ask again rather than show "Checking…" with a disabled button for good.
-        if (Date.now() + answer.retryAfterMs <= deadline) timer.current = setTimeout(() => void ask(false, gen), answer.retryAfterMs);
-        else setStalled(true);
+        again(answer.retryAfterMs);
       } else {
         since.current = null;
       }
     } catch {
-      // Offline, or a worker without the route: say nothing rather than something wrong.
+      // Offline, or a worker without the route. With nothing shown, say nothing. While the line
+      // says "Checking…", a failed recheck is tried again within the window, and past it the
+      // line stops spinning, so it never sits there with Check now disabled.
+      if (current() && latest.current?.state === 'checking') again(RETRY_FAILED_MS);
     } finally {
-      if (gen === generation.current) setAsking(false);
+      if (current()) setAsking(false);
     }
   }, [folderId]);
 
@@ -90,6 +105,7 @@ export function useFolderFreshness(folderId: string, enabled: boolean, onChecked
     const gen = ++generation.current;
     latest.current = null;
     since.current = null;
+    windowMs.current = DEFAULT_RECHECK_WINDOW_MS;
     setRefresh(null);
     setStalled(false);
     if (enabled) void ask(false, gen);
@@ -120,7 +136,7 @@ export function FolderFreshness({ refresh, asking, stalled = false, label, disab
   return <div role="status" aria-live="polite" className="-mt-2 mb-3 flex items-center gap-2 text-xs text-muted-foreground" data-testid="folder-freshness">
     <span className={cn('min-w-0 truncate', failed && 'text-amber-700 dark:text-amber-400')} title={text}>{text}</span>
     <button type="button" className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 hover:bg-muted hover:text-foreground disabled:opacity-50"
-      disabled={disabled || checking} onClick={onCheck} aria-label={`Check this folder in ${label} now`} title={`Check this folder in ${label} now`}>
+      disabled={disabled || checking || asking} onClick={onCheck} aria-label={`Check this folder in ${label} now`} title={`Check this folder in ${label} now`}>
       <Icon name="refresh" size={13} className={cn(checking && 'animate-spin')} />
       <span className="hidden sm:inline">Check now</span>
     </button>

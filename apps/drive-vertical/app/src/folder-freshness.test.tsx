@@ -25,8 +25,10 @@ const bodies = (fetcher: ReturnType<typeof answers>) => fetcher.mock.calls.map((
 it('words the folder\'s state, and how long ago it was checked', () => {
   expect(checkedAgo('2026-11-21T09:59:30.000Z', NOW)).toBe('just now');
   expect(checkedAgo('2026-11-21T09:56:00.000Z', NOW)).toBe('4 min ago');
-  expect(checkedAgo('2026-11-21T07:00:00.000Z', NOW)).toMatch(/^at /);
-  expect(checkedAgo('2026-11-19T07:00:00.000Z', NOW)).toMatch(/^on .* at /);
+  // Same day and another day in LOCAL time, whatever zone the tests run in.
+  const localNoon = new Date(2026, 10, 21, 12, 0).getTime();
+  expect(checkedAgo(new Date(2026, 10, 21, 9, 0).toISOString(), localNoon)).toMatch(/^at /);
+  expect(checkedAgo(new Date(2026, 10, 19, 9, 0).toISOString(), localNoon)).toMatch(/^on .* at /);
   expect(freshnessText(state('checking'), 'a3doc', NOW)).toBe('Checking a3doc for changes…');
   expect(freshnessText(state('checked', { checkedAt: '2026-11-21T09:59:50.000Z' }), 'a3doc', NOW)).toBe('Checked just now.');
   expect(freshnessText(state('failed', { checkedAt: '2026-11-21T09:59:50.000Z', error: 'a3doc wants MFA' }), 'a3doc', NOW))
@@ -115,4 +117,42 @@ it('keeps the line and its button for a folder that has never been checked', asy
   render(<Harness onChecked={() => {}} />);
   await screen.findByText('Not checked against a3doc yet.');
   expect((screen.getByRole('button', { name: 'Check this folder in a3doc now' }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it('tries a failed recheck again while "Checking…", and stops spinning when the window is up', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  let calls = 0;
+  const fetcher = vi.fn(async () => {
+    calls++;
+    if (calls === 1) return Response.json({ refresh: state('checking'), retryAfterMs: 5_000, recheckWindowMs: 15_000 });
+    throw new TypeError('offline');
+  });
+  vi.stubGlobal('fetch', fetcher);
+  render(<Harness onChecked={() => {}} />);
+  await screen.findByText('Checking a3doc for changes…');
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  // Asked at 0; failed at 5 and 10, each tried again; at 15 the window is up.
+  await screen.findByText('No answer from a3doc yet. Check now to ask again.');
+  expect(fetcher).toHaveBeenCalledTimes(4);
+  expect((screen.getByRole('button', { name: 'Check this folder in a3doc now' }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it('allows one check at a time, and never lets an older answer replace a newer one', async () => {
+  const resolvers: ((r: Response) => void)[] = [];
+  const fetcher = vi.fn(() => new Promise<Response>(resolve => resolvers.push(resolve)));
+  vi.stubGlobal('fetch', fetcher);
+  const old = new Date(Date.now() - 5 * 60_000).toISOString();
+  render(<Harness onChecked={() => {}} />);
+  await waitFor(() => expect(resolvers).toHaveLength(1));
+  resolvers[0]!(Response.json({ refresh: state('checked', { checkedAt: old }) }));
+  await screen.findByText('Checked 5 min ago.');
+  const button = () => screen.getByRole('button', { name: 'Check this folder in a3doc now' }) as HTMLButtonElement;
+  fireEvent.click(button());
+  // While that check is asked, the button cannot start another.
+  await waitFor(() => expect(button().disabled).toBe(true));
+  fireEvent.click(button());
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  resolvers[1]!(Response.json({ refresh: state('checked', { checkedAt: new Date().toISOString() }) }));
+  await screen.findByText('Checked just now.');
+  expect(button().disabled).toBe(false);
 });
