@@ -275,6 +275,16 @@ export const sourceSyncReport = z.object({
 });
 export type SourceSyncReport = z.infer<typeof sourceSyncReport>;
 
+/**
+ * Where one folder of a connected space stands against its source: `checking` while a check asked
+ * for is under way, then `checked` (or `failed`, with the source's reason) and when.
+ */
+export const folderRefresh = z.object({
+  folderId: z.string(), path: z.string(), state: z.enum(['unchecked', 'checking', 'checked', 'failed']),
+  checkedAt: z.string().nullable(), error: z.string().nullable(), changes: z.number().int(),
+});
+export type FolderRefresh = z.infer<typeof folderRefresh>;
+
 const sourceChangeInput = z.object({
   ...fileSourceChange.options[0].partial().shape,
   ...fileSourceChange.options[1].partial().shape,
@@ -348,6 +358,39 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   'drive/clear-source': {
     summary: 'Forget the file source this space was bound to', permission: 'drive:manage',
     output: z.object({ ok: z.literal(true) }),
+  },
+  /**
+   * Someone opened a folder of a connected space: ask its source for the folder's children now,
+   * unless that was done moments ago (`fresh`) or is already under way (`joined`). The worker polls
+   * the source only on `start`. `throttleMs` is the worker's setting, never the caller's.
+   */
+  'drive/request-folder-refresh': {
+    summary: 'Ask the space\'s source to check one folder now', permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({ folderId: z.string(), force: z.boolean().optional(), throttleMs: z.number().int().positive().optional() }),
+    output: z.object({ decision: z.enum(['start', 'joined', 'fresh', 'unsupported']), provider: z.string().nullable(), refresh: folderRefresh.nullable() }),
+  },
+  /** What the worker's poll of the source said, for a request the connector did not answer itself. */
+  'drive/settle-folder-refresh': {
+    summary: 'Record how a folder check went', permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
+    input: z.object({ folderId: z.string(), outcome: z.enum(['checked', 'failed']), error: z.string().max(500).optional(), changes: z.number().int().min(0).optional() }),
+    output: z.object({ folderId: z.string(), refresh: folderRefresh }),
+    emits: { entity: 'folder', entityIdFrom: 'folderId', type: 'drive.folder-checked', schemaVersion: 1, piiClass: 'none', payload: ['folderId'] },
+  },
+  /** The connector's side: folders people asked about, by the path the source knows them by. */
+  'drive/source-folder-requests': {
+    summary: 'Take the folders waiting for a check by the source', permission: 'drive:land-source',
+    input: z.object({ limit: z.number().int().min(1).max(10).default(3) }),
+    output: z.object({ folders: z.array(z.object({ folderId: z.string(), path: z.string() })) }),
+  },
+  /**
+   * The connector checked a folder it took (or failed to). `requeue`: a budget stopped the check
+   * part way, so the request goes back to wait for the next call instead of reading as checked.
+   */
+  'drive/source-folder-checked': {
+    summary: 'Record that the source checked a folder', permission: 'drive:land-source',
+    input: z.object({ folderId: z.string(), changes: z.number().int().min(0), error: z.string().max(500).nullable().optional(), requeue: z.boolean().optional() }),
+    output: z.object({ folderId: z.string(), refresh: folderRefresh.nullable() }),
+    emits: { entity: 'folder', entityIdFrom: 'folderId', type: 'drive.folder-checked', schemaVersion: 1, piiClass: 'none', payload: ['folderId'] },
   },
   /**
    * Mail forwarded to the space's address (#357), one mail-in change per call. Only the address's

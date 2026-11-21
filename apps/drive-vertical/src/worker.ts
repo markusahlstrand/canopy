@@ -1,4 +1,5 @@
 import { connectors } from './connectors.js';
+import { hasFolderChecks } from './folder-checks.js';
 import { declareConnectorEvents } from '@substrat-run/vertical-host/connectors';
 import { mountMemberRemoval } from './member-removal-route.js';
 import { claimSafeInvite, claimSafeInviteByCapability, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
@@ -276,6 +277,11 @@ export interface Env {
   GITHUB_TOKEN?: string;
   /** Optional npm registry base URL for plugin imports (https, or loopback http for local acceptance). Default: registry.npmjs.org. */
   NPM_REGISTRY_URL?: string;
+  /**
+   * How long a connected space's folder counts as freshly checked against its source, in ms:
+   * opening it again within this asks the source nothing. Default 60 000; never under 10 000.
+   */
+  SOURCE_FOLDER_REFRESH_MS?: string;
   /** The install's issuer. Absent ⇒ nothing authenticates, which is the honest default. */
   OIDC_ISSUER?: string;
   OIDC_CLIENT_ID?: string;
@@ -956,6 +962,9 @@ mountSource(app, async (c) => {
       return { controlPlaneUrl: c.env.CONTROL_PLANE_URL, platformSecret: c.env.PLATFORM_SECRET, tenantId: node.tenantId, scopeId: node.scopeId };
     },
   };
+}, {
+  folderRefreshMs: (c) => Number(c.env.SOURCE_FOLDER_REFRESH_MS) || undefined,
+  checksFolders: (provider) => hasFolderChecks(connectors.definition(provider)),
 });
 /**
  * Flows belong to the install: a caller sees and edits those whose every space they own. Each

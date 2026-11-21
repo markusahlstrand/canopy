@@ -1,6 +1,7 @@
 import type { ConnectorDefinition } from '@substrat-run/vertical-host/connectors';
 import { probeS3Secret, type S3Options } from './connection.js';
-import { bindS3Context, dispatchS3Context, syncS3Context, S3_FILES_EVENT, S3_ITEMS_EVENT } from './files.js';
+import type { ScopedConnectionContext } from '@substrat-run/kernel';
+import { bindS3Context, checkS3FoldersContext, dispatchS3Context, syncS3Context, S3_FILES_EVENT, S3_ITEMS_EVENT, type S3FolderCheck } from './files.js';
 
 /** A vertical-owned provider; the platform distinguishes it from first-party connector slugs. */
 export const S3_VERTICAL_PROVIDER = 'canopy.s3';
@@ -35,4 +36,12 @@ export function s3ConnectorDefinition(config: { journalOperation: string } & S3O
     },
     dispatch: (ctx, event) => dispatchS3Context(ctx, event, config),
   };
+}
+
+/**
+ * The folder-check capability, for a vertical that checks a folder when someone opens it: each
+ * path's own keys are listed one level deep and adds, edits and removals land, in one call.
+ */
+export function s3FolderChecks(config: { journalOperation: string } & S3Options): (ctx: ScopedConnectionContext, paths: string[]) => Promise<S3FolderCheck[]> {
+  return (ctx, paths) => checkS3FoldersContext(ctx, paths, config);
 }

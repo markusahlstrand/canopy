@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { SourceSettings, sourceSyncNote } from './source-settings';
+import { fullReadSummary, SourceSettings, sourceSyncNote } from './source-settings';
 import type { SourceStatus } from './api';
 import { actionsFor } from './file-table';
 
@@ -152,7 +152,11 @@ it('says what a sync found, a current failure first', () => {
   expect(sourceSyncNote(status({ binding: { status: 'active', lastSyncedAt: null, lastError: null } }))?.text).toMatch(/^The first sync is under way/);
   expect(sourceSyncNote(status({ report: { ...read, total: 0, read: 0, files: 0 } }))).toMatchObject({ failed: true, text: expect.stringContaining('a3doc listed no documents') });
   expect(sourceSyncNote(status({ report: { ...read, complete: false, read: 1 } }))).toEqual({ failed: false, text: 'Syncing: read 1 of 2 documents so far.' });
-  expect(sourceSyncNote(status({ report: read }))?.text).toContain('2 of 2 documents, 2 here.');
+  expect(sourceSyncNote(status({ report: read }))?.text).toContain('all 2 documents read, one file here for each.');
+  // One document a3doc files in two folders is two files here, and the line says why.
+  expect(sourceSyncNote(status({ report: { ...read, total: 280, read: 280, files: 283 } }))?.text)
+    .toContain('all 280 documents read, 283 files here: a document can sit in more than one a3doc folder, and shows in each.');
+  expect(fullReadSummary({ total: 3, read: 2, skipped: 0, files: 1 })).toBe('2 of 3 documents read, 1 file here');
   expect(sourceSyncNote(status({ report: read, binding: { status: 'active', lastSyncedAt: null, lastError: { at: '2026-11-06T22:05:00.000Z', message: 'a3doc refused' } } }))).toMatchObject({ failed: true, text: expect.stringContaining('a3doc refused') });
 });
 

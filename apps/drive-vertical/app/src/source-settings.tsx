@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Icon, Input } from '@canopy/ui';
-import { connectSource, disconnectSource, getSourceStatus, syncSource, type QontoLogin, type SourceLogin, type SourceStatus, type SourceSyncOutcome } from './api';
+import { connectSource, disconnectSource, getSourceStatus, syncSource, type QontoLogin, type SourceLogin, type SourceStatus, type SourceSyncOutcome, type SourceSyncReport } from './api';
 import { useUnsavedDraft } from './drafts';
 
 export const emptyLogin: SourceLogin = { companyCode: '', user: '', password: '', customerId: '', folder: '' };
@@ -14,7 +14,7 @@ export const emptyQontoLogin: QontoLogin = { provider: 'canopy.qonto', login: ''
 export const isQontoLogin = (login: SourceLogin | QontoLogin): login is QontoLogin => 'secretKey' in login;
 export const qontoLoginReady = (login: QontoLogin) => !!login.login.trim() && !!login.secretKey.trim();
 /** What a source is called to the person connecting it. */
-export const sourceLabel = (provider: string | undefined) => provider === 'canopy.qonto' ? 'Qonto' : 'a3doc';
+export const sourceLabel = (provider: string | undefined) => provider === 'canopy.qonto' ? 'Qonto' : provider === 'canopy.s3' ? 'S3' : 'a3doc';
 
 /** What a **Sync now** did, in a sentence. */
 export function syncOutcomeNote(o: SourceSyncOutcome, label = 'a3doc'): { failed: boolean; text: string } {
@@ -59,6 +59,22 @@ const when = (iso: string) => new Date(iso).toLocaleString();
 const documents = (count: number) => `${count} ${count === 1 ? 'document' : 'documents'}`;
 
 /**
+ * What a full read found, said so the numbers add up. `files` counts what the source holds HERE,
+ * one file per placement: a3doc files one document in several folders (its categories), and each
+ * placement is its own file, so a space usually holds more files than a3doc has documents. Files only
+ * in Canopy (a flow's copies, uploads still on their way) are not in either number.
+ */
+export function fullReadSummary(report: Pick<SourceSyncReport, 'total' | 'read' | 'skipped' | 'files'>): string {
+  const read = report.read === report.total ? `all ${documents(report.total)} read` : `${report.read} of ${documents(report.total)} read`;
+  const landed = report.read - report.skipped;
+  const files = `${report.files} ${report.files === 1 ? 'file' : 'files'} here`;
+  // A likely reason, not a proven one: a held document can also outlive a read that missed it.
+  if (report.files > landed) return `${read}, ${files}: a document can sit in more than one a3doc folder, and shows in each`;
+  if (report.files === landed) return `${read}, one file here for each`;
+  return `${read}, ${files}`;
+}
+
+/**
  * Why a connected space holds what it holds, in the order worth reading: a failure, then what the
  * last full read found. Shared by space settings and the empty folder, where the question comes up.
  */
@@ -73,7 +89,7 @@ export function sourceSyncNote({ source, binding, report }: SourceStatus): { fai
     return { failed: true, text: `${report.skipped} of ${documents(report.read)} read were skipped because a3doc files them outside this folder.${ids}` };
   }
   if (!report.complete) return { failed: false, text: `Syncing: read ${report.read} of ${documents(report.total)} so far.` };
-  return { failed: false, text: `Last full read ${when(report.at)}: ${report.read} of ${documents(report.total)}, ${report.files} here.` };
+  return { failed: false, text: `Last full read ${when(report.at)}: ${fullReadSummary(report)}.` };
 }
 
 /**

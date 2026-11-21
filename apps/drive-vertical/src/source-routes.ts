@@ -6,11 +6,29 @@ import type { ScopeStub } from '@substrat-run/kernel';
 import { bindConnection, ConnectionRequestError, listBindings, syncConnections, unbindConnection, upsertConnection, type ConnectionRelayAccess } from '@substrat-run/vertical-host';
 import { a3docSecret, A3DOC_VERTICAL_PROVIDER } from '@canopy/connector-a3docs';
 import { qontoSecret, QONTO_VERTICAL_PROVIDER } from '@canopy/connector-qonto';
+import { TAKEN_RETRY_MS, UNTAKEN_RETRY_MS } from '@canopy/scope-drive';
 
 export interface DriveSource { provider: string; connectionId: string; account: string; user?: string; folder: string; canUpload: boolean; boundAt: string }
 
 /** What the connector's last full read found; see `A3docSyncReport`. */
 export interface SourceSyncReport { at: string; complete: boolean; total: number; read: number; skipped: number; skippedContainers: number[]; files: number }
+
+/** Where one folder of a connected space stands against its source; see `drive/request-folder-refresh`. */
+export interface FolderRefresh { folderId: string; path: string; state: 'unchecked' | 'checking' | 'checked' | 'failed'; checkedAt: string | null; error: string | null; changes: number }
+/**
+ * What asking for a folder check answers: the folder's state and, while it is checking, how soon to
+ * ask again and for how long to keep asking before the page stops waiting.
+ */
+export interface FolderRefreshAnswer { refresh: FolderRefresh | null; retryAfterMs?: number; recheckWindowMs?: number }
+/** How soon a page showing "Checking…" asks again: cheap, since only `start` reaches the source. */
+export const FOLDER_RECHECK_MS = 5_000;
+/**
+ * How long a page keeps asking while a check shows "Checking…": as long as the drive can keep a
+ * request under way (a connector that took it and died is given {@link TAKEN_RETRY_MS}, one nobody
+ * took {@link UNTAKEN_RETRY_MS} before a re-ask starts it again), plus one more ask. Derived, so
+ * the page never gives up on a check the drive still calls under way.
+ */
+export const FOLDER_RECHECK_WINDOW_MS = TAKEN_RETRY_MS + UNTAKEN_RETRY_MS + FOLDER_RECHECK_MS;
 
 /** What one poll of this space's binding did; `pending` means more is left for a later sync. */
 export interface SourceSyncOutcome { outcome: 'landed' | 'unchanged' | 'failed' | 'in-progress'; at: string; pending: boolean; error?: string }
@@ -43,7 +61,15 @@ function parseConnect(body: unknown) {
  * two connections, each bound to its own folder. The platform's bind asks the connector, which
  * checks the folder exists and reads whether this a3doc user may upload.
  */
-export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>) => Promise<{ scope: ScopeStub; relay: () => SourceRelay }>) {
+export function mountSource<E extends Env>(
+  app: Hono<E>,
+  resolve: (c: Context<E>) => Promise<{ scope: ScopeStub; relay: () => SourceRelay }>,
+  options: {
+    folderRefreshMs?: (c: Context<E>) => number | undefined;
+    /** Whether the provider's connector answers folder requests itself (`hasFolderChecks`). */
+    checksFolders?: (provider: string) => boolean;
+  } = {},
+) {
   app.get('/api/source/status', async (c) => {
     const { scope, relay } = await resolve(c);
     const { source, report } = await scope.invoke<{ source: DriveSource | null; report?: SourceSyncReport }>('drive/get-source');
@@ -110,6 +136,53 @@ export function mountSource<E extends Env>(app: Hono<E>, resolve: (c: Context<E>
     if (!mine) throw new HTTPException(409, { message: 'The platform holds no binding for this space’s source. Connect it again.' });
     const { connectionId: _, ...outcome } = mine;
     return c.json(outcome satisfies SourceSyncOutcome);
+  });
+
+  /**
+   * Someone opened a folder (or pressed its refresh): check it against the source unless that was
+   * done within the throttle or is already under way. The drive decides (`drive/request-folder-refresh`,
+   * which needs only read access to the folder); only a `start` polls the source, through the
+   * platform, which itself polls a binding at most once a minute. A connector with the folder-check
+   * capability reads that folder's children in the poll; any other runs its ordinary pass. Failures
+   * are recorded on the folder and answered as its state, never as an error: the listing stands.
+   */
+  app.post('/api/source/folders/:folderId/refresh', async (c) => {
+    const { scope, relay } = await resolve(c);
+    const body = await c.req.json().catch(() => ({})) as { force?: unknown };
+    const folderId = c.req.param('folderId');
+    const throttleMs = options.folderRefreshMs?.(c);
+    const asked = await scope.invoke<{ decision: 'start' | 'joined' | 'fresh' | 'unsupported'; provider: string | null; refresh: FolderRefresh | null }>(
+      'drive/request-folder-refresh', { folderId, force: body.force === true, ...(throttleMs ? { throttleMs } : {}) },
+    );
+    const answer = (refresh: FolderRefresh | null): FolderRefreshAnswer =>
+      ({ refresh, ...(refresh?.state === 'checking' ? { retryAfterMs: FOLDER_RECHECK_MS, recheckWindowMs: FOLDER_RECHECK_WINDOW_MS } : {}) });
+    if (asked.decision !== 'start' || !asked.provider) return c.json(answer(asked.refresh));
+    const settle = async (outcome: 'checked' | 'failed', error?: string) =>
+      (await scope.invoke<{ refresh: FolderRefresh }>('drive/settle-folder-refresh', { folderId, outcome, ...(error ? { error: error.slice(0, 500) } : {}) })).refresh;
+    let polled: Awaited<ReturnType<typeof syncConnections>>;
+    try {
+      polled = await syncConnections({ ...relay(), provider: asked.provider });
+    } catch (error) {
+      // Polled within the last minute: the request waits for the pass under way or the next one.
+      if (error instanceof ConnectionRequestError && error.status === 429) return c.json(answer(asked.refresh));
+      if (error instanceof ConnectionRequestError && error.status === 501) return c.json(answer(await settle('failed', 'This source can\u2019t be checked on request.')));
+      const reason = error instanceof HTTPException || error instanceof ConnectionRequestError ? error.message : 'Could not reach the source through the platform.';
+      return c.json(answer(await settle('failed', reason)));
+    }
+    const failed = polled.bindings.find((b) => b.outcome === 'failed');
+    if (failed) return c.json(answer(await settle('failed', failed.error ?? 'The source gave no reason.')));
+    // Another pass was already running, so nothing read this folder: the request waits for the next.
+    if (polled.bindings.length && polled.bindings.every((b) => b.outcome === 'in-progress')) return c.json(answer(asked.refresh));
+    // A connector that checks folders answered this one in the poll, or did not take it (a sweep
+    // takes only a few): either way the drive's record is the truth, and a poll that went well says
+    // nothing about a folder nobody read. Asking again reads it without starting anything: `fresh`
+    // with the answer, or `joined` while the request still waits for the next sweep.
+    if (options.checksFolders?.(asked.provider)) {
+      const now = await scope.invoke<{ refresh: FolderRefresh | null }>('drive/request-folder-refresh', { folderId, ...(throttleMs ? { throttleMs } : {}) });
+      return c.json(answer(now.refresh));
+    }
+    // Any other connector ran its ordinary pass, which is the whole of what a check can be there.
+    return c.json(answer(await settle('checked')));
   });
 
   app.delete('/api/source', async (c) => {

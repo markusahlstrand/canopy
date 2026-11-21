@@ -1,9 +1,10 @@
-import { expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ScopeId, TenantId } from '@substrat-run/contracts';
 import type { ScopeStub } from '@substrat-run/kernel';
-import { mountSource, type DriveSource } from './source-routes';
+import { FOLDER_RECHECK_WINDOW_MS, mountSource, type DriveSource } from './source-routes';
+import { TAKEN_RETRY_MS } from '@canopy/scope-drive';
 
 const tenantId = '01JZ00000000000000000TEN01' as TenantId, scopeId = '01JZ00000000000000000SC001' as ScopeId;
 const CONNECTION = '01JZ00000000000000000C0N01', OTHER = '01JZ00000000000000000C0N02';
@@ -160,4 +161,88 @@ it('asks for both Qonto fields, and syncs the provider the space is on', async (
   const on = world({ manager: true, prior: { provider: 'canopy.qonto', connectionId: CONNECTION, account: 'acme-1234', folder: '', canUpload: false, boundAt: 'then' } });
   expect((await on.app.request('/api/source/sync', { method: 'POST' })).status).toBe(200);
   expect(on.calls.at(-1)).toMatchObject({ path: '/internal/connections/sync', body: { provider: 'canopy.qonto' } });
+});
+
+describe('checking a folder when it is opened', () => {
+  type Decision = 'start' | 'joined' | 'fresh' | 'unsupported';
+  const refresh = (state: string, extra: Record<string, unknown> = {}) => ({ folderId: 'f1', path: 'Recibidas', state, checkedAt: null, error: null, changes: 0, ...extra });
+  function folderWorld(decision: Decision, sync: { status?: number; bindings?: unknown[] } = {}, checksFolders = false) {
+    const decisions: Decision[] = [decision, 'joined'];
+    const paths: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      paths.push(new URL(String(url)).pathname);
+      if (sync.status) return Response.json({ error: 'refused' }, { status: sync.status });
+      return Response.json({ bindings: sync.bindings ?? [{ connectionId: CONNECTION, outcome: 'landed', at: '2026-11-21T10:00:00.000Z', pending: true }] });
+    }) as unknown as typeof fetch;
+    const invoke = vi.fn(async (operation: string, input?: unknown) => {
+      if (operation === 'drive/request-folder-refresh') {
+        const decision = decisions.length > 1 ? decisions.shift()! : decisions[0]!;
+        return { decision, provider: decision === 'unsupported' ? null : 'canopy.a3doc', refresh: decision === 'unsupported' ? null : refresh(decision === 'fresh' ? 'checked' : 'checking') };
+      }
+      if (operation === 'drive/settle-folder-refresh') {
+        const { outcome, error } = input as { outcome: string; error?: string };
+        return { folderId: 'f1', refresh: refresh(outcome, { error: error ?? null, checkedAt: '2026-11-21T10:00:01.000Z' }) };
+      }
+      throw new Error(operation);
+    });
+    const app = new Hono();
+    mountSource(app, async () => ({
+      scope: { invoke } as unknown as ScopeStub,
+      relay: () => ({ controlPlaneUrl: 'https://cp.example', platformSecret: 'secret', tenantId, scopeId, fetchImpl }),
+    }), { folderRefreshMs: () => 120_000, checksFolders: provider => checksFolders && provider === 'canopy.a3doc' });
+    const open = async (body: unknown = {}) => {
+      const res = await app.request('/api/source/folders/f1/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: res.status, body: await res.json() as Record<string, unknown> };
+    };
+    return { open, invoke, paths };
+  }
+
+  it('polls the source on a new request and records that the folder was checked', async () => {
+    const w = folderWorld('start');
+    expect(await w.open({ force: true })).toEqual({ status: 200, body: { refresh: refresh('checked', { checkedAt: '2026-11-21T10:00:01.000Z' }) } });
+    expect(w.invoke).toHaveBeenCalledWith('drive/request-folder-refresh', { folderId: 'f1', force: true, throttleMs: 120_000 });
+    expect(w.paths).toEqual(['/internal/connections/sync']);
+    expect(w.invoke).toHaveBeenLastCalledWith('drive/settle-folder-refresh', { folderId: 'f1', outcome: 'checked' });
+  });
+
+  it('keeps a page asking for longer than the drive keeps a check under way', () => {
+    expect(FOLDER_RECHECK_WINDOW_MS).toBeGreaterThan(TAKEN_RETRY_MS);
+  });
+
+  it('never records a folder as checked for a connector that checks folders itself, when its sweep did not take it', async () => {
+    const w = folderWorld('start', {}, true);
+    // The poll went well, but this connector answers folders itself: the drive's record says the
+    // request still waits (a sweep takes only a few), so the page keeps asking.
+    expect((await w.open()).body).toEqual({ refresh: refresh('checking'), retryAfterMs: 5_000, recheckWindowMs: FOLDER_RECHECK_WINDOW_MS });
+    expect(w.paths).toEqual(['/internal/connections/sync']);
+    expect(w.invoke.mock.calls.map(([op]) => op)).toEqual(['drive/request-folder-refresh', 'drive/request-folder-refresh']);
+    expect(w.invoke).toHaveBeenLastCalledWith('drive/request-folder-refresh', { folderId: 'f1', throttleMs: 120_000 });
+  });
+
+  it('asks nothing of the source for a fresh folder, and asks the page to look again while one is checking', async () => {
+    const fresh = folderWorld('fresh');
+    expect((await fresh.open()).body).toEqual({ refresh: refresh('checked') });
+    const joined = folderWorld('joined');
+    expect((await joined.open()).body).toEqual({ refresh: refresh('checking'), retryAfterMs: 5_000, recheckWindowMs: FOLDER_RECHECK_WINDOW_MS });
+    const none = folderWorld('unsupported');
+    expect((await none.open()).body).toEqual({ refresh: null });
+    expect([...fresh.paths, ...joined.paths, ...none.paths]).toEqual([]);
+  });
+
+  it('leaves the request waiting when the platform polled a minute ago or a pass is under way', async () => {
+    const throttled = folderWorld('start', { status: 429 });
+    expect((await throttled.open()).body).toMatchObject({ refresh: { state: 'checking' }, retryAfterMs: 5_000, recheckWindowMs: FOLDER_RECHECK_WINDOW_MS });
+    const busy = folderWorld('start', { bindings: [{ connectionId: CONNECTION, outcome: 'in-progress', at: '2026-11-21T10:00:00.000Z', pending: true }] });
+    expect((await busy.open()).body).toMatchObject({ refresh: { state: 'checking' } });
+    expect([...throttled.invoke.mock.calls, ...busy.invoke.mock.calls].some(([op]) => op === 'drive/settle-folder-refresh')).toBe(false);
+  });
+
+  it('answers a failure as the folder\'s state, never as an error', async () => {
+    const failed = folderWorld('start', { bindings: [{ connectionId: CONNECTION, outcome: 'failed', at: '2026-11-21T10:00:00.000Z', pending: false, error: 'a3doc wants MFA' }] });
+    expect(await failed.open()).toMatchObject({ status: 200, body: { refresh: { state: 'failed', error: 'a3doc wants MFA' } } });
+    const unsupported = folderWorld('start', { status: 501 });
+    expect((await unsupported.open()).body).toMatchObject({ refresh: { state: 'failed', error: expect.stringContaining('checked on request') } });
+    const down = folderWorld('start', { status: 500 });
+    expect(await down.open()).toMatchObject({ status: 200, body: { refresh: { state: 'failed' } } });
+  });
 });

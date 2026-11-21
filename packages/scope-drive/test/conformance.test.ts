@@ -162,6 +162,7 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
     'drive/create-folder': { name: 'conformance' },
     'drive/ensure-folder-path': { path: 'conformance/2026' },
     'drive/request-s3-change': { request: { op: 'mkdir', path: 'conformance' } },
+    'drive/settle-folder-refresh': { outcome: 'checked' },
     'drive/ensure-file': { name: 'conformance' },
     'drive/set-file-category': { category: 'conformance', source: 'person' },
     // A version id that is not the file's: the allowed half is then refused as a conflict, after
