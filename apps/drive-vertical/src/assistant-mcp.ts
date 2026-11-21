@@ -409,19 +409,40 @@ export function assistantStub(
 }
 
 /**
+ * The request as this endpoint authenticates it: its headers without the session cookie.
+ *
+ * An MCP client signs in with a bearer token, which a browser never attaches on its own. A cookie
+ * it does attach, to a cross-site "simple" POST too (`text/plain`, no preflight), so an endpoint
+ * that took the cookie could be driven by any page the person visits: saving, running or deleting
+ * flows as them, past the JSON-and-same-origin guard the app's own `/api/*` mutations sit behind.
+ * Bearer only closes that whatever the origin; forward THESE headers to anything called on the
+ * caller's behalf (the flow routes), so the cookie never authenticates a call from here either.
+ */
+export function bearerOnly(request: Request): Headers {
+  const headers = new Headers(request.headers);
+  headers.delete('cookie');
+  return headers;
+}
+
+/**
  * Mount `/api/mcp` with the drive's tools (each taking `space`) and the assistant's. `resolve`
- * authenticates the request (a 401 starts the client's sign-in) and says what the caller reaches.
+ * authenticates the request by its `bearerOnly` headers (a 401 starts the client's sign-in) and
+ * says what the caller reaches. A body that is not `application/json` is refused (415), as the
+ * MCP transport sends nothing else.
  */
 export function mountAssistantMcp<E extends object>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   app: Hono<any, any, any>,
   driveOperations: Readonly<Record<string, object>>,
-  resolve: (c: Context<E>) => Promise<{ access: AssistantAccess; ids: Pick<ScopeStub, 'tenantId' | 'scopeId'> }>,
+  resolve: (c: Context<E>, headers: Headers) => Promise<{ access: AssistantAccess; ids: Pick<ScopeStub, 'tenantId' | 'scopeId'> }>,
   options: { basePath?: string } = {},
 ) {
   const catalog = assistantCatalog(driveOperations);
   return mountMcp(app, catalog, async (c) => {
-    const { access, ids } = await resolve(c as Context<E>);
+    if (c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+      throw new HTTPException(415, { message: 'Use application/json for this request.' });
+    }
+    const { access, ids } = await resolve(c as Context<E>, bearerOnly(c.req.raw));
     return assistantStub(access, driveOperations, ids);
   }, { basePath: options.basePath ?? '/api', serverInfo: { name: 'drive' } });
 }

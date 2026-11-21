@@ -39,7 +39,9 @@ function scope(answers: Record<string, Answer>): SpaceInvoker & { invoke: Return
  * mirror) and `a3docs` (a3doc), and is a viewer in `shared`. She is not a member of `secret` at all,
  * and `gone` was deleted after she joined it.
  */
-function harness(opts: { flows?: ReturnType<typeof stored>[]; signedIn?: boolean } = {}) {
+function harness(opts: { flows?: ReturnType<typeof stored>[] } = {}) {
+  /** Who a request is: Ada, by her bearer token or her session cookie. */
+  const signedIn = (headers: Headers) => headers.get('authorization') === 'Bearer ada' || /(^|;\s*)session=ada\b/.test(headers.get('cookie') ?? '');
   const bank = scope({
     'drive/people-access': { canManage: true },
     'drive/get-folder': { id: 'root', canWrite: true },
@@ -88,7 +90,13 @@ function harness(opts: { flows?: ReturnType<typeof stored>[]; signedIn?: boolean
   const flowAccess: FlowAccess = { sub: 'ada', author: 'Ada', tenantId: 't', sites: async () => flowSites, store, newId: () => 'new-id', now: () => 'now', start };
   const flowRoutes = new Hono();
   flowRoutes.onError((err, c) => problemResponse(c, err));
-  mountFlows(flowRoutes, async () => flowAccess);
+  // As the worker resolves it: the flow routes authenticate whatever headers they are handed.
+  const flowCalls: Headers[] = [];
+  mountFlows(flowRoutes, async (c) => {
+    flowCalls.push(new Headers(c.req.raw.headers));
+    if (!signedIn(c.req.raw.headers)) throw new HTTPException(401, { message: 'unauthorized' });
+    return flowAccess;
+  });
 
   // The tenant's registry and directory: who is bound where, and each space as a principal.
   const registry = [
@@ -112,18 +120,22 @@ function harness(opts: { flows?: ReturnType<typeof stored>[]; signedIn?: boolean
       return stub;
     }),
   };
-  const access = assistantAccess(directory, 'ada', async (method, path, body) =>
-    flowRoutes.request(path, { method, headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
 
   const app = new Hono();
-  mountAssistantMcp(app, driveOperations, async () => {
-    if (opts.signedIn === false) throw new HTTPException(401, { message: 'unauthorized' });
+  mountAssistantMcp(app, driveOperations, async (_c, headers) => {
+    // Ada's session cookie and her bearer token would each be her, were either accepted.
+    if (!signedIn(headers)) throw new HTTPException(401, { message: 'unauthorized' });
+    const access = assistantAccess(directory, 'ada', async (method, path, body) => {
+      const forwarded = new Headers(headers);
+      forwarded.set('content-type', 'application/json');
+      return flowRoutes.request(path, { method, headers: forwarded, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    });
     return { access, ids: { tenantId: 't', scopeId: 's-home' } as unknown as Pick<ScopeStub, 'tenantId' | 'scopeId'> };
   });
 
   let id = 0;
-  const rpc = (method: string, params?: unknown) =>
-    app.request('/api/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }) });
+  const rpc = (method: string, params?: unknown, headers: Record<string, string> = { 'content-type': 'application/json', authorization: 'Bearer ada' }) =>
+    app.request('/api/mcp', { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }) });
   /** A tool call: what the model reads back, and whether it was refused. */
   const tool = async (name: string, args: Record<string, unknown> = {}) => {
     const res = await rpc('tools/call', { name, arguments: args });
@@ -132,7 +144,7 @@ function harness(opts: { flows?: ReturnType<typeof stored>[]; signedIn?: boolean
     const text = body.result!.content[0]!.text;
     return { isError: body.result!.isError === true, text, value: body.result!.isError ? null : JSON.parse(text) };
   };
-  return { rpc, tool, store, start, bank, a3docs, shared, home, secret, directory };
+  return { rpc, tool, store, start, bank, a3docs, shared, home, secret, directory, flowCalls };
 }
 
 describe('the assistant MCP endpoint', () => {
@@ -155,9 +167,44 @@ describe('the assistant MCP endpoint', () => {
   });
 
   it('answers 401 with a challenge when nobody is signed in, so the client starts its sign-in', async () => {
-    const res = await harness({ signedIn: false }).rpc('tools/list');
+    const res = await harness().rpc('tools/list', undefined, { 'content-type': 'application/json' });
     expect(res.status).toBe(401);
     expect(res.headers.get('WWW-Authenticate')).toContain('resource_metadata');
+  });
+});
+
+describe('a page in the browser cannot drive the endpoint as the person (CSRF)', () => {
+  const saveFlow = { name: 'drive_save-flow', arguments: { name: 'Planted', enabled: true, graph: graph() } };
+
+  it('does not take the session cookie: a cross-site POST carrying it is a 401, and saves nothing', async () => {
+    const h = harness();
+    const res = await h.rpc('tools/call', saveFlow, { 'content-type': 'application/json', cookie: 'session=ada', origin: 'https://evil.example' });
+    expect(res.status).toBe(401);
+    expect(h.store.save).not.toHaveBeenCalled();
+    // A text/plain "simple" POST, the kind a form or a no-cors fetch sends with no preflight.
+    const simple = await h.rpc('tools/call', saveFlow, { 'content-type': 'text/plain', cookie: 'session=ada' });
+    expect(simple.status).not.toBe(200);
+    expect(h.store.save).not.toHaveBeenCalled();
+    expect(h.flowCalls).toHaveLength(0);
+  });
+
+  it('refuses a body that is not JSON, even with a valid bearer', async () => {
+    const h = harness();
+    const res = await h.rpc('tools/call', saveFlow, { 'content-type': 'text/plain', authorization: 'Bearer ada' });
+    expect(res.status).toBe(415);
+    expect(h.store.save).not.toHaveBeenCalled();
+  });
+
+  it('authenticates the flow routes by the bearer alone: the cookie is never forwarded', async () => {
+    const h = harness();
+    const res = await h.rpc('tools/call', saveFlow, { 'content-type': 'application/json', authorization: 'Bearer ada', cookie: 'session=ada' });
+    expect(res.status).toBe(200);
+    expect(h.store.save).toHaveBeenCalledTimes(1);
+    expect(h.flowCalls.length).toBeGreaterThan(0);
+    for (const headers of h.flowCalls) {
+      expect(headers.get('cookie')).toBeNull();
+      expect(headers.get('authorization')).toBe('Bearer ada');
+    }
   });
 });
 

@@ -1671,10 +1671,11 @@ mountLiveReads(app, {
  * (`assistant-mcp.ts`). Signed in is all this asks; each call then acts as the caller's principal in
  * the space it names, and a flow tool as the caller on the app's own flow routes.
  */
-mountAssistantMcp<{ Bindings: Env }>(app, driveOperations, async (c) => {
+mountAssistantMcp<{ Bindings: Env }>(app, driveOperations, async (c, headers) => {
   const env = c.env;
-  // Who is asking, as a login: a 401 here is what starts the client's sign-in.
-  const { base, sub } = await subjectOf(c.req.raw, env);
+  // Who is asking, as a login, by bearer token only (`headers` carry no cookie): a 401 here is
+  // what starts the client's sign-in.
+  const { base, sub } = await subjectOf(new Request(c.req.url, { headers }), env);
   const host = hostFor(env);
   const directory = identityDo(env, base);
   let executionCtx: Context['executionCtx'] | undefined;
@@ -1689,11 +1690,11 @@ mountAssistantMcp<{ Bindings: Env }>(app, driveOperations, async (c) => {
     settings: (scope) => directory.readSpaceSettings(scope),
     scopeAs: (principal, scope) => host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(scope)),
   }, sub, (method, path, body) => {
-    // The caller's own request headers (their session, the router's assertion), as JSON.
-    const headers = new Headers(c.req.raw.headers);
-    headers.delete('content-length');
-    headers.set('content-type', 'application/json');
-    const init: RequestInit = { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) };
+    // The caller's bearer and the router's assertion, never the cookie (`bearerOnly`), as JSON.
+    const forwarded = new Headers(headers);
+    forwarded.delete('content-length');
+    forwarded.set('content-type', 'application/json');
+    const init: RequestInit = { method, headers: forwarded, ...(body === undefined ? {} : { body: JSON.stringify(body) }) };
     return Promise.resolve(flowRoutes.fetch(new Request(new URL(path, c.req.url), init), env, executionCtx));
   });
   return { access, ids: base };
