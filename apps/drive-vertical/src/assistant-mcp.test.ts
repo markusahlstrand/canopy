@@ -121,7 +121,7 @@ function harness(opts: { flows?: ReturnType<typeof stored>[] } = {}) {
     }),
     // Uploads are covered against the real drive module in test/upload.test.ts.
     uploadsAs: async () => ({ store: async () => { throw new Error('unexpected upload'); }, afterWrite: async () => {} }),
-    saveUploadLink: async () => ({ ok: true as const }),
+    saveUploadLink: async () => ({ ok: true as const, expiresAt: 0 }),
   };
 
   const app = new Hono();

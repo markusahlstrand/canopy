@@ -18,7 +18,7 @@ import { driveManifest, driveModule, ROOT_FOLDER_ID } from '@canopy/scope-drive'
 import { driveOperations } from '@canopy/scope-drive/spec/model';
 import { ROLES } from '../src/provision';
 import { assistantAccess, mountAssistantMcp, MAX_MCP_BODY_BYTES, type AssistantDirectory } from '../src/assistant-mcp';
-import { checkedUpload, decodeBase64, mountUploadLinks, uploadTokenHash, MAX_INLINE_UPLOAD_BYTES, type UploadTarget } from '../src/upload';
+import { checkedUpload, decodeBase64, mountUploadLinks, uploadTokenHash, MAX_INLINE_UPLOAD_BYTES, UPLOAD_LINK_TTL_MS, type UploadTarget } from '../src/upload';
 import { claimUploadLink, createUploadLink, MAX_LIVE_UPLOAD_LINKS, peekUploadLink } from '../src/upload-links';
 import type { DirectorySql } from '../src/space-creation';
 
@@ -328,30 +328,34 @@ describe('upload checks', () => {
 });
 
 describe('the upload-link store', () => {
-  const link = (over: Record<string, unknown> = {}) => ({ tokenHash: 'h1', sub: 'ada', scopeId: 's', folderId: 'f', name: 'a.pdf', alsoIn: ['c'], expiresAt: 1_000, now: 0, ...over });
+  // Links made at `now` expire UPLOAD_LINK_TTL_MS later: TTL is the store's, from the clock it is handed.
+  const TTL = UPLOAD_LINK_TTL_MS;
+  const link = (over: Record<string, unknown> = {}) => ({ tokenHash: 'h1', sub: 'ada', scopeId: 's', folderId: 'f', name: 'a.pdf', alsoIn: ['c'], now: 0, ...over });
 
   it('claims a link once, and not after it expires', () => {
     const sql = linkDb();
-    createUploadLink(sql, link());
+    expect(createUploadLink(sql, link())).toEqual({ ok: true, expiresAt: TTL });
     createUploadLink(sql, link({ tokenHash: 'h2' }));
-    expect(peekUploadLink(sql, 'h1', 10)).toEqual({ sub: 'ada', scopeId: 's', folderId: 'f', name: 'a.pdf', alsoIn: ['c'], expiresAt: 1_000 });
+    expect(peekUploadLink(sql, 'h1', 10)).toEqual({ sub: 'ada', scopeId: 's', folderId: 'f', name: 'a.pdf', alsoIn: ['c'], expiresAt: TTL });
     expect(claimUploadLink(sql, 'h1', 10)).toBe(true);
     expect(claimUploadLink(sql, 'h1', 11)).toBe(false);
     expect(peekUploadLink(sql, 'h1', 11)).toBeNull();
-    expect(claimUploadLink(sql, 'h2', 1_000)).toBe(false);
+    expect(claimUploadLink(sql, 'h2', TTL - 1)).toBe(true);
+    createUploadLink(sql, link({ tokenHash: 'h3' }));
+    expect(claimUploadLink(sql, 'h3', TTL)).toBe(false);
     expect(claimUploadLink(sql, 'unknown', 10)).toBe(false);
   });
 
   it('prunes spent and expired links, and caps the live ones per login', () => {
     const sql = linkDb();
-    for (let i = 0; i < MAX_LIVE_UPLOAD_LINKS; i++) expect(createUploadLink(sql, link({ tokenHash: `h${i}` }))).toEqual({ ok: true });
+    for (let i = 0; i < MAX_LIVE_UPLOAD_LINKS; i++) expect(createUploadLink(sql, link({ tokenHash: `h${i}` }))).toMatchObject({ ok: true });
     expect(createUploadLink(sql, link({ tokenHash: 'over' }))).toEqual({ error: 'limit' });
     // Another login has its own allowance.
-    expect(createUploadLink(sql, link({ tokenHash: 'bob', sub: 'bob' }))).toEqual({ ok: true });
+    expect(createUploadLink(sql, link({ tokenHash: 'bob', sub: 'bob' }))).toMatchObject({ ok: true });
     claimUploadLink(sql, 'h0', 1);
-    expect(createUploadLink(sql, link({ tokenHash: 'next', now: 2 }))).toEqual({ ok: true });
+    expect(createUploadLink(sql, link({ tokenHash: 'next', now: 2 }))).toMatchObject({ ok: true });
     // Once they have all expired, they are pruned on the next mint.
-    expect(createUploadLink(sql, link({ tokenHash: 'later', now: 5_000, expiresAt: 9_000 }))).toEqual({ ok: true });
+    expect(createUploadLink(sql, link({ tokenHash: 'later', now: TTL + 2 }))).toMatchObject({ ok: true });
     expect([...sql.exec('SELECT token_hash FROM canopy_upload_links ORDER BY token_hash')]).toEqual([{ token_hash: 'later' }]);
   });
 });

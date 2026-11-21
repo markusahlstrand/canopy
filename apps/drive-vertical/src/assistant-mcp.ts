@@ -27,7 +27,7 @@ import type { ScopeStub } from '@substrat-run/kernel';
 import { deliveryState, segment } from '@canopy/scope-drive/spec/model';
 import { flowSaveInput } from './flow-contract.js';
 import {
-  checkedUpload, decodeBase64, MAX_ALSO_IN, MAX_INLINE_UPLOAD_BYTES, mintUploadToken, UPLOAD_LINK_TTL_MS, UPLOAD_TYPES,
+  checkedUpload, decodeBase64, MAX_ALSO_IN, MAX_INLINE_UPLOAD_BYTES, mintUploadToken, UPLOAD_TYPES,
   uploadPreflight, uploadResult, uploadToFolder, uploadTokenHash, uploadTypeOf, type UploadLink, type UploadTarget,
 } from './upload.js';
 import { MAX_UPLOAD_BYTES } from './upload-limit.js';
@@ -64,7 +64,7 @@ export interface AssistantAccess {
   /** Where the caller's bytes go in a space by slug, as its principal there; null unless a member. */
   uploadTarget(slug: string): Promise<UploadTarget | null>;
   /** Keep an upload link for the caller in a space (its token hashed); null unless a member. */
-  saveUploadLink(slug: string, link: Omit<UploadLink, 'sub' | 'scopeId'> & { tokenHash: string }): Promise<{ ok: true } | { error: 'limit' } | null>;
+  saveUploadLink(slug: string, link: Omit<UploadLink, 'sub' | 'scopeId' | 'expiresAt'> & { tokenHash: string }): Promise<{ ok: true; expiresAt: number } | { error: 'limit' } | null>;
   /** This install's origin, for the links it hands out. */
   origin: string;
 }
@@ -83,8 +83,8 @@ export interface AssistantDirectory {
   scopeAs(principal: string, scopeId: string): Promise<SpaceInvoker>;
   /** Storing bytes in a space as that principal, and what runs after a write there. */
   uploadsAs(principal: string, scopeId: string): Promise<Omit<UploadTarget, 'scope'>>;
-  /** Keep an upload link (only its token's hash). */
-  saveUploadLink(link: UploadLink & { tokenHash: string }): Promise<{ ok: true } | { error: 'limit' }>;
+  /** Keep an upload link (only its token's hash); the store's clock says when it expires. */
+  saveUploadLink(link: Omit<UploadLink, 'expiresAt'> & { tokenHash: string }): Promise<{ ok: true; expiresAt: number } | { error: 'limit' }>;
 }
 
 /**
@@ -479,13 +479,12 @@ async function runAssistant(access: AssistantAccess, operation: AssistantOperati
       if (!target) throw notThere(space);
       await uploadPreflight(target.scope, { folderId, alsoIn });
       const token = mintUploadToken();
-      const expiresAt = Date.now() + UPLOAD_LINK_TTL_MS;
-      const saved = await access.saveUploadLink(space, { folderId, name, alsoIn: alsoIn ?? [], expiresAt, tokenHash: await uploadTokenHash(token) });
+      const saved = await access.saveUploadLink(space, { folderId, name, alsoIn: alsoIn ?? [], tokenHash: await uploadTokenHash(token) });
       if (!saved) throw notThere(space);
       if ('error' in saved) throw new HTTPException(429, { message: 'You have too many unused upload links. Use or let some expire (10 minutes) first.' });
       const url = `${access.origin}/api/upload-links/${token}`;
       return {
-        url, method: 'PUT', contentType: mime, maxBytes: MAX_UPLOAD_BYTES, expiresAt: new Date(expiresAt).toISOString(),
+        url, method: 'PUT', contentType: mime, maxBytes: MAX_UPLOAD_BYTES, expiresAt: new Date(saved.expiresAt).toISOString(),
         example: `curl -X PUT -H "content-type: ${mime}" --data-binary @"${name.replace(/["\\$`]/g, '')}" "${url}"`,
       };
     }

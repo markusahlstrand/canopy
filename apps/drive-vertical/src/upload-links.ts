@@ -10,7 +10,7 @@
  * The rows live in the tenant's identity DO beside app passwords, created on first use like them.
  */
 import type { DirectorySql } from './space-creation';
-import type { UploadLink } from './upload.js';
+import { UPLOAD_LINK_TTL_MS, type UploadLink } from './upload.js';
 
 /** Live (unused, unexpired) links one login may hold at once. */
 export const MAX_LIVE_UPLOAD_LINKS = 20;
@@ -22,11 +22,15 @@ const ensure = (sql: DirectorySql) => {
   sql.exec('CREATE INDEX IF NOT EXISTS canopy_upload_links_sub ON canopy_upload_links (sub)');
 };
 
-/** Store a new link. Spent and expired links are pruned first; too many live ones is `limit`. */
+/**
+ * Store a new link, good for `UPLOAD_LINK_TTL_MS` from `now` (the store's clock: module code
+ * reads none). Spent and expired links are pruned first; too many live ones is `limit`.
+ */
 export function createUploadLink(
   sql: DirectorySql,
-  link: UploadLink & { tokenHash: string; now: number },
-): { ok: true } | { error: 'limit' } {
+  input: Omit<UploadLink, 'expiresAt'> & { tokenHash: string; now: number },
+): { ok: true; expiresAt: number } | { error: 'limit' } {
+  const link = { ...input, expiresAt: input.now + UPLOAD_LINK_TTL_MS };
   ensure(sql);
   sql.exec('DELETE FROM canopy_upload_links WHERE used_at IS NOT NULL OR expires_at <= ?', link.now);
   const [count] = [...sql.exec('SELECT COUNT(*) AS n FROM canopy_upload_links WHERE sub = ?', link.sub)];
@@ -35,7 +39,7 @@ export function createUploadLink(
     'INSERT INTO canopy_upload_links (token_hash, sub, scope_id, folder_id, name, also_in, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
     link.tokenHash, link.sub, link.scopeId, link.folderId, link.name, JSON.stringify(link.alsoIn), link.now, link.expiresAt,
   );
-  return { ok: true };
+  return { ok: true, expiresAt: link.expiresAt };
 }
 
 /** The link a token hash names, if it can still be used at `now`. */

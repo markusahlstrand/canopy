@@ -184,7 +184,7 @@ export class IdentityDO extends PlatformIdentityDO {
     return verifyAppPassword(this.ctx.storage.sql, tokenHash, Date.now());
   }
   // Upload links for assistants (`upload-links.ts`): per login, beside its app passwords.
-  async createUploadLink(link: UploadLink & { tokenHash: string }): Promise<{ ok: true } | { error: 'limit' }> {
+  async createUploadLink(link: Omit<UploadLink, 'expiresAt'> & { tokenHash: string }): Promise<{ ok: true; expiresAt: number } | { error: 'limit' }> {
     return this.ctx.storage.transactionSync(() => createUploadLink(this.ctx.storage.sql, { ...link, now: Date.now() }));
   }
   async peekUploadLink(tokenHash: string): Promise<UploadLink | null> {
@@ -569,7 +569,7 @@ type SiteRegistry = {
   listAppPasswords(subject: string): Promise<AppPassword[]>;
   revokeAppPassword(subject: string, id: string): Promise<boolean>;
   verifyAppPassword(tokenHash: string): Promise<string | null>;
-  createUploadLink(link: UploadLink & { tokenHash: string }): Promise<{ ok: true } | { error: 'limit' }>;
+  createUploadLink(link: Omit<UploadLink, 'expiresAt'> & { tokenHash: string }): Promise<{ ok: true; expiresAt: number } | { error: 'limit' }>;
   peekUploadLink(tokenHash: string): Promise<UploadLink | null>;
   claimUploadLink(tokenHash: string): Promise<boolean>;
   listFlows(): Promise<{ flow: DirectoryFlow; scopes: FlowScopes }[]>;
