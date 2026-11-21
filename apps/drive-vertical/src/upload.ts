@@ -17,6 +17,7 @@
  */
 import type { Context, Env, Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { errorCodeOf } from '@substrat-run/contracts';
 import { MAX_UPLOAD_BYTES, readBounded } from './upload-limit.js';
 
 /** What one upload needs in one space, as the caller there. */
@@ -69,8 +70,23 @@ export async function uploadToFolder(
   const created = !file.current_version_id;
   const body = await input.body();
   const blobRef = await target.store(file.id, input.name, input.mime, body);
-  // No mime or size passed: `record-version` reads both off the attachment row.
-  const written = await target.scope.invoke<UploadedFile>('drive/record-version', { fileId: file.id, location: { source: 'blob', blobRef } });
+  // No mime or size passed: `record-version` reads both off the attachment row. Where a second
+  // version is never wanted (`keep`, `refuse`), the first is written only if the file still has none:
+  // two uploads racing to a new name both see it empty, and only one may become its version.
+  const firstOnly = created && input.existing !== 'version';
+  let written: UploadedFile;
+  try {
+    written = await target.scope.invoke<UploadedFile>('drive/record-version', {
+      fileId: file.id, ...(firstOnly ? { expectedCurrentVersion: null } : {}), location: { source: 'blob', blobRef },
+    });
+  } catch (error) {
+    if (!firstOnly || errorCodeOf(error) !== 'conflict') throw error;
+    // The other upload won. Its file is the answer; these bytes stay an attachment no version names.
+    const winner = await target.scope.invoke<UploadedFile>('drive/ensure-file', { folderId: input.folderId, name: input.name });
+    if (!winner.current_version_id) throw error;
+    if (input.existing === 'refuse') throw new HTTPException(409, { message: `This folder already has a file named '${input.name}'.` });
+    return { created: false, wrote: false, file: winner, source: null };
+  }
 
   // In a connected space an upload goes on to a3doc; its echo adopts this row (#358).
   let source: UploadOutcome['source'] = null;
@@ -97,9 +113,49 @@ export const UPLOAD_LINK_TTL_MS = 10 * 60 * 1000;
 export const MAX_ALSO_IN = 10;
 
 type Sniff = (bytes: Uint8Array) => boolean;
+
+/**
+ * A ZIP's entries, read from the archive's own structure: the end-of-central-directory record, each
+ * central directory header, and the local file header it points at (whose name is the one read).
+ * Null for anything that is not a well-formed ZIP. Data is kept for stored (uncompressed) entries.
+ */
+function zipEntries(b: Uint8Array): { name: string; stored: Uint8Array | null }[] | null {
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const u16 = (at: number) => view.getUint16(at, true);
+  const u32 = (at: number) => view.getUint32(at, true);
+  const sig = (at: number, value: number) => at >= 0 && at + 4 <= b.byteLength && u32(at) === value;
+  let end = -1;
+  for (let at = b.byteLength - 22; at >= Math.max(0, b.byteLength - 22 - 0xffff); at--) {
+    if (sig(at, 0x06054b50)) { end = at; break; }
+  }
+  if (end < 0) return null;
+  const count = u16(end + 10), size = u32(end + 12), offset = u32(end + 16);
+  if (count > 10_000 || offset + size > end) return null;
+  const names = new TextDecoder();
+  const entries: { name: string; stored: Uint8Array | null }[] = [];
+  for (let at = offset, i = 0; i < count; i++) {
+    if (!sig(at, 0x02014b50) || at + 46 > end) return null;
+    const method = u16(at + 10), compressed = u32(at + 20), local = u32(at + 42);
+    if (!sig(local, 0x04034b50) || local + 30 > b.byteLength) return null;
+    const nameLength = u16(local + 26), extra = u16(local + 28);
+    const data = local + 30 + nameLength + extra;
+    if (data + compressed > b.byteLength) return null;
+    entries.push({
+      name: names.decode(b.subarray(local + 30, local + 30 + nameLength)),
+      stored: method === 0 ? b.subarray(data, data + compressed) : null,
+    });
+    at += 46 + u16(at + 28) + u16(at + 30) + u16(at + 32);
+  }
+  return entries;
+}
+/** An Office Open XML package: a ZIP holding `[Content_Types].xml`. */
+const ooxml: Sniff = (b) => !!zipEntries(b)?.some((e) => e.name === '[Content_Types].xml');
+/** An OpenDocument package: a ZIP whose stored `mimetype` entry names this very type. */
+const odf = (mime: string): Sniff => (b) =>
+  !!zipEntries(b)?.some((e) => e.name === 'mimetype' && e.stored !== null && new TextDecoder().decode(e.stored) === mime);
+
 const startsWith = (bytes: Uint8Array, ...sig: number[]) => sig.every((b, i) => bytes[i] === b);
 const ascii = (bytes: Uint8Array, at: number, text: string) => [...text].every((ch, i) => bytes[at + i] === ch.charCodeAt(0));
-const zip: Sniff = (b) => startsWith(b, 0x50, 0x4b, 0x03, 0x04);
 const ole: Sniff = (b) => startsWith(b, 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1);
 /** UTF-8 text with no NUL: a text type whose bytes are not text is something else named as text. */
 const text: Sniff = (b) => {
@@ -141,11 +197,11 @@ export const UPLOAD_TYPES: Record<string, { mime: string; sniff: Sniff }> = {
   xml: { mime: 'application/xml', sniff: text },
   /** A signed Facturae e-invoice. */
   xsig: { mime: 'application/xml', sniff: text },
-  docx: { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', sniff: zip },
-  xlsx: { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', sniff: zip },
-  pptx: { mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', sniff: zip },
-  odt: { mime: 'application/vnd.oasis.opendocument.text', sniff: zip },
-  ods: { mime: 'application/vnd.oasis.opendocument.spreadsheet', sniff: zip },
+  docx: { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', sniff: ooxml },
+  xlsx: { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', sniff: ooxml },
+  pptx: { mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', sniff: ooxml },
+  odt: { mime: 'application/vnd.oasis.opendocument.text', sniff: odf('application/vnd.oasis.opendocument.text') },
+  ods: { mime: 'application/vnd.oasis.opendocument.spreadsheet', sniff: odf('application/vnd.oasis.opendocument.spreadsheet') },
   doc: { mime: 'application/msword', sniff: ole },
   xls: { mime: 'application/vnd.ms-excel', sniff: ole },
 };
@@ -154,10 +210,15 @@ const extensionOf = (name: string) => {
   const dot = name.lastIndexOf('.');
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
 };
+/** The accepted type an extension names: own entries only, so `.constructor` or `.__proto__` names none. */
+const typeFor = (name: string) => {
+  const extension = extensionOf(name);
+  return Object.hasOwn(UPLOAD_TYPES, extension) ? UPLOAD_TYPES[extension] : undefined;
+};
 
 /** The type a file of this name is stored as, or a refusal naming what is accepted. */
 export function uploadTypeOf(name: string): string {
-  const type = UPLOAD_TYPES[extensionOf(name)];
+  const type = typeFor(name);
   if (!type) {
     throw new HTTPException(415, { message: `Files named '.${extensionOf(name) || '(none)'}' can't be uploaded here. Accepted: ${Object.keys(UPLOAD_TYPES).join(', ')}.` });
   }
@@ -168,7 +229,7 @@ export function uploadTypeOf(name: string): string {
 export function checkedUpload(name: string, bytes: Uint8Array): string {
   const mime = uploadTypeOf(name);
   if (bytes.byteLength === 0) throw new HTTPException(400, { message: 'The file is empty.' });
-  if (!UPLOAD_TYPES[extensionOf(name)]!.sniff(bytes)) {
+  if (!typeFor(name)!.sniff(bytes)) {
     throw new HTTPException(415, { message: `The bytes are not a .${extensionOf(name)} file: check the name or the content.` });
   }
   return mime;

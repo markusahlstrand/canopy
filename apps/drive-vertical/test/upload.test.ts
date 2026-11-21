@@ -18,7 +18,7 @@ import { driveManifest, driveModule, ROOT_FOLDER_ID } from '@canopy/scope-drive'
 import { driveOperations } from '@canopy/scope-drive/spec/model';
 import { ROLES } from '../src/provision';
 import { assistantAccess, mountAssistantMcp, MAX_MCP_BODY_BYTES, type AssistantDirectory } from '../src/assistant-mcp';
-import { checkedUpload, decodeBase64, mountUploadLinks, uploadTokenHash, MAX_INLINE_UPLOAD_BYTES, UPLOAD_LINK_TTL_MS, type UploadTarget } from '../src/upload';
+import { checkedUpload, decodeBase64, mountUploadLinks, uploadToFolder, uploadTokenHash, uploadTypeOf, MAX_INLINE_UPLOAD_BYTES, UPLOAD_LINK_TTL_MS, type UploadTarget } from '../src/upload';
 import { claimUploadLink, createUploadLink, MAX_LIVE_UPLOAD_LINKS, peekUploadLink } from '../src/upload-links';
 import type { DirectorySql } from '../src/space-creation';
 
@@ -27,6 +27,39 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: tru
 
 const PDF = new TextEncoder().encode('%PDF-1.7\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n');
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
+
+/** A ZIP of stored (uncompressed) entries: local headers, central directory, end record. CRCs are left 0. */
+function zipOf(entries: { name: string; data: string }[]): Uint8Array {
+  const enc = new TextEncoder();
+  const parts: Uint8Array[] = [], central: Uint8Array[] = [];
+  let offset = 0;
+  const header = (size: number, write: (v: DataView, bytes: Uint8Array) => void) => {
+    const bytes = new Uint8Array(size); write(new DataView(bytes.buffer), bytes); return bytes;
+  };
+  for (const entry of entries) {
+    const name = enc.encode(entry.name), data = enc.encode(entry.data);
+    const local = header(30 + name.length, (v, b) => {
+      v.setUint32(0, 0x04034b50, true); v.setUint16(8, 0, true); v.setUint32(18, data.length, true); v.setUint32(22, data.length, true);
+      v.setUint16(26, name.length, true); b.set(name, 30);
+    });
+    central.push(header(46 + name.length, (v, b) => {
+      v.setUint32(0, 0x02014b50, true); v.setUint16(10, 0, true); v.setUint32(20, data.length, true); v.setUint32(24, data.length, true);
+      v.setUint16(28, name.length, true); v.setUint32(42, offset, true); b.set(name, 46);
+    }));
+    parts.push(local, data);
+    offset += local.length + data.length;
+  }
+  const size = central.reduce((n, c) => n + c.length, 0);
+  const end = header(22, (v) => {
+    v.setUint32(0, 0x06054b50, true); v.setUint16(8, entries.length, true); v.setUint16(10, entries.length, true);
+    v.setUint32(12, size, true); v.setUint32(16, offset, true);
+  });
+  const all = [...parts, ...central, end];
+  const out = new Uint8Array(all.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of all) { out.set(p, at); at += p.length; }
+  return out;
+}
 
 function linkDb(): DirectorySql {
   const db = new DatabaseSync(':memory:');
@@ -134,7 +167,8 @@ async function world() {
   const lastSend = async () => JSON.parse(String((await host.admin.queryScope(staff, t, spaces.gestoria!, { sql: "SELECT payload FROM _substrat_outbox WHERE type = 'a3doc.files-requested' ORDER BY id DESC LIMIT 1" })).rows[0]![0])) as Record<string, unknown>;
   const arrivals = async (slug: string) => (await (await as(slug)).invoke<{ items: { fileId: string; trigger: string; actor: string | null }[] }>('drive/automation-claim', {})).items;
 
-  return { app, tool, put, as, bind, bound, spaces, emitidas, month, inFiles, afterWrite, stored, files, sends, lastSend, arrivals, links, advance: (ms: number) => { offset += ms; } };
+  const versions = (slug: string, fileId: string) => count(slug, `SELECT COUNT(*) FROM drive_file_versions WHERE file_id = '${fileId}'`);
+  return { app, tool, put, as, bind, bound, spaces, emitidas, month, inFiles, afterWrite, stored, files, sends, lastSend, arrivals, versions, targetAs, links, advance: (ms: number) => { offset += ms; } };
 }
 
 describe('drive_upload-file', () => {
@@ -206,6 +240,37 @@ describe('drive_upload-file', () => {
     expect(w.stored).toHaveBeenCalledTimes(1);
     expect(await w.sends('gestoria')).toBe(1);
     expect(await w.arrivals('gestoria')).toHaveLength(1);
+  });
+
+  it('lets only one of two uploads racing to a new name become its version; the other returns it', async () => {
+    const w = await world();
+    const scope = await w.as('files');
+    const ada = w.bound.get(`${w.spaces.files}|ada`)!;
+    const plain = { scope, ...(await w.targetAs(ada, w.spaces.files!)) };
+    // The loser has seen the name empty and stored its bytes when the winner lands its whole upload.
+    const loser: UploadTarget = {
+      ...plain,
+      store: async (fileId, name, mime, body) => {
+        const id = await plain.store(fileId, name, mime, body);
+        await uploadToFolder(plain, { folderId: w.inFiles.id, name, mime, body: async () => body, existing: 'keep' });
+        return id;
+      },
+    };
+    const lost = await uploadToFolder(loser, { folderId: w.inFiles.id, name: 'race.pdf', mime: 'application/pdf', body: async () => PDF, existing: 'keep' });
+    expect(lost).toMatchObject({ created: false, wrote: false, source: null });
+    expect(lost.file.current_version_id).toEqual(expect.any(String));
+    expect(await w.versions('files', lost.file.id)).toBe(1);
+    expect(await w.arrivals('files')).toHaveLength(1);
+
+    // "New → …" (refuse) answers the loser with the usual 409.
+    const refusing: UploadTarget = { ...loser };
+    await expect(uploadToFolder(refusing, { folderId: w.inFiles.id, name: 'race-2.pdf', mime: 'application/pdf', body: async () => PDF, existing: 'refuse' }))
+      .rejects.toThrow("already has a file named 'race-2.pdf'");
+
+    // The app's drag-and-drop (version) keeps writing a new version, as for any existing file.
+    const versioning: UploadTarget = { ...loser };
+    const both = await uploadToFolder(versioning, { folderId: w.inFiles.id, name: 'race-3.pdf', mime: 'application/pdf', body: async () => PDF, existing: 'version' });
+    expect(await w.versions('files', both.file.id)).toBe(2);
   });
 
   it('refuses alsoIn outside a3doc, and a category folder that is not there, before writing', async () => {
@@ -325,10 +390,26 @@ describe('upload checks', () => {
   it('knows each accepted type by its bytes', () => {
     expect(checkedUpload('a.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]))).toBe('image/png');
     expect(checkedUpload('a.JPG', new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
-    expect(checkedUpload('a.docx', new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1]))).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    const docx = zipOf([{ name: '[Content_Types].xml', data: '<Types/>' }, { name: 'word/document.xml', data: '<w:document/>' }]);
+    expect(checkedUpload('a.docx', docx)).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    expect(checkedUpload('a.xlsx', docx)).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    const odt = zipOf([{ name: 'mimetype', data: 'application/vnd.oasis.opendocument.text' }, { name: 'content.xml', data: '<office/>' }]);
+    expect(checkedUpload('a.odt', odt)).toBe('application/vnd.oasis.opendocument.text');
     expect(checkedUpload('a.heic', new Uint8Array([0, 0, 0, 0x18, ...new TextEncoder().encode('ftypheic')]))).toBe('image/heic');
     expect(checkedUpload('factura.xsig', new TextEncoder().encode('<?xml version="1.0"?><fe:Facturae/>'))).toBe('application/xml');
     expect(() => checkedUpload('a.csv', new Uint8Array([0x61, 0x00, 0x62]))).toThrow('not a .csv file');
+    // A ZIP that is only a ZIP is an archive, whatever it is named.
+    const notes = zipOf([{ name: 'notes.txt', data: 'hello' }]);
+    expect(() => checkedUpload('invoice.docx', notes)).toThrow('not a .docx file');
+    expect(() => checkedUpload('invoice.odt', notes)).toThrow('not a .odt file');
+    // An OpenDocument package must name its own type, not another's.
+    expect(() => checkedUpload('a.ods', odt)).toThrow('not a .ods file');
+    // The signature alone is not a package.
+    expect(() => checkedUpload('a.docx', new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1]))).toThrow('not a .docx file');
+    // Only the table's own extensions, never inherited names.
+    for (const name of ['invoice.constructor', 'a.__proto__', 'a.toString', 'a.hasOwnProperty']) {
+      expect(() => uploadTypeOf(name), name).toThrow("can't be uploaded");
+    }
     expect(() => checkedUpload('a.pdf', new Uint8Array())).toThrow('empty');
     expect(() => checkedUpload('noextension', PDF)).toThrow("can't be uploaded");
   });
