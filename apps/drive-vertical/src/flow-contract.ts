@@ -4,7 +4,8 @@
  * Flows belong to the install. Each is shown to whoever owns every space it touches, and the
  * routes answer with those spaces named, so the app can tag and filter by them.
  */
-import type { FlowDelivery, FlowGraph, StoredFlow } from '@canopy/scope-drive/spec/model';
+import { z } from '@substrat-run/contracts';
+import { flowGraph, type FlowDelivery, type FlowGraph, type StoredFlow } from '@canopy/scope-drive/spec/model';
 
 /** A space a flow touches: it watches it (the trigger), writes to it (a copy), or both. */
 export interface FlowSpace { slug: string; name: string; watch: boolean; write: boolean }
@@ -24,6 +25,17 @@ export interface FlowList {
 
 /** `PUT /api/flows`. */
 export interface FlowSave { id?: string; name: string; enabled: boolean; graph: FlowGraph }
+
+/**
+ * What `PUT /api/flows` accepts. The route checks every save with it, and the app checks a flow
+ * edited as JSON with it before sending, so both refuse the same things.
+ */
+export const flowSaveInput = z.object({
+  id: z.string().min(1).max(64).optional(),
+  name: z.string().trim().min(1).max(100),
+  enabled: z.boolean(),
+  graph: flowGraph,
+});
 
 /** One document a flow would act on now. */
 export interface PreviewMatch {
