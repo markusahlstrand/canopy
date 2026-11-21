@@ -160,6 +160,9 @@ describe('the assistant MCP endpoint', () => {
     expect(Object.keys(save.inputSchema.properties)).toEqual(expect.arrayContaining(['name', 'enabled', 'graph']));
     expect(JSON.stringify(save.inputSchema)).toContain('"trigger"');
     expect(save.description).toContain('trigger');
+    // It names ownership by the field drive_list-spaces actually returns.
+    expect(save.description).toContain('role "owner" in drive_list-spaces');
+    expect(save.description).not.toContain('canManage');
     // Every drive tool, with or without its own input, must name the space it acts in.
     const driveTools = result.tools.filter((t) => !['drive_list-spaces', 'drive_list-flows'].includes(t.name) && !t.name.includes('flow'));
     expect(driveTools.length).toBeGreaterThan(40);
