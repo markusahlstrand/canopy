@@ -172,28 +172,45 @@ describe('deliveries', () => {
     expect((await done.call('POST', '/api/flow-deliveries/decide', { ...key, decision: 'retry' })).status).toBe(409);
   });
 
-  it('says where a proposal is and where it would go, and lists it without when it cannot tell', async () => {
+  it('says where a proposal is and where it would go, as the run will go on after approval', async () => {
     const byMonth = graph({
       nodes: [
         { id: 't', type: 'trigger', on: 'arrived', spaces: ['bank'] },
         { id: 'month', type: 'check', condition: { field: 'folder', op: 'matches', path: 'Invoices/{year}/{month}' } },
+        { id: 'early', type: 'copy', space: 'a3docs', folderId: 'bancos', alsoIn: [], subfolder: 'Early/{year}' },
+        { id: 'ask', type: 'check', condition: { field: 'ask', question: 'Is it an invoice?' } },
+        { id: 'w', type: 'approval' },
         { id: 'copy', type: 'copy', space: 'a3docs', folderId: 'bancos', alsoIn: [], subfolder: '{year}/{month}' },
       ],
-      edges: [{ from: 't', to: 'month', branch: 'next' }, { from: 'month', to: 'copy', branch: 'yes' }],
+      edges: [
+        { from: 't', to: 'month', branch: 'next' }, { from: 'month', to: 'early', branch: 'yes' },
+        { from: 'early', to: 'ask', branch: 'next' }, { from: 'ask', to: 'w', branch: 'yes' }, { from: 'w', to: 'copy', branch: 'next' },
+      ],
     });
-    const proposal = (fileId: string) => ({ flowId: 'mine', fileId, versionId: 'v', fileName: `${fileId}.pdf`, state: 'proposed', detail: {}, attempts: 0, createdAt: 'c', updatedAt: fileId });
+    const proposal = (fileId: string, versionId = 'v', detail: Record<string, unknown> = {}) =>
+      ({ flowId: 'mine', fileId, versionId, fileName: `${fileId}.pdf`, state: 'proposed', detail, attempts: 0, createdAt: 'c', updatedAt: fileId });
     const a = app({ flows: [stored('mine', { watch: ['s-bank'], write: ['s-a3'] }, { graph: byMonth })], bank: {
-      'drive/flow-deliveries': { deliveries: [proposal('f1'), proposal('gone')] },
+      'drive/flow-deliveries': { deliveries: [
+        // Waiting after the model said yes and the early copy was made.
+        proposal('f1', 'v', { answers: { ask: true }, done: { early: { fileId: 'x' } } }),
+        // Unasked: the walk stops at the model's question, so nothing after it is listed.
+        proposal('f2'),
+        // A newer version came since: where that one would go is not this one's destination.
+        proposal('f3', 'old', { answers: { ask: true } }),
+        proposal('gone'),
+      ] },
       'drive/file-facts': (input?: Record<string, unknown>) => {
         if (input?.fileId === 'gone') throw new Error('not_found');
-        return { fileId: 'f1', name: 'f1.pdf', folderId: 'x', folderPath: 'Invoices/2026/09', state: 'live', versionId: 'v', labels: [], category: null, copiedByFlow: false };
+        return { fileId: input?.fileId, name: 'x.pdf', folderId: 'x', folderPath: 'Invoices/2026/09', state: 'live', versionId: 'v', labels: [], category: null, copiedByFlow: false };
       },
     } });
     const body = await (await a.call('GET', '/api/flow-deliveries?state=proposed&limit=200')).json() as { deliveries: DeliveryView[] };
-    expect(body.deliveries.map((d) => [d.fileId, d.folderPath, d.filedIn])).toEqual([
-      ['gone', undefined, undefined],
-      ['f1', 'Invoices/2026/09', ['Gestoría › Bancos/2026/09']],
-    ]);
+    expect(Object.fromEntries(body.deliveries.map((d) => [d.fileId, [d.folderPath, d.filedIn]]))).toEqual({
+      f1: ['Invoices/2026/09', ['Gestoría › Bancos/2026/09']],
+      f2: ['Invoices/2026/09', ['Gestoría › Bancos/Early/2026']],
+      f3: ['Invoices/2026/09', undefined],
+      gone: [undefined, undefined],
+    });
   });
 
   it('puts an approval back when its run cannot be started', async () => {
@@ -236,7 +253,7 @@ describe('deciding several at once', () => {
     expect(a.start).toHaveBeenCalledTimes(3);
     expect(a.start).toHaveBeenCalledWith('s-bank', 'flow-run', 'mine:a:v1', expect.objectContaining({ approved: true }), { drive: false });
     expect(a.drive).toHaveBeenCalledTimes(1);
-    expect(a.drive).toHaveBeenCalledWith('s-bank');
+    expect(a.drive).toHaveBeenCalledWith('s-bank', 3);
   });
 
   it('rejects each without starting anything', async () => {
@@ -266,7 +283,8 @@ describe('deciding several at once', () => {
     ]);
     // The one approved stays approved; the one whose run could not start is put back to wait.
     expect(states).toMatchObject({ ok: 'approved', decided: 'dismissed', refused: 'proposed', broken: 'proposed' });
-    expect(a.drive).toHaveBeenCalledWith('s-bank');
+    // Driven for the one run that started.
+    expect(a.drive).toHaveBeenCalledWith('s-bank', 1);
   });
 
   it('approves a delivery once, however many times it is asked', async () => {

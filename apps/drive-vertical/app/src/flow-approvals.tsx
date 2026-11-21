@@ -83,7 +83,7 @@ function deferred() {
 const refusal = (status: number, message: string) => Object.assign(new Error(message), { status });
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error)) || 'That did not work.';
 
-export function FlowApprovals({ spaceName, include, refresh, onDecided, onOpen, chunk = APPROVAL_CHUNK }: {
+export function FlowApprovals({ spaceName, include, refresh, onDecided, onOpen, onRunning, chunk = APPROVAL_CHUNK }: {
   spaceName: (slug: string) => string;
   /** Which proposals to show (the dialog's space filter), or all. `include.key` changes when it does. */
   include: { key: string; test: (d: DeliveryView) => boolean } | null;
@@ -93,6 +93,11 @@ export function FlowApprovals({ spaceName, include, refresh, onDecided, onOpen, 
   onDecided: () => void;
   /** Open the document of a proposal, wherever it is. */
   onOpen: (d: DeliveryView) => void;
+  /**
+   * A bulk decision started (true) or finished (false). Its progress and refusals live here, so
+   * the dialog keeps this table on screen until then.
+   */
+  onRunning?: (running: boolean) => void;
   /** Decisions per request, at most `DECIDE_BATCH_LIMIT`. */
   chunk?: number;
 }) {
@@ -108,8 +113,8 @@ export function FlowApprovals({ spaceName, include, refresh, onDecided, onOpen, 
 
   const sourceText = (d: DeliveryView) => d.folderPath === undefined ? spaceName(d.space) : `${spaceName(d.space)} › ${d.folderPath || 'Top level'}`;
   // What events and reads see: the latest props, not the ones of the render that set them up.
-  const latest = useRef({ include, spaceName, onDecided, onOpen, sourceText, rows, chunk });
-  useLayoutEffect(() => { latest.current = { include, spaceName, onDecided, onOpen, sourceText, rows, chunk }; });
+  const latest = useRef({ include, spaceName, onDecided, onOpen, onRunning, sourceText, rows, chunk });
+  useLayoutEffect(() => { latest.current = { include, spaceName, onDecided, onOpen, onRunning, sourceText, rows, chunk }; });
   // The next read asks the server; a re-sort alone sorts what is here.
   const stale = useRef(true);
   /**
@@ -146,6 +151,7 @@ export function FlowApprovals({ spaceName, include, refresh, onDecided, onOpen, 
     const waiting = new Map(chosen.map((r) => [r.id, deferred()]));
     batch.current = { decision, waiting, handed: new Set() };
     running.current = true;
+    latest.current.onRunning?.(true);
     setProgress({ decision, done: 0, total: chosen.length, refused: [], running: true });
     void (async () => {
       const refused: Refusal[] = [];
@@ -169,6 +175,7 @@ export function FlowApprovals({ spaceName, include, refresh, onDecided, onOpen, 
         setProgress({ decision, done, total: chosen.length, refused: [...refused], running: done < chosen.length });
       }
       running.current = false;
+      latest.current.onRunning?.(false);
     })();
   };
 

@@ -163,6 +163,54 @@ describe('documents waiting for approval, in the file table', () => {
     expect(onOpenFile).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the table, and what it says of a running batch, on screen until the batch is through', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    server([proposal('one'), proposal('two')], { two: 'You cannot change deliveries here.' }, () => held);
+    const onOpenChange = vi.fn();
+    render(<FlowsDialog open onOpenChange={onOpenChange} />);
+    await shows(2);
+    toggleAll();
+    fireEvent.click(await waitFor(() => bulkAction('Approve')));
+    await screen.findByText('Approving 0 of 2…');
+    // Nothing that would take the table away while it runs: no editor, no closing.
+    const newFlow = screen.getByRole('button', { name: /New flow/ }) as HTMLButtonElement;
+    expect(newFlow.disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Edit Invoices to a3doc' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    expect(onOpenChange).not.toHaveBeenCalled();
+    release();
+    await screen.findByText('Approved 1 of 2. They run in a moment.');
+    expect(screen.getByRole('list', { name: 'Not decided' }).textContent).toContain('two.pdf — You cannot change deliveries here.');
+    await waitFor(() => expect(newFlow.disabled).toBe(false));
+  });
+
+  it('drops the proposals of a flow deleted here, even ones older than what flows did lately', async () => {
+    let deleted = false;
+    let proposedReads = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const at = new URL(url, 'http://x');
+      const method = init?.method ?? 'GET';
+      if (at.pathname.endsWith('/flows') && method === 'GET') return Response.json({ flows: deleted ? [] : [flow], spaces: [{ slug: 'qonto', name: 'Qonto' }] });
+      if (at.pathname.endsWith('/flows/f1') && method === 'DELETE') { deleted = true; return Response.json({ ok: true }); }
+      if (at.pathname.endsWith('/flow-deliveries')) {
+        // The proposal is older than the latest deliveries the dialog polls, which say nothing of it.
+        if (at.searchParams.get('state') !== 'proposed') return Response.json({ deliveries: [] });
+        proposedReads++;
+        return Response.json({ deliveries: deleted ? [] : [proposal('old')] });
+      }
+      return Response.json({});
+    }));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<FlowsDialog open onOpenChange={() => {}} />);
+    await shows(1);
+    const before = proposedReads;
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Invoices to a3doc' }));
+    await screen.findByText('Flow deleted.');
+    await shows(0);
+    expect(proposedReads).toBe(before + 1);
+  });
+
   it('on a phone, a tap opens the document in a bottom sheet to decide', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query === '(max-width: 767px)', media: query, addEventListener: () => {}, removeEventListener: () => {},

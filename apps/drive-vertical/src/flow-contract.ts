@@ -88,8 +88,9 @@ export interface DeliveryDecisions { items: DeliveryDecision[] }
 
 /**
  * One item's outcome, in the order asked. A refusal says why with the status a single decide
- * would have answered (404 no such delivery or flow, 409 already decided, 403 not allowed).
- * What succeeded stays done when others fail.
+ * would have answered: 404 when the flow is not one the caller can see or does not watch that
+ * space; 409 when the delivery is not there or not in a state to decide (already decided);
+ * 403 when the space does not allow it. What succeeded stays done when others fail.
  */
 export type DecisionResult = Omit<DeliveryDecision, 'decision'> & (
   | { ok: true; state: FlowDelivery['state'] }

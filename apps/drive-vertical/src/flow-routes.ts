@@ -37,8 +37,11 @@ export interface FlowAccess {
    * `drive: false` the job is only started: the caller drives the space once with `drive`.
    */
   start(scopeId: string, job: string, instance: string, payload: Record<string, unknown>, options?: { drive?: boolean }): Promise<void>;
-  /** Drive a space's due runs after the response: once, for a batch of jobs started without. */
-  drive?(scopeId: string): Promise<void>;
+  /**
+   * Drive a space's due runs after the response, for a batch of `runs` jobs started without: until
+   * they are through, rather than the one bounded pass a single start gets.
+   */
+  drive?(scopeId: string, runs: number): Promise<void>;
   tenantId: string;
 }
 
@@ -326,7 +329,11 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
     const placed = await pool(deliveries, FILING_CONCURRENCY, async (d): Promise<DeliveryView> => {
       try {
         const facts = await bySlug.get(d.space)!.scope.invoke<FileFactsRow>('drive/file-facts', { fileId: d.fileId });
-        const where = await filing.get(d.flowId)!(facts).catch(() => []);
+        // A newer version arrived meanwhile: where that one would go says nothing of this one.
+        if (facts.versionId !== d.versionId) return { ...d, folderPath: facts.folderPath };
+        // As the run will go on after approval: with the model's answers so far, and past the copies it already made.
+        const { answers, done } = d.detail as DeliveryDetail;
+        const where = await filing.get(d.flowId)!(facts, { answers, done }).catch(() => []);
         return { ...d, folderPath: facts.folderPath, ...(where.length ? { filedIn: where } : {}) };
       } catch {
         return d;
@@ -351,19 +358,19 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
       const ctx = await seen(access);
       // Each run is started in its space without driving it; the spaces are driven once each below.
       const batched = Boolean(access.drive);
-      const driven = new Set<string>();
+      const driven = new Map<string, number>();
       const results = await pool(parsed.data.items, DECIDE_CONCURRENCY, async (item): Promise<DecisionResult> => {
         const { decision: _decision, ...key } = item;
         try {
           const { site, delivery } = await decideOne(access, ctx, item, !batched);
-          if (item.decision !== 'dismiss') driven.add(site.scopeId);
+          if (item.decision !== 'dismiss') driven.set(site.scopeId, (driven.get(site.scopeId) ?? 0) + 1);
           return { ...key, ok: true, state: delivery.state };
         } catch (error) {
           return { ...key, ok: false, ...refusalOf(error) };
         }
       });
       if (batched) {
-        await Promise.all([...driven].map((scope) => access.drive!(scope).catch((error: unknown) => {
+        await Promise.all([...driven].map(([scope, runs]) => access.drive!(scope, runs).catch((error: unknown) => {
           console.error('drive.flow.drive-failed', { error: error instanceof Error ? error.message : String(error) });
         })));
       }
@@ -379,7 +386,9 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
 /**
  * Where a flow's copies would file a document, for the copies whose folder or categories it works
  * out from the document's own folders: 'space › path' each, or why it can't tell. Only the copies
- * the document surely reaches (no model question before them).
+ * the document surely reaches: no model question before them, unless `answers` (a delivery's, so
+ * far) settles it. Copies in `done` already happened and are not listed, though the walk still
+ * passes them so what they captured reaches the steps after.
  */
 function filedIn(graph: FlowGraph, bySlug: Map<string, FlowSite>) {
   const bases = new Map<string, Promise<string | null>>();
@@ -395,13 +404,13 @@ function filedIn(graph: FlowGraph, bySlug: Map<string, FlowSite>) {
     }
     return pending;
   };
-  return async (file: FileFactsRow): Promise<string[]> => {
-    const { path } = walk(graph, file);
+  return async (file: FileFactsRow, so: { answers?: Record<string, boolean>; done?: Record<string, unknown> } = {}): Promise<string[]> => {
+    const { path } = walk(graph, file, so.answers);
     const captures = capturesOn(graph, path, file);
     const out: string[] = [];
     for (const id of path) {
       const node = graph.nodes.find((n) => n.id === id);
-      if (node?.type !== 'copy' || (!node.subfolder?.trim() && !node.alsoInPaths?.some((t) => t.trim()))) continue;
+      if (node?.type !== 'copy' || so.done?.[id] || (!node.subfolder?.trim() && !node.alsoInPaths?.some((t) => t.trim()))) continue;
       const space = bySlug.get(node.space)?.name ?? node.space;
       try {
         const { subfolder, alsoInPaths } = copyPaths(node, captures.get(id) ?? {});

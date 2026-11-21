@@ -53,6 +53,12 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null, onO
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
+  // Counts what the person changed here (a flow deleted, saved, switched on or off, a retry): each
+  // can take proposals off the queue that `lately` does not cover, so the queue reads again.
+  const [changes, setChanges] = useState(0);
+  // A bulk decision is running in the approvals table: it stays on screen, with its results, until done.
+  const [deciding, setDeciding] = useState(false);
+  const locked = busy || deciding;
   const generation = useRef(0);
   useUnsavedDraft(open && Boolean(editing) && dirty);
 
@@ -74,15 +80,15 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null, onO
   }, [open, space]);
   // Runs finish in the background: while the list is showing, look again now and then for what they proposed or did.
   useEffect(() => {
-    if (!open || editing || busy) return;
+    if (!open || editing || locked) return;
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load(); }, FLOWS_REFRESH_MS);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, editing, busy]);
+  }, [open, editing, locked]);
 
   const act = async (work: () => Promise<unknown>, done?: string) => {
     setBusy(true); setError(null); setNotice(null);
-    try { await work(); if (done) setNotice(done); await load(); } catch (e) { setError(message(e, 'That did not work.')); } finally { setBusy(false); }
+    try { await work(); setChanges((n) => n + 1); if (done) setNotice(done); await load(); } catch (e) { setError(message(e, 'That did not work.')); } finally { setBusy(false); }
   };
 
   // Names for spaces: the ones this person owns, and those flows name.
@@ -97,19 +103,20 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null, onO
   const history = relevant.filter((d) => d.state !== 'proposed');
   // What flows did lately, newest first: when it changes, a proposal came or was decided, and the
   // proposals table reads again. Unchanged, it keeps what it has rather than re-reading every look.
-  const lately = deliveries.map((d) => `${deliveryKey(d)}:${d.state}:${d.updatedAt}`).join('|');
+  // `lately` is only the newest deliveries, so a change made here counts too.
+  const lately = `${changes}|${deliveries.map((d) => `${deliveryKey(d)}:${d.state}:${d.updatedAt}`).join('|')}`;
   const include = filter ? { key: `${filter}|${[...shownIds].join(',')}`, test: (d: DeliveryView) => d.space === filter || shownIds.has(d.flowId) } : null;
   const filterSpaces = [...new Map([...(list?.spaces ?? []), ...flows.flatMap((f) => f.spaces)].map((s) => [s.slug, s.name])).entries()];
 
   const close = (next: boolean) => {
-    if (busy) return;
+    if (locked) return;
     if (!next && editing && !confirmDiscardDrafts()) return;
     onOpenChange(next);
   };
   const edit = (f: FlowView) => setEditing({ id: f.id, name: f.name, enabled: f.enabled, graph: f.graph });
   // A document here opens in this tab's preview; one in another space opens that space on it.
   const openDocument = (d: DeliveryView) => {
-    if (busy) return;
+    if (locked) return;
     if (d.space === here && onOpenFile) { if (onOpenFile(d.fileId) !== false) onOpenChange(false); return; }
     if (openSpaceFile(d.space, d.fileId)) onOpenChange(false);
   };
@@ -147,7 +154,7 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null, onO
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4 text-sm">
             {!list ? (error ? null : <p role="status" className="text-muted-foreground">Loading flows…</p>) : <>
               <FlowApprovals spaceName={spaceName} include={include} refresh={lately}
-                onDecided={() => void load()} onOpen={openDocument} />
+                onDecided={() => void load()} onOpen={openDocument} onRunning={setDeciding} />
 
               <section aria-label="Flows" className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -156,7 +163,7 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null, onO
                       <option value="">All spaces</option>
                       {filterSpaces.map(([slug, name]) => <option key={slug} value={slug}>{name}</option>)}
                     </select></label>
-                  <Button type="button" variant="outline" disabled={busy || !list.spaces.length}
+                  <Button type="button" variant="outline" disabled={locked || !list.spaces.length}
                     onClick={() => setEditing({ name: '', enabled: true, graph: newGraph(startingSpaces(filter || here, list.spaces)) })}>
                     <Icon name="plus" size={14} /> New flow
                   </Button>
@@ -169,14 +176,14 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null, onO
                       <li key={f.id} className="space-y-2 rounded-lg border p-3">
                         <div className="flex items-start justify-between gap-2">
                           <label className="flex min-w-0 items-start gap-2">
-                            <Checkbox aria-label={`${f.name} is on`} checked={f.enabled} disabled={busy}
+                            <Checkbox aria-label={`${f.name} is on`} checked={f.enabled} disabled={locked}
                               onCheckedChange={(on) => void act(() => saveFlow({ id: f.id, name: f.name, enabled: on === true, graph: f.graph }))} />
                             <span className="min-w-0"><span className="block font-medium">{f.name}</span>
                               <span className="block text-xs text-muted-foreground">{describeFlow(f.graph, names)}</span></span>
                           </label>
                           <span className="flex shrink-0 gap-1">
-                            <Button type="button" size="sm" variant="ghost" aria-label={`Edit ${f.name}`} disabled={busy} onClick={() => edit(f)}><Icon name="edit" size={14} /></Button>
-                            <Button type="button" size="sm" variant="ghost" aria-label={`Delete ${f.name}`} disabled={busy}
+                            <Button type="button" size="sm" variant="ghost" aria-label={`Edit ${f.name}`} disabled={locked} onClick={() => edit(f)}><Icon name="edit" size={14} /></Button>
+                            <Button type="button" size="sm" variant="ghost" aria-label={`Delete ${f.name}`} disabled={locked}
                               onClick={() => { if (window.confirm(`Delete the flow “${f.name}”? What it already did stays.`)) void act(() => deleteFlow(f.id), 'Flow deleted.'); }}><Icon name="trash" size={14} /></Button>
                           </span>
                         </div>
@@ -190,7 +197,7 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null, onO
                         {f.pausedReason ? <p role="alert" className="text-xs text-destructive">{f.pausedReason} Save the flow again to start it.</p>
                           : f.failures ? <p className="text-xs text-destructive">Failed {f.failures} {f.failures === 1 ? 'time' : 'times'} lately.</p> : null}
                         {f.enabled && trigger?.type === 'trigger' && trigger.on !== 'schedule' ? (
-                          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void act(() => runFlow(f.id), `“${f.name}” is looking at the documents already there.`)}>Run on documents already there</Button>
+                          <Button type="button" size="sm" variant="outline" disabled={locked} onClick={() => void act(() => runFlow(f.id), `“${f.name}” is looking at the documents already there.`)}>Run on documents already there</Button>
                         ) : null}
                       </li>
                     );
@@ -208,7 +215,7 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null, onO
                           <span className="block truncate">{d.fileName ?? 'A file'} · <span className={d.state === 'failed' ? 'text-destructive' : 'text-muted-foreground'}>{STATE_TEXT[d.state]}</span></span>
                           <span className="block truncate text-xs text-muted-foreground">{spaceName(d.space)} · {d.flowName}{typeof d.detail.error === 'string' ? `: ${d.detail.error}` : typeof d.detail.reason === 'string' ? `: ${d.detail.reason}` : ''}</span>
                         </span>
-                        {d.state === 'failed' ? <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void act(() => decide(d, 'retry'), 'Trying again.')}>Retry</Button> : null}
+                        {d.state === 'failed' ? <Button type="button" size="sm" variant="outline" disabled={locked} onClick={() => void act(() => decide(d, 'retry'), 'Trying again.')}>Retry</Button> : null}
                       </li>
                     ))}
                   </ul>
