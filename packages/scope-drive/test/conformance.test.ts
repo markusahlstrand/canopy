@@ -163,6 +163,10 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
     'drive/request-s3-change': { request: { op: 'mkdir', path: 'conformance' } },
     'drive/ensure-file': { name: 'conformance' },
     'drive/set-file-category': { category: 'conformance', source: 'person' },
+    // A version id that is not the file's: the allowed half is then refused as a conflict, after
+    // the permission check the pair measures.
+    'drive/record-graph-suggestions': { versionId: 'conformance', extractedBy: 'conformance', entities: [], claims: [] },
+    'drive/decide-graph-claims': { claimIds: ['conformance'], decision: 'reject' },
     'drive/record-file-origin': { flowId: 'conformance', sourceScope: 'conformance', sourceFileId: 'conformance', sourceVersionId: 'conformance' },
     // The `external` branch on purpose: a `blob` version names an attachment the
     // handler verifies, so driving that branch would mean uploading bytes to set

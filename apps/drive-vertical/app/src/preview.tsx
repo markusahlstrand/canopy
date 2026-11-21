@@ -37,6 +37,7 @@ import { TextEditor } from './text-editor';
 import { useTextWrapPreference } from './text-wrap-preference';
 import { CommentsPanel } from './comments';
 import { FileDetailsPanel } from './file-details';
+import { FileGraphPanel } from './graph-review';
 import { VersionComparison } from './version-comparison';
 import { latestOnly } from './reads';
 import { JsonPreview } from './json-format';
@@ -489,7 +490,7 @@ export function PreviewPanel({
       {file ? <FileLinkAction key={file.id} fileId={file.id} /> : null}
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {metaError ? <PreviewFailure message={metaError} retry={() => setRetry(value => value + 1)} /> : tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : bodyError && version ? <PreviewFailure message={bodyError} retry={() => readTableBody(version.id)} /> : body ? <Empty>Table preview needs the complete text.</Empty> : <Empty>Loading…</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /></> : tab === 'file' ? (
+        {metaError ? <PreviewFailure message={metaError} retry={() => setRetry(value => value + 1)} /> : tab === 'table' ? (body && !body.truncated ? <CsvTable text={body.text} delimiter={csvSelection?.fileId === fileId ? csvSelection.delimiter : undefined} onDelimiterChange={delimiter => setCsvSelection({ fileId, delimiter })} /> : bodyError && version ? <PreviewFailure message={bodyError} retry={() => readTableBody(version.id)} /> : body ? <Empty>Table preview needs the complete text.</Empty> : <Empty>Loading…</Empty>) : tab === 'comments' ? <CommentsPanel key={fileId} fileId={fileId} /> : tab === 'details' ? <>{file ? <FileMetadata file={file} version={version} size={humanSize(version?.size)} canWrite={canWrite} /> : null}<FileDetailsPanel key={fileId} fileId={fileId} /><FileGraphPanel key={`graph-${fileId}`} fileId={fileId} /></> : tab === 'file' ? (
           !file ? <Empty>Loading…</Empty> : !version ? (
             <Empty>Nothing has been written to this file yet.</Empty>
           ) : selectedPlugin && file && version.source === 'blob' ? <SandboxPlugin key={`${selectedPlugin.id}:${pluginVersion.current}`} plugin={selectedPlugin} onSave={canWrite && editableTextMime(version.mime, file.name) ? savePluginText : undefined} file={{id: fileId, versionId: pluginVersion.current ?? version.id, name: file.name, mime: version.mime, size: version.size}} /> : shape === 'image' || shape === 'viewer' ? (

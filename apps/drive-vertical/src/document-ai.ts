@@ -81,7 +81,7 @@ export function systemFor(categories: readonly SpaceCategory[]): string {
 }
 
 /** The first complete JSON object in `raw`, by brace depth — trailing chatter with braces in it does not break it. */
-function firstObject(raw: string): string | null {
+export function firstObject(raw: string): string | null {
   const start = raw.indexOf('{');
   if (start < 0) return null;
   let depth = 0;

@@ -2,6 +2,7 @@ import { landSourceChange } from './source-landing.js';
 import { landedMailAttachment, landMailChange, mailSummary } from './mail-landing.js';
 import { searchSnippet, SNIPPET_SCAN_LIMIT } from './search-snippet.js';
 import { automationHandlers, queueArrival, readCategory, readOrigin, readSend } from './automation.js';
+import { graphHandlers } from './graph.js';
 /**
  * The drive's handlers — the first canopy operations written as scope-local code.
  *
@@ -1688,6 +1689,7 @@ const operations = {
     return { hits };
   },
   ...automationHandlers,
+  ...graphHandlers,
 } satisfies {
   [K in keyof typeof driveOperations]: OperationHandler<
     HandlerInput<(typeof driveOperations)[K]>,

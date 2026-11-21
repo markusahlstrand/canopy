@@ -79,6 +79,10 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
               <Checkbox id="settings-auto-label" className="mt-0.5" checked={settings.autoLabel ?? false} disabled={busy} onCheckedChange={checked=>setSettings({...settings,autoLabel:checked===true||undefined})}/>
               <span><span className="block text-sm font-medium">Label new documents automatically</span><span className="block text-xs text-muted-foreground">An AI model reads the text of each new document (uploaded, synced from a source or mailed in) and adds a type label and a short description. Labels and descriptions people wrote are kept.</span></span>
             </label>
+            <label htmlFor="settings-extract-entities" className="flex items-start gap-3 rounded-lg border px-3 py-2.5">
+              <Checkbox id="settings-extract-entities" className="mt-0.5" checked={settings.extractEntities ?? false} disabled={busy} onCheckedChange={checked=>setSettings({...settings,extractEntities:checked===true||undefined})}/>
+              <span><span className="block text-sm font-medium">Suggest people and companies</span><span className="block text-xs text-muted-foreground">An AI model reads each new document for the people, companies and places it names, and what it says about them (who issued an invoice, a VAT number, an email). Each one is a suggestion you accept or reject; nothing is added without you.</span></span>
+            </label>
             <div className="space-y-1 pt-1">
               <h4 className="text-xs font-medium">Categories</h4>
               <p className="text-xs text-muted-foreground">Document AI also puts each document in one of these, and flows can act on the category. A category someone picks by hand is never changed.</p>

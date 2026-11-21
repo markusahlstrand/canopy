@@ -320,4 +320,40 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
   ALTER TABLE drive_source_pending ADD COLUMN failed_at TEXT;
   ALTER TABLE drive_source_pending ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;` },
 
+  /**
+   * The space's knowledge graph, as claims (`spec/ontology.ts`, `src/graph.ts`).
+   *
+   * - `graph_entities`: a person, organisation or place the documents are about. `name_key` is
+   *   the name as identity resolution compares it; `merged_into` is kept for when two turn out
+   *   to be one. `suggested` until a person accepts a statement about it.
+   * - `graph_claims`: one statement, `(subject, predicate, object)`, with where it was read
+   *   (file, version, the quoted words), how sure the model was, which model, when it was true
+   *   (`valid_time`, the document's date) and when it was learned (`ingest_time`). The subject is
+   *   an entity or the document itself; the object an entity or a normalised value. A fact is
+   *   an accepted claim — never a row overwritten in place, so a later document changes the
+   *   answer without erasing what an earlier one said.
+   */
+  { version: '0018', sql: `CREATE TABLE graph_entities (
+    id TEXT PRIMARY KEY NOT NULL, type TEXT NOT NULL CHECK (type IN ('Person', 'Organization', 'Place')),
+    name TEXT NOT NULL, name_key TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('suggested', 'accepted')),
+    merged_into TEXT REFERENCES graph_entities(id), created_at TEXT NOT NULL, created_by TEXT NOT NULL
+  );
+  CREATE INDEX graph_entities_name ON graph_entities (type, name_key);
+  CREATE TABLE graph_claims (
+    id TEXT PRIMARY KEY NOT NULL,
+    subject_type TEXT NOT NULL CHECK (subject_type IN ('document', 'entity')), subject_id TEXT NOT NULL,
+    predicate TEXT NOT NULL,
+    object_entity_id TEXT REFERENCES graph_entities(id), object_kind TEXT NOT NULL, object_value TEXT,
+    file_id TEXT NOT NULL REFERENCES drive_files(id), version_id TEXT NOT NULL,
+    quote TEXT, confidence REAL, extracted_by TEXT NOT NULL, valid_time TEXT, ingest_time TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('suggested', 'accepted', 'rejected', 'superseded')),
+    decided_by TEXT, decided_at TEXT,
+    CHECK ((object_entity_id IS NULL) <> (object_value IS NULL))
+  );
+  CREATE INDEX graph_claims_subject ON graph_claims (subject_type, subject_id, predicate);
+  CREATE INDEX graph_claims_object ON graph_claims (object_entity_id);
+  CREATE INDEX graph_claims_value ON graph_claims (predicate, object_value);
+  CREATE INDEX graph_claims_file ON graph_claims (file_id, status);
+  CREATE INDEX graph_claims_open ON graph_claims (status, confidence);` },
+
 ];

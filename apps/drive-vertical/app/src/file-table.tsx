@@ -1,6 +1,6 @@
 import { useContext, useRef, useState, useLayoutEffect, type ReactNode, type KeyboardEvent } from "react";
 import type { FileItem } from './items';
-import { AiLabelContext, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
+import { AiLabelContext, EntityExtractionContext, FIND_ENTITIES, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from './file-icon';
 import { FileList, type FolderTree } from './file-list';
@@ -145,7 +145,7 @@ const COLUMNS: { key: SortKey; label: string; className: string }[] = [
  * is the same one the rest of this UI follows: an item that does nothing is worse than an
  * item that is absent.
  */
-export function actionsFor(file: FileItem, readOnly = false, trashed = false, mirrored = false, aiLabel = false): string[] {
+export function actionsFor(file: FileItem, readOnly = false, trashed = false, mirrored = false, aiLabel = false, aiExtract = false): string[] {
   if (readOnly) return ['Open'];
   if (mirrored) return trashed ? [] : file.isFolder ? ['Open', 'Share'] : ['Open', 'Download'];
   if (trashed) return ['Restore'];
@@ -153,12 +153,12 @@ export function actionsFor(file: FileItem, readOnly = false, trashed = false, mi
   // reaches what is under it, so there is no such thing as sharing one file here.
   // The AI items only where the space turned Document AI on: anywhere else they would do nothing.
   return file.isFolder
-    ? ['Open', 'Share', 'Rename', 'Move', ...(aiLabel ? [LABEL_WITH_AI, RELABEL_WITH_AI] : [])]
+    ? ['Open', 'Share', 'Rename', 'Move', ...(aiLabel ? [LABEL_WITH_AI, RELABEL_WITH_AI] : []), ...(aiExtract ? [FIND_ENTITIES] : [])]
     : ['Open', 'Download', 'Rename', 'Move', ...(aiLabel ? [LABEL_WITH_AI] : []), 'Delete'];
 }
 
 function RowActions({ file, onAction, readOnly, trashed, mirrored }: { file: FileItem; onAction: (action: string, f: FileItem) => void; readOnly: boolean; trashed?: boolean; mirrored?: boolean }) {
-  const actions = actionsFor(file, readOnly, trashed, mirrored, useContext(AiLabelContext));
+  const actions = actionsFor(file, readOnly, trashed, mirrored, useContext(AiLabelContext), useContext(EntityExtractionContext));
   if (actions.length === 0) return null;
   return (
     <DropdownMenu>
