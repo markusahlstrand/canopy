@@ -155,6 +155,8 @@ describe('folder patterns and path templates', () => {
     expect(templateProblem('{year}/{month}')).toBeNull();
     expect(templateProblem('{year')).toMatch(/without its pair/);
     expect(templateProblem('../{year}')).toMatch(/\.\./);
+    // A folder name can't hold a backslash: refused when the flow is saved, not each time it runs.
+    expect(templateProblem('DOC\\{year}')).toMatch(/has a \\ in it/);
   });
 
   const byMonth = (copy: Record<string, unknown> = {}): FlowGraph => ({
@@ -195,7 +197,35 @@ describe('folder patterns and path templates', () => {
     const { path } = walk(graph, doc);
     expect(path).toEqual(['t', 'pdf', 'month', 'copy']);
     const copy = graph.nodes.find((n) => n.type === 'copy')!;
-    expect(copyPaths(copy as Extract<typeof copy, { type: 'copy' }>, capturesOn(graph, path, doc))).toEqual({ subfolder: 'DOC/2026/09', alsoInPaths: ['Ventas/2026'] });
+    expect(copyPaths(copy as Extract<typeof copy, { type: 'copy' }>, capturesOn(graph, path, doc).get('copy')!)).toEqual({ subfolder: 'DOC/2026/09', alsoInPaths: ['Ventas/2026'] });
     expect(walk(graph, facts({ name: 'F-12.pdf', folderPath: 'Client invoices/2026' })).path).toEqual(['t', 'pdf', 'month']);
+  });
+
+  it('files each copy by what was taken before it, even when a later check takes the name again', () => {
+    const graph: FlowGraph = {
+      versions: 'first',
+      nodes: [
+        { id: 't', type: 'trigger', on: 'arrived', spaces: ['qonto'] },
+        { id: 'first', type: 'check', condition: { field: 'folder', op: 'matches', path: '{year}/*' } },
+        { id: 'early', type: 'copy', space: 'a3doc', folderId: 'root', alsoIn: [], subfolder: 'DOC/{year}' },
+        { id: 'again', type: 'check', condition: { field: 'folder', op: 'matches', path: '*/{year}' } },
+        { id: 'late', type: 'copy', space: 'a3doc', folderId: 'root', alsoIn: [], subfolder: 'DOC/{year}' },
+      ],
+      edges: [
+        { from: 't', to: 'first', branch: 'next' },
+        { from: 'first', to: 'early', branch: 'yes' },
+        { from: 'early', to: 'again', branch: 'next' },
+        { from: 'again', to: 'late', branch: 'yes' },
+      ],
+    };
+    expect(graphProblems(graph)).toEqual([]);
+    const doc = facts({ folderPath: '2026/09' });
+    const { path } = walk(graph, doc);
+    expect(path).toEqual(['t', 'first', 'early', 'again', 'late']);
+    const captures = capturesOn(graph, path, doc);
+    const copyOf = (id: string) => graph.nodes.find((n) => n.id === id) as Extract<FlowGraph['nodes'][number], { type: 'copy' }>;
+    expect(copyPaths(copyOf('early'), captures.get('early')!).subfolder).toBe('DOC/2026');
+    expect(copyPaths(copyOf('late'), captures.get('late')!).subfolder).toBe('DOC/09');
+    expect(captures.get('first')).toEqual({});
   });
 });

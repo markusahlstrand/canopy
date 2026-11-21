@@ -113,6 +113,8 @@ export function patternProblem(pattern: string): string | null {
 /** What is wrong with a path template, in words; null when it is fine. */
 export function templateProblem(template: string): string | null {
   if (/[{}]/.test(template.replace(TOKEN, ''))) return `'${template}' has a { or } without its pair.`;
+  // A folder name can't hold a backslash: the copy would be refused each time it runs.
+  if (template.includes('\\')) return `'${template}' has a \\ in it: folders are split by /.`;
   for (const name of tokensOf(template)) if (!TOKEN_NAME.test(name)) return `'{${name}}' needs a short lowercase name, like {year}.`;
   for (const level of template.split('/').map((s) => s.trim())) if (level === '.' || level === '..') return `'${template}' can't use . or .. as a folder.`;
   return null;

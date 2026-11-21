@@ -205,18 +205,22 @@ export function capturedBefore(graph: Pick<FlowGraph, 'nodes' | 'edges'>): Map<s
 }
 
 /**
- * The names the folder patterns on a document's path took from it. A pattern that did not fit
- * took nothing (the path went on by No).
+ * By step on a document's path: the names the folder patterns before it took from the document.
+ * A step sees only what came before it, so a pattern further on that takes the same name again
+ * can't change where an earlier copy files it. A pattern that did not fit took nothing (the path
+ * went on by No).
  */
-export function capturesOn(graph: Pick<FlowGraph, 'nodes'>, path: readonly string[], facts: FileFacts): Record<string, string> {
+export function capturesOn(graph: Pick<FlowGraph, 'nodes'>, path: readonly string[], facts: FileFacts): Map<string, Readonly<Record<string, string>>> {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  const captures: Record<string, string> = {};
+  const byStep = new Map<string, Readonly<Record<string, string>>>();
+  let captures: Readonly<Record<string, string>> = {};
   for (const id of path) {
+    byStep.set(id, captures);
     const node = byId.get(id);
     if (node?.type !== 'check' || node.condition.field !== 'folder' || node.condition.op !== 'matches') continue;
-    Object.assign(captures, folderCaptures(node.condition.path, facts.folderPath) ?? {});
+    captures = { ...captures, ...folderCaptures(node.condition.path, facts.folderPath) };
   }
-  return captures;
+  return byStep;
 }
 
 /** Where a copy files one document: below its folder, and in which more categories by path. Throws when a name has no value. */

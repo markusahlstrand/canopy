@@ -312,10 +312,12 @@ function filedIn(graph: FlowGraph, bySlug: Map<string, FlowSite>) {
       if (node?.type !== 'copy' || (!node.subfolder?.trim() && !node.alsoInPaths?.some((t) => t.trim()))) continue;
       const space = bySlug.get(node.space)?.name ?? node.space;
       try {
-        const { subfolder, alsoInPaths } = copyPaths(node, captures);
+        const { subfolder, alsoInPaths } = copyPaths(node, captures.get(id) ?? {});
         const base = await baseOf(node.space, node.folderId);
-        const join = (a: string | null, b: string) => [a ?? '', b].filter(Boolean).join('/');
-        out.push(`${space} › ${join(base, subfolder) || 'Top level'}`);
+        // The folder it copies to is gone, or not one to read: saying the path below it would mislead.
+        if (base === null) out.push(`${space} › can't tell: the folder it copies to isn't there`);
+        else out.push(`${space} › ${[base, subfolder].filter(Boolean).join('/') || 'Top level'}`);
+        // Categories by path start at the top of the space: they don't need that folder.
         for (const extra of alsoInPaths) out.push(`${space} › ${extra || 'Top level'}`);
       } catch (error) {
         out.push(`${space} › can't tell: ${error instanceof Error ? error.message : String(error)}`);

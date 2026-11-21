@@ -323,7 +323,7 @@ export function flowRunJob(deps: AutomationDeps): JobHandler {
       route = walk(flow.graph, facts, answers);
     }
     const path = route.path;
-    // What the folder patterns on the path took from the document: where its copies go.
+    // By step: what the folder patterns before it on the path took from the document, where its copies go.
     const captures = capturesOn(flow.graph, path, facts);
     const actions = path.map((id) => byId.get(id)).filter((n): n is ActionNode => !!n && isAction(n));
     if (!actions.length) {
@@ -374,7 +374,7 @@ export function flowRunJob(deps: AutomationDeps): JobHandler {
 /** Run actions in path order, each once (its result lands in `done`). The first failure stops them, and is returned. */
 async function act(
   pass: JobPassContext, deps: AutomationDeps, node: Node, flow: DirectoryFlow, author: string, facts: FileFactsRow,
-  captures: Readonly<Record<string, string>>, actions: ActionNode[], done: Record<string, Record<string, unknown>>,
+  captures: ReadonlyMap<string, Readonly<Record<string, string>>>, actions: ActionNode[], done: Record<string, Record<string, unknown>>,
 ): Promise<string | null> {
   for (const action of actions) {
     let result: Record<string, unknown>;
@@ -382,7 +382,7 @@ async function act(
       result = await pass.step(`act:${action.id}`, async (): Promise<Record<string, unknown>> => {
         try {
           if (action.type === 'label') return await addLabel(await deps.scopeAs(node, author), facts.fileId, action.value);
-          return await copy(deps, node, flow, author, facts, action, captures);
+          return await copy(deps, node, flow, author, facts, action, captures.get(action.id) ?? {});
         } catch (error) {
           // Refused for good: no retry will change the answer, so it is this delivery's answer.
           if (terminal(error)) return { error: messageOf(error) };
