@@ -739,8 +739,16 @@ async function syncFiles(
     if (!e || e.kind !== 'file' || !e.documentId) return;
     const here = await client.findByTitle({ containerId: e.parentId, children: false, title: e.title ?? '' });
     if (here.some((d) => d.Id === e.documentId)) return;
-    await landDelete(id, e, (await client.download(e.documentId)) ? 'moved-out' : 'deleted');
+    await landDelete(id, e, (await download(e.documentId)) ? 'moved-out' : 'deleted');
   };
+  /**
+   * What a document read here is marked as seen in. The pass marks its own id, which is what keeps a
+   * held file out of that pass's own removal check. A folder check marks nothing new: if it marked
+   * the paused pass's id, a document it saw and that went later would never be asked about by
+   * that pass. So a check leaves `seenIn` as it was, and the pass still presents or verifies it.
+   */
+  const observed = options.folders ? undefined : pass.id;
+  const seen = (prior: ItemEntry | undefined) => observed ?? prior?.seenIn;
   const landDoc = async (doc: A3Document, containerId: number) => {
     await landFolder(containerId);
     const id = `${doc.Id}@${containerId}`;
@@ -773,7 +781,7 @@ async function syncFiles(
       if (bytes && (await sha256Hex(bytes)) !== prior.sha256) contentChanged = true;
     }
     if (prior?.dated && prior.path === path && !contentChanged && !!prior.tooLarge === tooLarge) {
-      await put(id, { ...prior, seenIn: pass.id });
+      if (observed && prior.seenIn !== observed) await put(id, { ...prior, seenIn: observed });
       return;
     }
     const content = tooLarge ? 'too-large' : contentChanged ? 'follows' : 'unchanged';
@@ -808,7 +816,7 @@ async function syncFiles(
       tooLarge,
       dated: true,
       ambiguous: isAmbiguousA3Date(doc.DateModified),
-      seenIn: pass.id,
+      ...(seen(prior) ? { seenIn: seen(prior) } : {}),
     };
     if (content === 'follows') {
       const target = fileSourceUpsertAnswer.safeParse(answer);
@@ -855,10 +863,14 @@ async function syncFiles(
           const { documents } = await client.listDocuments({ containerId, children: false, pageIndex: page, pageSize });
           pages++;
           for (const doc of documents) {
-            if (downloads >= maxDownloads) { stopped = true; break; }
             presented.add(doc.Id);
             const placements = (doc.ContainersId ?? [containerId]).filter((c) => folderPath.has(c));
-            for (const c of placements) await landDoc(doc, c);
+            // The budget is checked before each placement: each may download the document's bytes.
+            for (const c of placements) {
+              if (downloads >= maxDownloads) { stopped = true; break; }
+              await landDoc(doc, c);
+            }
+            if (stopped) break;
             await landMovedOut(doc, placements);
           }
           listed = !stopped && documents.length < pageSize;
@@ -873,8 +885,12 @@ async function syncFiles(
             .filter(([, e]) => e.kind === 'file' && e.parentId === containerId && e.documentId && !presented.has(e.documentId))
             .map(([id]) => id);
           const budget = options.folderVerify ?? FOLDER_VERIFY_PER_CHECK;
-          for (const id of gone.slice(0, budget)) await verifyHeld(id);
           complete = gone.length <= budget;
+          // Asking about a document can download it, so the call's download budget holds here too.
+          for (const id of gone.slice(0, budget)) {
+            if (downloads >= maxDownloads) { complete = false; break; }
+            await verifyHeld(id);
+          }
         }
         checks.push({ path, changes: changes - before, complete });
       } catch (err) {

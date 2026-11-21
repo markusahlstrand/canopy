@@ -158,3 +158,36 @@ it('says a folder the shared download budget stopped is incomplete, and carries 
   expect(await w.check(['Fiscal/Modelo 303'])).toEqual([{ path: 'Fiscal/Modelo 303', changes: 5, complete: true }]);
   expect(w.paths().filter(p => p.startsWith('Fiscal/'))).toHaveLength(10);
 });
+
+it('counts the downloads that ask about removed documents against the same budget', async () => {
+  const w = world();
+  await w.bind('Facturas');
+  const old = Array.from({ length: 5 }, (_, i) => w.a3.add([21], `Old ${i}`, `o${i}`));
+  await w.sweep();
+  for (const doc of old) w.a3.remove(doc);
+  for (let i = 0; i < 14; i++) w.a3.add([21], `New ${i}`, `n${i}`);
+  const downloads = () => w.a3.calls.filter(c => c.method === 'Download').length;
+  const before = downloads();
+  // Fourteen new documents, then one removal asked about (a3doc's Download says it is gone): fifteen.
+  expect(await w.check(['Recibidas'])).toEqual([{ path: 'Recibidas', changes: 15, complete: false }]);
+  expect(downloads() - before).toBe(15);
+  expect(w.paths().filter(p => p.includes('/Old '))).toHaveLength(4);
+  expect(await w.check(['Recibidas'])).toEqual([{ path: 'Recibidas', changes: 4, complete: true }]);
+  expect(w.paths().filter(p => p.includes('/Old '))).toHaveLength(0);
+});
+
+it('leaves a paused full pass to ask about what a folder check saw, so a later removal still lands', async () => {
+  const w = world();
+  await w.bind('Facturas');
+  const docs = Array.from({ length: 30 }, (_, i) => w.a3.add([21], `Doc ${i}`, `d${i}`));
+  // The first pass is full and reads 25 a call: it stops with the five oldest still unread.
+  expect(await w.sweep()).toMatchObject({ more: true });
+  // A folder check lands those five while the pass is paused.
+  await w.check(['Recibidas']);
+  expect(w.paths()).toHaveLength(30);
+  // Then a3doc loses one of them before the pass resumes.
+  w.a3.remove(docs[0]!);
+  for (let i = 0; i < 10 && (await w.sweep())?.more; i++);
+  expect(w.paths()).toHaveLength(29);
+  expect(w.paths()).not.toContain('Recibidas/Doc 0.pdf');
+});

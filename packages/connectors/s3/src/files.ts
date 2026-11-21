@@ -242,7 +242,10 @@ export async function syncS3Context(
   const stored = (await ctx.state.get(BINDING)) as Binding | undefined;
   // A binding to another prefix starts a fresh pass; items outside the prefix are simply not read.
   const binding: Binding = stored && stored.prefix === prefix ? stored : { prefix };
-  const pass: Pass = binding.pass ?? { id: crypto.randomUUID(), startedAt: nowOf(config).toISOString(), changes: 0, skipped: 0 };
+  // A folder check observes under its own id, never the paused pass's: marking that pass's id would
+  // keep what the check saw out of the pass's own removal check, so a later delete would never land.
+  // The check never saves its pass, so the paused one resumes untouched.
+  const pass: Pass = (!config.folders && binding.pass) || { id: crypto.randomUUID(), startedAt: nowOf(config).toISOString(), changes: 0, skipped: 0 };
   const items = await readItems(io);
   // Bound to another prefix since: a held path is relative to the old one, so the item moves.
   for (const [key, e] of items) {

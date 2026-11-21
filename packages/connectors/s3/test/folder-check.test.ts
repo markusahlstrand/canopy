@@ -52,7 +52,7 @@ function world() {
   const bind = async (folder = '') => { ctx.scope.options = await def.bind!(ctx, { folder }); };
   const sweepAll = async () => { for (let i = 0; i < 50; i++) if (!(await def.sweep!(ctx))?.more) return; throw new Error('sweep never completed'); };
   const paths = () => [...drive.values()].map(v => v.path).sort();
-  return { s3, ctx, changes, drive, bind, sweepAll, paths, check: (p: string[]) => check(ctx, p) };
+  return { s3, ctx, changes, drive, bind, sweepAll, paths, sweep: () => def.sweep!(ctx), check: (p: string[]) => check(ctx, p) };
 }
 
 it('lands what was added to, changed in and removed from one folder, one level deep', async () => {
@@ -101,4 +101,18 @@ it('stops at the download budget and finishes on the next check', async () => {
   const [second] = await w.check(['inbox']);
   expect(second).toMatchObject({ complete: true });
   expect(w.paths().filter(p => p.startsWith('inbox/'))).toHaveLength(25);
+});
+
+it('leaves a paused pass to ask about what a folder check saw, so a later removal still lands', async () => {
+  const w = world();
+  for (let i = 0; i < 25; i++) w.s3.put(`f${String(i).padStart(2, '0')}.txt`, `n${i}`);
+  await w.bind();
+  // The first pass downloads twenty a call: it stops with five keys still unread.
+  expect(await w.sweep()).toMatchObject({ more: true });
+  await w.check(['']);
+  expect(w.paths()).toHaveLength(25);
+  w.s3.objects.delete('f24.txt');
+  await w.sweepAll();
+  expect(w.paths()).toHaveLength(24);
+  expect(w.paths()).not.toContain('f24.txt');
 });
