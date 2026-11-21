@@ -101,6 +101,8 @@ import { placesFetch } from './places-fetch.js';
 import { readBounded } from './upload-limit';
 import { appPasswordName, createAppPassword, listAppPasswords, mintAppPassword, revokeAppPassword, verifyAppPassword, type AppPassword } from './app-passwords';
 import { mountWebdav } from './webdav';
+import { claimUploadLink, createUploadLink, peekUploadLink } from './upload-links.js';
+import { mountUploadLinks, uploadToFolder, type UploadLink, type UploadTarget } from './upload.js';
 import { mountFileContent, type FileContentRecord } from './file-content.js';
 import { mountTextContent, type TextContentRecord } from './text-content.js';
 import { INVITABLE_ROLE_KEYS, MODULES, OWNER_ROLE_KEY, ROLES } from './provision.js';
@@ -180,6 +182,16 @@ export class IdentityDO extends PlatformIdentityDO {
   }
   async verifyAppPassword(tokenHash: string): Promise<string | null> {
     return verifyAppPassword(this.ctx.storage.sql, tokenHash, Date.now());
+  }
+  // Upload links for assistants (`upload-links.ts`): per login, beside its app passwords.
+  async createUploadLink(link: Omit<UploadLink, 'expiresAt'> & { tokenHash: string }): Promise<{ ok: true; expiresAt: number } | { error: 'limit' }> {
+    return this.ctx.storage.transactionSync(() => createUploadLink(this.ctx.storage.sql, { ...link, now: Date.now() }));
+  }
+  async peekUploadLink(tokenHash: string): Promise<UploadLink | null> {
+    return peekUploadLink(this.ctx.storage.sql, tokenHash, Date.now());
+  }
+  async claimUploadLink(tokenHash: string): Promise<boolean> {
+    return this.ctx.storage.transactionSync(() => claimUploadLink(this.ctx.storage.sql, tokenHash, Date.now()));
   }
   // Flows belong to the install, so they live here beside its spaces (`flow-directory.ts`).
   async listFlows(): Promise<{ flow: DirectoryFlow; scopes: FlowScopes }[]> {
@@ -557,6 +569,9 @@ type SiteRegistry = {
   listAppPasswords(subject: string): Promise<AppPassword[]>;
   revokeAppPassword(subject: string, id: string): Promise<boolean>;
   verifyAppPassword(tokenHash: string): Promise<string | null>;
+  createUploadLink(link: Omit<UploadLink, 'expiresAt'> & { tokenHash: string }): Promise<{ ok: true; expiresAt: number } | { error: 'limit' }>;
+  peekUploadLink(tokenHash: string): Promise<UploadLink | null>;
+  claimUploadLink(tokenHash: string): Promise<boolean>;
   listFlows(): Promise<{ flow: DirectoryFlow; scopes: FlowScopes }[]>;
   flowsWatching(scope: string): Promise<DirectoryFlow[]>;
   saveFlow(input: SaveFlow, create: boolean): Promise<DirectoryFlow | { error: 'limit' | 'not_found' }>;
@@ -1495,44 +1510,56 @@ app.post('/api/folders/:folderId/content', async (c) => {
   if (alsoIn.length > 10) throw new HTTPException(400, { message: 'a file can be filed in at most 10 other folders' });
 
   const host = hostFor(env);
-  const stub = await host.getScope(principal, node.tenantId, node.scopeId);
-  const file = await stub.invoke<{ id: string; current_version_id: string | null }>('drive/ensure-file', {
-    folderId: c.req.param('folderId'),
-    name,
-  });
+  const target = await uploadTargetFor(c, host, node, principal);
   // `?create=only` is "New → …": a starter file must never become a version of a
   // file that already has content under that name.
-  if (c.req.query('create') === 'only' && file.current_version_id) {
-    throw new HTTPException(409, { message: `This folder already has a file named '${name}'.` });
-  }
-
-  const contentType = c.req.header('content-type') ?? 'application/octet-stream';
-  const body = await readBounded(c.req.raw);
-  const attachments = await host.attachments(principal, node.tenantId, node.scopeId);
-  const attachment = await attachments.upload({
-    entity: { entityType: 'file', entityId: file.id },
-    filename: name,
-    contentType,
-    visibility: 'internal',
-    body,
+  const outcome = await uploadToFolder(target, {
+    folderId: c.req.param('folderId'), name, alsoIn,
+    mime: c.req.header('content-type') ?? 'application/octet-stream',
+    body: () => readBounded(c.req.raw),
+    existing: c.req.query('create') === 'only' ? 'refuse' : 'version',
   });
+  // In the app a refused a3doc send fails the request, as it always has; the file is uploaded all the same.
+  if (outcome.source?.error !== undefined) throw outcome.source.error;
+  return c.json(outcome.file, 201);
+});
 
-  // No mime or size passed: `record-version` reads both off the attachment row, so
-  // the version describes the bytes that were actually stored.
-  const written = await stub.invoke<{ id: string; current_version_id: string | null }>(
-    'drive/record-version',
-    { fileId: file.id, location: { source: 'blob', blobRef: attachment.id } },
-  );
+/**
+ * One upload's target in a space, as `principal` there: the stub, the attachment surface for the
+ * bytes, and the indexing and automation run after the write (the app's upload, the assistant's
+ * and an upload link's all go through `uploadToFolder` with this).
+ */
+async function uploadTargetFor(c: Pick<Context, 'executionCtx'>, host: CloudflareScopeHost, node: Node, principal: PrincipalId): Promise<UploadTarget> {
+  const scope = await host.getScope(principal, node.tenantId, node.scopeId);
+  return {
+    scope,
+    store: async (fileId, name, mime, body) => (await (await host.attachments(principal, node.tenantId, node.scopeId)).upload({
+      entity: { entityType: 'file', entityId: fileId }, filename: name, contentType: mime, visibility: 'internal', body,
+    })).id,
+    afterWrite: () => indexSoon(c, host, node, () => kickAutomation(host, node)),
+  };
+}
 
-  // In a connected space an upload goes on to a3doc; its echo adopts this row (#358).
-  const { source } = await stub.invoke<{ source: DriveSource | null }>('drive/get-source');
-  if (source) await stub.invoke('drive/send-source-file', { fileId: file.id, ...(alsoIn.length ? { alsoIn } : {}) });
-
-  // The write queued itself for automation (Document AI, flows); the dispatcher takes it now.
-  // A "New → …" starter is empty, so Document AI finds no text in it and settles at once.
-  if (written.current_version_id) await indexSoon(c, host, node, () => kickAutomation(host, node));
-
-  return c.json(written, 201);
+/**
+ * Upload links (`drive_create-upload-link`): the token is the credential, and it is redeemed as
+ * the login that made it, resolved to its principal in the space again now.
+ */
+mountUploadLinks(app, async (c) => {
+  const env = c.env;
+  const base = baseNode(c.req.raw, env);
+  const directory = identityDo(env, base);
+  const host = hostFor(env);
+  return {
+    peek: (hash) => directory.peekUploadLink(hash),
+    claim: (hash) => directory.claimUploadLink(hash),
+    targetFor: async (sub, scope) => {
+      const parsed = scopeId.safeParse(scope);
+      const bound = parsed.success ? await directory.resolvePrincipal(parsed.data, sub) : null;
+      if (!bound || !parsed.success) return null;
+      return uploadTargetFor(c, host, { tenantId: base.tenantId, scopeId: parsed.data }, principalId.parse(bound)).catch(() => null);
+    },
+    now: () => Date.now(),
+  };
 });
 
 /** An administrator can run the scope's due text extraction without waiting for the sweep. */
@@ -1698,6 +1725,11 @@ mountAssistantMcp<{ Bindings: Env }>(app, driveOperations, async (c, headers) =>
     principalIn: (scope, login) => directory.resolvePrincipal(scope, login),
     settings: (scope) => directory.readSpaceSettings(scope),
     scopeAs: (principal, scope) => host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(scope)),
+    uploadsAs: async (principal, scope) => {
+      const { store, afterWrite } = await uploadTargetFor(c, host, { tenantId: base.tenantId, scopeId: scopeId.parse(scope) }, principalId.parse(principal));
+      return { store, afterWrite };
+    },
+    saveUploadLink: (link) => directory.createUploadLink(link),
   }, sub, (method, path, body) => {
     // The caller's bearer and the router's assertion, never the cookie (`bearerOnly`), as JSON.
     const forwarded = new Headers(headers);
@@ -1705,7 +1737,7 @@ mountAssistantMcp<{ Bindings: Env }>(app, driveOperations, async (c, headers) =>
     forwarded.set('content-type', 'application/json');
     const init: RequestInit = { method, headers: forwarded, ...(body === undefined ? {} : { body: JSON.stringify(body) }) };
     return Promise.resolve(flowRoutes.fetch(new Request(new URL(path, c.req.url), init), env, executionCtx));
-  });
+  }, new URL(c.req.url).origin);
   return { access, ids: base };
 });
 
