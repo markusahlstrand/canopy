@@ -31,7 +31,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import type { FileItem, FileKind } from './items';
 import { FileIcon } from './file-icon';
 import { SearchHighlight } from './search-highlight';
-import { AiLabelContext } from './ai-label';
+import { AiLabelContext, EntityExtractionContext } from './ai-label';
 import { actionsFor, type PluginMenuItem, type SortKey, type SortState } from './file-table';
 
 type SubEntityTableProps = DetailedHTMLProps<HTMLAttributes<SubEntityTable<FileItem, SortKey>>, SubEntityTable<FileItem, SortKey>> & {
@@ -117,7 +117,7 @@ function useNarrow(): boolean {
 }
 
 function RowMenu({ file, onAction, readOnly, trashed, mirrored }: { file: FileItem; onAction: (action: string, f: FileItem) => void; readOnly: boolean; trashed: boolean; mirrored: boolean }) {
-  const actions = actionsFor(file, readOnly, trashed, mirrored, useContext(AiLabelContext));
+  const actions = actionsFor(file, readOnly, trashed, mirrored, useContext(AiLabelContext), useContext(EntityExtractionContext));
   if (actions.length === 0) return null;
   return (
     <DropdownMenu>
@@ -147,6 +147,7 @@ export function FileList({
 }: FileListProps) {
   const table = useRef<SubEntityTable<FileItem, SortKey>>(null);
   const aiLabel = useContext(AiLabelContext);
+  const aiExtract = useContext(EntityExtractionContext);
   const rows = useRef(files);
   const latest = useRef({ files, selection, sort, onSelectionChange, onOpen, onSort, onMove, previewOpen, trashed, tree });
   // Refresh after commit, before the effects below read them: a render React throws away
@@ -332,7 +333,7 @@ export function FileList({
   const byId = new Map(nested);
   for (const f of files) byId.set(f.id, f);
   const menuFile = menu ? byId.get(menu.file.id) ?? menu.file : null;
-  const menuActions = menuFile ? actionsFor(menuFile, readOnly, trashed, mirrored, aiLabel) : [];
+  const menuActions = menuFile ? actionsFor(menuFile, readOnly, trashed, mirrored, aiLabel, aiExtract) : [];
   const menuPlugins = menuFile && !readOnly ? pluginMenuItems(menuFile.kind) : [];
 
   return (

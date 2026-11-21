@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { Button, Checkbox, Icon, Input } from '@canopy/ui';
+import { Button, Checkbox, Icon, Input, Tabs, TabsList, TabsTrigger } from '@canopy/ui';
 import { graphAsksModel, type FlowBranch } from '@canopy/scope-drive/spec/model';
 import { getSpaceSettings, previewFlow, type FlowGraph, type FlowNode, type FlowPreview } from './api';
 import type { SpaceCategory } from '../../src/space-settings';
@@ -15,6 +15,7 @@ import {
 } from './flow-graph-edit';
 import { folderLabel, message, StepInspector, useFolderMap, type SpaceOption } from './flow-inspector';
 import { layoutGraph } from './flow-layout';
+import { draftJson, FlowRawEditor, readDraft, type RawStatus } from './flow-raw';
 
 export type Draft = { id?: string; name: string; enabled: boolean; graph: FlowGraph };
 
@@ -56,12 +57,19 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
   const graph = draft.graph;
   const setGraph = useCallback((next: FlowGraph) => setDraft((d) => ({ ...d, graph: next })), []);
 
+  // Goes up when the whole graph is replaced (from the JSON): a layout begun before then is for a
+  // graph that is gone, so what it works out is dropped rather than put on the new one's steps.
+  const generation = useRef(0);
+  const current = (mine: number) => generation.current === mine;
+
   // A flow from before graphs has no positions: lay it out once, and count that as where it started.
   const laidOut = useRef(false);
   useEffect(() => {
     if (laidOut.current || !needsLayout(initial.graph)) return;
     laidOut.current = true;
+    const mine = generation.current;
     void layoutGraph(initial.graph).then((positions) => {
+      if (!current(mine)) return;
       setDraft((d) => {
         const next = { ...d, graph: placeSteps(d.graph, positions) };
         if (JSON.stringify(d) === JSON.stringify(initial)) setBaseline(JSON.stringify(next));
@@ -69,9 +77,48 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
       });
     });
   }, [initial]);
-  const tidy = () => void layoutGraph(graph).then((positions) => setDraft((d) => ({ ...d, graph: placeSteps(d.graph, positions) })));
+  const layOut = (from: FlowGraph) => {
+    const mine = generation.current;
+    void layoutGraph(from).then((positions) => { if (current(mine)) setDraft((d) => ({ ...d, graph: placeSteps(d.graph, positions) })); });
+  };
+  const tidy = () => layOut(graph);
 
-  const dirty = JSON.stringify(draft) !== baseline;
+  // The flow as JSON, while that view is open: the text, and what it was when opened (to tell an edit).
+  const [raw, setRaw] = useState<{ text: string; from: string } | null>(null);
+  const [rawStatus, setRawStatus] = useState<RawStatus>(null);
+  const openRaw = () => { const text = draftJson(draft); setRaw({ text, from: text }); setRawStatus(null); };
+  const ignoredNote = (ignored: string[]) => (ignored.length ? `Ignored ${ignored.join(', ')}: Canopy keeps ${ignored.length === 1 ? 'that' : 'those'} itself.` : null);
+  /** Back to the canvas, with the text's changes when it can draw them. */
+  const openCanvas = () => {
+    if (!raw) return;
+    if (raw.text === raw.from) { setRaw(null); return; }
+    const read = readDraft(raw.text, draft.id, 'canvas');
+    if (!read.ok) { setRawStatus({ kind: 'problems', problems: read.problems }); return; }
+    generation.current++;
+    setDraft(read.draft);
+    setRaw(null);
+    if (needsLayout(read.draft.graph)) layOut(read.draft.graph);
+  };
+  const checkRaw = () => {
+    if (!raw) return;
+    const read = readDraft(raw.text, draft.id, 'save');
+    setRawStatus(read.ok ? { kind: 'note', text: ['This flow can be saved.', ignoredNote(read.ignored)].filter(Boolean).join(' ') } : { kind: 'problems', problems: read.problems });
+  };
+  /**
+   * Save what the text says, once it passes what the server checks; never send what doesn't.
+   * The draft stays as it was when the JSON opened: a save the server refuses leaves the text to
+   * fix, and "Undo my changes" still goes back to the flow from before.
+   */
+  const saveRaw = () => {
+    if (!raw) return;
+    const read = readDraft(raw.text, draft.id, 'save');
+    if (!read.ok) { setRawStatus({ kind: 'problems', problems: read.problems }); return; }
+    setRawStatus(read.ignored.length ? { kind: 'note', text: ignoredNote(read.ignored)! } : null);
+    // A run asked for on the canvas still holds when the JSON left what the flow does as it was.
+    onSave(read.draft, runsExisting(read.draft));
+  };
+
+  const dirty = JSON.stringify(draft) !== baseline || (raw !== null && raw.text !== raw.from);
   useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
 
   const trigger = graph.nodes.find((n): n is Extract<FlowNode, { type: 'trigger' }> => n.type === 'trigger');
@@ -97,7 +144,13 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
   // Consent to run on what is there is for one preview: the graph it showed, as it was.
   const [runExisting, setRunExisting] = useState<string | null>(null);
   // Running on what is there is a backfill: a new scheduled flow's first run already covers it, and a flow that is off acts on nothing.
-  const canRunExisting = draft.enabled && (trigger?.on !== 'schedule' || Boolean(draft.id));
+  const canRun = (d: Draft) => d.enabled && (d.graph.nodes.find((n) => n.type === 'trigger')?.on !== 'schedule' || Boolean(d.id));
+  const canRunExisting = canRun(draft);
+  /** Whether to run on what is there when saving `d`: asked for on a preview of what it does now. */
+  const runsExisting = (d: Draft) => {
+    const behaves = behaviourKey(d.graph);
+    return runExisting === behaves && preview?.key === behaves && Boolean(preview.result.matched) && canRun(d);
+  };
 
   const node = graph.nodes.find((n) => n.id === selected) ?? null;
   const add = (type: StepType) => {
@@ -111,25 +164,41 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
     setGraph(to ? connect(graph, node.id, branch, to) : disconnect(graph, node.id, branch));
   };
   const general = problems.filter((p) => !p.node);
-  const blocked = busy || problems.length > 0 || !draft.name.trim();
+  const blocked = busy || (!raw && (problems.length > 0 || !draft.name.trim()));
 
   return (
     <form aria-label={draft.id ? 'Edit flow' : 'New flow'} className="flex min-h-0 flex-1 flex-col"
-      onSubmit={(e) => { e.preventDefault(); if (!blocked) onSave(draft, runExisting === key && canRunExisting && Boolean(fresh?.matched)); }}>
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (blocked) return;
+        if (raw) saveRaw();
+        else onSave(draft, runsExisting(draft));
+      }}>
       <div className="flex flex-wrap items-end gap-3 border-b px-4 py-3">
         <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}><Icon name="chevron-left" size={14} /> All flows</Button>
-        <label className="min-w-48 flex-1 space-y-1"><span className="text-xs font-medium text-muted-foreground">Name</span>
-          <Input aria-label="Flow name" value={draft.name} maxLength={100} placeholder="Statements to the gestoría" disabled={busy} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
-        <label className="flex items-center gap-2 pb-2 text-sm"><Checkbox aria-label="Flow is on" checked={draft.enabled} disabled={busy} onCheckedChange={(on) => setDraft({ ...draft, enabled: on === true })} /> On</label>
-        <label className="flex items-center gap-2 pb-2 text-sm"><Checkbox aria-label="Act again when a document gets a new version" checked={graph.versions === 'every'} disabled={busy}
-          onCheckedChange={(on) => setGraph({ ...graph, versions: on === true ? 'every' : 'first' })} /> Act again when a document gets a new version</label>
+        {raw ? <span className="flex-1" /> : <>
+          <label className="min-w-48 flex-1 space-y-1"><span className="text-xs font-medium text-muted-foreground">Name</span>
+            <Input aria-label="Flow name" value={draft.name} maxLength={100} placeholder="Statements to the gestoría" disabled={busy} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
+          <label className="flex items-center gap-2 pb-2 text-sm"><Checkbox aria-label="Flow is on" checked={draft.enabled} disabled={busy} onCheckedChange={(on) => setDraft({ ...draft, enabled: on === true })} /> On</label>
+          <label className="flex items-center gap-2 pb-2 text-sm"><Checkbox aria-label="Act again when a document gets a new version" checked={graph.versions === 'every'} disabled={busy}
+            onCheckedChange={(on) => setGraph({ ...graph, versions: on === true ? 'every' : 'first' })} /> Act again when a document gets a new version</label>
+        </>}
+        <Tabs value={raw ? 'raw' : 'canvas'} onValueChange={(v) => (v === 'raw' ? openRaw() : openCanvas())} className="pb-0.5">
+          <TabsList aria-label="Show the flow as">
+            <TabsTrigger value="canvas" disabled={busy}><Icon name="model" size={14} /> Canvas</TabsTrigger>
+            <TabsTrigger value="raw" disabled={busy}><Icon name="file-code" size={14} /> Raw JSON</TabsTrigger>
+          </TabsList>
+        </Tabs>
         <span className="ml-auto flex gap-2 pb-0.5">
           <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
           <Button type="submit" disabled={blocked}>{busy ? 'Saving…' : 'Save flow'}</Button>
         </span>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+      {raw ? (
+        <FlowRawEditor id={draft.id} text={raw.text} status={rawStatus} busy={busy}
+          onChange={(text) => { setRaw({ ...raw, text }); setRawStatus(null); }} onCheck={checkRaw} onReset={openRaw} />
+      ) : <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <div className="relative min-h-[320px] min-w-0 flex-1 overflow-hidden">
           <div role="toolbar" aria-label="Add a step" className="absolute top-2 left-2 z-10 flex flex-wrap gap-1 rounded-lg border bg-background/95 p-1 shadow-sm">
             {PALETTE.map((p) => (
@@ -172,7 +241,7 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
             runExisting={canRunExisting ? runExisting === key : null} onRunExisting={(on) => setRunExisting(on ? key : null)}
             scheduledNew={!draft.id && trigger?.on === 'schedule'} />
         </aside>
-      </div>
+      </div>}
     </form>
   );
 }

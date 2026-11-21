@@ -27,5 +27,5 @@ it('uses existing preview metadata and keeps the editable Details panel availabl
   fireEvent.click(screen.getByRole('button', { name: 'Details' }));
   await screen.findByText('Description');
   expect(screen.getByRole('region', { name: 'File information' }).textContent).toContain('1.0 kB');
-  expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/plugins', '/api/files/file', '/api/files/file/details']);
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/plugins', '/api/files/file', '/api/files/file/details', '/api/files/file/graph']);
 });

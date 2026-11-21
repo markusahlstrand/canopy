@@ -1,8 +1,9 @@
 # Design: Relationship intelligence (knowledge graph)
 
-> **Status:** design notes, not built. A future plugin plus a few core primitives.
-> This page captures a design conversation so the ideas aren't lost. Treat it as an RFC,
-> not documentation of shipped behaviour.
+> **Status:** the first slice is built — AI suggestions from documents into a per-space claims
+> graph, reviewed by people (see [What is built](#what-is-built-suggestions-from-documents)).
+> The rest of this page is still design: treat it as an RFC, not documentation of shipped
+> behaviour.
 
 ## The idea
 
@@ -229,6 +230,59 @@ are the same problem seen twice:
 3. **Vectorize** — the first real enhancement, once there are entities/claims worth embedding.
    Embed *entities* (name + aliases + key attributes), not just document chunks, so semantic
    dedup works. Turning it on is also when the external-search consumer (above) goes live.
+
+## What is built: suggestions from documents
+
+The first slice follows the principles above. It lives in the drive itself, not in a plugin yet.
+
+- **Vocabulary** (`packages/scope-drive/spec/ontology.ts`). It is closed and adopted, not invented:
+  schema.org `Person` / `Organization` / `Place`, contact and identity values (`email`,
+  `telephone`, `url`, `address`, `vatID`, `iban`), relationships (`worksFor`, `memberOf`,
+  `parentOrganization`, `location`), and the `Invoice` properties on the document itself
+  (`provider`, `customer`, `identifier`, `totalPaymentDue`, `paymentDueDate`, `dateIssued`).
+  Two locale packs add `es:nif` (NIF/NIE/CIF) and `se:orgnr` / `se:personnummer`. Every
+  predicate carries cardinality, temporality, `matchKey` and `sensitive`. Every value kind has a
+  normaliser that checks checksums (IBAN mod-97, NIF letter, Luhn).
+- **Storage** (migration 0018): `graph_entities` and `graph_claims` in the space's own SQLite.
+  A claim is RDF-star-shaped: subject (an entity or the document), predicate, and object (an entity
+  or a normalised value). It also carries the file and version it was read from, the quote,
+  extraction confidence, the model, `valid_time` (the document's date), `ingest_time`, and a
+  status of `suggested | accepted | rejected | superseded`. Match keys are claims too, looked up
+  by `(predicate, object_value)`, so there is no second table that can drift.
+- **Extraction** (`apps/drive-vertical/src/entity-extraction.ts`). A kernel job runs per file,
+  opt-in per space (`extractEntities`), separate from labelling because it costs more. It waits for
+  the text index and for the file to stop changing, and pays for the model once per version. A
+  quote the text does not contain is dropped and its claim's confidence capped. The scope checks
+  everything against the vocabulary and drops what does not fit.
+- **Reconcile** (`packages/scope-drive/src/graph.ts`) is deterministic, not the LLM. An entity is
+  matched by a match-key value first, then by its normalised name (case, accents and legal form
+  ignored). An identical triple already accepted is recorded as corroboration
+  (`auto:corroborates`); one already rejected is not asked again. Accepting a one-value predicate
+  supersedes the accepted value it differs from, which stays as history. A new version supersedes
+  the old version's open suggestions.
+- **Review**: the file's Details tab (per-claim and "accept all"), the space's Suggestions list
+  (surest first, grouped by file), and an entity card with its facts, documents and connections.
+- **Permission comes from provenance.** A claim, an entity or a connection is visible only
+  through a live file the caller can read. Connections are walked breadth-first over accepted
+  claims, with documents as hops ("issued by X, addressed to Y" ties X to Y). This is not one
+  recursive CTE, because every edge is gated by the kernel's file check.
+
+### Cross-space: per space, joined at read time
+
+The decision: **each space keeps its own graph; a cross-space view is assembled at read time
+from the spaces the reader can open.** No global edge store means no second permission system.
+The join key is the normalised match-key value: the same `vatID` / `es:nif` / `email` in two
+spaces is the same party. That join runs over the reader's own spaces only. Before it ships, the
+`sensitive` keys (`se:personnummer`) should be compared as keyed hashes (HMAC with a
+tenant secret), not plaintext. Inside one space they sit in plaintext beside the document text they
+came from, which the space already holds.
+
+### Not built yet
+
+- Merging two entities by hand (`merged_into` is in the schema and read paths already follow it).
+- Auto-promotion by trust and corroboration. Only identical-triple corroboration is automatic today.
+- `valid_to` intervals. Supersession is a status today, not a closed interval.
+- The cross-space read-time view, the core proposals inbox, and Vectorize-based semantic dedup.
 
 ## See also
 

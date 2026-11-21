@@ -109,6 +109,8 @@ export interface AutomationDeps {
   spaceBySlug(tenantId: string, slug: string): Promise<string | null>;
   /** Queue Document AI for a version, as `principal` (it decides whether the space has it on). */
   queueLabel(node: Node, principal: string, file: { id: string; name: string; versionId: string }): Promise<void>;
+  /** Queue entity extraction for a version, as `principal` (it decides whether the space has it on). */
+  queueExtract?(node: Node, principal: string, file: { id: string; name: string; versionId: string }): Promise<void>;
   /** Start (or join) a job run in a space. */
   start(node: Node, job: string, instance: string, payload: Record<string, unknown>): Promise<void>;
   /** The model for a flow's questions, or null where the runtime has none. */
@@ -186,7 +188,7 @@ export async function moveLegacyFlows(deps: AutomationDeps, node: Node, owner: S
   return moved;
 }
 
-/** The dispatcher: queue in, Document AI and flow runs out. */
+/** The dispatcher: queue in, Document AI, entity extraction and flow runs out. */
 export function automationJob(deps: AutomationDeps): JobHandler {
   return async (pass) => {
     const node = pass.payload as Node;
@@ -205,7 +207,11 @@ export function automationJob(deps: AutomationDeps): JobHandler {
         // Document AI for a new version, as the person who wrote it, or the owner for a sync or mail.
         if (item.trigger === 'arrived' && item.versionId === file.versionId) {
           const principal = item.actor ?? await deps.ownerPrincipal(node);
-          if (principal) await deps.queueLabel(node, principal, { id: file.fileId, name: file.name, versionId: file.versionId });
+          if (principal) {
+            const arrived = { id: file.fileId, name: file.name, versionId: file.versionId };
+            await deps.queueLabel(node, principal, arrived);
+            await deps.queueExtract?.(node, principal, arrived);
+          }
         }
         let started = 0;
         for (const flow of flows) {

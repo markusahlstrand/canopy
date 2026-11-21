@@ -5,6 +5,7 @@ import { capturesOn, copyPaths, flowGraph, isAction, reach, spacesOf, walk, type
 import type { DeliveryDetail, DeliveryView, FlowList, FlowPreview, FlowSpace, FlowView, PreviewMatch } from './flow-contract.js';
 import { alreadyHandled, FLOW_BACKFILL_JOB, FLOW_RUN_JOB } from './automation.js';
 import type { DirectoryFlow, FlowScopes, SaveFlow } from './flow-directory.js';
+import { flowSaveInput } from './flow-contract.js';
 
 export interface FlowScope {
   invoke<T>(operation: string, input?: Record<string, unknown>): Promise<T>;
@@ -34,13 +35,6 @@ export interface FlowAccess {
   start(scopeId: string, job: string, instance: string, payload: Record<string, unknown>): Promise<void>;
   tenantId: string;
 }
-
-const saveInput = z.object({
-  id: z.string().min(1).max(64).optional(),
-  name: z.string().trim().min(1).max(100),
-  enabled: z.boolean(),
-  graph: flowGraph,
-});
 
 const previewInput = z.object({ id: z.string().min(1).max(64).optional(), graph: flowGraph });
 
@@ -115,7 +109,7 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
 
   app.put('/api/flows', async (c) => {
     const access = await resolve(c);
-    const parsed = saveInput.safeParse(await c.req.json().catch(() => null));
+    const parsed = flowSaveInput.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) throw new HTTPException(400, { message: incomplete(parsed.error) });
     const input = parsed.data;
     const { managed, visible } = await seen(access);

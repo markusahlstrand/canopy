@@ -31,6 +31,9 @@ import { s3ItemsRequest } from '@canopy/connector-s3';
 import { categoryId, deliveryState, flowDelivery, legacyFlow } from './flows.js';
 export * from './flows.js';
 export * from './flow-graph.js';
+export * from './ontology.js';
+export * from './graph.js';
+import { graphClaim, graphConnection, graphEntity, graphExtraction } from './graph.js';
 
 /**
  * One path segment: a folder or file name, never a path.
@@ -867,6 +870,49 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     summary: 'Record which flow copied a file in', permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
     input: z.object({ fileId: z.string(), flowId: z.string(), sourceScope: z.string(), sourceFileId: z.string(), sourceVersionId: z.string() }),
     output: z.object({ ok: z.literal(true) }),
+  },
+
+  /**
+   * For the worker's entity extraction: what a model read in one version, as suggestions. Checked
+   * against the vocabulary here, not trusted from the caller; never served over HTTP.
+   */
+  'drive/record-graph-suggestions': {
+    summary: 'Record suggested graph claims read from a file version',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: graphExtraction,
+    output: z.object({ suggested: z.number().int(), corroborated: z.number().int(), dropped: z.number().int(), entities: z.number().int() }),
+  },
+  /** What was read from a file: its open suggestions and what has been decided about them. */
+  'drive/file-graph': {
+    summary: 'Read the graph claims read from a file',
+    permission: { key: 'drive:read', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string() }),
+    output: z.object({ claims: z.array(graphClaim), canWrite: z.boolean() }),
+    http: { method: 'GET', path: '/files/{fileId}/graph' },
+  },
+  /** Accept or reject suggestions read from a file. Accepting makes them facts; rejecting keeps them from being asked again. */
+  'drive/decide-graph-claims': {
+    summary: 'Accept or reject graph claims read from a file',
+    permission: { key: 'drive:write', entity: 'file', idFrom: 'fileId' },
+    input: z.object({ fileId: z.string(), claimIds: z.array(z.string()).min(1).max(100), decision: z.enum(['accept', 'reject']) }),
+    output: z.object({ changed: z.number().int(), claims: z.array(graphClaim) }),
+    http: { method: 'POST', path: '/files/{fileId}/graph/decisions' },
+  },
+  /** The space's review queue: open suggestions from files the caller can read, surest first. */
+  'drive/graph-suggestions': {
+    summary: 'List open graph suggestions',
+    permission: 'drive:read',
+    input: z.object({ limit: z.number().int().min(1).max(100).optional() }),
+    output: z.object({ claims: z.array(graphClaim) }),
+    http: { method: 'GET', path: '/graph/suggestions' },
+  },
+  /** One entity: what is known about it, which documents it is in, and who or what it connects to. */
+  'drive/graph-entity': {
+    summary: 'Read one graph entity with its claims and connections',
+    permission: 'drive:read',
+    input: z.object({ entityId: z.string(), depth: z.number().int().min(1).max(4).optional() }),
+    output: z.object({ entity: graphEntity, claims: z.array(graphClaim), connections: z.array(graphConnection) }),
+    http: { method: 'GET', path: '/graph/entities/{entityId}' },
   },
 
   'drive/keep-version': {
