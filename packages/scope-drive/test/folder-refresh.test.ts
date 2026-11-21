@@ -170,3 +170,14 @@ it('puts a check a budget stopped back in the queue, still checking, for the nex
   await w.ask(id, { force: true }); await w.take();
   expect((await w.checked(id, 0, 'a3doc went away', true)).refresh).toMatchObject({ state: 'failed', error: 'a3doc went away' });
 });
+
+it('queues a request made in the same instant a check finished', async () => {
+  const w = await world();
+  await w.connect();
+  const id = await w.folder('Facturas');
+  await w.ask(id); await w.take(); await w.checked(id, 0);
+  // Same clock reading: the new request must not read as answered by the check just recorded.
+  expect((await w.ask(id, { force: true })).decision).toBe('start');
+  expect(await w.take()).toEqual({ folders: [{ folderId: id, path: 'Facturas' }] });
+  expect((await w.ask(id)).decision).toBe('joined');
+});

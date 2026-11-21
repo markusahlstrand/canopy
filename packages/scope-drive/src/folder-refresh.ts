@@ -35,7 +35,7 @@ export const TAKEN_RETRY_MS = 3 * 60_000;
 /** A request older than this is no longer handed to a connector: whoever asked has moved on. */
 export const REQUEST_EXPIRES_MS = 10 * 60_000;
 
-type Row = { folder_id: string; requested_at: string | null; taken_at: string | null; checked_at: string | null; error: string | null; changes: number };
+type Row = { folder_id: string; pending: number; requested_at: string | null; taken_at: string | null; checked_at: string | null; error: string | null; changes: number };
 type Ops = typeof driveOperations;
 type RefreshOp = 'drive/request-folder-refresh' | 'drive/settle-folder-refresh' | 'drive/source-folder-requests' | 'drive/source-folder-checked';
 
@@ -52,9 +52,8 @@ function folderPath(ctx: OperationContext, folderId: string): string {
 const rowOf = (ctx: OperationContext, folderId: string) =>
   ctx.sql.query<Row>('SELECT * FROM drive_source_refresh WHERE folder_id = ?', [folderId])[0];
 
-/** A check asked for and not answered since. */
-const asked = (row: Row | undefined): row is Row & { requested_at: string } =>
-  !!row?.requested_at && (!row.checked_at || row.checked_at < row.requested_at);
+/** A check asked for and not answered since: an explicit flag, never two timestamps compared. */
+const asked = (row: Row | undefined): row is Row & { requested_at: string } => row?.pending === 1 && !!row.requested_at;
 
 /** Asked, and still worth waiting for: neither forgotten by every connector nor abandoned by one. */
 function underWay(row: Row | undefined, now: number): boolean {
@@ -72,8 +71,8 @@ export function refreshOf(ctx: OperationContext, folderId: string, path: string,
 /** Record a check's end on the folder, and tell whoever is looking at it. */
 function finish(ctx: OperationContext, folderId: string, error: string | null, changes: number) {
   ctx.sql.exec(
-    `INSERT INTO drive_source_refresh (folder_id, checked_at, error, changes) VALUES (?, ?, ?, ?)
-     ON CONFLICT(folder_id) DO UPDATE SET checked_at = excluded.checked_at, error = excluded.error, changes = excluded.changes`,
+    `INSERT INTO drive_source_refresh (folder_id, pending, checked_at, error, changes) VALUES (?, 0, ?, ?, ?)
+     ON CONFLICT(folder_id) DO UPDATE SET pending = 0, checked_at = excluded.checked_at, error = excluded.error, changes = excluded.changes`,
     [folderId, ctx.now(), error, changes],
   );
   ctx.emit({ type: 'drive.folder-checked', schemaVersion: 1, entity: folderRef(folderId), piiClass: 'none', payload: { folderId } });
@@ -94,8 +93,8 @@ export const folderRefreshHandlers = {
       return { decision: 'fresh' as const, provider, refresh: refreshOf(ctx, input.folderId, path, now) };
     }
     ctx.sql.exec(
-      `INSERT INTO drive_source_refresh (folder_id, requested_at) VALUES (?, ?)
-       ON CONFLICT(folder_id) DO UPDATE SET requested_at = excluded.requested_at, taken_at = NULL`,
+      `INSERT INTO drive_source_refresh (folder_id, pending, requested_at) VALUES (?, 1, ?)
+       ON CONFLICT(folder_id) DO UPDATE SET pending = 1, requested_at = excluded.requested_at, taken_at = NULL`,
       [input.folderId, ctx.now()],
     );
     return { decision: 'start' as const, provider, refresh: refreshOf(ctx, input.folderId, path, now) };
@@ -118,7 +117,7 @@ export const folderRefreshHandlers = {
     const now = ms(ctx.now());
     const rows = ctx.sql.query<Row & { path: string }>(
       `SELECT r.*, f.path FROM drive_source_refresh r JOIN drive_folders f ON f.id = r.folder_id
-        WHERE r.requested_at IS NOT NULL AND (r.checked_at IS NULL OR r.checked_at < r.requested_at)
+        WHERE r.pending = 1 AND r.requested_at IS NOT NULL
         ORDER BY r.requested_at`,
     );
     const due = rows
