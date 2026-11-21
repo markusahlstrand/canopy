@@ -46,6 +46,8 @@ export interface PreviewMatch {
   needsAnswer: boolean;
   /** A saved flow already acted on it (or it is waiting for approval): running again skips it. */
   handled: boolean;
+  /** Where its copies would file it, as 'space › path', when a copy works that out from its folders. */
+  filedIn?: string[];
 }
 
 /** `POST /api/flows/preview`, with `{ id?, graph }`. Never calls a model. */

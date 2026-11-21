@@ -378,3 +378,32 @@ it('lists every live file at or below a folder, with its folder path and labels'
   expect((await list(a, { after: first.next!, limit: 1 })).entries.map((f) => f.id)).toEqual([inB]);
   await expect(list('01J00000000000000000000000')).rejects.toThrow();
 });
+
+it('makes a missing folder path where a flow files by month, which a3doc takes up when it lands', async () => {
+  const w = await world();
+  // A plain space: made level by level, and found again the second time.
+  const made = await w.human.invoke<{ id: string; path: string }>('drive/ensure-folder-path', { parentId: ROOT_FOLDER_ID, path: 'DOC/2026/09' });
+  expect(made.path).toBe('DOC/2026/09');
+  expect((await w.human.invoke<{ id: string }>('drive/ensure-folder-path', { parentId: ROOT_FOLDER_ID, path: ' DOC / 2026 / 09 ' })).id).toBe(made.id);
+  await expect(w.human.invoke('drive/ensure-folder-path', { parentId: ROOT_FOLDER_ID, path: 'DOC/../x' })).rejects.toThrow('not a folder name');
+
+  // An a3doc space that can upload makes it too; its own folder at that path adopts it.
+  await w.connect(true);
+  const month = await w.human.invoke<{ id: string }>('drive/ensure-folder-path', { parentId: made.id, path: '10' });
+  await w.land(w.upsert('c1', 'DOC', 'folder'));
+  await w.land(w.upsert('c2', 'DOC/2026', 'folder'));
+  const landed = await w.land(w.upsert('c3', 'DOC/2026/09/10', 'folder'));
+  expect(landed.entity.entityId).toBe(month.id);
+  // A plain create is still refused there, and in a space that can't upload, so is this.
+  await expect(w.human.invoke('drive/create-folder', { parentId: ROOT_FOLDER_ID, name: 'Other' })).rejects.toThrow("a3doc can't create folders");
+  await w.connect(false);
+  await expect(w.human.invoke('drive/ensure-folder-path', { parentId: ROOT_FOLDER_ID, path: 'DOC/2026/11' })).rejects.toThrow("a3doc can't create folders");
+  // What is already there is still found.
+  expect((await w.human.invoke<{ id: string }>('drive/ensure-folder-path', { parentId: ROOT_FOLDER_ID, path: 'DOC/2026/09' })).id).toBe(made.id);
+});
+
+it('refuses to make folders in a Qonto space', async () => {
+  const w = await world();
+  await w.connect(false, 'connection', 'canopy.qonto');
+  await expect(w.human.invoke('drive/ensure-folder-path', { parentId: ROOT_FOLDER_ID, path: 'X/2026' })).rejects.toThrow('Qonto');
+});

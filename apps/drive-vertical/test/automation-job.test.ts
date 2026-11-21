@@ -411,6 +411,43 @@ describe('flows a space kept before flows moved out', () => {
   });
 });
 
+describe('filing by the folders a document came from', () => {
+  it('copies into {year}/{month} below the chosen folder, making the folders once', async () => {
+    const invoices = await folder(source, 'Client invoices');
+    const y2026 = await folder(source, '2026', invoices);
+    const sep = await folder(source, '09', y2026), oct = await folder(source, '10', y2026);
+    const flow = saveGraph('By month', {
+      versions: 'first',
+      nodes: [
+        { id: 't', type: 'trigger', on: 'arrived', spaces: ['qonto'] },
+        { id: 'month', type: 'check', condition: { field: 'folder', op: 'matches', path: 'Client invoices/{year}/{month}' } },
+        { id: 'file-it', type: 'copy', space: 'a3docs', folderId: bancos, alsoIn: [], subfolder: '{year}/{month}' },
+      ],
+      edges: [
+        { from: 't', to: 'month', branch: 'next' },
+        { from: 'month', to: 'file-it', branch: 'yes' },
+      ],
+    });
+    const a = await upload(source, sep, '2026-09-03 Acme 1.txt', 'one');
+    const b = await upload(source, sep, '2026-09-20 Acme 2.txt', 'two');
+    const c = await upload(source, oct, '2026-10-01 Acme 3.txt', 'three');
+    const loose = await upload(source, y2026, '2026 Acme 4.txt', 'not in a month');
+    await settle(source, target);
+
+    const t = await scopeOf(target);
+    const at = async (path: string) => (await t.invoke<{ id: string } | null>('drive/folder-by-path', { path }))?.id;
+    expect((await filesIn(target, (await at('Bancos/2026/09'))!)).map((f) => f.name).sort()).toEqual(['2026-09-03 Acme 1.txt', '2026-09-20 Acme 2.txt']);
+    expect((await filesIn(target, (await at('Bancos/2026/10'))!)).map((f) => f.name)).toEqual(['2026-10-01 Acme 3.txt']);
+    const byFile = new Map((await deliveries(source, flow.id)).map((d) => [d.fileId, d]));
+    expect(byFile.get(a.id)).toMatchObject({ state: 'done', detail: { done: { 'file-it': { folder: 'Bancos/2026/09' } } } });
+    expect(byFile.get(b.id)?.state).toBe('done');
+    expect(byFile.get(c.id)).toMatchObject({ state: 'done', detail: { done: { 'file-it': { folder: 'Bancos/2026/10' } } } });
+    // A level short: the pattern doesn't fit, so nothing reaches the copy.
+    expect(byFile.get(loose.id)).toBeUndefined();
+    directory.deleteFlow(sql, flow.id);
+  });
+});
+
 describe('parseAnswer', () => {
   it('reads yes or no, and nothing else', () => {
     expect(parseAnswer('{"answer": "YES"}')).toBe(true);

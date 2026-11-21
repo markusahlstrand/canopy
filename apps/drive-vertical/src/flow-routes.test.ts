@@ -32,7 +32,7 @@ function app(opts: { flows?: { flow: DirectoryFlow; scopes: FlowScopes }[]; bank
   const a3docs: FlowScope = { invoke: vi.fn(async (op: string, input?: Record<string, unknown>) => {
     if (op === 'drive/flow-deliveries') return { deliveries: [] };
     if (op === 'drive/get-source') return { source: { provider: 'canopy.a3doc', canUpload: true } };
-    if (input?.folderId === 'bancos') return { id: 'bancos', canWrite: true };
+    if (input?.folderId === 'bancos') return { id: 'bancos', path: 'Bancos', canWrite: true };
     if (input?.folderId === 'read-only') return { id: 'read-only', canWrite: false };
     throw new Error('not_found');
   }) as FlowScope['invoke'] };
@@ -217,6 +217,31 @@ describe('previewing a flow', () => {
     } });
     const body = await (await a.call('POST', '/api/flows/preview', { id: 'f1', graph: graph() })).json() as FlowPreview;
     expect(body.matches).toMatchObject([{ fileId: 'a', handled: true, needsAnswer: false }]);
+  });
+
+  it('says where its copies file a document by its own year and month, and when it cannot tell', async () => {
+    const byMonth = graph({
+      nodes: [
+        { id: 't', type: 'trigger', on: 'arrived', spaces: ['bank'] },
+        { id: 'month', type: 'check', condition: { field: 'folder', op: 'matches', path: 'Client invoices/{year}/{month}' } },
+        { id: 'copy', type: 'copy', space: 'a3docs', folderId: 'bancos', alsoIn: [], subfolder: '{year}/{month}', alsoInPaths: ['Facturas/{year}'] },
+        { id: 'gone', type: 'copy', space: 'a3docs', folderId: 'deleted', alsoIn: [], subfolder: '{year}', alsoInPaths: ['Ventas/{year}'] },
+      ],
+      edges: [
+        { from: 't', to: 'month', branch: 'next' },
+        { from: 'month', to: 'copy', branch: 'yes' },
+        { from: 'copy', to: 'gone', branch: 'next' },
+      ],
+    });
+    const a = app({ bank: { 'drive/flow-candidates': { files: [facts('a', 'F-12.pdf', { folderPath: 'Client invoices/2026/09' })], next: null } } });
+    const body = await (await a.call('POST', '/api/flows/preview', { graph: byMonth })).json() as FlowPreview;
+    expect(body.matches[0]!.filedIn).toEqual([
+      'Gestoría › Bancos/2026/09',
+      'Gestoría › Facturas/2026',
+      // Its folder is gone: no path below it is shown as if it were at the top. Categories by path still are.
+      "Gestoría › can't tell: the folder it copies to isn't there",
+      'Gestoría › Ventas/2026',
+    ]);
   });
 
   it('refuses a graph that cannot run, and spaces the caller does not own', async () => {

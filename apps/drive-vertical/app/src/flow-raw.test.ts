@@ -129,4 +129,36 @@ describe('a flow as JSON', () => {
     const loose = edit((v) => { (v.graph as { edges: unknown[] }).edges = []; });
     expect(readDraft(loose, 'f1', 'canvas').ok).toBe(true);
   });
+
+  it('saves a flow that files by year and month, and refuses a {name} nothing takes, as the route does', () => {
+    const byMonth: Draft = {
+      id: 'f2', name: 'Invoices to gestoría', enabled: true,
+      graph: {
+        nodes: [
+          { id: 'trigger', type: 'trigger', on: 'arrived', spaces: ['qonto'], position: { x: 0, y: 0 } },
+          { id: 'check-1', type: 'check', condition: { field: 'folder', op: 'matches', path: 'Client invoices/{year}/{month}' }, position: { x: 300, y: 0 } },
+          { id: 'copy-1', type: 'copy', space: 'a3doc', folderId: 'f-ventas', alsoIn: [], subfolder: '{year}/{month}', alsoInPaths: ['Facturas/{year}'], position: { x: 600, y: 0 } },
+        ],
+        edges: [{ from: 'trigger', to: 'check-1', branch: 'next' }, { from: 'check-1', to: 'copy-1', branch: 'yes' }],
+        versions: 'first',
+      },
+    };
+    const text = JSON.stringify({ name: byMonth.name, enabled: byMonth.enabled, graph: byMonth.graph });
+    // Everything new comes back as it was: the pattern, the subfolder and the categories by path.
+    expect(readDraft(text, 'f2', 'save')).toEqual({ ok: true, draft: byMonth, ignored: [] });
+    expect(draftJson(byMonth)).toContain('"subfolder": "{year}/{month}"');
+
+    // The copy on the No side of the pattern has no {year} to use: refused before it is sent.
+    const onNo = JSON.parse(text) as { name: string; enabled: boolean; graph: { edges: { branch: string }[] } };
+    onNo.graph.edges[1]!.branch = 'no';
+    const refused = readDraft(JSON.stringify(onNo), 'f2', 'save');
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.problems[0]).toMatch(/^graph › nodes › copy-1: Nothing takes \{year\} on every way here/);
+    // The canvas still draws it, with the problem left for it to show on the step.
+    expect(readDraft(JSON.stringify(onNo), 'f2', 'canvas').ok).toBe(true);
+
+    for (const value of [JSON.parse(text), onNo] as { name: string; enabled: boolean; graph: unknown }[]) {
+      expect(readDraft(JSON.stringify(value), 'f2', 'save').ok).toBe(flowSaveInput.safeParse(value).success);
+    }
+  });
 });

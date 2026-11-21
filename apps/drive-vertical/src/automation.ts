@@ -30,6 +30,8 @@ import { errorCodeOf, substratError } from '@substrat-run/contracts';
 import type { ExecutorRetryPolicy, JobHandler, JobPassContext } from '@substrat-run/kernel';
 import type { ModelAttribution, ModelHost } from '@substrat-run/vertical-host/model';
 import {
+  capturesOn,
+  copyPaths,
   graphMatches,
   isAction,
   legacyFlowDefinition,
@@ -49,6 +51,8 @@ import type { DirectoryFlow, FlowScopes, SaveFlow } from './flow-directory.js';
 import type { DeliveryDetail } from './flow-contract.js';
 
 export const AUTOMATION_JOB = 'automation';
+/** The top folder of every space. */
+const ROOT_FOLDER = 'root';
 export const FLOW_RUN_JOB = 'flow-run';
 export const FLOW_BACKFILL_JOB = 'flow-backfill';
 /** The dispatcher's one instance per space. */
@@ -319,6 +323,8 @@ export function flowRunJob(deps: AutomationDeps): JobHandler {
       route = walk(flow.graph, facts, answers);
     }
     const path = route.path;
+    // By step: what the folder patterns before it on the path took from the document, where its copies go.
+    const captures = capturesOn(flow.graph, path, facts);
     const actions = path.map((id) => byId.get(id)).filter((n): n is ActionNode => !!n && isAction(n));
     if (!actions.length) {
       if (p.approved) await pass.step('record-unmatched', () => record('skipped', { reason: 'the document no longer reaches an action', path, answers }, ['approved']));
@@ -334,7 +340,7 @@ export function flowRunJob(deps: AutomationDeps): JobHandler {
       if (pending(beforeWait).length) {
         const claim = await pass.step('claim', () => record('running', { path, answers, done, at: wait }, ['none', 'failed']));
         if (!claim.changed) return finish(pass, 'taken');
-        const failure = await act(pass, deps, node, flow, author, facts, pending(beforeWait), done);
+        const failure = await act(pass, deps, node, flow, author, facts, captures, pending(beforeWait), done);
         if (failure !== null) return fail(failure, { at: wait });
         const proposed = await pass.step('propose', () => record('proposed', { path, answers, done, at: wait }, ['running']));
         return finish(pass, proposed.changed ? 'proposed' : 'taken');
@@ -348,7 +354,7 @@ export function flowRunJob(deps: AutomationDeps): JobHandler {
     const approved = Boolean(wait && p.approved);
     const claim = await pass.step('claim', () => record('running', { path, answers, done, approved }, p.approved ? ['approved'] : ['none', 'failed']));
     if (!claim.changed) return finish(pass, 'taken');
-    const failure = await act(pass, deps, node, flow, author, facts, pending(actions), done);
+    const failure = await act(pass, deps, node, flow, author, facts, captures, pending(actions), done);
     if (failure !== null) return fail(failure, { approved });
     await pass.step('record-done', () => record('done', { path, answers, done, approved }));
     await pass.step('outcome', () => directory.recordOutcome(flow.id, { ok: true }));
@@ -368,7 +374,7 @@ export function flowRunJob(deps: AutomationDeps): JobHandler {
 /** Run actions in path order, each once (its result lands in `done`). The first failure stops them, and is returned. */
 async function act(
   pass: JobPassContext, deps: AutomationDeps, node: Node, flow: DirectoryFlow, author: string, facts: FileFactsRow,
-  actions: ActionNode[], done: Record<string, Record<string, unknown>>,
+  captures: ReadonlyMap<string, Readonly<Record<string, string>>>, actions: ActionNode[], done: Record<string, Record<string, unknown>>,
 ): Promise<string | null> {
   for (const action of actions) {
     let result: Record<string, unknown>;
@@ -376,7 +382,7 @@ async function act(
       result = await pass.step(`act:${action.id}`, async (): Promise<Record<string, unknown>> => {
         try {
           if (action.type === 'label') return await addLabel(await deps.scopeAs(node, author), facts.fileId, action.value);
-          return await copy(deps, node, flow, author, facts, action);
+          return await copy(deps, node, flow, author, facts, action, captures.get(action.id) ?? {});
         } catch (error) {
           // Refused for good: no retry will change the answer, so it is this delivery's answer.
           if (terminal(error)) return { error: messageOf(error) };
@@ -419,18 +425,38 @@ function candidateName(name: string, n: number): string {
  * Copy the file's current version into a folder of a space, as the author there. Idempotent: a
  * file this flow already made for this source file is found again by its origin and finished,
  * never made twice; a name someone else's file holds gets a numbered sibling.
+ *
+ * A subfolder or category the copy names by path (`{year}/{month}`, filled from `captures`) is
+ * made where it is missing, so a retry finds the same folders and the same file again.
  */
 async function copy(
   deps: AutomationDeps, node: Node, flow: DirectoryFlow, author: string, facts: FileFactsRow,
-  action: { space: string; folderId: string; alsoIn: string[] },
+  step: ActionNode & { type: 'copy' }, captures: Readonly<Record<string, string>>,
 ) {
   if (!facts.blobRef || !facts.versionId) throw substratError('conflict', 'this file has no stored bytes to copy');
-  const targetScope = await deps.spaceBySlug(node.tenantId, action.space);
-  if (!targetScope) throw substratError('not_found', `there is no space '${action.space}'`);
+  let paths: { subfolder: string; alsoInPaths: string[] };
+  try {
+    paths = copyPaths(step, captures);
+  } catch (error) {
+    throw substratError('validation_failed', `can't tell where to file it: ${messageOf(error)}`);
+  }
+  const targetScope = await deps.spaceBySlug(node.tenantId, step.space);
+  if (!targetScope) throw substratError('not_found', `there is no space '${step.space}'`);
   const target: Node = { tenantId: node.tenantId, scopeId: targetScope };
   const writer = await deps.principalIn(target, flow.authorSub);
-  if (!writer) throw substratError('forbidden', `whoever saved the flow is not a member of '${action.space}'`);
+  if (!writer) throw substratError('forbidden', `whoever saved the flow is not a member of '${step.space}'`);
   const there = await deps.scopeAs(target, writer);
+  const ensure = (parentId: string, path: string) =>
+    there.invoke<{ id: string; path: string }>('drive/ensure-folder-path', { parentId, path });
+  const folder = paths.subfolder ? await ensure(step.folderId, paths.subfolder) : null;
+  const extra: string[] = [];
+  for (const path of paths.alsoInPaths) extra.push((await ensure(ROOT_FOLDER, path)).id);
+  const action = {
+    space: step.space, folderId: folder?.id ?? step.folderId,
+    alsoIn: [...new Set([...step.alsoIn, ...extra])].filter((id) => id !== (folder?.id ?? step.folderId)),
+  };
+  // Where it went, by path, when the flow worked it out: the delivery shows it.
+  const filed = folder || extra.length ? { folder: folder?.path ?? null, alsoIn: paths.alsoInPaths } : {};
 
   const origin = { flowId: flow.id, sourceScope: node.scopeId, sourceFileId: facts.fileId, sourceVersionId: facts.versionId };
   let fileId: string | null = null, name = facts.name, earlier = false;
@@ -442,7 +468,7 @@ async function copy(
     if (ours && file.current_version_id && details.origin!.sourceVersionId === facts.versionId) {
       // The bytes made it on an earlier try; what may not have is the send on to a3doc.
       const sent = await forward(there, file.id, action.alsoIn);
-      return { space: action.space, fileId: file.id, name, already: true, ...(sent === null ? {} : { sent }) };
+      return { space: action.space, fileId: file.id, name, already: true, ...filed, ...(sent === null ? {} : { sent }) };
     }
     if (ours) { fileId = file.id; earlier = Boolean(file.current_version_id); }
     else if (!file.current_version_id && !details.origin) fileId = file.id;
@@ -462,7 +488,7 @@ async function copy(
   const sent = await forward(there, fileId, action.alsoIn, true);
   // The target's own automation sees the copy now rather than at the next sweep.
   await deps.start(target, AUTOMATION_JOB, DISPATCH_INSTANCE, target as unknown as Record<string, unknown>).catch(() => {});
-  return { space: action.space, fileId, name, sent: sent ?? false };
+  return { space: action.space, fileId, name, ...filed, sent: sent ?? false };
 }
 
 /**

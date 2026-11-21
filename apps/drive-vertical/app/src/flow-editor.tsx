@@ -298,6 +298,7 @@ function MatchPreview({ draft, previewKey, preview, fresh, names, busy, onPrevie
                   <span className="min-w-0">
                     <span className="block truncate">{m.name}</span>
                     <span className="block truncate text-xs text-muted-foreground">{names.space(m.space)} › {folderLabel(m.folderPath)}{m.category ? ` · ${names.category(m.category)}` : ''}</span>
+                    {m.filedIn?.map((where) => <span key={where} className="block truncate text-xs text-muted-foreground">→ {where}</span>)}
                   </span>
                   {m.handled ? <span className="shrink-0 text-xs text-muted-foreground">Already done</span>
                     : m.needsAnswer ? <span className="shrink-0 text-xs text-muted-foreground">If AI says yes</span> : null}

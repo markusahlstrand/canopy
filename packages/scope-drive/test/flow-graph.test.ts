@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  capturesOn, copyPaths, fillTemplate, folderCaptures, patternProblem, templateProblem,
   flowGraph, graphMatches, graphProblems, legacyToGraph, legacyFlowDefinition, reach, reactsTo, scheduleDue, spacesOf, walk,
   type FileFacts, type FlowGraph,
 } from '../spec/model.js';
@@ -125,5 +126,106 @@ describe('a flow from before graphs', () => {
     expect(walk(graph, facts({ folderPath: 'Other' })).path).toEqual(['trigger', 'check-1']);
     const auto = legacyToGraph(legacyFlowDefinition.parse({ trigger: { on: 'arrived' }, actions: [{ type: 'label', value: 'x' }], mode: 'auto' }), 'bank');
     expect(auto.edges).toEqual([{ from: 'trigger', to: 'action-1', branch: 'next' }]);
+  });
+});
+
+describe('folder patterns and path templates', () => {
+  it('takes names from a folder path that fits, level by level', () => {
+    expect(folderCaptures('Client invoices/{year}/{month}', 'Client invoices/2026/09')).toEqual({ year: '2026', month: '09' });
+    expect(folderCaptures('*/{year}', 'Supplier invoices/2026')).toEqual({ year: '2026' });
+    expect(folderCaptures('Client invoices/{year}/{month}', 'Client invoices/2026')).toBeNull();
+    expect(folderCaptures('Client invoices/{year}/{month}', 'Client invoices/2026/09/extra')).toBeNull();
+    expect(folderCaptures('Client invoices/{year}', 'client invoices/2026')).toBeNull();
+    expect(folderCaptures('', '')).toEqual({});
+  });
+
+  it('fills a template, and says which name is missing', () => {
+    expect(fillTemplate('{year}/{month}', { year: '2026', month: '09' })).toBe('2026/09');
+    expect(fillTemplate(' Facturas / {year}-{month} ', { year: '2026', month: '09' })).toBe('Facturas/2026-09');
+    expect(fillTemplate('', {})).toBe('');
+    expect(() => fillTemplate('{year}/{month}', { year: '2026' })).toThrow('{month}');
+    expect(() => fillTemplate('{x}', { x: '..' })).toThrow('not a folder path');
+  });
+
+  it('names what is wrong with a pattern or template', () => {
+    expect(patternProblem('Client invoices/{year}/{month}')).toBeNull();
+    expect(patternProblem('Invoices/{year}-x')).toMatch(/whole folder level/);
+    expect(patternProblem('{Year}')).toMatch(/lowercase/);
+    expect(patternProblem('{y}/{y}')).toMatch(/twice/);
+    expect(templateProblem('{year}/{month}')).toBeNull();
+    expect(templateProblem('{year')).toMatch(/without its pair/);
+    expect(templateProblem('../{year}')).toMatch(/\.\./);
+    // A folder name can't hold a backslash: refused when the flow is saved, not each time it runs.
+    expect(templateProblem('DOC\\{year}')).toMatch(/has a \\ in it/);
+  });
+
+  const byMonth = (copy: Record<string, unknown> = {}): FlowGraph => ({
+    versions: 'first',
+    nodes: [
+      { id: 't', type: 'trigger', on: 'arrived', spaces: ['qonto'] },
+      { id: 'pdf', type: 'check', condition: { field: 'extension', values: ['pdf'] } },
+      { id: 'month', type: 'check', condition: { field: 'folder', op: 'matches', path: 'Client invoices/{year}/{month}' } },
+      { id: 'copy', type: 'copy', space: 'a3doc', folderId: 'root', alsoIn: [], subfolder: 'DOC/{year}/{month}', ...copy },
+    ],
+    edges: [
+      { from: 't', to: 'pdf', branch: 'next' },
+      { from: 'pdf', to: 'month', branch: 'yes' },
+      { from: 'month', to: 'copy', branch: 'yes' },
+    ],
+  });
+
+  it('accepts a copy whose names a pattern takes on every way to it', () => {
+    expect(graphProblems(byMonth())).toEqual([]);
+  });
+
+  it('refuses a name nothing takes, or one taken only on No', () => {
+    expect(messages(byMonth({ subfolder: '{year}/{quarter}' }))[0]).toMatch(/Nothing takes \{quarter\}/);
+    const onNo = byMonth();
+    onNo.edges[2] = { from: 'month', to: 'copy', branch: 'no' };
+    expect(messages(onNo)[0]).toMatch(/Nothing takes \{year\}/);
+  });
+
+  it('refuses a name taken on one way in but not the other', () => {
+    const graph = byMonth();
+    graph.edges.push({ from: 'pdf', to: 'copy', branch: 'no' });
+    expect(messages(graph)[0]).toMatch(/Nothing takes \{year\}/);
+  });
+
+  it('works out where a document goes from its own path', () => {
+    const graph = byMonth({ alsoInPaths: ['Ventas/{year}', ' '] });
+    const doc = facts({ name: 'F-12.pdf', folderPath: 'Client invoices/2026/09' });
+    const { path } = walk(graph, doc);
+    expect(path).toEqual(['t', 'pdf', 'month', 'copy']);
+    const copy = graph.nodes.find((n) => n.type === 'copy')!;
+    expect(copyPaths(copy as Extract<typeof copy, { type: 'copy' }>, capturesOn(graph, path, doc).get('copy')!)).toEqual({ subfolder: 'DOC/2026/09', alsoInPaths: ['Ventas/2026'] });
+    expect(walk(graph, facts({ name: 'F-12.pdf', folderPath: 'Client invoices/2026' })).path).toEqual(['t', 'pdf', 'month']);
+  });
+
+  it('files each copy by what was taken before it, even when a later check takes the name again', () => {
+    const graph: FlowGraph = {
+      versions: 'first',
+      nodes: [
+        { id: 't', type: 'trigger', on: 'arrived', spaces: ['qonto'] },
+        { id: 'first', type: 'check', condition: { field: 'folder', op: 'matches', path: '{year}/*' } },
+        { id: 'early', type: 'copy', space: 'a3doc', folderId: 'root', alsoIn: [], subfolder: 'DOC/{year}' },
+        { id: 'again', type: 'check', condition: { field: 'folder', op: 'matches', path: '*/{year}' } },
+        { id: 'late', type: 'copy', space: 'a3doc', folderId: 'root', alsoIn: [], subfolder: 'DOC/{year}' },
+      ],
+      edges: [
+        { from: 't', to: 'first', branch: 'next' },
+        { from: 'first', to: 'early', branch: 'yes' },
+        { from: 'early', to: 'again', branch: 'next' },
+        { from: 'again', to: 'late', branch: 'yes' },
+      ],
+    };
+    expect(graphProblems(graph)).toEqual([]);
+    const doc = facts({ folderPath: '2026/09' });
+    const { path } = walk(graph, doc);
+    expect(path).toEqual(['t', 'first', 'early', 'again', 'late']);
+    const captures = capturesOn(graph, path, doc);
+    const copyOf = (id: string) => graph.nodes.find((n) => n.id === id) as Extract<FlowGraph['nodes'][number], { type: 'copy' }>;
+    expect(copyPaths(copyOf('early'), captures.get('early')!).subfolder).toBe('DOC/2026');
+    expect(copyPaths(copyOf('late'), captures.get('late')!).subfolder).toBe('DOC/09');
+    expect(captures.get('first')).toEqual({});
   });
 });

@@ -65,6 +65,7 @@ describe('the derived route table', () => {
       'POST /api/folders/:folderId/move',
       'POST /api/folders/:folderId/s3-change',
       'POST /api/folders/:folderId/shares',
+      'POST /api/folders/:parentId/ensure-path',
       'POST /api/folders/:parentId/folders',
       'PUT /api/files/:fileId/category',
       'PUT /api/plugins',

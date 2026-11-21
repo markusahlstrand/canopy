@@ -174,7 +174,9 @@ const list = (items: string[], joiner = ' or ') =>
 /** A check as the question it asks of a document. */
 export function describeCondition(c: FlowCondition, names: Pick<Names, 'category'>): string {
   switch (c.field) {
-    case 'folder': return c.op === 'is' ? `Is it in ${c.path || 'the top level'}?` : c.path ? `Is it in ${c.path}, or a folder in it?` : 'Is it anywhere in the space?';
+    case 'folder':
+      if (c.op === 'matches') return `Is its folder like ${c.path || 'the top level'}?`;
+      return c.op === 'is' ? `Is it in ${c.path || 'the top level'}?` : c.path ? `Is it in ${c.path}, or a folder in it?` : 'Is it anywhere in the space?';
     case 'name': return c.value.trim() ? (c.op === 'contains' ? `Does its name contain ${quoted(c.value)}?` : `Does its name match ${quoted(c.value)}?`) : 'Does its name…?';
     case 'extension': return c.values.length ? `Is it a ${list(c.values.map((v) => v.replace(/^\./, '').toUpperCase()))}?` : 'Is it a… file?';
     case 'category': return c.values.length ? `Is it a ${list(c.values.map(names.category))}?` : 'Is it in a category…?';
@@ -199,7 +201,9 @@ export function describeStep(node: FlowNode, names: Names): string {
     case 'copy': {
       if (!node.space) return 'Copy to…';
       const folder = node.folderId ? names.folder(node.space, node.folderId) : undefined;
-      return `Copy to ${names.space(node.space)}${folder ? ` › ${folder}` : folder === '' ? ' › Top level' : ''}`;
+      const sub = node.subfolder?.trim();
+      const where = folder && sub ? `${folder}/${sub}` : sub || folder;
+      return `Copy to ${names.space(node.space)}${where ? ` › ${where}` : folder === '' ? ' › Top level' : ''}`;
     }
     case 'label': return node.value.trim() ? `Add label ${quoted(node.value.trim())}` : 'Add a label…';
   }
