@@ -20,10 +20,11 @@ import { alreadyReadBy, EXTRACT_ENTITIES_JOB, extractEntitiesJob, manualExtractI
 import { mountExtract } from './extract-routes.js';
 import { isLockedName } from './editable-text.js';
 import { AUTOMATION_JOB, automationJob, DISPATCH_INSTANCE, FLOW_BACKFILL_JOB, flowBackfillJob, FLOW_RUN_JOB, flowRunJob, type AutomationDeps, type Bytes } from './automation.js';
-import { mountFlows } from './flow-routes.js';
+import { mountFlows, type FlowAccess } from './flow-routes.js';
+import { assistantAccess, mountAssistantMcp } from './assistant-mcp.js';
 import * as flowDirectory from './flow-directory.js';
 import type { DirectoryFlow, FlowScopes, SaveFlow } from './flow-directory.js';
-import { scheduleDue, triggerOf } from '@canopy/scope-drive/spec/model';
+import { driveOperations, scheduleDue, triggerOf } from '@canopy/scope-drive/spec/model';
 import { DEFAULT_ASSISTANT_MODEL, mountAssistant } from './assistant.js';
 /**
  * The drive as a deployable Substrat vertical — sandbox-clean and control-plane-less:
@@ -72,7 +73,7 @@ import {
 } from '@substrat-run/adapter-cloudflare';
 import type { DurableObjectNamespace, DurableObjectStub } from '@cloudflare/workers-types';
 import { ulid, type ScopeStub } from '@substrat-run/kernel';
-import { invocationLog, kickFlags, mountLiveReads, mountPlatformSurface, readRoutedNode, RouterAssertionError } from '@substrat-run/vertical-host';
+import { invocationLog, kickFlags, mountLiveReads, mountPlatformSurface, problemResponse, readRoutedNode, RouterAssertionError } from '@substrat-run/vertical-host';
 import {
   AuthConfigError,
   IdentityDO as PlatformIdentityDO,
@@ -960,7 +961,7 @@ mountSource(app, async (c) => {
  * Flows belong to the install: a caller sees and edits those whose every space they own. Each
  * route reaches the spaces as the caller, and a flow saved acts as the caller's login.
  */
-mountFlows(app, async (c) => {
+async function flowAccessFor(c: Context<{ Bindings: Env }>): Promise<FlowAccess> {
   const env = c.env;
   const { base, sub, label } = await subjectOf(c.req.raw, env);
   const host = hostFor(env);
@@ -989,7 +990,15 @@ mountFlows(app, async (c) => {
       }));
     },
   };
-});
+}
+mountFlows(app, flowAccessFor);
+/**
+ * The same flow routes, off the public table: the MCP endpoint's flow tools call them in-process
+ * as the caller, so an assistant meets exactly the checks the app does.
+ */
+const flowRoutes = new Hono<{ Bindings: Env }>();
+flowRoutes.onError((err, c) => problemResponse(c, err));
+mountFlows(flowRoutes, flowAccessFor);
 mountExtract(app, async (c) => {
   const env = c.env;
   const principal = await principalFor(env, c.req.raw);
@@ -1656,12 +1665,46 @@ mountLiveReads(app, {
   },
 });
 
+/**
+ * `/api/mcp`, for assistants (Claude Desktop and the like), bound to no space (#418): every space
+ * this login is a member of, each drive tool naming the `space` it acts in, plus the install's flows
+ * (`assistant-mcp.ts`). Signed in is all this asks; each call then acts as the caller's principal in
+ * the space it names, and a flow tool as the caller on the app's own flow routes.
+ */
+mountAssistantMcp<{ Bindings: Env }>(app, driveOperations, async (c) => {
+  const env = c.env;
+  // Who is asking, as a login: a 401 here is what starts the client's sign-in.
+  const { base, sub } = await subjectOf(c.req.raw, env);
+  const host = hostFor(env);
+  const directory = identityDo(env, base);
+  let executionCtx: Context['executionCtx'] | undefined;
+  try { executionCtx = c.executionCtx; } catch { executionCtx = undefined; }
+  const access = assistantAccess({
+    listSites: () => directory.listSites(),
+    resolveSiteScope: async (slug) => {
+      const scope = await directory.resolveSiteScope(slug);
+      return scope && scopeId.safeParse(scope).success ? scope : null;
+    },
+    principalIn: (scope, login) => directory.resolvePrincipal(scope, login),
+    settings: (scope) => directory.readSpaceSettings(scope),
+    scopeAs: (principal, scope) => host.getScope(principalId.parse(principal), base.tenantId, scopeId.parse(scope)),
+  }, sub, (method, path, body) => {
+    // The caller's own request headers (their session, the router's assertion), as JSON.
+    const headers = new Headers(c.req.raw.headers);
+    headers.delete('content-length');
+    headers.set('content-type', 'application/json');
+    const init: RequestInit = { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) };
+    return Promise.resolve(flowRoutes.fetch(new Request(new URL(path, c.req.url), init), env, executionCtx));
+  });
+  return { access, ids: base };
+});
+
 mountApi(app, async (c): Promise<ScopeStub> => {
   const env = c.env as Env;
   const principal = await principalFor(env, c.req.raw);
   if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
   const node = await nodeFor(c.req.raw, env);
   return hostFor(env).getScope(principal, node.tenantId, node.scopeId);
-});
+}, { mcp: false });
 
 export default app;
