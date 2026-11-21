@@ -1558,7 +1558,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             </div>
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'partial' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</p> : null}
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'error' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</p> : null}
-      {mirrored && view === 'drive' && !allFiles && !offline ? <FolderFreshness refresh={freshness.refresh} asking={freshness.asking} label={sourceLabel(source?.provider)} onCheck={freshness.check} /> : null}
+      {mirrored && view === 'drive' && !allFiles && !offline ? <FolderFreshness refresh={freshness.refresh} asking={freshness.asking} stalled={freshness.stalled} label={sourceLabel(source?.provider)} onCheck={freshness.check} /> : null}
       {labelNotice ? <p role="status" className="-mt-2 mb-3 flex items-center gap-2 text-xs text-muted-foreground">
         <Icon name="sparkles" className="size-3.5" />{labelNotice.text}
         {labelNotice.more ? <button type="button" className="ml-auto underline" disabled={offline} onClick={labelNotice.more}>Continue</button> : null}

@@ -3,7 +3,8 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ScopeId, TenantId } from '@substrat-run/contracts';
 import type { ScopeStub } from '@substrat-run/kernel';
-import { mountSource, type DriveSource } from './source-routes';
+import { FOLDER_RECHECK_WINDOW_MS, mountSource, type DriveSource } from './source-routes';
+import { TAKEN_RETRY_MS } from '@canopy/scope-drive';
 
 const tenantId = '01JZ00000000000000000TEN01' as TenantId, scopeId = '01JZ00000000000000000SC001' as ScopeId;
 const CONNECTION = '01JZ00000000000000000C0N01', OTHER = '01JZ00000000000000000C0N02';
@@ -204,11 +205,15 @@ describe('checking a folder when it is opened', () => {
     expect(w.invoke).toHaveBeenLastCalledWith('drive/settle-folder-refresh', { folderId: 'f1', outcome: 'checked' });
   });
 
+  it('keeps a page asking for longer than the drive keeps a check under way', () => {
+    expect(FOLDER_RECHECK_WINDOW_MS).toBeGreaterThan(TAKEN_RETRY_MS);
+  });
+
   it('never records a folder as checked for a connector that checks folders itself, when its sweep did not take it', async () => {
     const w = folderWorld('start', {}, true);
     // The poll went well, but this connector answers folders itself: the drive's record says the
     // request still waits (a sweep takes only a few), so the page keeps asking.
-    expect((await w.open()).body).toEqual({ refresh: refresh('checking'), retryAfterMs: 5_000 });
+    expect((await w.open()).body).toEqual({ refresh: refresh('checking'), retryAfterMs: 5_000, recheckWindowMs: FOLDER_RECHECK_WINDOW_MS });
     expect(w.paths).toEqual(['/internal/connections/sync']);
     expect(w.invoke.mock.calls.map(([op]) => op)).toEqual(['drive/request-folder-refresh', 'drive/request-folder-refresh']);
     expect(w.invoke).toHaveBeenLastCalledWith('drive/request-folder-refresh', { folderId: 'f1', throttleMs: 120_000 });
@@ -218,7 +223,7 @@ describe('checking a folder when it is opened', () => {
     const fresh = folderWorld('fresh');
     expect((await fresh.open()).body).toEqual({ refresh: refresh('checked') });
     const joined = folderWorld('joined');
-    expect((await joined.open()).body).toEqual({ refresh: refresh('checking'), retryAfterMs: 5_000 });
+    expect((await joined.open()).body).toEqual({ refresh: refresh('checking'), retryAfterMs: 5_000, recheckWindowMs: FOLDER_RECHECK_WINDOW_MS });
     const none = folderWorld('unsupported');
     expect((await none.open()).body).toEqual({ refresh: null });
     expect([...fresh.paths, ...joined.paths, ...none.paths]).toEqual([]);
@@ -226,7 +231,7 @@ describe('checking a folder when it is opened', () => {
 
   it('leaves the request waiting when the platform polled a minute ago or a pass is under way', async () => {
     const throttled = folderWorld('start', { status: 429 });
-    expect((await throttled.open()).body).toMatchObject({ refresh: { state: 'checking' }, retryAfterMs: 5_000 });
+    expect((await throttled.open()).body).toMatchObject({ refresh: { state: 'checking' }, retryAfterMs: 5_000, recheckWindowMs: FOLDER_RECHECK_WINDOW_MS });
     const busy = folderWorld('start', { bindings: [{ connectionId: CONNECTION, outcome: 'in-progress', at: '2026-11-21T10:00:00.000Z', pending: true }] });
     expect((await busy.open()).body).toMatchObject({ refresh: { state: 'checking' } });
     expect([...throttled.invoke.mock.calls, ...busy.invoke.mock.calls].some(([op]) => op === 'drive/settle-folder-refresh')).toBe(false);

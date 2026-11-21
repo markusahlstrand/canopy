@@ -6,6 +6,7 @@ import type { ScopeStub } from '@substrat-run/kernel';
 import { bindConnection, ConnectionRequestError, listBindings, syncConnections, unbindConnection, upsertConnection, type ConnectionRelayAccess } from '@substrat-run/vertical-host';
 import { a3docSecret, A3DOC_VERTICAL_PROVIDER } from '@canopy/connector-a3docs';
 import { qontoSecret, QONTO_VERTICAL_PROVIDER } from '@canopy/connector-qonto';
+import { TAKEN_RETRY_MS, UNTAKEN_RETRY_MS } from '@canopy/scope-drive';
 
 export interface DriveSource { provider: string; connectionId: string; account: string; user?: string; folder: string; canUpload: boolean; boundAt: string }
 
@@ -14,10 +15,20 @@ export interface SourceSyncReport { at: string; complete: boolean; total: number
 
 /** Where one folder of a connected space stands against its source; see `drive/request-folder-refresh`. */
 export interface FolderRefresh { folderId: string; path: string; state: 'unchecked' | 'checking' | 'checked' | 'failed'; checkedAt: string | null; error: string | null; changes: number }
-/** What asking for a folder check answers: the folder's state, and when to ask again while it is checking. */
-export interface FolderRefreshAnswer { refresh: FolderRefresh | null; retryAfterMs?: number }
+/**
+ * What asking for a folder check answers: the folder's state and, while it is checking, how soon to
+ * ask again and for how long to keep asking before the page stops waiting.
+ */
+export interface FolderRefreshAnswer { refresh: FolderRefresh | null; retryAfterMs?: number; recheckWindowMs?: number }
 /** How soon a page showing "Checking…" asks again: cheap, since only `start` reaches the source. */
 export const FOLDER_RECHECK_MS = 5_000;
+/**
+ * How long a page keeps asking while a check shows "Checking…": as long as the drive can keep a
+ * request under way (a connector that took it and died is given {@link TAKEN_RETRY_MS}, one nobody
+ * took {@link UNTAKEN_RETRY_MS} before a re-ask starts it again), plus one more ask. Derived, so
+ * the page never gives up on a check the drive still calls under way.
+ */
+export const FOLDER_RECHECK_WINDOW_MS = TAKEN_RETRY_MS + UNTAKEN_RETRY_MS + FOLDER_RECHECK_MS;
 
 /** What one poll of this space's binding did; `pending` means more is left for a later sync. */
 export interface SourceSyncOutcome { outcome: 'landed' | 'unchanged' | 'failed' | 'in-progress'; at: string; pending: boolean; error?: string }
@@ -144,7 +155,7 @@ export function mountSource<E extends Env>(
       'drive/request-folder-refresh', { folderId, force: body.force === true, ...(throttleMs ? { throttleMs } : {}) },
     );
     const answer = (refresh: FolderRefresh | null): FolderRefreshAnswer =>
-      ({ refresh, ...(refresh?.state === 'checking' ? { retryAfterMs: FOLDER_RECHECK_MS } : {}) });
+      ({ refresh, ...(refresh?.state === 'checking' ? { retryAfterMs: FOLDER_RECHECK_MS, recheckWindowMs: FOLDER_RECHECK_WINDOW_MS } : {}) });
     if (asked.decision !== 'start' || !asked.provider) return c.json(answer(asked.refresh));
     const settle = async (outcome: 'checked' | 'failed', error?: string) =>
       (await scope.invoke<{ refresh: FolderRefresh }>('drive/settle-folder-refresh', { folderId, outcome, ...(error ? { error: error.slice(0, 500) } : {}) })).refresh;

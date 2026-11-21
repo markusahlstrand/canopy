@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon, cn } from '@canopy/ui';
 import { refreshSourceFolder, type FolderRefresh } from './api';
 
-/** How many times a page asks again while a check stays "Checking…": about two and a half minutes. */
-export const MAX_RECHECKS = 30;
+/**
+ * How long the page keeps asking while a check shows "Checking…", when the server names no window
+ * of its own (it sends `recheckWindowMs`, derived from how long it keeps a request under way).
+ */
+export const DEFAULT_RECHECK_WINDOW_MS = 4 * 60_000 + 5_000;
 /** A check this recent that landed changes is this ask's own, so the listing is read again. */
 const JUST_CHECKED_MS = 15_000;
 /** How often the "Checked 2 min ago" wording moves on. */
@@ -27,7 +30,7 @@ export function freshnessText(refresh: FolderRefresh | null, label: string, now 
     case 'checking': return `Checking ${label} for changes…`;
     case 'checked': return `Checked ${checkedAgo(refresh.checkedAt!, now)}.`;
     case 'failed': return `Couldn't check ${label}${refresh.checkedAt ? ` (${checkedAgo(refresh.checkedAt, now)})` : ''}: ${refresh.error ?? 'no reason given'}. Showing what's already here.`;
-    case 'unchecked': return null;
+    case 'unchecked': return `Not checked against ${label} yet.`;
   }
 }
 
@@ -42,13 +45,19 @@ export function useFolderFreshness(folderId: string, enabled: boolean, onChecked
   const [refresh, setRefresh] = useState<FolderRefresh | null>(null);
   const latest = useRef<FolderRefresh | null>(null);
   const [asking, setAsking] = useState(false);
+  /** A check the page stopped waiting for: still "checking" on the server, but not spinning here. */
+  const [stalled, setStalled] = useState(false);
+  /** When the current run of "Checking…" answers began, so the page knows when to stop asking. */
+  const since = useRef<number | null>(null);
   const generation = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const checked = useRef(onChecked);
   checked.current = onChecked;
 
-  const ask = useCallback(async (force: boolean, gen: number, attempt: number) => {
+  const ask = useCallback(async (force: boolean, gen: number) => {
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    if (force) since.current = null;
+    setStalled(false);
     setAsking(true);
     try {
       const answer = await refreshSourceFolder(folderId, force);
@@ -60,8 +69,15 @@ export function useFolderFreshness(folderId: string, enabled: boolean, onChecked
       const ended = answer.refresh && answer.refresh.state !== 'checking';
       const justLanded = ended && answer.refresh!.changes > 0 && !!answer.refresh!.checkedAt && Date.now() - Date.parse(answer.refresh!.checkedAt) < JUST_CHECKED_MS;
       if (ended && (previous?.state === 'checking' || justLanded)) checked.current();
-      if (answer.refresh?.state === 'checking' && answer.retryAfterMs && attempt < MAX_RECHECKS) {
-        timer.current = setTimeout(() => void ask(false, gen, attempt + 1), answer.retryAfterMs);
+      if (answer.refresh?.state === 'checking' && answer.retryAfterMs) {
+        since.current ??= Date.now();
+        const deadline = since.current + (answer.recheckWindowMs ?? DEFAULT_RECHECK_WINDOW_MS);
+        // Past the window the server would have answered or started over: stop spinning, and let
+        // the person ask again rather than show "Checking…" with a disabled button for good.
+        if (Date.now() + answer.retryAfterMs <= deadline) timer.current = setTimeout(() => void ask(false, gen), answer.retryAfterMs);
+        else setStalled(true);
+      } else {
+        since.current = null;
       }
     } catch {
       // Offline, or a worker without the route: say nothing rather than something wrong.
@@ -73,18 +89,20 @@ export function useFolderFreshness(folderId: string, enabled: boolean, onChecked
   useEffect(() => {
     const gen = ++generation.current;
     latest.current = null;
+    since.current = null;
     setRefresh(null);
-    if (enabled) void ask(false, gen, 0);
+    setStalled(false);
+    if (enabled) void ask(false, gen);
     return () => { generation.current++; if (timer.current) clearTimeout(timer.current); };
   }, [folderId, enabled, ask]);
 
-  const check = useCallback(() => void ask(true, generation.current, 0), [ask]);
-  return { refresh, asking, check };
+  const check = useCallback(() => void ask(true, generation.current), [ask]);
+  return { refresh, asking, stalled, check };
 }
 
 /** The folder's line: when it was last checked against its source, and a button to check it now. */
-export function FolderFreshness({ refresh, asking, label, disabled, onCheck }: {
-  refresh: FolderRefresh | null; asking: boolean; label: string; disabled?: boolean; onCheck: () => void;
+export function FolderFreshness({ refresh, asking, stalled = false, label, disabled, onCheck }: {
+  refresh: FolderRefresh | null; asking: boolean; stalled?: boolean; label: string; disabled?: boolean; onCheck: () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -92,8 +110,11 @@ export function FolderFreshness({ refresh, asking, label, disabled, onCheck }: {
     return () => clearInterval(t);
   }, []);
   useEffect(() => setNow(Date.now()), [refresh]);
-  const checking = refresh?.state === 'checking' || (asking && !refresh);
-  const text = freshnessText(refresh, label, now) ?? (checking ? `Checking ${label} for changes…` : null);
+  const waitedOut = stalled && refresh?.state === 'checking';
+  const checking = (refresh?.state === 'checking' && !waitedOut) || (asking && !refresh);
+  const text = waitedOut
+    ? `No answer from ${label} yet. Check now to ask again.`
+    : freshnessText(refresh, label, now) ?? (checking ? `Checking ${label} for changes…` : null);
   if (!text) return null;
   const failed = refresh?.state === 'failed';
   return <div role="status" aria-live="polite" className="-mt-2 mb-3 flex items-center gap-2 text-xs text-muted-foreground" data-testid="folder-freshness">

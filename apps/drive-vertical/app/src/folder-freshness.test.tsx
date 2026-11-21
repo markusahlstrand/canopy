@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { checkedAgo, FolderFreshness, freshnessText, useFolderFreshness } from './folder-freshness';
-import type { FolderRefresh } from './api';
+import { checkedAgo, DEFAULT_RECHECK_WINDOW_MS, FolderFreshness, freshnessText, useFolderFreshness } from './folder-freshness';
+import type { FolderRefresh, FolderRefreshAnswer } from './api';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -11,11 +11,11 @@ const state = (s: FolderRefresh['state'], extra: Partial<FolderRefresh> = {}): F
 
 function Harness({ folderId = 'f1', enabled = true, onChecked }: { folderId?: string; enabled?: boolean; onChecked: () => void }) {
   const f = useFolderFreshness(folderId, enabled, onChecked);
-  return <FolderFreshness refresh={f.refresh} asking={f.asking} label="a3doc" onCheck={f.check} />;
+  return <FolderFreshness refresh={f.refresh} asking={f.asking} stalled={f.stalled} label="a3doc" onCheck={f.check} />;
 }
 
 /** The worker's answers, in order; the last repeats. */
-function answers(...list: { refresh: FolderRefresh | null; retryAfterMs?: number }[]) {
+function answers(...list: FolderRefreshAnswer[]) {
   const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => Response.json(list.length > 1 ? list.shift() : list[0]));
   vi.stubGlobal('fetch', fetcher);
   return fetcher;
@@ -31,7 +31,7 @@ it('words the folder\'s state, and how long ago it was checked', () => {
   expect(freshnessText(state('checked', { checkedAt: '2026-11-21T09:59:50.000Z' }), 'a3doc', NOW)).toBe('Checked just now.');
   expect(freshnessText(state('failed', { checkedAt: '2026-11-21T09:59:50.000Z', error: 'a3doc wants MFA' }), 'a3doc', NOW))
     .toBe("Couldn't check a3doc (just now): a3doc wants MFA. Showing what's already here.");
-  expect(freshnessText(state('unchecked'), 'a3doc', NOW)).toBeNull();
+  expect(freshnessText(state('unchecked'), 'a3doc', NOW)).toBe('Not checked against a3doc yet.');
   expect(freshnessText(null, 'a3doc', NOW)).toBeNull();
 });
 
@@ -82,4 +82,37 @@ it('asks nothing for a folder that is not a source\'s, and says nothing when the
   view.rerender(<Harness onChecked={() => {}} />);
   await waitFor(() => expect(fetcher).toHaveBeenCalled());
   await waitFor(() => expect(screen.queryByTestId('folder-freshness')).toBeNull());
+});
+
+it('keeps asking for the window the server names, then stops spinning and lets the person ask again', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const fetcher = answers({ refresh: state('checking'), retryAfterMs: 5_000, recheckWindowMs: 20_000 });
+  render(<Harness onChecked={() => {}} />);
+  await screen.findByText('Checking a3doc for changes…');
+  const button = () => screen.getByRole('button', { name: 'Check this folder in a3doc now' }) as HTMLButtonElement;
+  expect(button().disabled).toBe(true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+  // Asked at 0, 5, 10, 15 and 20 seconds; the next would land past the window.
+  await screen.findByText('No answer from a3doc yet. Check now to ask again.');
+  expect(fetcher).toHaveBeenCalledTimes(5);
+  expect(button().disabled).toBe(false);
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(fetcher).toHaveBeenCalledTimes(5);
+  // Asking again is a forced check, and the page waits a whole window again.
+  fireEvent.click(button());
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(6));
+  expect(bodies(fetcher)[5]).toEqual(['/source/folders/f1/refresh', { force: true }]);
+  await screen.findByText('Checking a3doc for changes…');
+});
+
+it('waits longer by default than the server keeps a taken request checking', () => {
+  // TAKEN_RETRY_MS in @canopy/scope-drive is three minutes; the server's own window says so too.
+  expect(DEFAULT_RECHECK_WINDOW_MS).toBeGreaterThan(3 * 60_000);
+});
+
+it('keeps the line and its button for a folder that has never been checked', async () => {
+  answers({ refresh: state('unchecked') });
+  render(<Harness onChecked={() => {}} />);
+  await screen.findByText('Not checked against a3doc yet.');
+  expect((screen.getByRole('button', { name: 'Check this folder in a3doc now' }) as HTMLButtonElement).disabled).toBe(false);
 });
