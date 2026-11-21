@@ -36,6 +36,7 @@ import { actionsFor, type PluginMenuItem, type SortKey, type SortState } from '.
 
 type SubEntityTableProps = DetailedHTMLProps<HTMLAttributes<SubEntityTable<FileItem, SortKey>>, SubEntityTable<FileItem, SortKey>> & {
   label?: string;
+  empty?: string;
   selectable?: boolean;
   paging?: 'pages' | 'more' | 'scroll';
   'row-select'?: boolean;
@@ -104,7 +105,7 @@ const canDropOn = (folder: FileItem, dragged: FileItem[]) =>
 const NARROW = '(max-width: 767px)';
 const narrowNow = () => !!window.matchMedia?.(NARROW).matches;
 
-function useNarrow(): boolean {
+export function useNarrow(): boolean {
   const [narrow, setNarrow] = useState(narrowNow);
   useEffect(() => {
     const query = window.matchMedia?.(NARROW);

@@ -15,6 +15,8 @@ import { confirmDiscardDrafts, useUnsavedDraft } from './drafts';
 import { FlowEditor, type Draft } from './flow-editor';
 import { describeFlow, newGraph, type Names } from './flow-graph-edit';
 import { forgetFolders, message } from './flow-inspector';
+import { FlowApprovals } from './flow-approvals';
+import { openSpaceFile } from './space-navigation';
 
 const STATE_TEXT: Record<DeliveryView['state'], string> = {
   proposed: 'Waiting for you', approved: 'Approved', running: 'Running', done: 'Done', failed: 'Failed', dismissed: 'Dismissed', skipped: 'Skipped',
@@ -34,12 +36,14 @@ const deliveryKey = (d: DeliveryView) => `${d.space}:${d.flowId}:${d.fileId}:${d
 const decide = (d: DeliveryView, decision: 'approve' | 'dismiss' | 'retry') =>
   decideDelivery({ space: d.space, flowId: d.flowId, fileId: d.fileId, versionId: d.versionId }, decision);
 
-export function FlowsDialog({ open, onOpenChange, space = null, here = null }: {
+export function FlowsDialog({ open, onOpenChange, space = null, here = null, onOpenFile }: {
   open: boolean; onOpenChange: (open: boolean) => void;
   /** Start filtered to this space, and start new flows watching it. */
   space?: string | null;
   /** The space this tab is in: what a new flow watches when the list is not filtered. */
   here?: string | null;
+  /** Preview a file of the space this tab is in; false when it could not (a draft kept it). */
+  onOpenFile?: (fileId: string) => boolean | void;
 }) {
   const [list, setList] = useState<FlowList | null>(null);
   const [deliveries, setDeliveries] = useState<DeliveryView[]>([]);
@@ -90,8 +94,11 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null }: {
   const shown = filter ? flows.filter((f) => f.spaces.some((s) => s.slug === filter)) : flows;
   const shownIds = new Set(shown.map((f) => f.id));
   const relevant = filter ? deliveries.filter((d) => d.space === filter || shownIds.has(d.flowId)) : deliveries;
-  const proposals = relevant.filter((d) => d.state === 'proposed');
   const history = relevant.filter((d) => d.state !== 'proposed');
+  // What flows did lately, newest first: when it changes, a proposal came or was decided, and the
+  // proposals table reads again. Unchanged, it keeps what it has rather than re-reading every look.
+  const lately = deliveries.map((d) => `${deliveryKey(d)}:${d.state}:${d.updatedAt}`).join('|');
+  const include = filter ? { key: `${filter}|${[...shownIds].join(',')}`, test: (d: DeliveryView) => d.space === filter || shownIds.has(d.flowId) } : null;
   const filterSpaces = [...new Map([...(list?.spaces ?? []), ...flows.flatMap((f) => f.spaces)].map((s) => [s.slug, s.name])).entries()];
 
   const close = (next: boolean) => {
@@ -100,6 +107,12 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null }: {
     onOpenChange(next);
   };
   const edit = (f: FlowView) => setEditing({ id: f.id, name: f.name, enabled: f.enabled, graph: f.graph });
+  // A document here opens in this tab's preview; one in another space opens that space on it.
+  const openDocument = (d: DeliveryView) => {
+    if (busy) return;
+    if (d.space === here && onOpenFile) { if (onOpenFile(d.fileId) !== false) onOpenChange(false); return; }
+    if (openSpaceFile(d.space, d.fileId)) onOpenChange(false);
+  };
 
   return (
     <Dialog open={open} onOpenChange={close}>
@@ -133,23 +146,8 @@ export function FlowsDialog({ open, onOpenChange, space = null, here = null }: {
         ) : (
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4 text-sm">
             {!list ? (error ? null : <p role="status" className="text-muted-foreground">Loading flows…</p>) : <>
-              {proposals.length ? (
-                <section aria-label="Waiting for approval" className="space-y-2">
-                  <h3 className="text-xs font-medium text-muted-foreground">Waiting for you</h3>
-                  <ul className="space-y-2">
-                    {proposals.map((d) => (
-                      <li key={deliveryKey(d)} className="flex items-center justify-between gap-2 rounded-lg border p-2">
-                        <span className="min-w-0"><span className="block truncate font-medium">{d.fileName ?? 'A file'}</span>
-                          <span className="block truncate text-xs text-muted-foreground">{spaceName(d.space)} · {d.flowName}</span></span>
-                        <span className="flex shrink-0 gap-1">
-                          <Button type="button" size="sm" disabled={busy} onClick={() => void act(() => decide(d, 'approve'), 'Approved. It runs in a moment.')}>Approve</Button>
-                          <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => void act(() => decide(d, 'dismiss'))}>Dismiss</Button>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
+              <FlowApprovals spaceName={spaceName} include={include} refresh={lately}
+                onDecided={() => void load()} onOpen={openDocument} />
 
               <section aria-label="Flows" className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">

@@ -990,6 +990,10 @@ async function flowAccessFor(c: Context<{ Bindings: Env }>): Promise<FlowAccess>
   const { base, sub, label } = await subjectOf(c.req.raw, env);
   const host = hostFor(env);
   const directory = identityDo(env, base);
+  // Drive a space's due runs after the response, as the runs just started there need.
+  const driveFlows = (scope: string) => defer(c, host.runDueJobs(base.tenantId, scopeId.parse(scope)).catch((error: unknown) => {
+    console.error('drive.flow.run-failed', { error: error instanceof Error ? error.message : String(error) });
+  }));
   return {
     sub,
     author: label,
@@ -1006,13 +1010,12 @@ async function flowAccessFor(c: Context<{ Bindings: Env }>): Promise<FlowAccess>
     },
     newId: () => ulid(),
     now: () => new Date().toISOString(),
-    start: async (scope, job, instance, payload) => {
+    start: async (scope, job, instance, payload, options) => {
       const node = { tenantId: base.tenantId, scopeId: scopeId.parse(scope) };
       await host.startJobRun(node.tenantId, node.scopeId, { moduleId: DRIVE_MODULE_ID, job, instance, payload });
-      await defer(c, host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
-        console.error('drive.flow.run-failed', { error: error instanceof Error ? error.message : String(error) });
-      }));
+      if (options?.drive !== false) await driveFlows(scope);
     },
+    drive: (scope) => driveFlows(scope),
   };
 }
 mountFlows(app, flowAccessFor);

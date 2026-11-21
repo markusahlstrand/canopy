@@ -1713,7 +1713,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* scrolling region */}
       </div>{/* the column beside the rail */}
 
-      <FlowsDialog open={flowsOpen} onOpenChange={setFlowsOpen} here={liveSpace} />
+      <FlowsDialog open={flowsOpen} onOpenChange={setFlowsOpen} here={liveSpace} onOpenFile={fileId => {
+        if (activePluginId) { if (!exitPluginApp()) return false; changePreview(fileId); }
+        else if (!setPreviewing(fileId)) return false;
+      }} />
       <SuggestionsDialog open={suggestionsOpen && !offline} onOpenChange={setSuggestionsOpen} onOpenFile={fileId => {
         if (activePluginId) { if (!exitPluginApp()) return; changePreview(fileId); }
         else if (!setPreviewing(fileId)) return;

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
+import { substratError } from '@substrat-run/contracts';
 import type { FlowGraph } from '@canopy/scope-drive/spec/model';
 import { mountFlows, type FlowAccess, type FlowScope, type FlowSite, type FlowStore } from './flow-routes';
 import type { DirectoryFlow, FlowScopes } from './flow-directory';
-import type { DeliveryView, FlowList, FlowPreview, FlowView } from './flow-contract';
+import { DECIDE_BATCH_LIMIT, type DecisionResults, type DeliveryView, type FlowList, type FlowPreview, type FlowView } from './flow-contract';
 
 const graph = (over: Partial<FlowGraph> = {}): FlowGraph => ({
   versions: 'first',
@@ -21,7 +22,7 @@ const stored = (id: string, scopes: FlowScopes, over: Partial<DirectoryFlow> = {
 });
 
 /** Ada owns `bank` and `a3docs`, and is only a member of `shared`. */
-function app(opts: { flows?: { flow: DirectoryFlow; scopes: FlowScopes }[]; bank?: Record<string, unknown>; start?: FlowAccess['start'] } = {}) {
+function app(opts: { flows?: { flow: DirectoryFlow; scopes: FlowScopes }[]; bank?: Record<string, unknown>; start?: FlowAccess['start']; drive?: boolean } = {}) {
   const bankInvoke = vi.fn(async (op: string, input?: Record<string, unknown>) => {
     if (opts.bank && op in opts.bank) {
       const answer = opts.bank[op];
@@ -48,11 +49,12 @@ function app(opts: { flows?: { flow: DirectoryFlow; scopes: FlowScopes }[]; bank
     delete: vi.fn(async () => {}),
   };
   const start = vi.fn(opts.start ?? (async () => {}));
-  const access: FlowAccess = { sub: 'ada', author: 'Ada', tenantId: 't', sites: async () => sites, store, newId: () => 'new-id', now: () => 'now', start };
+  const drive = vi.fn(async () => {});
+  const access: FlowAccess = { sub: 'ada', author: 'Ada', tenantId: 't', sites: async () => sites, store, newId: () => 'new-id', now: () => 'now', start, ...(opts.drive ? { drive } : {}) };
   const hono = new Hono();
   mountFlows(hono, async () => access);
   const call = (method: string, path: string, body?: unknown) => hono.request(path, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-  return { call, bankInvoke, store, start };
+  return { call, bankInvoke, store, start, drive };
 }
 
 describe('listing flows', () => {
@@ -170,10 +172,145 @@ describe('deliveries', () => {
     expect((await done.call('POST', '/api/flow-deliveries/decide', { ...key, decision: 'retry' })).status).toBe(409);
   });
 
+  it('says where a proposal is and where it would go, and lists it without when it cannot tell', async () => {
+    const byMonth = graph({
+      nodes: [
+        { id: 't', type: 'trigger', on: 'arrived', spaces: ['bank'] },
+        { id: 'month', type: 'check', condition: { field: 'folder', op: 'matches', path: 'Invoices/{year}/{month}' } },
+        { id: 'copy', type: 'copy', space: 'a3docs', folderId: 'bancos', alsoIn: [], subfolder: '{year}/{month}' },
+      ],
+      edges: [{ from: 't', to: 'month', branch: 'next' }, { from: 'month', to: 'copy', branch: 'yes' }],
+    });
+    const proposal = (fileId: string) => ({ flowId: 'mine', fileId, versionId: 'v', fileName: `${fileId}.pdf`, state: 'proposed', detail: {}, attempts: 0, createdAt: 'c', updatedAt: fileId });
+    const a = app({ flows: [stored('mine', { watch: ['s-bank'], write: ['s-a3'] }, { graph: byMonth })], bank: {
+      'drive/flow-deliveries': { deliveries: [proposal('f1'), proposal('gone')] },
+      'drive/file-facts': (input?: Record<string, unknown>) => {
+        if (input?.fileId === 'gone') throw new Error('not_found');
+        return { fileId: 'f1', name: 'f1.pdf', folderId: 'x', folderPath: 'Invoices/2026/09', state: 'live', versionId: 'v', labels: [], category: null, copiedByFlow: false };
+      },
+    } });
+    const body = await (await a.call('GET', '/api/flow-deliveries?state=proposed&limit=200')).json() as { deliveries: DeliveryView[] };
+    expect(body.deliveries.map((d) => [d.fileId, d.folderPath, d.filedIn])).toEqual([
+      ['gone', undefined, undefined],
+      ['f1', 'Invoices/2026/09', ['Gestoría › Bancos/2026/09']],
+    ]);
+  });
+
   it('puts an approval back when its run cannot be started', async () => {
     const a = app({ flows, start: async () => { throw new Error('no runner'); }, bank: { 'drive/record-flow-delivery': { changed: true, delivery: { state: 'approved' }, previous: 'proposed' } } });
     expect((await a.call('POST', '/api/flow-deliveries/decide', { ...key, decision: 'approve' })).status).toBe(500);
     expect(a.bankInvoke).toHaveBeenLastCalledWith('drive/record-flow-delivery', expect.objectContaining({ state: 'proposed', expect: ['approved'] }));
+  });
+});
+
+describe('deciding several at once', () => {
+  const flows = [stored('mine', { watch: ['s-bank'], write: ['s-a3'] }), stored('theirs', { watch: ['s-bank', 's-shared'], write: [] })];
+  const item = (fileId: string, decision: 'approve' | 'dismiss' | 'retry' = 'approve', over: Record<string, string> = {}) =>
+    ({ space: 'bank', flowId: 'mine', fileId, versionId: 'v1', decision, ...over });
+
+  /** A space that keeps each delivery's state and moves it only from the state a decision expects, as the scope does. */
+  function bank(states: Record<string, string>, refuse: string[] = []) {
+    return {
+      'drive/record-flow-delivery': (input?: Record<string, unknown>) => {
+        const { fileId, state, expect: from } = input as { fileId: string; state: string; expect: string[] };
+        if (refuse.includes(fileId)) throw substratError('forbidden', 'You cannot change deliveries here.');
+        const previous = states[fileId] ?? 'none';
+        if (!from.includes(previous)) return { changed: false, delivery: null, previous };
+        states[fileId] = state;
+        return { changed: true, delivery: { flowId: 'mine', fileId, versionId: 'v1', state }, previous };
+      },
+    };
+  }
+  const decideMany = async (a: ReturnType<typeof app>, items: unknown[]) => {
+    const res = await a.call('POST', '/api/flow-deliveries/decide', { items });
+    expect(res.status).toBe(200);
+    return (await res.json() as DecisionResults).results;
+  };
+
+  it('approves each, starts its run, and drives the space once', async () => {
+    const states: Record<string, string> = { a: 'proposed', b: 'proposed', c: 'proposed' };
+    const a = app({ flows, drive: true, bank: bank(states) });
+    const results = await decideMany(a, ['a', 'b', 'c'].map((f) => item(f)));
+    expect(results).toEqual(['a', 'b', 'c'].map((fileId) => ({ space: 'bank', flowId: 'mine', fileId, versionId: 'v1', ok: true, state: 'approved' })));
+    expect(states).toEqual({ a: 'approved', b: 'approved', c: 'approved' });
+    expect(a.start).toHaveBeenCalledTimes(3);
+    expect(a.start).toHaveBeenCalledWith('s-bank', 'flow-run', 'mine:a:v1', expect.objectContaining({ approved: true }), { drive: false });
+    expect(a.drive).toHaveBeenCalledTimes(1);
+    expect(a.drive).toHaveBeenCalledWith('s-bank');
+  });
+
+  it('rejects each without starting anything', async () => {
+    const states: Record<string, string> = { a: 'proposed', b: 'proposed' };
+    const a = app({ flows, drive: true, bank: bank(states) });
+    const results = await decideMany(a, [item('a', 'dismiss'), item('b', 'dismiss')]);
+    expect(results.map((r) => r.ok && r.state)).toEqual(['dismissed', 'dismissed']);
+    expect(states).toEqual({ a: 'dismissed', b: 'dismissed' });
+    expect(a.start).not.toHaveBeenCalled();
+    expect(a.drive).not.toHaveBeenCalled();
+  });
+
+  it('keeps what succeeded when others fail, and says which failed and why', async () => {
+    const states: Record<string, string> = { ok: 'proposed', decided: 'dismissed', refused: 'proposed', broken: 'proposed' };
+    const a = app({
+      flows, drive: true, bank: bank(states, ['refused']),
+      start: async (_scope, _job, instance) => { if (instance === 'mine:broken:v1') throw new Error('no runner'); },
+    });
+    const results = await decideMany(a, [item('ok'), item('decided'), item('missing'), item('refused'), item('broken'), item('x', 'approve', { flowId: 'nope' })]);
+    expect(results).toEqual([
+      expect.objectContaining({ fileId: 'ok', ok: true, state: 'approved' }),
+      expect.objectContaining({ fileId: 'decided', ok: false, status: 409, error: 'Someone already decided this one.' }),
+      expect.objectContaining({ fileId: 'missing', ok: false, status: 409, error: 'There is no such delivery.' }),
+      expect.objectContaining({ fileId: 'refused', ok: false, status: 403, error: 'You cannot change deliveries here.' }),
+      expect.objectContaining({ fileId: 'broken', ok: false, error: 'no runner' }),
+      expect.objectContaining({ fileId: 'x', flowId: 'nope', ok: false, status: 404, error: 'Flow not found.' }),
+    ]);
+    // The one approved stays approved; the one whose run could not start is put back to wait.
+    expect(states).toMatchObject({ ok: 'approved', decided: 'dismissed', refused: 'proposed', broken: 'proposed' });
+    expect(a.drive).toHaveBeenCalledWith('s-bank');
+  });
+
+  it('approves a delivery once, however many times it is asked', async () => {
+    const states: Record<string, string> = { a: 'proposed' };
+    const a = app({ flows, drive: true, bank: bank(states) });
+    // Twice in one batch (a double click), then again from another tab.
+    const first = await decideMany(a, [item('a'), item('a')]);
+    expect(first.filter((r) => r.ok)).toHaveLength(1);
+    expect(first.find((r) => !r.ok)).toMatchObject({ status: 409, error: 'Someone already decided this one.' });
+    const again = await decideMany(a, [item('a')]);
+    expect(again).toEqual([expect.objectContaining({ ok: false, status: 409 })]);
+    const single = await a.call('POST', '/api/flow-deliveries/decide', item('a', 'dismiss'));
+    expect(single.status).toBe(409);
+    expect(a.start).toHaveBeenCalledTimes(1);
+    expect(states.a).toBe('approved');
+  });
+
+  it('refuses deliveries of a flow over a space the caller does not own, and touches nothing there', async () => {
+    const states: Record<string, string> = { a: 'proposed' };
+    const a = app({ flows, drive: true, bank: bank(states) });
+    const results = await decideMany(a, [item('a', 'approve', { flowId: 'theirs' }), item('a', 'approve', { space: 'shared' })]);
+    expect(results).toEqual([
+      expect.objectContaining({ ok: false, status: 404, error: 'Flow not found.' }),
+      expect.objectContaining({ ok: false, status: 404, error: 'There is no such delivery.' }),
+    ]);
+    expect(states.a).toBe('proposed');
+    expect(a.bankInvoke).not.toHaveBeenCalled();
+    expect(a.start).not.toHaveBeenCalled();
+  });
+
+  it('takes a batch only of a size it can finish', async () => {
+    const a = app({ flows });
+    expect((await a.call('POST', '/api/flow-deliveries/decide', { items: [] })).status).toBe(400);
+    const tooMany = Array.from({ length: DECIDE_BATCH_LIMIT + 1 }, (_, i) => item(`f${i}`));
+    expect((await a.call('POST', '/api/flow-deliveries/decide', { items: tooMany })).status).toBe(400);
+    expect((await a.call('POST', '/api/flow-deliveries/decide', { items: [{ ...item('a'), decision: 'maybe' }] })).status).toBe(400);
+  });
+
+  it('drives each run on its own when the host cannot drive a space once for the batch', async () => {
+    const states: Record<string, string> = { a: 'proposed', b: 'proposed' };
+    const a = app({ flows, bank: bank(states) });
+    await decideMany(a, [item('a'), item('b')]);
+    expect(a.start).toHaveBeenCalledWith('s-bank', 'flow-run', 'mine:a:v1', expect.objectContaining({ approved: true }));
+    expect(a.start.mock.calls.every((call) => call.length === 4)).toBe(true);
   });
 });
 

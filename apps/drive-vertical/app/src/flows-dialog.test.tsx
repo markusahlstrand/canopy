@@ -5,6 +5,7 @@ import { FileAutomation } from './file-automation';
 import { categoryIdFor } from './categories-editor';
 import { addStep, connect, describeFlow, describeStep, newGraph, removeSteps, type Names } from './flow-graph-edit';
 import type { DeliveryView, FileDetails, FlowGraph, FlowView } from './api';
+import { fileRow, fileRows, rowAction, rowText } from './test-table';
 
 /**
  * React Flow measures its nodes before it shows them, and jsdom measures nothing: these stand in
@@ -281,14 +282,17 @@ describe('the flows workspace', () => {
       ],
     });
     render(<FlowsDialog open onOpenChange={() => {}} />);
-    const waiting = await screen.findByRole('region', { name: 'Waiting for approval' });
-    expect(within(waiting).getByText('Bank · Statements')).toBeTruthy();
-    expect(within(waiting).getByText('Receipts · Statements')).toBeTruthy();
+    await screen.findByRole('region', { name: 'Waiting for approval' });
+    // In the file table, each row says where the document is and which flow it waits in.
+    await waitFor(() => expect(rowText(fileRow('Statement.pdf'))).toContain('Bank · Statements'));
+    expect(rowText(fileRow('Other.pdf'))).toContain('Receipts · Statements');
+    expect(fileRows()).toHaveLength(2);
     expect(within(screen.getByRole('region', { name: 'Recent activity' })).getByText('Bank · Statements: a3doc said no')).toBeTruthy();
 
-    fireEvent.click(within(waiting).getAllByRole('button', { name: 'Approve' })[0]!);
+    fireEvent.click(rowAction(fileRow('Statement.pdf'), 'Approve'));
     await screen.findByText('Approved. It runs in a moment.');
-    fireEvent.click(within(screen.getByRole('region', { name: 'Waiting for approval' })).getAllByRole('button', { name: 'Dismiss' })[1]!);
+    await waitFor(() => expect(rowAction(fileRow('Other.pdf'), 'Reject').hasAttribute('disabled')).toBe(false));
+    fireEvent.click(rowAction(fileRow('Other.pdf'), 'Reject'));
     await waitFor(() => expect(calls.filter((c) => c.url.includes('/decide'))).toHaveLength(2));
     await waitFor(() => expect((within(screen.getByRole('region', { name: 'Recent activity' })).getByRole('button', { name: 'Retry' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(within(screen.getByRole('region', { name: 'Recent activity' })).getByRole('button', { name: 'Retry' }));

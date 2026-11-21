@@ -25,7 +25,7 @@ import { z } from '@substrat-run/contracts';
 import { mountMcp } from '@substrat-run/vertical-host';
 import type { ScopeStub } from '@substrat-run/kernel';
 import { deliveryState, segment } from '@canopy/scope-drive/spec/model';
-import { flowSaveInput } from './flow-contract.js';
+import { DECIDE_BATCH_LIMIT, flowSaveInput } from './flow-contract.js';
 import {
   checkedUpload, decodeBase64, MAX_ALSO_IN, MAX_INLINE_UPLOAD_BYTES, mintUploadToken, UPLOAD_TYPES,
   uploadPreflight, uploadResult, uploadToFolder, uploadTokenHash, uploadTypeOf, type UploadLink, type UploadTarget,
@@ -220,6 +220,12 @@ const FLOW_GRAPH_GUIDE = [
   ' "versions": "first" }',
 ].join('\n');
 
+/** One delivery, or several in `items`: the app's decide route takes either, by the same checks. */
+const decideManyInput = decideInput.partial().extend({
+  items: z.array(decideInput).min(1).max(DECIDE_BATCH_LIMIT).optional()
+    .describe(`Several decisions at once, at most ${DECIDE_BATCH_LIMIT} per call; leave the single fields out. Answers { results } in the same order.`),
+});
+
 /**
  * The tools this mount adds. Declarations in the platform's shape, so `mountMcp` renders them like
  * any operation; `http` only marks them as tools and says read or write: no route is mounted.
@@ -290,8 +296,8 @@ export const assistantOperations = {
   },
   'drive/decide-flow-delivery': {
     summary: 'Approve, dismiss or retry a flow delivery',
-    mcp: { description: 'Approve or dismiss a delivery a flow proposed (waiting at an approval step), or retry a failed one. Take the fields from drive_list-flow-deliveries.' },
-    input: decideInput,
+    mcp: { description: 'Approve or dismiss a delivery a flow proposed (waiting at an approval step), or retry a failed one. Take the fields from drive_list-flow-deliveries. To decide many (say every proposal of a flow), pass them in `items`: each is decided on its own, approved once even if named twice, and each result says ok with its new state, or why it was refused; what succeeded stays done.' },
+    input: decideManyInput,
     http: { method: 'POST', path: '/flow-deliveries/decide' },
   },
   'drive/upload-file': {
