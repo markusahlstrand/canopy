@@ -24,8 +24,13 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from '@substrat-run/contracts';
 import { mountMcp } from '@substrat-run/vertical-host';
 import type { ScopeStub } from '@substrat-run/kernel';
-import { deliveryState } from '@canopy/scope-drive/spec/model';
+import { deliveryState, segment } from '@canopy/scope-drive/spec/model';
 import { flowSaveInput } from './flow-contract.js';
+import {
+  checkedUpload, decodeBase64, MAX_ALSO_IN, MAX_INLINE_UPLOAD_BYTES, mintUploadToken, UPLOAD_LINK_TTL_MS, UPLOAD_TYPES,
+  uploadPreflight, uploadResult, uploadToFolder, uploadTokenHash, uploadTypeOf, type UploadLink, type UploadTarget,
+} from './upload.js';
+import { MAX_UPLOAD_BYTES } from './upload-limit.js';
 
 /** The argument every space-scoped drive tool takes. */
 export const SPACE_ARG = 'space';
@@ -56,6 +61,12 @@ export interface AssistantAccess {
   scopeFor(slug: string): Promise<SpaceInvoker | null>;
   /** The app's flow routes (`/api/flows…`), called as this caller. */
   flows(method: string, path: string, body?: unknown): Promise<Response>;
+  /** Where the caller's bytes go in a space by slug, as its principal there; null unless a member. */
+  uploadTarget(slug: string): Promise<UploadTarget | null>;
+  /** Keep an upload link for the caller in a space (its token hashed); null unless a member. */
+  saveUploadLink(slug: string, link: Omit<UploadLink, 'sub' | 'scopeId'> & { tokenHash: string }): Promise<{ ok: true } | { error: 'limit' } | null>;
+  /** This install's origin, for the links it hands out. */
+  origin: string;
 }
 
 /** What the install knows, as `assistantAccess` asks it: the tenant's registry and directory. */
@@ -70,6 +81,10 @@ export interface AssistantDirectory {
   settings(scopeId: string): Promise<{ name?: string; categories?: SpaceCategory[] } | null>;
   /** The space's stub as that principal. May refuse (a deleted or inactive space). */
   scopeAs(principal: string, scopeId: string): Promise<SpaceInvoker>;
+  /** Storing bytes in a space as that principal, and what runs after a write there. */
+  uploadsAs(principal: string, scopeId: string): Promise<Omit<UploadTarget, 'scope'>>;
+  /** Keep an upload link (only its token's hash). */
+  saveUploadLink(link: UploadLink & { tokenHash: string }): Promise<{ ok: true } | { error: 'limit' }>;
 }
 
 /**
@@ -81,11 +96,19 @@ export function assistantAccess(
   directory: AssistantDirectory,
   sub: string,
   flows: AssistantAccess['flows'],
+  origin = '',
 ): AssistantAccess {
-  const asMember = async (scopeId: string): Promise<SpaceInvoker | null> => {
+  const member = async (scopeId: string): Promise<{ principal: string; scope: SpaceInvoker } | null> => {
     const principal = await directory.principalIn(scopeId, sub);
     if (!principal) return null;
-    return directory.scopeAs(principal, scopeId).catch(() => null);
+    const scope = await directory.scopeAs(principal, scopeId).catch(() => null);
+    return scope ? { principal, scope } : null;
+  };
+  const asMember = async (scopeId: string) => (await member(scopeId))?.scope ?? null;
+  const memberBySlug = async (slug: string) => {
+    const scopeId = await directory.resolveSiteScope(slug);
+    const found = scopeId ? await member(scopeId) : null;
+    return found && scopeId ? { ...found, scopeId } : null;
   };
   return {
     sites: async () => {
@@ -103,6 +126,15 @@ export function assistantAccess(
       return scopeId ? asMember(scopeId) : null;
     },
     flows,
+    uploadTarget: async (slug) => {
+      const found = await memberBySlug(slug);
+      return found ? { scope: found.scope, ...(await directory.uploadsAs(found.principal, found.scopeId)) } : null;
+    },
+    saveUploadLink: async (slug, link) => {
+      const found = await memberBySlug(slug);
+      return found ? directory.saveUploadLink({ ...link, sub, scopeId: found.scopeId }) : null;
+    },
+    origin,
   };
 }
 
@@ -138,6 +170,27 @@ const decideInput = z.object({
   versionId: z.string().min(1),
   decision: z.enum(['approve', 'dismiss', 'retry']).describe('approve or dismiss a proposed delivery; retry a failed one.'),
 });
+
+const uploadPlace = {
+  space: z.string().min(1).max(64).describe('The space to file it in: a slug from drive_list-spaces.'),
+  folderId: z.string().min(1).max(64).describe('The folder to put it in: an id from drive_list-space-folders ("root" is the top level).'),
+  name: segment.describe('The file name, with its extension: it decides the type (pdf, png, jpg, docx, xlsx, csv, xml, xsig…).'),
+  alsoIn: z.array(z.string().min(1).max(64)).max(MAX_ALSO_IN).optional()
+    .describe('a3doc spaces only: up to 10 more folder ids (from drive_list-space-folders) to file the document under as a3doc categories too.'),
+};
+const uploadFileInput = z.object({
+  ...uploadPlace,
+  contentBase64: z.string().min(1).describe(`The file's bytes, base64. At most ${MAX_INLINE_UPLOAD_BYTES / 1024 / 1024} MB.`),
+});
+const uploadLinkInput = z.object(uploadPlace);
+
+const UPLOAD_RULES = [
+  'Who: only someone who may add files to that folder (an owner or editor of the space); a viewer is refused.',
+  'If the folder already has a file with that name, nothing is written and the existing file comes back (`created: false`): an a3doc document cannot be deleted, so a retry never files it twice. Pick another name for a new document.',
+  'A Qonto space mirrors the bank account and takes no uploads. In an a3doc space the document is sent on to a3doc (`source.sent`), filed in the folder plus every `alsoIn` category.',
+  `Accepted types, by the name's extension: ${Object.keys(UPLOAD_TYPES).join(', ')}. The bytes must match the type.`,
+  'Existing flows treat it like any upload: it "arrived" in that space.',
+].join(' ');
 
 const FLOW_GRAPH_GUIDE = [
   'A flow belongs to the install, not to a space: its trigger watches one or more spaces and its copy steps may write into others.',
@@ -241,6 +294,27 @@ export const assistantOperations = {
     input: decideInput,
     http: { method: 'POST', path: '/flow-deliveries/decide' },
   },
+  'drive/upload-file': {
+    summary: 'Upload a file into a folder of a space',
+    mcp: { description: [
+      `Upload a small file (at most ${MAX_INLINE_UPLOAD_BYTES / 1024 / 1024} MB) whose bytes you have, as base64.`,
+      'Base64 costs about one token per 3 characters, so anything past roughly 100 KB is far cheaper through drive_create-upload-link, which never passes the bytes through you.',
+      UPLOAD_RULES,
+    ].join(' ') },
+    input: uploadFileInput,
+    http: { method: 'POST', path: '/uploads' },
+  },
+  'drive/create-upload-link': {
+    summary: 'Get a one-time link to upload a file',
+    mcp: { description: [
+      `A link to upload one file (up to ${MAX_UPLOAD_BYTES / 1024 / 1024} MB) into a folder, under the name given here: PUT the raw bytes to it, e.g.`,
+      '`curl -X PUT -H "content-type: application/pdf" --data-binary @invoice.pdf "<url>"`. It works once and for 10 minutes, and answers like drive_upload-file.',
+      'Use it whenever you (or a tool you can run) can read the file from disk.',
+      UPLOAD_RULES,
+    ].join(' ') },
+    input: uploadLinkInput,
+    http: { method: 'POST', path: '/upload-links' },
+  },
 } as const satisfies Record<string, Declared>;
 
 type AssistantOperation = keyof typeof assistantOperations;
@@ -316,6 +390,16 @@ async function foldersOf(scope: SpaceInvoker, limit: number) {
   return { folders: folders.sort((a, b) => a.path.localeCompare(b.path)), truncated };
 }
 
+/** Input checked against its schema, a refusal naming what is wrong. */
+function parsed<T extends z.ZodType>(schema: T, input: unknown): z.infer<T> {
+  const result = schema.safeParse(input);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    throw new HTTPException(400, { message: `${issue?.path.join('.') || 'input'}: ${issue?.message ?? 'invalid'}` });
+  }
+  return result.data;
+}
+
 /** What one assistant tool does. */
 async function runAssistant(access: AssistantAccess, operation: AssistantOperation, raw: unknown): Promise<unknown> {
   const input = (raw ?? {}) as Record<string, unknown>;
@@ -378,6 +462,33 @@ async function runAssistant(access: AssistantAccess, operation: AssistantOperati
     }
     case 'drive/decide-flow-delivery':
       return answered(await access.flows('POST', '/api/flow-deliveries/decide', input));
+    case 'drive/upload-file': {
+      const { space, folderId, name, contentBase64, alsoIn } = parsed(uploadFileInput, input);
+      uploadTypeOf(name);
+      const bytes = decodeBase64(contentBase64);
+      const mime = checkedUpload(name, bytes);
+      const target = await access.uploadTarget(space);
+      if (!target) throw notThere(space);
+      await uploadPreflight(target.scope, { folderId, alsoIn });
+      return uploadResult(await uploadToFolder(target, { folderId, name, mime, body: async () => bytes, alsoIn, existing: 'keep' }));
+    }
+    case 'drive/create-upload-link': {
+      const { space, folderId, name, alsoIn } = parsed(uploadLinkInput, input);
+      const mime = uploadTypeOf(name);
+      const target = await access.uploadTarget(space);
+      if (!target) throw notThere(space);
+      await uploadPreflight(target.scope, { folderId, alsoIn });
+      const token = mintUploadToken();
+      const expiresAt = Date.now() + UPLOAD_LINK_TTL_MS;
+      const saved = await access.saveUploadLink(space, { folderId, name, alsoIn: alsoIn ?? [], expiresAt, tokenHash: await uploadTokenHash(token) });
+      if (!saved) throw notThere(space);
+      if ('error' in saved) throw new HTTPException(429, { message: 'You have too many unused upload links. Use or let some expire (10 minutes) first.' });
+      const url = `${access.origin}/api/upload-links/${token}`;
+      return {
+        url, method: 'PUT', contentType: mime, maxBytes: MAX_UPLOAD_BYTES, expiresAt: new Date(expiresAt).toISOString(),
+        example: `curl -X PUT -H "content-type: ${mime}" --data-binary @"${name.replace(/["\\$`]/g, '')}" "${url}"`,
+      };
+    }
   }
 }
 
@@ -407,6 +518,9 @@ export function assistantStub(
     }) as ScopeStub['invoke'],
   };
 }
+
+/** The largest MCP request accepted: an inline upload at its limit, as base64, and room for the rest. */
+export const MAX_MCP_BODY_BYTES = 8 * 1024 * 1024;
 
 /**
  * The request as this endpoint authenticates it: its headers without the session cookie.
@@ -438,6 +552,16 @@ export function mountAssistantMcp<E extends object>(
   options: { basePath?: string } = {},
 ) {
   const catalog = assistantCatalog(driveOperations);
+  const path = `${options.basePath ?? '/api'}/mcp`;
+  // The platform mount reads a body whole before anything here runs, so a declared size past what a
+  // tool can take (an inline upload, base64) is refused first. Larger files go by upload link.
+  app.use(path, async (c, next) => {
+    const declared = Number(c.req.header('content-length') ?? '');
+    if (c.req.method === 'POST' && Number.isFinite(declared) && declared > MAX_MCP_BODY_BYTES) {
+      throw new HTTPException(413, { message: 'This request is too large. Upload larger files with drive_create-upload-link.' });
+    }
+    await next();
+  });
   return mountMcp(app, catalog, async (c) => {
     if (c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') {
       throw new HTTPException(415, { message: 'Use application/json for this request.' });
