@@ -11,7 +11,7 @@ import { hasIcon } from '@canopy/ui';
 import { DRIVE_ICONS } from './drive';
 import { SIDEBAR_ICONS } from './sidebar';
 import { actionsFor } from './file-table';
-import { LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
+import { FIND_ENTITIES, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
 import { latestOnly } from './reads';
 import {
   ApiError,
@@ -273,6 +273,28 @@ describe('the AI labelling items', () => {
     expect(actionsFor(file, true, false, false, true)).toEqual(['Open']);
     expect(actionsFor(file, false, false, true, true)).not.toContain(LABEL_WITH_AI);
     expect(actionsFor(file, false, true, false, true)).toEqual(['Restore']);
+  });
+});
+
+describe('the find people and companies item', () => {
+  const file = { id: '01A', name: 'a.pdf', kind: 'pdf', modified: 'today', size: '1 kB', isFolder: false } as const;
+  const folder = { id: '01F', name: 'Invoices', kind: 'folder', modified: '—', size: '—', isFolder: true } as const;
+  it('is on folders only, where the space reads people and companies', () => {
+    expect(actionsFor(folder, false, false, false, false, true)).toEqual(['Open', 'Share', 'Rename', 'Move', FIND_ENTITIES]);
+    expect(actionsFor(folder, false, false, false, true, true)).toEqual(['Open', 'Share', 'Rename', 'Move', LABEL_WITH_AI, RELABEL_WITH_AI, FIND_ENTITIES]);
+    expect(actionsFor(folder)).not.toContain(FIND_ENTITIES);
+    expect(actionsFor(file, false, false, false, false, true)).not.toContain(FIND_ENTITIES);
+  });
+  it('stays off read-only, mirrored and trashed folders', () => {
+    expect(actionsFor(folder, true, false, false, false, true)).toEqual(['Open']);
+    expect(actionsFor(folder, false, false, true, false, true)).not.toContain(FIND_ENTITIES);
+    expect(actionsFor(folder, false, true, false, false, true)).toEqual(['Restore']);
+  });
+  it('says what a folder request queued', async () => {
+    const { extractNoticeFor } = await import('./drive');
+    expect(extractNoticeFor(folder, { queued: 0, skipped: 0, more: false })).toBe('“Invoices” has no files to read.');
+    expect(extractNoticeFor(folder, { queued: 200, skipped: 1, more: true, next: 'f200' })).toBe(
+      'Reading 200 files in “Invoices” for people and companies. Files already read are skipped, and suggestions appear in Suggestions as each one finishes. 1 file can’t be read. More are waiting: continue to queue the next batch.');
   });
 });
 

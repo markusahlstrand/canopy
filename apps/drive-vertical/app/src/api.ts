@@ -866,6 +866,25 @@ export interface LabelResult { queued: number; skipped: number; more: boolean; n
 /** Label one file now, or the files under a folder — those without labels, or all with `relabel`. */
 export const labelWithAi = (target: { fileId: string } | { folderId: string; relabel?: boolean; after?: string }) =>
   call<LabelResult>('/label', { method: 'POST', body: JSON.stringify(target) });
+/** What a request to read people and companies from a file or folder queued (`POST /api/extract-entities`). */
+export type ExtractResult = LabelResult;
+/** Read one file again now, or the files under a folder that have not been read yet. */
+export const extractEntities = (target: { fileId: string } | { folderId: string; after?: string }) =>
+  call<ExtractResult>('/extract-entities', { method: 'POST', body: JSON.stringify(target) });
+
+export type GraphClaim = import('@canopy/scope-drive/spec/model').GraphClaim;
+export type GraphEntity = import('@canopy/scope-drive/spec/model').GraphEntity;
+export interface GraphConnection { entity: GraphEntity; depth: number; via: string[] }
+/** What was read from a file: open suggestions and what has been decided. */
+export const fileGraph = (fileId: string) => call<{ claims: GraphClaim[]; canWrite: boolean }>(`/files/${encodeURIComponent(fileId)}/graph`);
+/** Accept or reject suggestions read from one file; answers with the file's claims after. */
+export const decideGraphClaims = (fileId: string, claimIds: string[], decision: 'accept' | 'reject') =>
+  call<{ changed: number; claims: GraphClaim[] }>(`/files/${encodeURIComponent(fileId)}/graph/decisions`, { method: 'POST', body: JSON.stringify({ claimIds, decision }) });
+/** The space's open suggestions, surest first. */
+export const graphSuggestions = (limit = 50) => call<{ claims: GraphClaim[] }>(`/graph/suggestions?limit=${limit}`);
+/** One entity, what is said about it, and who or what it connects to. */
+export const graphEntity = (entityId: string) =>
+  call<{ entity: GraphEntity; claims: GraphClaim[]; connections: GraphConnection[] }>(`/graph/entities/${encodeURIComponent(entityId)}`);
 /** The selected space's settings, or (for a flow's categories) another space's the caller can read. */
 export const getSpaceSettings = (selectedSite = site) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', undefined, selectedSite);
 export const updateSpaceSettings = (settings: import('../../src/space-settings').SpaceSettings) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', {method:'PATCH',body:JSON.stringify(settings)});

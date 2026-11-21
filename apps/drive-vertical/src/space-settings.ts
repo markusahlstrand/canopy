@@ -18,6 +18,12 @@ export const SPACE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf
 export const spaceSettingsSchema = z.object({ name: z.string().trim().min(1).max(100).refine(name => !/[\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(name) && /[^\s\p{Cf}]/u.test(name), 'Use a visible name without control or direction-override characters'), icon: z.enum(SPACE_ICONS), color: z.enum(SPACE_COLORS),
  /** Document AI: label and describe uploads with a model. Off unless an administrator turns it on. */
  autoLabel: z.boolean().optional(),
+ /**
+  * Entity extraction: read who and what documents are about into suggestions for the space's
+  * knowledge graph. Separate from `autoLabel` because it sends more text and costs more. Off
+  * unless an administrator turns it on.
+  */
+ extractEntities: z.boolean().optional(),
  /** What Document AI sorts documents into, and flows match on. Empty: it only labels and describes. */
  categories: spaceCategories.optional() });
 export type SpaceSettings = z.infer<typeof spaceSettingsSchema>;

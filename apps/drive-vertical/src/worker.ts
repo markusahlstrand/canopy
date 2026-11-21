@@ -16,6 +16,8 @@ import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors
 import { createModelHost } from '@substrat-run/vertical-host/model';
 import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, latestWrote, manualInstance, MAX_TEXT_CHARS, planRun, settledBy, type AutoLabelPayload } from './document-ai.js';
 import { mountLabel } from './label-routes.js';
+import { alreadyReadBy, EXTRACT_ENTITIES_JOB, extractEntitiesJob, manualExtractInstance, type ExtractPayload } from './entity-extraction.js';
+import { mountExtract } from './extract-routes.js';
 import { isLockedName } from './editable-text.js';
 import { AUTOMATION_JOB, automationJob, DISPATCH_INSTANCE, FLOW_BACKFILL_JOB, flowBackfillJob, FLOW_RUN_JOB, flowRunJob, type AutomationDeps, type Bytes } from './automation.js';
 import { mountFlows } from './flow-routes.js';
@@ -265,6 +267,8 @@ export interface Env {
   AI?: unknown;
   /** Document AI's model as `provider:model`. Default: {@link DEFAULT_DOCUMENT_AI_MODEL}. */
   DOCUMENT_AI_MODEL?: string;
+  /** Entity extraction's model as `provider:model`. Default: Document AI's. */
+  ENTITY_AI_MODEL?: string;
   /** The ⌘K assistant's model as `provider:model`. Default: {@link DEFAULT_ASSISTANT_MODEL}. */
   ASSISTANT_MODEL?: string;
   /** Optional token for GitHub commit lookups during public plugin imports. */
@@ -375,6 +379,7 @@ function hostFor(env: Env): CloudflareScopeHost {
   // Registered on every host, so whichever drives the scope's jobs — an upload's
   // `runDueJobs` or the sweeper's pass — can run a queued Document AI run.
   host.registerJob(DRIVE_MODULE_ID, AUTO_LABEL_JOB, documentAiFor(env, host));
+  host.registerJob(DRIVE_MODULE_ID, EXTRACT_ENTITIES_JOB, entityExtractionFor(env, host));
   const automation = automationDeps(env, host);
   host.registerJob(DRIVE_MODULE_ID, AUTOMATION_JOB, automationJob(automation));
   host.registerJob(DRIVE_MODULE_ID, FLOW_RUN_JOB, flowRunJob(automation));
@@ -439,6 +444,7 @@ function automationDeps(env: Env, host: CloudflareScopeHost): AutomationDeps {
     },
     spaceBySlug: async (tenant, slug) => identityDo(env, nodeOf({ tenantId: tenant, scopeId: DEV_NODE.scopeId })).resolveSiteScope(slug),
     queueLabel: (n, principal, file) => labelSoon(env, host, nodeOf(n), principalId.parse(principal), file),
+    queueExtract: (n, principal, file) => extractSoon(env, host, nodeOf(n), principalId.parse(principal), file),
     start: async (n, job, instance, payload) => {
       await host.startJobRun(nodeOf(n).tenantId, nodeOf(n).scopeId, { moduleId: DRIVE_MODULE_ID, job, instance, payload });
     },
@@ -487,6 +493,29 @@ function documentAiFor(env: Env, host: CloudflareScopeHost) {
       sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each uploaded document’s extracted text, and its file name`,
       usageEvent: 'drive.document-ai.usage',
       operation: 'drive/auto-label',
+      tenant: tenantId.parse(p.tenantId),
+      scope: scopeId.parse(p.scopeId),
+    }) : null,
+    now: () => Date.now(),
+    log: (event, fields) => console.log(event, fields),
+  });
+}
+
+/** The model entity extraction reads with. */
+const entityModelSpec = (env: Env) => env.ENTITY_AI_MODEL || env.DOCUMENT_AI_MODEL || DEFAULT_DOCUMENT_AI_MODEL;
+
+/** Entity extraction's run body, over this worker's bindings and the host driving it. */
+function entityExtractionFor(env: Env, host: CloudflareScopeHost) {
+  const nodeOf = (p: ExtractPayload): Node => ({ tenantId: tenantId.parse(p.tenantId), scopeId: scopeId.parse(p.scopeId) });
+  return extractEntitiesJob({
+    scopeFor: (p) => host.getScope(principalId.parse(p.principal), tenantId.parse(p.tenantId), scopeId.parse(p.scopeId)),
+    enabled: async (p) => (await identityDo(env, nodeOf(p)).readSpaceSettings(p.scopeId))?.extractEntities === true,
+    alreadyRead: async (p, versionId) => alreadyReadBy(await extractRuns(host, nodeOf(p), p.fileId), versionId),
+    model: (p) => env.AI ? modelFor(env, env.AI, {
+      spec: entityModelSpec(env),
+      sent: `The first ${MAX_TEXT_CHARS.toLocaleString('en')} characters of each document’s extracted text, and its file name`,
+      usageEvent: 'drive.entity-extraction.usage',
+      operation: 'drive/extract-entities',
       tenant: tenantId.parse(p.tenantId),
       scope: scopeId.parse(p.scopeId),
     }) : null,
@@ -961,6 +990,36 @@ mountFlows(app, async (c) => {
     },
   };
 });
+mountExtract(app, async (c) => {
+  const env = c.env;
+  const principal = await principalFor(env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, env);
+  const host = hostFor(env);
+  return {
+    scope: await host.getScope(principal, node.tenantId, node.scopeId),
+    unavailable: async () => {
+      if (!env.AI) return 'Entity extraction isn’t available here.';
+      if (!(await identityDo(env, node).readSpaceSettings(node.scopeId))?.extractEntities) {
+        return 'Finding people and companies is off in this space. An administrator can turn it on in space settings.';
+      }
+      return null;
+    },
+    queue: async (files, manual) => {
+      for (let i = 0; i < files.length; i += 10) {
+        await Promise.all(files.slice(i, i + 10).map(async (file) => {
+          const payload: ExtractPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, principal, ...(manual ? { manual: true as const } : {}) };
+          await host.startJobRun(node.tenantId, node.scopeId, {
+            moduleId: DRIVE_MODULE_ID, job: EXTRACT_ENTITIES_JOB, instance: manual ? manualExtractInstance(file.id) : file.id, payload,
+          });
+        }));
+      }
+      await defer(c, host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
+        console.error('drive.entity-extraction.run-failed', { error: error instanceof Error ? error.message : String(error) });
+      }));
+    },
+  };
+});
 mountLabel(app, async (c) => {
   const env = c.env;
   const principal = await principalFor(env, c.req.raw);
@@ -1353,6 +1412,35 @@ async function labelSoon(
   } catch (error) {
     console.error('drive.document-ai.queue-failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) });
   }
+}
+
+/**
+ * Queue entity extraction for a version, in a space that turned it on. One run per file: a live
+ * run is joined (and follows the newer version); a version a run already read is left alone.
+ * Never throws: a failed queue is a log line, not a failed upload.
+ */
+async function extractSoon(
+  env: Env, host: CloudflareScopeHost, node: Node, principal: PrincipalId, file: { id: string; name: string; versionId: string },
+): Promise<void> {
+  if (!env.AI || isLockedName(file.name)) return;
+  try {
+    if (!(await identityDo(env, node).readSpaceSettings(node.scopeId))?.extractEntities) return;
+    if (alreadyReadBy(await extractRuns(host, node, file.id), file.versionId)) return;
+    const payload: ExtractPayload = { tenantId: node.tenantId, scopeId: node.scopeId, fileId: file.id, principal };
+    await host.startJobRun(node.tenantId, node.scopeId, { moduleId: DRIVE_MODULE_ID, job: EXTRACT_ENTITIES_JOB, instance: file.id, payload });
+  } catch (error) {
+    console.error('drive.entity-extraction.queue-failed', { fileId: file.id, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/** Every entity extraction run of a file: its automatic instance and its manual one. */
+async function extractRuns(host: CloudflareScopeHost, node: Node, fileId: string) {
+  const key = (instance: string) => ({ moduleId: DRIVE_MODULE_ID, job: EXTRACT_ENTITIES_JOB, instance });
+  const [auto, manual] = await Promise.all([
+    host.jobRuns(node.tenantId, node.scopeId, key(fileId)),
+    host.jobRuns(node.tenantId, node.scopeId, key(manualExtractInstance(fileId))),
+  ]);
+  return [...auto, ...manual];
 }
 
 /** Every Document AI run of a file: its automatic instance and its manual one. */

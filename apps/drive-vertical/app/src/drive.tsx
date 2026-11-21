@@ -32,7 +32,8 @@ import { PreviewPanel, type PreviewMode } from './preview';
 import { PreviewResizeHandle, PREVIEW_WIDTH_VAR, usePreviewWidth } from './preview-resize';
 import { AllFilesTable } from './all-files-table';
 import { FileTable, type SortKey, type SortState } from './file-table';
-import { AiLabelContext, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
+import { AiLabelContext, EntityExtractionContext, FIND_ENTITIES, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
+import { SuggestionsDialog } from './graph-review';
 import type { FolderPage, FolderTree } from './file-list';
 import { Topbar } from './topbar';
 import { AccountMenu } from './account-menu';
@@ -91,6 +92,7 @@ import {
   search,
   trashFile,
   labelWithAi,
+  extractEntities,
   getSpaceSettings,
   type DriveFile,
   type LabelResult,
@@ -301,6 +303,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false);
   const [flowsOpen, setFlowsOpen] = useState(false);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
   const [spacesOpen, setSpacesOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
@@ -346,11 +349,14 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const mirrored = source !== null, canUpload = !source || source.canUpload;
   // Whether this space runs Document AI: the menus offer "Label with AI" only where it does.
   const [aiLabel, setAiLabel] = useState(false);
+  // And whether it reads people and companies from documents: the Details tab offers "Find people and companies" only then.
+  const [aiExtract, setAiExtract] = useState(false);
   useEffect(() => {
     let current = true;
     setAiLabel(false);
+    setAiExtract(false);
     // Read again when the screen reconnects: a read that failed offline must not hide the items for good.
-    if (!offline) getSpaceSettings().then(settings => { if (current) setAiLabel(settings.autoLabel === true); }).catch(() => {});
+    if (!offline) getSpaceSettings().then(settings => { if (current) { setAiLabel(settings.autoLabel === true); setAiExtract(settings.extractEntities === true); } }).catch(() => {});
     return () => { current = false; };
   }, [liveSpace, sourceTick, offline]);
   /** What the last "Label with AI" queued, shown above the list until the next one — and how to go on when a folder had more. */
@@ -359,6 +365,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const result = await labelWithAi(item.isFolder ? { folderId: item.id, relabel, ...(after ? { after } : {}) } : { fileId: item.id });
     const next = result.next;
     setLabelNotice({ text: labelNoticeFor(item, result), ...(next ? { more: () => labelItem(item, relabel, next) } : {}) });
+  });
+  /** "Find people and companies" on a folder: queue its files for reading; a version already read is skipped by the runs. */
+  const findEntitiesIn = (item: FileItem, after?: string) => void act(async () => {
+    const result = await extractEntities({ folderId: item.id, ...(after ? { after } : {}) });
+    const next = result.next;
+    setLabelNotice({ text: extractNoticeFor(item, result), ...(next ? { more: () => findEntitiesIn(item, next) } : {}) });
   });
   // An empty mirrored folder is a question, so it answers with what the last sync found.
   const [syncNote, setSyncNote] = useState<ReturnType<typeof sourceSyncNote>>(null);
@@ -1108,6 +1120,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       labelItem(item, action === RELABEL_WITH_AI);
       return;
     }
+    if (action === FIND_ENTITIES && item.isFolder) {
+      findEntitiesIn(item);
+      return;
+    }
     if (action === 'Open') {
       const found = folderFor(item.id);
       if (found) open(found.folder, found.via);
@@ -1271,6 +1287,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
   return (
     <AiLabelContext.Provider value={aiLabel && !offline}>
+    <EntityExtractionContext.Provider value={aiExtract && !offline}>
     <div className="flex min-h-0 flex-1">
       <div className="hidden md:block">
         <Sidebar
@@ -1292,6 +1309,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           canManageSpace={canManagePeople}
           onSpaceSettings={() => setSpaceSettingsOpen(true)}
           onFlows={() => setFlowsOpen(true)}
+          onSuggestions={() => setSuggestionsOpen(true)}
           onSpaceMembers={() => setPeopleOpen(true)}
           onSpacePlugins={() => setViewersOpen(true)}
           account={compact => accountMenu(compact)}
@@ -1322,6 +1340,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             canManageSpace={canManagePeople}
             onSpaceSettings={() => { setMobileNavOpen(false); setSpaceSettingsOpen(true); }}
             onFlows={() => { setMobileNavOpen(false); setFlowsOpen(true); }}
+            onSuggestions={() => { setMobileNavOpen(false); setSuggestionsOpen(true); }}
             onSpaceMembers={() => { setMobileNavOpen(false); setPeopleOpen(true); }}
             onSpacePlugins={() => { setMobileNavOpen(false); setViewersOpen(true); }}
             account={compact => accountMenu(compact, () => setMobileNavOpen(false))}
@@ -1690,6 +1709,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       </div>{/* the column beside the rail */}
 
       <FlowsDialog open={flowsOpen} onOpenChange={setFlowsOpen} here={liveSpace} />
+      <SuggestionsDialog open={suggestionsOpen && !offline} onOpenChange={setSuggestionsOpen} onOpenFile={fileId => {
+        if (activePluginId) { if (!exitPluginApp()) return; changePreview(fileId); }
+        else if (!setPreviewing(fileId)) return;
+        setSuggestionsOpen(false);
+      }} />
       <SpaceSettingsDialog open={spaceSettingsOpen} onOpenChange={setSpaceSettingsOpen} onSaved={() => { siteList.retry(); setSourceTick(tick => tick + 1); }} />
       <CreateSpaceDialog open={createSpaceOpen} onOpenChange={setCreateSpaceOpen} onCreated={openSpace} />
       <SpacesDialog open={spacesOpen} onOpenChange={setSpacesOpen} sites={siteList.sites} failed={siteList.failed} onRetry={siteList.retry} offline={offline} canManage={canManagePeople} onSettings={() => setSpaceSettingsOpen(true)} onCreate={() => setCreateSpaceOpen(true)} onMembers={() => setPeopleOpen(true)} />
@@ -1761,6 +1785,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         />
       ) : null}
     </div>
+    </EntityExtractionContext.Provider>
     </AiLabelContext.Provider>
   );
 }
@@ -1774,6 +1799,15 @@ export function labelNoticeFor(item: { name: string; isFolder: boolean }, result
   }
   return `Labelling ${files(result.queued)} in “${item.name}”.`
     + (result.skipped ? ` ${files(result.skipped)} already had labels or can’t be read.` : '')
+    + (result.more ? ' More are waiting: continue to queue the next batch.' : '');
+}
+
+/** What a folder's "Find people and companies" queued, in words: suggestions show up as each file is read. */
+export function extractNoticeFor(item: { name: string }, result: LabelResult): string {
+  const files = (n: number) => `${n} ${n === 1 ? 'file' : 'files'}`;
+  if (result.queued === 0) return `“${item.name}” has no files to read.`;
+  return `Reading ${files(result.queued)} in “${item.name}” for people and companies. Files already read are skipped, and suggestions appear in Suggestions as each one finishes.`
+    + (result.skipped ? ` ${files(result.skipped)} can’t be read.` : '')
     + (result.more ? ' More are waiting: continue to queue the next batch.' : '');
 }
 
