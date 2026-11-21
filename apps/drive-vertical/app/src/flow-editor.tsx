@@ -114,7 +114,8 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
     const read = readDraft(raw.text, draft.id, 'save');
     if (!read.ok) { setRawStatus({ kind: 'problems', problems: read.problems }); return; }
     setRawStatus(read.ignored.length ? { kind: 'note', text: ignoredNote(read.ignored)! } : null);
-    onSave(read.draft, false);
+    // A run asked for on the canvas still holds when the JSON left what the flow does as it was.
+    onSave(read.draft, runsExisting(read.draft));
   };
 
   const dirty = JSON.stringify(draft) !== baseline || (raw !== null && raw.text !== raw.from);
@@ -143,7 +144,13 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
   // Consent to run on what is there is for one preview: the graph it showed, as it was.
   const [runExisting, setRunExisting] = useState<string | null>(null);
   // Running on what is there is a backfill: a new scheduled flow's first run already covers it, and a flow that is off acts on nothing.
-  const canRunExisting = draft.enabled && (trigger?.on !== 'schedule' || Boolean(draft.id));
+  const canRun = (d: Draft) => d.enabled && (d.graph.nodes.find((n) => n.type === 'trigger')?.on !== 'schedule' || Boolean(d.id));
+  const canRunExisting = canRun(draft);
+  /** Whether to run on what is there when saving `d`: asked for on a preview of what it does now. */
+  const runsExisting = (d: Draft) => {
+    const behaves = behaviourKey(d.graph);
+    return runExisting === behaves && preview?.key === behaves && Boolean(preview.result.matched) && canRun(d);
+  };
 
   const node = graph.nodes.find((n) => n.id === selected) ?? null;
   const add = (type: StepType) => {
@@ -165,7 +172,7 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
         e.preventDefault();
         if (blocked) return;
         if (raw) saveRaw();
-        else onSave(draft, runExisting === key && canRunExisting && Boolean(fresh?.matched));
+        else onSave(draft, runsExisting(draft));
       }}>
       <div className="flex flex-wrap items-end gap-3 border-b px-4 py-3">
         <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}><Icon name="chevron-left" size={14} /> All flows</Button>

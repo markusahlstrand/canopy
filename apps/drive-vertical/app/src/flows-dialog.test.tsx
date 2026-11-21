@@ -492,6 +492,32 @@ describe('a flow as raw JSON', () => {
     expect((puts(calls)[0]!.body as { graph: FlowGraph }).graph.nodes.find((n) => n.id === 'copy-1')).toEqual({ id: 'copy-1', type: 'label', value: 'urgent', position: { x: 900, y: 0 } });
   });
 
+  it('keeps a run asked for on the canvas only while the JSON leaves what the flow does as it was', async () => {
+    const matching = { matches: [{ space: 'bank', fileId: 'a', name: 'S.pdf', folderPath: 'Statements', category: null, needsAnswer: false, handled: false }], matched: 1, uncertain: 0, scanned: 1, truncated: false, reach: {}, maybe: {} };
+    const runs = (calls: { url: string }[]) => calls.filter((c) => c.url.endsWith('/flows/f1/run')).length;
+    for (const [change, ran] of [[(v: Record<string, unknown>) => { v.name = 'Renamed'; }, 1], [(v: Record<string, unknown>) => {
+      const nodes = (v.graph as FlowGraph).nodes;
+      (v.graph as FlowGraph).nodes = nodes.map((n) => (n.type === 'check' ? { ...n, condition: { field: 'extension' as const, values: ['xml'] } } : n));
+    }, 0]] as const) {
+      const calls = server({ flows: [flow()], preview: matching });
+      render(<FlowsDialog open onOpenChange={() => {}} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit Statements' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Show what it matches' }));
+      const preview = screen.getByRole('region', { name: 'Documents it matches now' });
+      await within(preview).findByText('1 document matches.');
+      fireEvent.click(within(preview).getByRole('checkbox'));
+
+      fireEvent.mouseDown(screen.getByRole('tab', { name: /Raw JSON/ }));
+      const value = JSON.parse((screen.getByLabelText('Flow as JSON') as HTMLTextAreaElement).value) as Record<string, unknown>;
+      change(value);
+      type(JSON.stringify(value));
+      fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+      await screen.findByText(ran ? 'Flow saved. What it matches shows up under “Waiting for you” in a moment.' : 'Flow saved.');
+      expect(runs(calls)).toBe(ran);
+      cleanup();
+    }
+  });
+
   it('never puts a layout for a graph that was replaced on the one that replaced it', async () => {
     const calls = server({ flows: [flow()] });
     render(<FlowsDialog open onOpenChange={() => {}} />);

@@ -86,4 +86,47 @@ describe('a flow as JSON', () => {
     const badNode = edit((v) => { (v.graph as { nodes: unknown[] }).nodes.push({ id: 'x', type: 'teleport' }); });
     expect(readDraft(badNode, 'f1', 'canvas').ok).toBe(false);
   });
+
+  it('lets the canvas take steps still left blank, as they were, and still fills in what is left out', () => {
+    // As the editor makes them: a trigger watching nothing yet, a label with no text, a copy going nowhere yet.
+    const blank = JSON.stringify({
+      name: '', enabled: true,
+      graph: {
+        nodes: [
+          { id: 'trigger', type: 'trigger', on: 'arrived', spaces: [] },
+          { id: 'label-1', type: 'label', value: '' },
+          { id: 'copy-1', type: 'copy', space: '', folderId: '' },
+          { id: 'check-1', type: 'check', condition: { field: 'ask', question: '' } },
+        ],
+        edges: [{ from: 'trigger', to: 'label-1', branch: 'next' }],
+      },
+    });
+    expect(readDraft(blank, 'f1', 'save').ok).toBe(false);
+    const read = readDraft(blank, 'f1', 'canvas');
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.draft.name).toBe('');
+    expect(read.draft.graph.versions).toBe('first');
+    expect(read.draft.graph.nodes).toEqual([
+      { id: 'trigger', type: 'trigger', on: 'arrived', spaces: [] },
+      { id: 'label-1', type: 'label', value: '' },
+      { id: 'copy-1', type: 'copy', space: '', folderId: '', alsoIn: [] },
+      { id: 'check-1', type: 'check', condition: { field: 'ask', question: '' } },
+    ]);
+
+    // Anything else wrong beside a blank is still refused, and said as it is.
+    const wrong = JSON.parse(blank) as { graph: { nodes: Record<string, unknown>[] } };
+    wrong.graph.nodes[1]!.value = 42;
+    const refused = readDraft(JSON.stringify(wrong), 'f1', 'canvas');
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.problems.some((p) => p.startsWith('graph › nodes › 1 › value: '))).toBe(true);
+  });
+
+  it('refuses two steps with one id on the canvas, which would change both at once', () => {
+    const twins = edit((v) => { (v.graph as { nodes: unknown[] }).nodes.push({ id: 'label-1', type: 'label', value: 'twin' }); });
+    expect(readDraft(twins, 'f1', 'canvas')).toEqual({ ok: false, problems: ["graph › nodes › 2 › id: Two steps share the id 'label-1'."] });
+    // A step left unconnected is only something still to do: the canvas shows it.
+    const loose = edit((v) => { (v.graph as { edges: unknown[] }).edges = []; });
+    expect(readDraft(loose, 'f1', 'canvas').ok).toBe(true);
+  });
 });

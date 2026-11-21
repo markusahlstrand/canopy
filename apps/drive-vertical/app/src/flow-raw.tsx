@@ -7,7 +7,7 @@
  * accepts the server accepts, short of what only the server can tell (who owns which space).
  */
 import { Button } from '@canopy/ui';
-import { z } from '@substrat-run/contracts';
+import type { z } from '@substrat-run/contracts';
 import { flowGraphShape } from '@canopy/scope-drive/spec/model';
 import { flowSaveInput } from '../../src/flow-contract';
 import type { Draft } from './flow-editor';
@@ -16,10 +16,50 @@ import type { Draft } from './flow-editor';
 const EDITABLE = ['name', 'enabled', 'graph'] as const;
 
 /**
- * The same input, with what the canvas can show left to it: a blank name and a graph that can't
- * run yet are drawn there with what still needs doing.
+ * The same input, with what the canvas can show left to it: a graph that can't run yet is drawn
+ * there with what still needs doing. Steps must still have ids of their own, since the canvas
+ * finds and changes a step by its id. Blank fields are allowed too (see `readDraft`).
  */
-const canvasInput = flowSaveInput.extend({ name: z.string().trim().max(100), graph: flowGraphShape });
+const canvasInput = flowSaveInput.extend({
+  graph: flowGraphShape.superRefine((graph, ctx) => {
+    const seen = new Set<string>();
+    graph.nodes.forEach((node, i) => {
+      if (seen.has(node.id)) ctx.addIssue({ code: 'custom', message: `Two steps share the id '${node.id}'.`, path: ['nodes', i, 'id'] });
+      seen.add(node.id);
+    });
+  }),
+});
+
+type Issue = z.core.$ZodIssue;
+type Path = readonly PropertyKey[];
+
+/** A field the editor leaves empty until it is filled in: a blank name, label or space, an empty list. */
+const unfinished = (issue: Issue): issue is Extract<Issue, { code: 'too_small' }> =>
+  issue.code === 'too_small' && (issue.origin === 'string' || issue.origin === 'array');
+
+const at = (value: unknown, path: Path): unknown =>
+  path.reduce<unknown>((v, key) => (v && typeof v === 'object' ? (v as Record<PropertyKey, unknown>)[key] : undefined), value);
+function put(value: unknown, path: Path, next: unknown) {
+  const parent = at(value, path.slice(0, -1));
+  if (parent && typeof parent === 'object') (parent as Record<PropertyKey, unknown>)[path[path.length - 1]!] = next;
+}
+
+/**
+ * Check for the canvas: like saving, but blank fields pass. Each blank is stood in for just long
+ * enough for the schema to fill in defaults, then put back as it was, so the canvas shows it as a
+ * step still to finish. Anything else wrong stays wrong.
+ */
+function parseForCanvas(input: Record<string, unknown>) {
+  const first = canvasInput.safeParse(input);
+  if (first.success || !first.error.issues.every(unfinished)) return first;
+  const blanks = first.error.issues.map((issue) => ({ path: issue.path, value: at(input, issue.path), min: Number(issue.minimum) }));
+  const filled = structuredClone(input);
+  for (const b of blanks) put(filled, b.path, Array.isArray(b.value) ? Array.from({ length: b.min }, (_, i) => `x${i}`) : 'x'.repeat(b.min));
+  const second = canvasInput.safeParse(filled);
+  if (!second.success) return first;
+  for (const b of blanks) put(second.data, b.path, b.value);
+  return second;
+}
 
 /** How many problems the text shows at once. */
 const MAX_ISSUES = 6;
@@ -46,7 +86,7 @@ export function readDraft(text: string, id: string | undefined, purpose: 'save' 
   const record = value as Record<string, unknown>;
   const ignored = Object.keys(record).filter((k) => !(EDITABLE as readonly string[]).includes(k));
   const editable = Object.fromEntries(EDITABLE.filter((k) => k in record).map((k) => [k, record[k]]));
-  const parsed = (purpose === 'save' ? flowSaveInput : canvasInput).safeParse(editable);
+  const parsed = purpose === 'save' ? flowSaveInput.safeParse(editable) : parseForCanvas(editable);
   if (!parsed.success) {
     const problems = parsed.error.issues.slice(0, MAX_ISSUES).map((issue) => {
       const where = issue.path.map(String).join(' › ');
