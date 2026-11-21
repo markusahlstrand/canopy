@@ -57,12 +57,19 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
   const graph = draft.graph;
   const setGraph = useCallback((next: FlowGraph) => setDraft((d) => ({ ...d, graph: next })), []);
 
+  // Goes up when the whole graph is replaced (from the JSON): a layout begun before then is for a
+  // graph that is gone, so what it works out is dropped rather than put on the new one's steps.
+  const generation = useRef(0);
+  const current = (mine: number) => generation.current === mine;
+
   // A flow from before graphs has no positions: lay it out once, and count that as where it started.
   const laidOut = useRef(false);
   useEffect(() => {
     if (laidOut.current || !needsLayout(initial.graph)) return;
     laidOut.current = true;
+    const mine = generation.current;
     void layoutGraph(initial.graph).then((positions) => {
+      if (!current(mine)) return;
       setDraft((d) => {
         const next = { ...d, graph: placeSteps(d.graph, positions) };
         if (JSON.stringify(d) === JSON.stringify(initial)) setBaseline(JSON.stringify(next));
@@ -70,7 +77,11 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
       });
     });
   }, [initial]);
-  const tidy = () => void layoutGraph(graph).then((positions) => setDraft((d) => ({ ...d, graph: placeSteps(d.graph, positions) })));
+  const layOut = (from: FlowGraph) => {
+    const mine = generation.current;
+    void layoutGraph(from).then((positions) => { if (current(mine)) setDraft((d) => ({ ...d, graph: placeSteps(d.graph, positions) })); });
+  };
+  const tidy = () => layOut(graph);
 
   // The flow as JSON, while that view is open: the text, and what it was when opened (to tell an edit).
   const [raw, setRaw] = useState<{ text: string; from: string } | null>(null);
@@ -83,9 +94,10 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
     if (raw.text === raw.from) { setRaw(null); return; }
     const read = readDraft(raw.text, draft.id, 'canvas');
     if (!read.ok) { setRawStatus({ kind: 'problems', problems: read.problems }); return; }
+    generation.current++;
     setDraft(read.draft);
     setRaw(null);
-    if (needsLayout(read.draft.graph)) void layoutGraph(read.draft.graph).then((positions) => setDraft((d) => ({ ...d, graph: placeSteps(d.graph, positions) })));
+    if (needsLayout(read.draft.graph)) layOut(read.draft.graph);
   };
   const checkRaw = () => {
     if (!raw) return;

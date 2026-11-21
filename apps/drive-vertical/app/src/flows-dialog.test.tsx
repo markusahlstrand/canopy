@@ -492,6 +492,27 @@ describe('a flow as raw JSON', () => {
     expect((puts(calls)[0]!.body as { graph: FlowGraph }).graph.nodes.find((n) => n.id === 'copy-1')).toEqual({ id: 'copy-1', type: 'label', value: 'urgent', position: { x: 900, y: 0 } });
   });
 
+  it('never puts a layout for a graph that was replaced on the one that replaced it', async () => {
+    const calls = server({ flows: [flow()] });
+    render(<FlowsDialog open onOpenChange={() => {}} />);
+    await openRaw();
+    // A has no positions, so applying it starts a layout; B replaces it before that layout is done.
+    const unplaced = edited({ graph: { ...graph, nodes: graph.nodes.map(({ position: _p, ...n }) => n) } });
+    const placed = edited({ graph: { ...graph, nodes: graph.nodes.map((n, i) => ({ ...n, position: { x: 7 + i, y: 11 } })) } });
+    type(JSON.stringify(unplaced));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Canvas/ }));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Raw JSON/ }));
+    type(JSON.stringify(placed));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Canvas/ }));
+    // Let A's layout finish (the layout engine loads and runs asynchronously).
+    await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+    await screen.findByText('Flow saved.');
+    const saved = (puts(calls)[0]!.body as { graph: FlowGraph }).graph;
+    expect(saved.nodes.map((n) => n.position)).toEqual(placed.graph.nodes.map((n) => n.position));
+  });
+
   it('keeps the edit when the server refuses it, and undoes back to the flow from before', async () => {
     server({ flows: [flow()] });
     const answer = globalThis.fetch;
