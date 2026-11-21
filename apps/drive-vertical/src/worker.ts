@@ -1,4 +1,5 @@
 import { connectors } from './connectors.js';
+import { hasFolderChecks } from './folder-checks.js';
 import { declareConnectorEvents } from '@substrat-run/vertical-host/connectors';
 import { mountMemberRemoval } from './member-removal-route.js';
 import { claimSafeInvite, claimSafeInviteByCapability, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
@@ -961,7 +962,10 @@ mountSource(app, async (c) => {
       return { controlPlaneUrl: c.env.CONTROL_PLANE_URL, platformSecret: c.env.PLATFORM_SECRET, tenantId: node.tenantId, scopeId: node.scopeId };
     },
   };
-}, { folderRefreshMs: (c) => Number(c.env.SOURCE_FOLDER_REFRESH_MS) || undefined });
+}, {
+  folderRefreshMs: (c) => Number(c.env.SOURCE_FOLDER_REFRESH_MS) || undefined,
+  checksFolders: (provider) => hasFolderChecks(connectors.definition(provider)),
+});
 /**
  * Flows belong to the install: a caller sees and edits those whose every space they own. Each
  * route reaches the spaces as the caller, and a flow saved acts as the caller's login.

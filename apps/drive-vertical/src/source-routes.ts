@@ -53,7 +53,11 @@ function parseConnect(body: unknown) {
 export function mountSource<E extends Env>(
   app: Hono<E>,
   resolve: (c: Context<E>) => Promise<{ scope: ScopeStub; relay: () => SourceRelay }>,
-  options: { folderRefreshMs?: (c: Context<E>) => number | undefined } = {},
+  options: {
+    folderRefreshMs?: (c: Context<E>) => number | undefined;
+    /** Whether the provider's connector answers folder requests itself (`hasFolderChecks`). */
+    checksFolders?: (provider: string) => boolean;
+  } = {},
 ) {
   app.get('/api/source/status', async (c) => {
     const { scope, relay } = await resolve(c);
@@ -158,6 +162,15 @@ export function mountSource<E extends Env>(
     if (failed) return c.json(answer(await settle('failed', failed.error ?? 'The source gave no reason.')));
     // Another pass was already running, so nothing read this folder: the request waits for the next.
     if (polled.bindings.length && polled.bindings.every((b) => b.outcome === 'in-progress')) return c.json(answer(asked.refresh));
+    // A connector that checks folders answered this one in the poll, or did not take it (a sweep
+    // takes only a few): either way the drive's record is the truth, and a poll that went well says
+    // nothing about a folder nobody read. Asking again reads it without starting anything: `fresh`
+    // with the answer, or `joined` while the request still waits for the next sweep.
+    if (options.checksFolders?.(asked.provider)) {
+      const now = await scope.invoke<{ refresh: FolderRefresh | null }>('drive/request-folder-refresh', { folderId, ...(throttleMs ? { throttleMs } : {}) });
+      return c.json(answer(now.refresh));
+    }
+    // Any other connector ran its ordinary pass, which is the whole of what a check can be there.
     return c.json(answer(await settle('checked')));
   });
 

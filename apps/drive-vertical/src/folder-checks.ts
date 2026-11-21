@@ -27,7 +27,7 @@ const reason = (error: unknown) => (error instanceof Error ? error.message : Str
 export function withFolderChecks(definition: ConnectorDefinition, check: FolderChecks): ConnectorDefinition {
   const sweep = definition.sweep;
   if (!sweep) return definition;
-  return {
+  const wrapped: ConnectorDefinition = {
     ...definition,
     sweep: async (ctx) => {
       const asked = await ctx.invoke<{ folders: { folderId: string; path: string }[] }>(FOLDER_REQUESTS_OPERATION, { limit: FOLDERS_PER_CALL })
@@ -54,4 +54,16 @@ export function withFolderChecks(definition: ConnectorDefinition, check: FolderC
       return { landed, more: true };
     },
   };
+  checking.add(wrapped);
+  return wrapped;
 }
+
+/** The definitions `withFolderChecks` made: their sweeps answer folder requests themselves. */
+const checking = new WeakSet<ConnectorDefinition>();
+
+/**
+ * Whether a connector answers folder requests itself. The worker needs this after a poll: for such
+ * a connector, a request no sweep took is still waiting (a sweep takes only {@link FOLDERS_PER_CALL}),
+ * and must never be recorded as checked just because the poll succeeded.
+ */
+export const hasFolderChecks = (definition: ConnectorDefinition | undefined) => !!definition && checking.has(definition);

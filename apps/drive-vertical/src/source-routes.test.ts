@@ -165,7 +165,8 @@ it('asks for both Qonto fields, and syncs the provider the space is on', async (
 describe('checking a folder when it is opened', () => {
   type Decision = 'start' | 'joined' | 'fresh' | 'unsupported';
   const refresh = (state: string, extra: Record<string, unknown> = {}) => ({ folderId: 'f1', path: 'Recibidas', state, checkedAt: null, error: null, changes: 0, ...extra });
-  function folderWorld(decision: Decision, sync: { status?: number; bindings?: unknown[] } = {}) {
+  function folderWorld(decision: Decision, sync: { status?: number; bindings?: unknown[] } = {}, checksFolders = false) {
+    const decisions: Decision[] = [decision, 'joined'];
     const paths: string[] = [];
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       paths.push(new URL(String(url)).pathname);
@@ -174,6 +175,7 @@ describe('checking a folder when it is opened', () => {
     }) as unknown as typeof fetch;
     const invoke = vi.fn(async (operation: string, input?: unknown) => {
       if (operation === 'drive/request-folder-refresh') {
+        const decision = decisions.length > 1 ? decisions.shift()! : decisions[0]!;
         return { decision, provider: decision === 'unsupported' ? null : 'canopy.a3doc', refresh: decision === 'unsupported' ? null : refresh(decision === 'fresh' ? 'checked' : 'checking') };
       }
       if (operation === 'drive/settle-folder-refresh') {
@@ -186,7 +188,7 @@ describe('checking a folder when it is opened', () => {
     mountSource(app, async () => ({
       scope: { invoke } as unknown as ScopeStub,
       relay: () => ({ controlPlaneUrl: 'https://cp.example', platformSecret: 'secret', tenantId, scopeId, fetchImpl }),
-    }), { folderRefreshMs: () => 120_000 });
+    }), { folderRefreshMs: () => 120_000, checksFolders: provider => checksFolders && provider === 'canopy.a3doc' });
     const open = async (body: unknown = {}) => {
       const res = await app.request('/api/source/folders/f1/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
       return { status: res.status, body: await res.json() as Record<string, unknown> };
@@ -200,6 +202,16 @@ describe('checking a folder when it is opened', () => {
     expect(w.invoke).toHaveBeenCalledWith('drive/request-folder-refresh', { folderId: 'f1', force: true, throttleMs: 120_000 });
     expect(w.paths).toEqual(['/internal/connections/sync']);
     expect(w.invoke).toHaveBeenLastCalledWith('drive/settle-folder-refresh', { folderId: 'f1', outcome: 'checked' });
+  });
+
+  it('never records a folder as checked for a connector that checks folders itself, when its sweep did not take it', async () => {
+    const w = folderWorld('start', {}, true);
+    // The poll went well, but this connector answers folders itself: the drive's record says the
+    // request still waits (a sweep takes only a few), so the page keeps asking.
+    expect((await w.open()).body).toEqual({ refresh: refresh('checking'), retryAfterMs: 5_000 });
+    expect(w.paths).toEqual(['/internal/connections/sync']);
+    expect(w.invoke.mock.calls.map(([op]) => op)).toEqual(['drive/request-folder-refresh', 'drive/request-folder-refresh']);
+    expect(w.invoke).toHaveBeenLastCalledWith('drive/request-folder-refresh', { folderId: 'f1', throttleMs: 120_000 });
   });
 
   it('asks nothing of the source for a fresh folder, and asks the page to look again while one is checking', async () => {
