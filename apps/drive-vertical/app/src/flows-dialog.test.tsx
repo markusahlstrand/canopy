@@ -491,4 +491,31 @@ describe('a flow as raw JSON', () => {
     await screen.findByText('Flow saved.');
     expect((puts(calls)[0]!.body as { graph: FlowGraph }).graph.nodes.find((n) => n.id === 'copy-1')).toEqual({ id: 'copy-1', type: 'label', value: 'urgent', position: { x: 900, y: 0 } });
   });
+
+  it('keeps the edit when the server refuses it, and undoes back to the flow from before', async () => {
+    server({ flows: [flow()] });
+    const answer = globalThis.fetch;
+    const refused = 'Only someone who owns the space \'elsewhere\' can use it in a flow.';
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => (init?.method === 'PUT'
+      ? Promise.resolve(Response.json({ detail: refused }, { status: 403 }))
+      : answer(url, init))));
+    render(<FlowsDialog open onOpenChange={() => {}} />);
+    const text = await openRaw();
+    const original = text.value;
+
+    const edit = JSON.stringify(edited(), null, 2);
+    type(edit);
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+    await screen.findByText(refused);
+    expect((screen.getByLabelText('Flow as JSON') as HTMLTextAreaElement).value).toBe(edit);
+
+    // Still unsaved, so leaving still asks.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(confirm).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo my changes' }));
+    expect((screen.getByLabelText('Flow as JSON') as HTMLTextAreaElement).value).toBe(original);
+    expect(JSON.parse(original)).toEqual({ name: 'Statements', enabled: true, graph });
+  });
 });

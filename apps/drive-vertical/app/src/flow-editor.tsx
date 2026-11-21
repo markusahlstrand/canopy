@@ -92,13 +92,16 @@ export function FlowEditor({ draft: initial, spaces, spaceName, busy, onSave, on
     const read = readDraft(raw.text, draft.id, 'save');
     setRawStatus(read.ok ? { kind: 'note', text: ['This flow can be saved.', ignoredNote(read.ignored)].filter(Boolean).join(' ') } : { kind: 'problems', problems: read.problems });
   };
-  /** Save what the text says, once it passes what the server checks; never send what doesn't. */
+  /**
+   * Save what the text says, once it passes what the server checks; never send what doesn't.
+   * The draft stays as it was when the JSON opened: a save the server refuses leaves the text to
+   * fix, and "Undo my changes" still goes back to the flow from before.
+   */
   const saveRaw = () => {
     if (!raw) return;
     const read = readDraft(raw.text, draft.id, 'save');
     if (!read.ok) { setRawStatus({ kind: 'problems', problems: read.problems }); return; }
     setRawStatus(read.ignored.length ? { kind: 'note', text: ignoredNote(read.ignored)! } : null);
-    setDraft(read.draft);
     onSave(read.draft, false);
   };
 
