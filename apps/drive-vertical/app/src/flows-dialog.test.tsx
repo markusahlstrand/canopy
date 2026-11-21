@@ -421,3 +421,148 @@ it('makes category ids from names, without accents or clashes', () => {
   expect(categoryIdFor('Invoice', ['invoice'])).toBe('invoice-2');
   expect(categoryIdFor('!!!', [])).toBe('category');
 });
+
+describe('a flow as raw JSON', () => {
+  /** The flow fixture with its copy turned into a label, as someone would type it. */
+  const edited = (over: Record<string, unknown> = {}) => ({
+    name: 'Renamed', enabled: true,
+    graph: { ...graph, nodes: graph.nodes.map((n) => (n.id === 'copy-1' ? { id: 'copy-1', type: 'label', value: 'urgent', position: n.position } : n)) },
+    ...over,
+  });
+  const openRaw = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Statements' }));
+    // Radix tabs switch on mouse down.
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Raw JSON/ }));
+    return screen.getByLabelText('Flow as JSON') as HTMLTextAreaElement;
+  };
+  const type = (text: string) => fireEvent.change(screen.getByLabelText('Flow as JSON'), { target: { value: text } });
+  const puts = <C extends { method: string }>(calls: C[]) => calls.filter((c) => c.method === 'PUT');
+
+  it('shows what a person may change, and saves an edit only once it passes the save route’s checks', async () => {
+    const calls = server({ flows: [flow()] });
+    render(<FlowsDialog open onOpenChange={() => {}} />);
+    const text = await openRaw();
+    expect(JSON.parse(text.value)).toEqual({ name: 'Statements', enabled: true, graph });
+    expect(screen.getByText('f1').tagName).toBe('CODE');
+
+    type('{ "name": "Renamed", ');
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+    const problems = screen.getByRole('alert', { name: 'What is wrong with the JSON' });
+    expect(problems.textContent).toContain('This isn’t valid JSON');
+    expect(text.getAttribute('aria-invalid')).toBe('true');
+
+    type(JSON.stringify(edited({ graph: { ...graph, nodes: [graph.nodes[0]], edges: [] } })));
+    fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+    expect(screen.getByRole('alert', { name: 'What is wrong with the JSON' }).textContent).toContain('graph: A flow needs at least one action: copy or label.');
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+    expect(puts(calls)).toHaveLength(0);
+
+    // Fields the server keeps are ignored, and the id is never taken from the text.
+    type(JSON.stringify({ ...edited(), id: 'someone-elses', author: 'Eve' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+    expect(screen.getByRole('status').textContent).toBe('This flow can be saved. Ignored id, author: Canopy keeps those itself.');
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+    await screen.findByText('Flow saved.');
+    expect(puts(calls).map((c) => c.body)).toEqual([{ id: 'f1', ...edited() }]);
+  });
+
+  it('shows the edited flow on the canvas, and stays on the JSON while it is broken', async () => {
+    const calls = server({ flows: [flow()] });
+    render(<FlowsDialog open onOpenChange={() => {}} />);
+    await openRaw();
+    type('not json');
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Canvas/ }));
+    expect(screen.getByLabelText('Flow as JSON')).toBeTruthy();
+    expect(screen.getByRole('alert', { name: 'What is wrong with the JSON' }).textContent).toContain('This isn’t valid JSON');
+
+    // An unsaved edit is an unsaved edit, in either view.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(confirm).toHaveBeenCalled();
+
+    type(JSON.stringify(edited()));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Canvas/ }));
+    expect(screen.queryByLabelText('Flow as JSON')).toBeNull();
+    expect((screen.getByLabelText('Flow name') as HTMLInputElement).value).toBe('Renamed');
+    expect(step('Add label ‘urgent’')).toBeTruthy();
+    expect(screen.queryByText('Copy to Gestoría › Bancos')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+    await screen.findByText('Flow saved.');
+    expect((puts(calls)[0]!.body as { graph: FlowGraph }).graph.nodes.find((n) => n.id === 'copy-1')).toEqual({ id: 'copy-1', type: 'label', value: 'urgent', position: { x: 900, y: 0 } });
+  });
+
+  it('keeps a run asked for on the canvas only while the JSON leaves what the flow does as it was', async () => {
+    const matching = { matches: [{ space: 'bank', fileId: 'a', name: 'S.pdf', folderPath: 'Statements', category: null, needsAnswer: false, handled: false }], matched: 1, uncertain: 0, scanned: 1, truncated: false, reach: {}, maybe: {} };
+    const runs = (calls: { url: string }[]) => calls.filter((c) => c.url.endsWith('/flows/f1/run')).length;
+    for (const [change, ran] of [[(v: Record<string, unknown>) => { v.name = 'Renamed'; }, 1], [(v: Record<string, unknown>) => {
+      const nodes = (v.graph as FlowGraph).nodes;
+      (v.graph as FlowGraph).nodes = nodes.map((n) => (n.type === 'check' ? { ...n, condition: { field: 'extension' as const, values: ['xml'] } } : n));
+    }, 0]] as const) {
+      const calls = server({ flows: [flow()], preview: matching });
+      render(<FlowsDialog open onOpenChange={() => {}} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit Statements' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Show what it matches' }));
+      const preview = screen.getByRole('region', { name: 'Documents it matches now' });
+      await within(preview).findByText('1 document matches.');
+      fireEvent.click(within(preview).getByRole('checkbox'));
+
+      fireEvent.mouseDown(screen.getByRole('tab', { name: /Raw JSON/ }));
+      const value = JSON.parse((screen.getByLabelText('Flow as JSON') as HTMLTextAreaElement).value) as Record<string, unknown>;
+      change(value);
+      type(JSON.stringify(value));
+      fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+      await screen.findByText(ran ? 'Flow saved. What it matches shows up under “Waiting for you” in a moment.' : 'Flow saved.');
+      expect(runs(calls)).toBe(ran);
+      cleanup();
+    }
+  });
+
+  it('never puts a layout for a graph that was replaced on the one that replaced it', async () => {
+    const calls = server({ flows: [flow()] });
+    render(<FlowsDialog open onOpenChange={() => {}} />);
+    await openRaw();
+    // A has no positions, so applying it starts a layout; B replaces it before that layout is done.
+    const unplaced = edited({ graph: { ...graph, nodes: graph.nodes.map(({ position: _p, ...n }) => n) } });
+    const placed = edited({ graph: { ...graph, nodes: graph.nodes.map((n, i) => ({ ...n, position: { x: 7 + i, y: 11 } })) } });
+    type(JSON.stringify(unplaced));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Canvas/ }));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Raw JSON/ }));
+    type(JSON.stringify(placed));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Canvas/ }));
+    // Let A's layout finish (the layout engine loads and runs asynchronously).
+    await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+    await screen.findByText('Flow saved.');
+    const saved = (puts(calls)[0]!.body as { graph: FlowGraph }).graph;
+    expect(saved.nodes.map((n) => n.position)).toEqual(placed.graph.nodes.map((n) => n.position));
+  });
+
+  it('keeps the edit when the server refuses it, and undoes back to the flow from before', async () => {
+    server({ flows: [flow()] });
+    const answer = globalThis.fetch;
+    const refused = 'Only someone who owns the space \'elsewhere\' can use it in a flow.';
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => (init?.method === 'PUT'
+      ? Promise.resolve(Response.json({ detail: refused }, { status: 403 }))
+      : answer(url, init))));
+    render(<FlowsDialog open onOpenChange={() => {}} />);
+    const text = await openRaw();
+    const original = text.value;
+
+    const edit = JSON.stringify(edited(), null, 2);
+    type(edit);
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
+    await screen.findByText(refused);
+    expect((screen.getByLabelText('Flow as JSON') as HTMLTextAreaElement).value).toBe(edit);
+
+    // Still unsaved, so leaving still asks.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(confirm).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo my changes' }));
+    expect((screen.getByLabelText('Flow as JSON') as HTMLTextAreaElement).value).toBe(original);
+    expect(JSON.parse(original)).toEqual({ name: 'Statements', enabled: true, graph });
+  });
+});
