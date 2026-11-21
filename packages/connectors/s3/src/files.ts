@@ -213,7 +213,7 @@ export interface S3FolderCheck {
   /** The folder's path in the space (`''` is the bound prefix itself). */
   path: string;
   changes: number;
-  /** False when a budget stopped the check: what is left is the next check's or the pass's to find. */
+  /** False when a budget stopped the check: another call carries it on. A page-capped listing is complete. */
   complete: boolean;
   /** Set for a path the bucket cannot hold. */
   missing?: true;
@@ -388,7 +388,9 @@ export async function syncS3Context(
           token = res.nextContinuationToken;
           listed = !stopped && !res.truncated;
         }
-        let complete = listed;
+        // Incomplete only when the download budget stopped it, so another call carries on; a listing
+        // cut at the page cap is as far as a check goes (repeating it reads the same keys).
+        let complete = !stopped;
         // Only a complete listing says which held children the folder no longer has.
         if (listed) {
           const gone = [...items.entries()].filter(([key, e]) => !e.previousPath && dirOf(e.path) === path && e.path !== path && !presented.has(key)).map(([key]) => key);

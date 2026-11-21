@@ -530,7 +530,11 @@ export interface A3docFolderCheck {
   path: string;
   /** Changes landed for this folder. */
   changes: number;
-  /** False when a budget stopped the check: what is left is the ordinary pass's to find. */
+  /**
+   * False when a budget stopped the check (downloads, or removals still to ask about): another
+   * call carries it on, skipping what already landed. A listing cut at the page cap is complete:
+   * repeating it would read the same pages, and the ordinary pass reads the rest.
+   */
   complete: boolean;
   /** Set when a3doc's tree no longer has a folder at this path. */
   missing?: true;
@@ -859,8 +863,11 @@ async function syncFiles(
           }
           listed = !stopped && documents.length < pageSize;
         }
+        // Incomplete only when a budget stopped it, so another call carries on. A listing cut at
+        // the page cap is as far as a check goes (the newest documents, which is where new ones
+        // are): repeating it would read the same pages, so the pass finds the rest.
+        let complete = !stopped;
         // Only a complete listing says which held documents the folder no longer has.
-        let complete = listed;
         if (listed) {
           const gone = [...index.entries()]
             .filter(([, e]) => e.kind === 'file' && e.parentId === containerId && e.documentId && !presented.has(e.documentId))

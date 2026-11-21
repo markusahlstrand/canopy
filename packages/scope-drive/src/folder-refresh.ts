@@ -133,6 +133,12 @@ export const folderRefreshHandlers = {
     const folder = ctx.sql.query<{ path: string }>('SELECT path FROM drive_folders WHERE id = ?', [input.folderId])[0];
     // The folder went while it was checked (the source removed it): nothing left to describe.
     if (!folder) return { folderId: input.folderId, refresh: null };
+    // Stopped by a budget with more to read: back in the queue for the next call to take, still
+    // `checking` to whoever looks. What it landed already shows; the rest is skipped as unchanged.
+    if (input.requeue && !input.error) {
+      if (asked(rowOf(ctx, input.folderId))) ctx.sql.exec('UPDATE drive_source_refresh SET taken_at = NULL WHERE folder_id = ?', [input.folderId]);
+      return { folderId: input.folderId, refresh: refreshOf(ctx, input.folderId, folder.path) };
+    }
     finish(ctx, input.folderId, input.error ?? null, input.changes);
     return { folderId: input.folderId, refresh: refreshOf(ctx, input.folderId, folder.path) };
   },

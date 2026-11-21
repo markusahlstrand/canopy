@@ -205,3 +205,24 @@ it('leaves folders a sweep did not take waiting, never "checked", when more are 
   expect(await w.openRoute(ids.Recibidas)).toEqual({ refresh: expect.objectContaining({ state: 'checked', changes: 1 }) });
   expect(await w.names(ids.Recibidas)).toEqual(['Recibidas new.pdf', 'Recibidas old.pdf']);
 });
+
+it('puts back a folder the shared download budget ran out on, and finishes it in the follow-up call', async () => {
+  const w = await world();
+  const F = TinyA3doc.FOLDERS;
+  w.a3.add(F.Emitidas, 'Emitidas old', 'old'); w.a3.add(F.Bancos, 'Bancos old', 'old');
+  await w.poll();
+  const emitidas = await w.folderAt('Emitidas'), bancos = await w.folderAt('Bancos');
+  for (let i = 0; i < 10; i++) { w.a3.add(F.Emitidas, `Emitida ${i}`, `e${i}`); w.a3.add(F.Bancos, `Banco ${i}`, `b${i}`); }
+  await w.open(emitidas); w.advance(1_000); await w.open(bancos);
+
+  // One call: Emitidas spends ten of its fifteen downloads, Bancos gets five and is put back.
+  expect(await w.poll()).toEqual({ landed: 15, more: true });
+  expect(await w.open(emitidas)).toMatchObject({ decision: 'fresh', refresh: { state: 'checked', changes: 10 } });
+  expect(await w.open(bancos)).toMatchObject({ decision: 'joined', refresh: { state: 'checking' } });
+  expect(await w.names(bancos)).toHaveLength(6);
+
+  // The follow-up call the `more` asks for takes it again, skips what landed, and finishes.
+  expect(await w.poll()).toEqual({ landed: 5, more: true });
+  expect(await w.open(bancos)).toMatchObject({ decision: 'fresh', refresh: { state: 'checked', changes: 5 } });
+  expect(await w.names(bancos)).toHaveLength(11);
+});

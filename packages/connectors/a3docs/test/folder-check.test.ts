@@ -141,3 +141,20 @@ it('says a folder a3doc no longer has is missing, and fails the call when a3doc 
   w.a3.mfa = 2;
   await expect(w.check(['Recibidas'])).rejects.toThrow('MFA');
 });
+
+it('says a folder the shared download budget stopped is incomplete, and carries it on in the next call', async () => {
+  const w = world();
+  await w.bind('');
+  await w.sweep();
+  for (let i = 0; i < 10; i++) { w.a3.add([21], `Received ${i}`, `r${i}`); w.a3.add([11], `Tax ${i}`, `t${i}`); }
+  // The first folder spends ten of the call's fifteen downloads; the second gets five. (Each also
+  // lands its folder and the one above it, which a3doc's tree had and no document had used yet.)
+  expect(await w.check(['Facturas/Recibidas', 'Fiscal/Modelo 303'])).toEqual([
+    { path: 'Facturas/Recibidas', changes: 12, complete: true },
+    { path: 'Fiscal/Modelo 303', changes: 7, complete: false },
+  ]);
+  expect(w.paths().filter(p => p.startsWith('Fiscal/'))).toHaveLength(5);
+  // The next call skips what landed and finishes it.
+  expect(await w.check(['Fiscal/Modelo 303'])).toEqual([{ path: 'Fiscal/Modelo 303', changes: 5, complete: true }]);
+  expect(w.paths().filter(p => p.startsWith('Fiscal/'))).toHaveLength(10);
+});

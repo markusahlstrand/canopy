@@ -382,10 +382,13 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     input: z.object({ limit: z.number().int().min(1).max(10).default(3) }),
     output: z.object({ folders: z.array(z.object({ folderId: z.string(), path: z.string() })) }),
   },
-  /** The connector checked a folder it took (or failed to). */
+  /**
+   * The connector checked a folder it took (or failed to). `requeue`: a budget stopped the check
+   * part way, so the request goes back to wait for the next call instead of reading as checked.
+   */
   'drive/source-folder-checked': {
     summary: 'Record that the source checked a folder', permission: 'drive:land-source',
-    input: z.object({ folderId: z.string(), changes: z.number().int().min(0), error: z.string().max(500).nullable().optional() }),
+    input: z.object({ folderId: z.string(), changes: z.number().int().min(0), error: z.string().max(500).nullable().optional(), requeue: z.boolean().optional() }),
     output: z.object({ folderId: z.string(), refresh: folderRefresh.nullable() }),
     emits: { entity: 'folder', entityIdFrom: 'folderId', type: 'drive.folder-checked', schemaVersion: 1, piiClass: 'none', payload: ['folderId'] },
   },

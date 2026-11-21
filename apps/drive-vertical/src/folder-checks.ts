@@ -7,7 +7,18 @@ import type { ScopedConnectionContext } from '@substrat-run/kernel';
  * (`''` is the bound folder). A check answers per folder; a throw means the call itself failed (a
  * login a3doc refused, MFA wanted), and is every folder's answer.
  */
-export type FolderChecks = (ctx: ScopedConnectionContext, paths: string[]) => Promise<{ path: string; changes: number; error?: string }[]>;
+export type FolderChecks = (ctx: ScopedConnectionContext, paths: string[]) => Promise<FolderCheckResult[]>;
+export interface FolderCheckResult {
+  path: string;
+  changes: number;
+  /**
+   * False when a budget of the call stopped the check (the connectors share one download budget
+   * across the call's folders): the request goes back in the queue, and the follow-up call carries
+   * on, skipping what already landed. Never read as checked.
+   */
+  complete: boolean;
+  error?: string;
+}
 
 /** The drive operations the capability is wired through; see `@canopy/scope-drive` `folder-refresh.ts`. */
 export const FOLDER_REQUESTS_OPERATION = 'drive/source-folder-requests';
@@ -33,8 +44,8 @@ export function withFolderChecks(definition: ConnectorDefinition, check: FolderC
       const asked = await ctx.invoke<{ folders: { folderId: string; path: string }[] }>(FOLDER_REQUESTS_OPERATION, { limit: FOLDERS_PER_CALL })
         .then((r) => r.folders, () => []);
       if (!asked.length) return sweep(ctx);
-      const tell = (folderId: string, changes: number, error: string | null) =>
-        ctx.invoke(FOLDER_CHECKED_OPERATION, { folderId, changes, error }).catch(() => undefined);
+      const tell = (folderId: string, changes: number, error: string | null, requeue = false) =>
+        ctx.invoke(FOLDER_CHECKED_OPERATION, { folderId, changes, error, ...(requeue ? { requeue } : {}) }).catch(() => undefined);
       let checks: Awaited<ReturnType<FolderChecks>>;
       try {
         checks = await check(ctx, asked.map((f) => f.path));
@@ -46,7 +57,10 @@ export function withFolderChecks(definition: ConnectorDefinition, check: FolderC
       for (const f of asked) {
         const found = checks.find((r) => r.path === f.path);
         landed += found?.changes ?? 0;
-        await tell(f.folderId, found?.changes ?? 0, found?.error ? reason(found.error) : null);
+        // A check a budget stopped (or one the connector did not answer) is not an answer: back in
+        // the queue, for the `more` call to finish.
+        const requeue = !found || (!found.error && !found.complete);
+        await tell(f.folderId, found?.changes ?? 0, found?.error ? reason(found.error) : null, requeue);
       }
       // Every folder failed the same way: the call failed, and the platform should record it so.
       const errors = checks.filter((r) => r.error);

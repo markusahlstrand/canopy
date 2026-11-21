@@ -37,7 +37,7 @@ async function world() {
   };
   const ask = (folderId: string, extra: { force?: boolean; throttleMs?: number } = {}, as = member) => as.invoke<Ask>('drive/request-folder-refresh', { folderId, ...extra });
   const take = (limit = 3) => connector.invoke<{ folders: { folderId: string; path: string }[] }>('drive/source-folder-requests', { limit });
-  const checked = (folderId: string, changes: number, error?: string) => connector.invoke<{ refresh: FolderRefresh | null }>('drive/source-folder-checked', { folderId, changes, ...(error ? { error } : {}) });
+  const checked = (folderId: string, changes: number, error?: string, requeue?: boolean) => connector.invoke<{ refresh: FolderRefresh | null }>('drive/source-folder-checked', { folderId, changes, ...(error ? { error } : {}), ...(requeue ? { requeue } : {}) });
   const settle = (folderId: string, outcome: 'checked' | 'failed', error?: string) =>
     member.invoke<{ refresh: FolderRefresh }>('drive/settle-folder-refresh', { folderId, outcome, ...(error ? { error } : {}) });
   const emitted = async () => Number((await host.admin.queryScope(staff, t, s, { sql: `SELECT COUNT(*) FROM _substrat_outbox WHERE type = 'drive.folder-checked'` })).rows[0]![0]);
@@ -153,4 +153,20 @@ it('refuses the connector operations to a member, and asking about a folder that
   await expect(w.member.invoke('drive/source-folder-requests', { limit: 3 })).rejects.toThrow();
   await expect(w.member.invoke('drive/source-folder-checked', { folderId: ROOT_FOLDER_ID, changes: 0 })).rejects.toThrow();
   await expect(w.ask('missing')).rejects.toThrow();
+});
+
+it('puts a check a budget stopped back in the queue, still checking, for the next call to take', async () => {
+  const w = await world();
+  await w.connect();
+  const id = await w.folder('Facturas');
+  await w.ask(id); await w.take();
+  expect((await w.checked(id, 4, undefined, true)).refresh).toMatchObject({ state: 'checking', checkedAt: null });
+  expect(await w.emitted()).toBe(0);
+  // Not taken any more: the follow-up call takes it at once, without the three-minute wait.
+  expect(await w.take()).toEqual({ folders: [{ folderId: id, path: 'Facturas' }] });
+  expect((await w.ask(id)).decision).toBe('joined');
+  expect((await w.checked(id, 2)).refresh).toMatchObject({ state: 'checked', changes: 2 });
+  // A requeue that carries an error is a failure, not more to read.
+  await w.ask(id, { force: true }); await w.take();
+  expect((await w.checked(id, 0, 'a3doc went away', true)).refresh).toMatchObject({ state: 'failed', error: 'a3doc went away' });
 });
