@@ -985,11 +985,33 @@ mountSource(app, async (c) => {
  * Flows belong to the install: a caller sees and edits those whose every space they own. Each
  * route reaches the spaces as the caller, and a flow saved acts as the caller's login.
  */
+/** A batch of approvals is driven this many runs at a time (at least), this many passes each, this many times at most. */
+const FLOW_DRIVE_LIMIT = 50;
+const FLOW_DRIVE_PASSES = 3;
+const FLOW_DRIVE_ROUNDS = 4;
+
 async function flowAccessFor(c: Context<{ Bindings: Env }>): Promise<FlowAccess> {
   const env = c.env;
   const { base, sub, label } = await subjectOf(c.req.raw, env);
   const host = hostFor(env);
   const directory = identityDo(env, base);
+  // Drive a space's due runs after the response, as the runs just started there need. One run: the
+  // default drive. A batch: as many runs as it started, a few passes each, again while work remains.
+  const driveFlows = (scope: string, runs?: number) => {
+    const node = scopeId.parse(scope);
+    const work = async () => {
+      if (runs === undefined) return void await host.runDueJobs(base.tenantId, node);
+      const limit = Math.max(FLOW_DRIVE_LIMIT, runs);
+      for (let round = 0; round < FLOW_DRIVE_ROUNDS; round++) {
+        const report = await host.runDueJobs(base.tenantId, node, { limit, maxPasses: FLOW_DRIVE_PASSES });
+        // Nothing picked up, or all of it settled within its passes: the batch is through.
+        if (report.attempted < limit && report.advanced === 0) return;
+      }
+    };
+    return defer(c, work().catch((error: unknown) => {
+      console.error('drive.flow.run-failed', { error: error instanceof Error ? error.message : String(error) });
+    }));
+  };
   return {
     sub,
     author: label,
@@ -1006,13 +1028,12 @@ async function flowAccessFor(c: Context<{ Bindings: Env }>): Promise<FlowAccess>
     },
     newId: () => ulid(),
     now: () => new Date().toISOString(),
-    start: async (scope, job, instance, payload) => {
+    start: async (scope, job, instance, payload, options) => {
       const node = { tenantId: base.tenantId, scopeId: scopeId.parse(scope) };
       await host.startJobRun(node.tenantId, node.scopeId, { moduleId: DRIVE_MODULE_ID, job, instance, payload });
-      await defer(c, host.runDueJobs(node.tenantId, node.scopeId).catch((error: unknown) => {
-        console.error('drive.flow.run-failed', { error: error instanceof Error ? error.message : String(error) });
-      }));
+      if (options?.drive !== false) await driveFlows(scope);
     },
+    drive: (scope, runs) => driveFlows(scope, runs),
   };
 }
 mountFlows(app, flowAccessFor);

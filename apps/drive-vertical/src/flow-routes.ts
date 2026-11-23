@@ -2,7 +2,8 @@ import type { Context, Env, Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { capturesOn, copyPaths, flowGraph, isAction, reach, spacesOf, walk, type FileFactsRow, type FlowDelivery, type FlowGraph } from '@canopy/scope-drive/spec/model';
-import type { DeliveryDetail, DeliveryView, FlowList, FlowPreview, FlowSpace, FlowView, PreviewMatch } from './flow-contract.js';
+import { problemFor } from '@substrat-run/vertical-host';
+import { DECIDE_BATCH_LIMIT, type DecisionResult, type DecisionResults, type DeliveryDetail, type DeliveryView, type FlowList, type FlowPreview, type FlowSpace, type FlowView, type PreviewMatch } from './flow-contract.js';
 import { alreadyHandled, FLOW_BACKFILL_JOB, FLOW_RUN_JOB } from './automation.js';
 import type { DirectoryFlow, FlowScopes, SaveFlow } from './flow-directory.js';
 import { flowSaveInput } from './flow-contract.js';
@@ -31,8 +32,16 @@ export interface FlowAccess {
   store: FlowStore;
   newId(): string;
   now(): string;
-  /** Start (or join) a drive job in a space, then drive due runs after the response. */
-  start(scopeId: string, job: string, instance: string, payload: Record<string, unknown>): Promise<void>;
+  /**
+   * Start (or join) a drive job in a space, then drive due runs after the response. With
+   * `drive: false` the job is only started: the caller drives the space once with `drive`.
+   */
+  start(scopeId: string, job: string, instance: string, payload: Record<string, unknown>, options?: { drive?: boolean }): Promise<void>;
+  /**
+   * Drive a space's due runs after the response, for a batch of `runs` jobs started without: until
+   * they are through, rather than the one bounded pass a single start gets.
+   */
+  drive?(scopeId: string, runs: number): Promise<void>;
   tenantId: string;
 }
 
@@ -47,6 +56,34 @@ const decideInput = z.object({
   space: z.string().min(1), flowId: z.string().min(1), fileId: z.string().min(1), versionId: z.string().min(1),
   decision: z.enum(['approve', 'dismiss', 'retry']),
 });
+type DecideInput = z.infer<typeof decideInput>;
+const decideManyInput = z.object({ items: z.array(decideInput).min(1).max(DECIDE_BATCH_LIMIT) });
+
+/** How many of a batch's decisions run at once: each is a few calls into its space. */
+const DECIDE_CONCURRENCY = 5;
+/** How many proposals at once read their document's folder, to say where they would go. */
+const FILING_CONCURRENCY = 10;
+
+/** Run `work` over `items`, `width` at a time, keeping their order. */
+async function pool<T, R>(items: readonly T[], width: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await work(items[i]!);
+    }
+  }));
+  return out;
+}
+
+/** What a refusal answers as one item of a batch: the status and words a single decide would have. */
+function refusalOf(error: unknown): { status: number; error: string } {
+  if (error instanceof HTTPException) return { status: error.status, error: error.message || 'That did not work.' };
+  const { status, body } = problemFor(error);
+  const said = [body.detail, body.title].find((v) => typeof v === 'string' && v);
+  return { status, error: typeof said === 'string' ? said : 'That did not work.' };
+}
 
 const deliveriesQuery = z.object({
   flowId: z.string().optional(),
@@ -87,11 +124,60 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
     return { ...rest, spaces };
   };
 
-  async function visibleFlow(access: FlowAccess, id: string) {
-    const ctx = await seen(access);
+  type Seen = Awaited<ReturnType<typeof seen>>;
+  const flowIn = (ctx: Seen, id: string) => {
     const found = ctx.visible.find((v) => v.flow.id === id);
     if (!found) throw new HTTPException(404, { message: 'Flow not found.' });
     return { ...ctx, ...found };
+  };
+  const visibleFlow = async (access: FlowAccess, id: string) => flowIn(await seen(access), id);
+
+  /**
+   * Approve or dismiss a proposal, or try a failed delivery again, as `ctx` lets the caller see
+   * flows. Each move names the state it expects to leave, so a delivery is decided once however
+   * many times it is asked (a double click, two tabs, a batch naming it twice): the second is a 409.
+   * `drive: false` starts a run without driving its space, for a batch that drives each space once.
+   */
+  async function decideOne(access: FlowAccess, ctx: Seen, input: DecideInput, drive = true) {
+    const { space, flowId, fileId, versionId, decision } = input;
+    const { scopes, managed } = flowIn(ctx, flowId);
+    const site = [...managed.values()].find((s) => s.slug === space);
+    if (!site || !scopes.watch.includes(site.scopeId)) throw new HTTPException(404, { message: 'There is no such delivery.' });
+    const key = { flowId, fileId, versionId };
+    const move = (state: string, expect: string[]) =>
+      site.scope.invoke<{ changed: boolean; delivery: FlowDelivery | null; previous: string }>('drive/record-flow-delivery', { ...key, state, expect });
+    const refuse = (previous: string): never => {
+      throw new HTTPException(409, { message: previous === 'none' ? 'There is no such delivery.' : 'Someone already decided this one.' });
+    };
+    if (decision === 'dismiss') {
+      const moved = await move('dismissed', ['proposed']);
+      if (!moved.changed) refuse(moved.previous);
+      return { site, delivery: moved.delivery ?? { ...key, state: 'dismissed' as const } };
+    }
+    // A retry goes past the flow's wait only when a person had already approved it there (or, for a
+    // delivery from before flows were graphs, when its conditions had all held). Otherwise it walks
+    // again from the start, keeping the answers and finished actions it has, and proposes at the wait.
+    let approved = true;
+    if (decision === 'retry') {
+      const { deliveries } = await site.scope.invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId, fileId, limit: 200 });
+      const delivery = deliveries.find((d) => d.versionId === versionId);
+      if (!delivery || delivery.state !== 'failed') return refuse(delivery?.state ?? 'none');
+      const detail = delivery.detail as DeliveryDetail & { matched?: unknown };
+      approved = detail.approved ?? detail.matched === true;
+    }
+    const from = decision === 'retry' ? 'failed' : 'proposed';
+    // Not approved, it stays failed: the run claims (or proposes) from there.
+    const moved = approved ? await move('approved', [from]) : null;
+    if (moved && !moved.changed) refuse(moved.previous);
+    try {
+      const run = [site.scopeId, FLOW_RUN_JOB, `${flowId}:${fileId}:${versionId}`, { tenantId: access.tenantId, scopeId: site.scopeId, ...key, approved }] as const;
+      await (drive ? access.start(...run) : access.start(...run, { drive: false }));
+    } catch (error) {
+      // No run is coming: put the delivery back, so it can be decided again rather than sit approved for good.
+      if (approved) await move(from, ['approved']).catch(() => {});
+      throw error;
+    }
+    return { site, delivery: moved?.delivery ?? { ...key, state: 'failed' as const } };
   }
 
   app.get('/api/flows', async (c) => {
@@ -235,59 +321,74 @@ export function mountFlows<E extends Env>(app: Hono<E>, resolve: (c: Context<E>)
       return deliveries.filter((d) => names.has(d.flowId)).map((d): DeliveryView => ({ ...d, space: site.slug, flowName: names.get(d.flowId)! }));
     }));
     const deliveries = lists.flat().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
-    return c.json({ deliveries });
+    if (state !== 'proposed') return c.json({ deliveries });
+    // Proposals wait for a person, who decides better seeing where the document is and where it would go.
+    const bySlug = new Map([...managed.values()].map((s) => [s.slug, s]));
+    const filing = new Map(flows.map((v) => [v.flow.id, filedIn(v.flow.graph, bySlug)]));
+    // A document that can't be read, or a destination that can't be worked out, is listed without them.
+    const placed = await pool(deliveries, FILING_CONCURRENCY, async (d): Promise<DeliveryView> => {
+      try {
+        const facts = await bySlug.get(d.space)!.scope.invoke<FileFactsRow>('drive/file-facts', { fileId: d.fileId });
+        // A newer version arrived meanwhile: where that one would go says nothing of this one.
+        if (facts.versionId !== d.versionId) return { ...d, folderPath: facts.folderPath };
+        // As the run will go on after approval: with the model's answers so far, and past the copies it already made.
+        const { answers, done } = d.detail as DeliveryDetail;
+        const where = await filing.get(d.flowId)!(facts, { answers, done }).catch(() => []);
+        return { ...d, folderPath: facts.folderPath, ...(where.length ? { filedIn: where } : {}) };
+      } catch {
+        return d;
+      }
+    });
+    return c.json({ deliveries: placed });
   });
 
-  /** Approve or dismiss a proposal, or try a failed delivery again. */
+  /**
+   * Approve or dismiss a proposal, or try a failed delivery again. Given `{ items }` (at most
+   * `DECIDE_BATCH_LIMIT`), decide each by the same checks as one alone and answer `{ results }`
+   * in the same order: one that is refused says why, and those decided stay decided.
+   */
   app.post('/api/flow-deliveries/decide', async (c) => {
     const access = await resolve(c);
-    const parsed = decideInput.safeParse(await c.req.json().catch(() => null));
+    const body: unknown = await c.req.json().catch(() => null);
+    if (body && typeof body === 'object' && 'items' in body) {
+      const parsed = decideManyInput.safeParse(body);
+      if (!parsed.success) {
+        throw new HTTPException(400, { message: `Send between 1 and ${DECIDE_BATCH_LIMIT} decisions, each naming a delivery and approve, dismiss or retry.` });
+      }
+      const ctx = await seen(access);
+      // Each run is started in its space without driving it; the spaces are driven once each below.
+      const batched = Boolean(access.drive);
+      const driven = new Map<string, number>();
+      const results = await pool(parsed.data.items, DECIDE_CONCURRENCY, async (item): Promise<DecisionResult> => {
+        const { decision: _decision, ...key } = item;
+        try {
+          const { site, delivery } = await decideOne(access, ctx, item, !batched);
+          if (item.decision !== 'dismiss') driven.set(site.scopeId, (driven.get(site.scopeId) ?? 0) + 1);
+          return { ...key, ok: true, state: delivery.state };
+        } catch (error) {
+          return { ...key, ok: false, ...refusalOf(error) };
+        }
+      });
+      if (batched) {
+        await Promise.all([...driven].map(([scope, runs]) => access.drive!(scope, runs).catch((error: unknown) => {
+          console.error('drive.flow.drive-failed', { error: error instanceof Error ? error.message : String(error) });
+        })));
+      }
+      return c.json({ results } satisfies DecisionResults);
+    }
+    const parsed = decideInput.safeParse(body);
     if (!parsed.success) throw new HTTPException(400, { message: 'Say which delivery, and approve, dismiss or retry.' });
-    const { space, flowId, fileId, versionId, decision } = parsed.data;
-    const { scopes, managed } = await visibleFlow(access, flowId);
-    const site = [...managed.values()].find((s) => s.slug === space);
-    if (!site || !scopes.watch.includes(site.scopeId)) throw new HTTPException(404, { message: 'There is no such delivery.' });
-    const key = { flowId, fileId, versionId };
-    const move = (state: string, expect: string[]) =>
-      site.scope.invoke<{ changed: boolean; delivery: FlowDelivery | null; previous: string }>('drive/record-flow-delivery', { ...key, state, expect });
-    const refuse = (previous: string): never => {
-      throw new HTTPException(409, { message: previous === 'none' ? 'There is no such delivery.' : 'Someone already decided this one.' });
-    };
-    if (decision === 'dismiss') {
-      const moved = await move('dismissed', ['proposed']);
-      if (!moved.changed) refuse(moved.previous);
-      return c.json(moved.delivery);
-    }
-    // A retry goes past the flow's wait only when a person had already approved it there (or, for a
-    // delivery from before flows were graphs, when its conditions had all held). Otherwise it walks
-    // again from the start, keeping the answers and finished actions it has, and proposes at the wait.
-    let approved = true;
-    if (decision === 'retry') {
-      const { deliveries } = await site.scope.invoke<{ deliveries: FlowDelivery[] }>('drive/flow-deliveries', { flowId, fileId, limit: 200 });
-      const delivery = deliveries.find((d) => d.versionId === versionId);
-      if (!delivery || delivery.state !== 'failed') return refuse(delivery?.state ?? 'none');
-      const detail = delivery.detail as DeliveryDetail & { matched?: unknown };
-      approved = detail.approved ?? detail.matched === true;
-    }
-    const from = decision === 'retry' ? 'failed' : 'proposed';
-    // Not approved, it stays failed: the run claims (or proposes) from there.
-    const moved = approved ? await move('approved', [from]) : null;
-    if (moved && !moved.changed) refuse(moved.previous);
-    try {
-      await access.start(site.scopeId, FLOW_RUN_JOB, `${flowId}:${fileId}:${versionId}`, { tenantId: access.tenantId, scopeId: site.scopeId, ...key, approved });
-    } catch (error) {
-      // No run is coming: put the delivery back, so it can be decided again rather than sit approved for good.
-      if (approved) await move(from, ['approved']).catch(() => {});
-      throw error;
-    }
-    return c.json(moved?.delivery ?? { ...key, state: 'failed' });
+    const { delivery } = await decideOne(access, await seen(access), parsed.data);
+    return c.json(delivery);
   });
 }
 
 /**
  * Where a flow's copies would file a document, for the copies whose folder or categories it works
  * out from the document's own folders: 'space › path' each, or why it can't tell. Only the copies
- * the document surely reaches (no model question before them).
+ * the document surely reaches: no model question before them, unless `answers` (a delivery's, so
+ * far) settles it. Copies in `done` already happened and are not listed, though the walk still
+ * passes them so what they captured reaches the steps after.
  */
 function filedIn(graph: FlowGraph, bySlug: Map<string, FlowSite>) {
   const bases = new Map<string, Promise<string | null>>();
@@ -303,13 +404,13 @@ function filedIn(graph: FlowGraph, bySlug: Map<string, FlowSite>) {
     }
     return pending;
   };
-  return async (file: FileFactsRow): Promise<string[]> => {
-    const { path } = walk(graph, file);
+  return async (file: FileFactsRow, so: { answers?: Record<string, boolean>; done?: Record<string, unknown> } = {}): Promise<string[]> => {
+    const { path } = walk(graph, file, so.answers);
     const captures = capturesOn(graph, path, file);
     const out: string[] = [];
     for (const id of path) {
       const node = graph.nodes.find((n) => n.id === id);
-      if (node?.type !== 'copy' || (!node.subfolder?.trim() && !node.alsoInPaths?.some((t) => t.trim()))) continue;
+      if (node?.type !== 'copy' || so.done?.[id] || (!node.subfolder?.trim() && !node.alsoInPaths?.some((t) => t.trim()))) continue;
       const space = bySlug.get(node.space)?.name ?? node.space;
       try {
         const { subfolder, alsoInPaths } = copyPaths(node, captures.get(id) ?? {});

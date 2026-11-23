@@ -42,12 +42,21 @@ function scope(answers: Record<string, Answer>): SpaceInvoker & { invoke: Return
 function harness(opts: { flows?: ReturnType<typeof stored>[] } = {}) {
   /** Who a request is: Ada, by her bearer token or her session cookie. */
   const signedIn = (headers: Headers) => headers.get('authorization') === 'Bearer ada' || /(^|;\s*)session=ada\b/.test(headers.get('cookie') ?? '');
+  const waiting: Record<string, string> = { a: 'proposed', b: 'proposed' };
   const bank = scope({
     'drive/people-access': { canManage: true },
     'drive/get-folder': { id: 'root', canWrite: true },
     'drive/get-source': { source: { provider: 'canopy.qonto', canUpload: false } },
     'drive/list-plugins': { plugins: [{ id: 'qonto-view' }] },
     'drive/flow-candidates': { files: [], next: null },
+    // Two proposals wait here; a delivery moves only from the state a decision expects, as in the scope.
+    'drive/record-flow-delivery': (input: unknown) => {
+      const { fileId, state, expect: from } = input as { fileId: string; state: string; expect: string[] };
+      const previous = waiting[fileId] ?? 'none';
+      if (!from.includes(previous)) return { changed: false, delivery: null, previous };
+      waiting[fileId] = state;
+      return { changed: true, delivery: { flowId: 'mine', fileId, versionId: 'v1', state }, previous };
+    },
   });
   const a3docs = scope({
     'drive/people-access': { canManage: true },
@@ -147,7 +156,7 @@ function harness(opts: { flows?: ReturnType<typeof stored>[] } = {}) {
     const text = body.result!.content[0]!.text;
     return { isError: body.result!.isError === true, text, value: body.result!.isError ? null : JSON.parse(text) };
   };
-  return { rpc, tool, store, start, bank, a3docs, shared, home, secret, directory, flowCalls };
+  return { rpc, tool, store, start, bank, a3docs, shared, home, secret, directory, flowCalls, waiting };
 }
 
 describe('the assistant MCP endpoint', () => {
@@ -374,5 +383,21 @@ describe('flows over MCP', () => {
       { id: 'copy', type: 'copy', space: 'a3docs', folderId: 'bancos', alsoIn: [] },
     ] }) });
     expect(elsewhere).toMatchObject({ isError: true, text: "Only someone who owns the space 'shared' can use it in a flow." });
+  });
+
+  it('decides several deliveries in one call through the app route, each answering for itself', async () => {
+    const h = harness({ flows: [stored('mine', { watch: ['s-bank'], write: ['s-a3'] })] });
+    const item = (fileId: string) => ({ space: 'bank', flowId: 'mine', fileId, versionId: 'v1', decision: 'approve' });
+    const decided = await h.tool('drive_decide-flow-delivery', { items: [item('a'), item('b'), item('a'), item('gone')] });
+    expect(decided.value.results).toEqual([
+      expect.objectContaining({ fileId: 'a', ok: true, state: 'approved' }),
+      expect.objectContaining({ fileId: 'b', ok: true, state: 'approved' }),
+      expect.objectContaining({ fileId: 'a', ok: false, status: 409, error: 'Someone already decided this one.' }),
+      expect.objectContaining({ fileId: 'gone', ok: false, status: 409, error: 'There is no such delivery.' }),
+    ]);
+    expect(h.waiting).toEqual({ a: 'approved', b: 'approved' });
+    // One at a time still works, and still answers the delivery.
+    const again = await h.tool('drive_decide-flow-delivery', item('a'));
+    expect(again).toMatchObject({ isError: true, text: 'Someone already decided this one.' });
   });
 });

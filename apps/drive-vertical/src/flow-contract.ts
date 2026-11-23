@@ -65,11 +65,40 @@ export interface FlowPreview {
   truncated: boolean;
 }
 
-/** A delivery as the app lists it: in which space the document is, and which flow it was. */
-export interface DeliveryView extends FlowDelivery { space: string; flowName: string }
+/**
+ * A delivery as the app lists it: in which space the document is, and which flow it was. Asked
+ * for proposals (`state=proposed`), each also says the folder the document is in and where the
+ * flow's copies would file it, when the route can tell.
+ */
+export interface DeliveryView extends FlowDelivery {
+  space: string; flowName: string;
+  folderPath?: string;
+  /** As in a preview: 'space › path' for each copy that works its folder out from the document's. */
+  filedIn?: string[];
+}
 
-/** `POST /api/flow-deliveries/decide`. */
+/** `POST /api/flow-deliveries/decide`: one decision, answered with the delivery as it is now. */
 export interface DeliveryDecision { space: string; flowId: string; fileId: string; versionId: string; decision: 'approve' | 'dismiss' | 'retry' }
+
+/** How many decisions one `POST /api/flow-deliveries/decide` with `items` takes: more go in further requests. */
+export const DECIDE_BATCH_LIMIT = 50;
+
+/** `POST /api/flow-deliveries/decide` with `{ items }`: each decided on its own, by the same checks. */
+export interface DeliveryDecisions { items: DeliveryDecision[] }
+
+/**
+ * One item's outcome, in the order asked. A refusal says why with the status a single decide
+ * would have answered: 404 when the flow is not one the caller can see or does not watch that
+ * space; 409 when the delivery is not there or not in a state to decide (already decided);
+ * 403 when the space does not allow it. What succeeded stays done when others fail.
+ */
+export type DecisionResult = Omit<DeliveryDecision, 'decision'> & (
+  | { ok: true; state: FlowDelivery['state'] }
+  | { ok: false; status: number; error: string }
+);
+
+/** The answer to `{ items }`. */
+export interface DecisionResults { results: DecisionResult[] }
 
 /**
  * What a delivery's `detail` holds once a graph flow wrote it: the path the document took, the

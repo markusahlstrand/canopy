@@ -72,3 +72,18 @@ export async function rowNames(): Promise<string[]> {
   await waitFor(() => { if (!fileRows().length) throw new Error('no rows yet'); });
   return fileRows().map(rowText);
 }
+
+/** A row's own action button (Approve, Reject…), drawn by the table in the row. */
+export function rowAction(row: HTMLTableRowElement, label: string): HTMLElement {
+  const button = [...row.querySelectorAll<HTMLElement>('td.actions wa-button')].find((b) => b.textContent?.trim().startsWith(label));
+  if (!button) throw new Error(`Row has no ${label} action`);
+  return button;
+}
+
+/** A bulk action in the bar the table shows over a selection. */
+export function bulkAction(label: string): HTMLElement {
+  const bar = document.querySelector('sub-entity-table')?.shadowRoot?.querySelector('[part~="bulk-bar"]');
+  const button = [...(bar?.querySelectorAll<HTMLElement>('wa-button') ?? [])].find((b) => b.textContent?.trim() === label);
+  if (!button) throw new Error(`No bulk ${label} in the selection bar`);
+  return button;
+}

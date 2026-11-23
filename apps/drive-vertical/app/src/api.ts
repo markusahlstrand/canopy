@@ -625,7 +625,7 @@ export const retrySourceSend = (fileId: string) => call(`/files/${encodeURICompo
 export type {
   FlowCondition, FlowDelivery, FlowEdge, FlowGraph, FlowNode, FlowNodeType, StoredFlow, DeliveryState, GraphProblem,
 } from '@canopy/scope-drive/spec/model';
-export type { DeliveryDecision, DeliveryDetail, DeliveryView, FlowList, FlowSave, FlowSpace, FlowView } from '../../src/flow-contract';
+export type { DecisionResult, DeliveryDecision, DeliveryDetail, DeliveryView, FlowList, FlowSave, FlowSpace, FlowView } from '../../src/flow-contract';
 
 // Flows belong to the install, not to the space this tab is in: these routes ignore the selected space.
 
@@ -646,6 +646,12 @@ export const flowDeliveries = (query: { flowId?: string; state?: string; limit?:
 };
 export const decideDelivery = (key: { space: string; flowId: string; fileId: string; versionId: string }, decision: 'approve' | 'dismiss' | 'retry') =>
   call<import('@canopy/scope-drive/spec/model').FlowDelivery>('/flow-deliveries/decide', { method: 'POST', body: JSON.stringify({ ...key, decision }) });
+/**
+ * Several decisions in one request (at most `DECIDE_BATCH_LIMIT`): each answered in order, ok or
+ * refused with why. A request that fails as a whole throws, as `call` does.
+ */
+export const decideDeliveries = (items: import('../../src/flow-contract').DeliveryDecision[]) =>
+  call<import('../../src/flow-contract').DecisionResults>('/flow-deliveries/decide', { method: 'POST', body: JSON.stringify({ items }) }).then((r) => r.results);
 export const fileDetails = (fileId: string) => call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`);
 export const updateFileDetails = (fileId: string, description: string, labels: string[], expectedRevision: number) =>
   call<FileDetails>(`/files/${encodeURIComponent(fileId)}/details`, { method: 'PATCH', body: JSON.stringify({ description, labels, expectedRevision }) });

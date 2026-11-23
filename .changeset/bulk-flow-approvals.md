@@ -1,0 +1,5 @@
+---
+"@canopy/drive-vertical": patch
+---
+
+Documents waiting for a flow's approval now show in the same file table as the drive, so you can approve or reject several at once. Each row shows the document, where it is (space › folder), the flow, where its copies would go (for example "a3doc › Facturas/2026/09") and when it arrived. Sort by name, source, flow or arrival, open a document to preview it, and select one, a range or all of them. The table's own selection bar offers Approve and Reject. A large selection is sent in batches of 20, with a progress line. If some documents can't be decided, the others stay decided and a list names each one that failed and why. On a phone, tapping a proposal opens it in a bottom sheet to decide. `POST /api/flow-deliveries/decide` also takes `{ items }` (up to 50) and answers `{ results }` in order, with the same permission checks and the same once-only guard as a single decision. The assistant's `drive_decide-flow-delivery` tool takes `items` too, through the same route.
