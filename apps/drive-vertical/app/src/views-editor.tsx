@@ -20,7 +20,8 @@ export function ViewsEditor({ value, defaultView, onChange, disabled, savedIds =
 }) {
   const fresh = useRef(new Set<string>());
   // A default that names a view no longer in the list goes with it, so the saved default is always real.
-  const commit = (views: SpaceView[], next = defaultView) => onChange(views, next && views.some(v => v.id === next) ? next : undefined);
+  // `next` is required: undefined is the owner choosing the folders, never "keep the old one".
+  const commit = (views: SpaceView[], next: string | undefined) => onChange(views, next && views.some(v => v.id === next) ? next : undefined);
   const update = (i: number, patch: Partial<SpaceView>) => {
     let renamedFrom: string | null = null, renamedTo: string | null = null;
     const views = value.map((view, j) => {
@@ -38,7 +39,7 @@ export function ViewsEditor({ value, defaultView, onChange, disabled, savedIds =
   const add = () => {
     const id = viewIdFor('New view', value.map(v => v.id));
     fresh.current.add(id);
-    commit([...value, { id, name: 'New view', groupBy: ['category', 'year'] }]);
+    commit([...value, { id, name: 'New view', groupBy: ['category', 'year'] }], defaultView);
   };
   const setLevel = (i: number, depth: number, key: ViewKey) => update(i, { groupBy: value[i]!.groupBy.map((k, d) => d === depth ? key : k) });
   const addLevel = (i: number) => {
@@ -53,7 +54,7 @@ export function ViewsEditor({ value, defaultView, onChange, disabled, savedIds =
         <div className="flex items-center gap-2">
           <Input aria-label={`View ${i + 1} name`} value={view.name} maxLength={60} disabled={disabled} onChange={e => update(i, { name: e.target.value })} />
           <Button type="button" variant="ghost" size="sm" aria-label={`Remove ${view.name || 'view'}`} disabled={disabled}
-            onClick={() => commit(value.filter((_, j) => j !== i))}><Icon name="trash" size={14} /></Button>
+            onClick={() => commit(value.filter((_, j) => j !== i), defaultView)}><Icon name="trash" size={14} /></Button>
         </div>
         <ol className="flex flex-wrap items-center gap-1.5" aria-label={`Levels of ${view.name || 'this view'}`}>
           {view.groupBy.map((key, depth) => <li key={depth} className="flex items-center gap-1">

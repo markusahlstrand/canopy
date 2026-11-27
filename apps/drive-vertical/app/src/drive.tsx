@@ -565,7 +565,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const lensId = lens?.id ?? null;
   const lensNames = useMemo(() => new Map((spaceViews?.categories ?? []).map(c => [c.id, c.name])), [spaceViews]);
   const lensLeaf = lens && lensPath.length >= lens.groupBy.length ? filesUnder(lensFiles, lens.groupBy, lensPath, lensNames) : [];
-  useEffect(() => { setLensPath([]); }, [lensId, liveSpace]);
+  // A string, not the array: a reload that recreates the same grouping keeps the drill-down.
+  const lensGrouping = lens?.groupBy.join(',') ?? null;
+  useEffect(() => { setLensPath([]); }, [lensId, lensGrouping, liveSpace]);
   const showingAll = allFiles && view === 'drive' && !offline && !lens;
   // A mirrored folder is checked against its source when it is opened (and on demand): the
   // listing shows what is indexed at once, and a check that lands changes re-reads it quietly.

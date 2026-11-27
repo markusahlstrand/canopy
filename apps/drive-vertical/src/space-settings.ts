@@ -22,6 +22,8 @@ const spaceCategories = z.array(spaceCategorySchema).max(30)
  * - `type`: the kind of file (PDF, image, spreadsheet…), from its current version.
  * - `folder`: the top folder it really sits in.
  */
+/** The folder tree, which every space has and no view can replace. */
+export const FOLDERS_VIEW = 'folders';
 export const VIEW_KEYS = ['category', 'label', 'year', 'month', 'type', 'folder'] as const;
 export type ViewKey = typeof VIEW_KEYS[number];
 /**
@@ -29,7 +31,8 @@ export type ViewKey = typeof VIEW_KEYS[number];
  * copied, and nothing about who may read what changes: it is a way of looking, not a place.
  */
 export const spaceViewSchema = z.object({
-  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/, 'Use lowercase letters, digits and dashes'),
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/, 'Use lowercase letters, digits and dashes')
+    .refine((id) => id !== FOLDERS_VIEW, 'The folders view id is reserved'),
   name: z.string().trim().min(1).max(60),
   groupBy: z.array(z.enum(VIEW_KEYS)).min(1).max(4)
     .refine((keys) => new Set(keys).size === keys.length, 'Group by each thing once'),
@@ -37,8 +40,6 @@ export const spaceViewSchema = z.object({
 export type SpaceView = z.infer<typeof spaceViewSchema>;
 const spaceViews = z.array(spaceViewSchema).max(12)
   .refine((list) => new Set(list.map((v) => v.id)).size === list.length, 'Each view needs its own id');
-/** The folder tree, which every space has and no view can replace. */
-export const FOLDERS_VIEW = 'folders';
 export const SPACE_ICONS =['folder', 'home', 'calendar', 'users', 'cloud', 'star'] as const;
 export const SPACE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#64748b'] as const;
 export const spaceSettingsSchema = z.object({ name: z.string().trim().min(1).max(100).refine(name => !/[\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(name) && /[^\s\p{Cf}]/u.test(name), 'Use a visible name without control or direction-override characters'), icon: z.enum(SPACE_ICONS), color: z.enum(SPACE_COLORS),

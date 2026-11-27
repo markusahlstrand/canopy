@@ -75,3 +75,12 @@ it('makes a view id from its name that is never "folders" or taken', () => {
   expect(viewIdFor('Folders', [])).toBe('folders-2');
   expect(viewIdFor('By year', ['by-year'])).toBe('by-year-2');
 });
+
+it('reads only the view\'s own levels from a path left over from a longer view', () => {
+  const stale = ['invoice', '2026'];
+  expect(() => pathLabels(files, ['category'], stale, names)).not.toThrow();
+  expect(pathLabels(files, ['category'], stale, names)).toEqual(['Invoices']);
+  expect(filesUnder(files, ['category'], stale, names).map(f => f.id)).toEqual(['a', 'b']);
+  const level = viewLevel(files, ['category'], stale, names);
+  expect(level.kind === 'files' && level.files.map(f => f.id)).toEqual(['a', 'b']);
+});

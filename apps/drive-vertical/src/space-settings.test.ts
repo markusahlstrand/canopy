@@ -25,4 +25,6 @@ it('keeps saved views bounded: known keys, each once, one id per view', () => {
  expect(spaceSettingsSchema.safeParse({ ...base, views: [{ ...view, groupBy: ['owner'] }] }).success).toBe(false);
  expect(spaceSettingsSchema.safeParse({ ...base, views: [{ ...view, groupBy: [] }] }).success).toBe(false);
  expect(spaceSettingsSchema.safeParse({ ...base, views: [view, view] }).success).toBe(false);
+ // `folders` is the folder tree's own name: a view may not take it.
+ expect(spaceSettingsSchema.safeParse({ ...base, views: [{ ...view, id: 'folders' }] }).success).toBe(false);
 });

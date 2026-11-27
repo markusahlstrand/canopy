@@ -1,11 +1,16 @@
-import { useMemo } from 'react';
-import { Badge, Icon } from '@canopy/ui';
+import { useMemo, useState } from 'react';
+import { Badge, Button, Icon } from '@canopy/ui';
 import type { SpaceView } from '../../src/space-settings';
 import { AllFilesTable, type AllFilesRow } from './all-files-table';
 import type { SortKey } from './file-table';
 import { pathLabels, suggestedPlacement, viewLevel, VIEW_KEY_LABEL, type ViewFile } from './space-views';
 
 const UNCONFIRMED = 'Document AI chose this category and nobody has confirmed it yet.';
+/**
+ * Rows a leaf mounts at a time. A view reads the whole space without anyone asking, so one group
+ * can hold thousands of files; the table mounts these and offers the rest a page at a time.
+ */
+export const LEAF_PAGE = 200;
 
 /**
  * One saved view of the space, browsed like folders: the groups at the current level, and the
@@ -65,11 +70,9 @@ export function SpaceViewBrowser({ view, files, categories, path, onPath, toRow,
       </ul> : <p role="status" className="rounded-lg border px-4 py-10 text-center text-sm text-muted-foreground">
         {loading ? 'Loading files…' : 'No documents here.'}
       </p>
-    ) : <AllFilesTable
+    ) : <ViewLeaf
       key={path.join('\u0000')}
-      files={toRow(level.files)}
-      below={null}
-      empty="No documents here."
+      rows={toRow(level.files)}
       sort={sort}
       onSort={onSort}
       onOpen={onOpen}
@@ -77,5 +80,28 @@ export function SpaceViewBrowser({ view, files, categories, path, onPath, toRow,
       mark={file => marked.has(file.id) ? UNCONFIRMED : null}
       onLabelsChanged={onLabelsChanged}
     />}
+  </div>;
+}
+
+/** The files at the end of a path, mounted a page at a time. */
+function ViewLeaf({ rows, sort, onSort, onOpen, loading, mark, onLabelsChanged }: {
+  rows: AllFilesRow[];
+  sort: { key: SortKey; dir: 'asc' | 'desc' };
+  onSort: (key: SortKey) => void;
+  onOpen: (id: string) => void;
+  loading: boolean;
+  mark: (file: AllFilesRow) => string | null;
+  onLabelsChanged?: (fileId: string, labels: string[]) => void;
+}) {
+  const [limit, setLimit] = useState(LEAF_PAGE);
+  const shown = rows.length > limit ? rows.slice(0, limit) : rows;
+  const rest = rows.length - shown.length;
+  return <div className="space-y-3">
+    <AllFilesTable files={shown} below={null} empty="No documents here." sort={sort} onSort={onSort} onOpen={onOpen}
+      loading={loading} more={rest > 0} mark={mark} onLabelsChanged={onLabelsChanged} />
+    {rest > 0 ? <div className="flex items-center gap-3 text-xs text-muted-foreground">
+      <Button type="button" variant="outline" size="sm" onClick={() => setLimit(n => n + LEAF_PAGE)}>Show {Math.min(rest, LEAF_PAGE)} more</Button>
+      Showing {shown.length} of {rows.length}.
+    </div> : null}
   </div>;
 }

@@ -38,3 +38,15 @@ it('keeps a saved view\'s id through a rename, and offers each level only once',
   fireEvent.click(screen.getByRole('button', { name: 'Remove level 1' }));
   expect(latest.views[0]!.groupBy).toEqual(['category']);
 });
+
+it('lets an owner hand the default back to the folders', () => {
+  render(<Harness saved={['by-type']} initial={[{ id: 'by-type', name: 'By type', groupBy: ['type'] }]} />);
+  fireEvent.change(screen.getByLabelText('Default view'), { target: { value: 'by-type' } });
+  expect(latest.defaultView).toBe('by-type');
+  fireEvent.change(screen.getByLabelText('Default view'), { target: { value: '' } });
+  expect(latest.defaultView).toBeUndefined();
+  // Adding a view keeps whatever default is set.
+  fireEvent.change(screen.getByLabelText('Default view'), { target: { value: 'by-type' } });
+  fireEvent.click(screen.getByRole('button', { name: /Add view/ }));
+  expect(latest.defaultView).toBe('by-type');
+});

@@ -97,7 +97,9 @@ export type ViewLevel =
 
 /** The files under a path of values, one value per key from the top. */
 export function filesUnder<T extends ViewFile>(files: readonly T[], groupBy: readonly ViewKey[], path: readonly string[], names: ReadonlyMap<string, string>): T[] {
-  return files.filter(file => path.every((value, depth) => placesOf(file, groupBy[depth]!, names).some(place => place.value === value)));
+  // A path from before the view lost levels names keys it no longer has: only its own levels count.
+  const levels = path.slice(0, groupBy.length);
+  return files.filter(file => levels.every((value, depth) => placesOf(file, groupBy[depth]!, names).some(place => place.value === value)));
 }
 
 /** Whether a file sits where it does in this view because Document AI chose its category, unconfirmed. */
@@ -110,8 +112,9 @@ const byNewest = (key: ViewKey) => key === 'year' || key === 'month';
 /** One level of a view: the groups below a path, or the files once every key is used. */
 export function viewLevel(files: readonly ViewFile[], groupBy: readonly ViewKey[], path: readonly string[], names: ReadonlyMap<string, string>): ViewLevel {
   const here = filesUnder(files, groupBy, path, names);
-  if (path.length >= groupBy.length) return { kind: 'files', files: here };
-  const key = groupBy[path.length]!;
+  const depth = Math.min(path.length, groupBy.length);
+  if (depth >= groupBy.length) return { kind: 'files', files: here };
+  const key = groupBy[depth]!;
   const groups = new Map<string, ViewGroup>();
   for (const file of here) {
     for (const place of placesOf(file, key, names)) {
@@ -129,7 +132,7 @@ export function viewLevel(files: readonly ViewFile[], groupBy: readonly ViewKey[
 
 /** A path's labels, for breadcrumbs: each value as its group calls it. */
 export function pathLabels(files: readonly ViewFile[], groupBy: readonly ViewKey[], path: readonly string[], names: ReadonlyMap<string, string>): string[] {
-  return path.map((value, depth) => {
+  return path.slice(0, groupBy.length).map((value, depth) => {
     const key = groupBy[depth]!;
     if (value === MISSING) return MISSING_LABEL[key];
     for (const file of files) {
