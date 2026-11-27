@@ -219,11 +219,16 @@ entityCheckConformanceSuite('@canopy/scope-drive', driveOperations, makeFixture,
    * The kit drives an entity check by putting an id in the input. `drive/folder-by-path`
    * takes a PATH, so there is no id to put — it is declared `resolved` and the kit
    * reports it here rather than letting it pass as covered. `search.test.ts` drives it
-   * by hand instead, including the refusal.
+   * by hand instead, including the refusal. `drive/resolve-files` takes MANY ids and
+   * filters rather than refuses, so it is listed the same way; `name-reads.test.ts`
+   * covers what it leaves out.
    */
   uncovered: {
     'drive/folder-by-path':
       "declares 'resolved' (addressed by path, not id — the handler resolves the row and checks it)"
+      + ' — the entity id is not in the input, so the harness cannot reach the entity',
+    'drive/resolve-files':
+      "declares 'resolved' (many files at once — the handler checks each one and drops what the caller may not read)"
       + ' — the entity id is not in the input, so the harness cannot reach the entity',
   },
 });

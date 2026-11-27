@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Icon } from "@canopy/ui";
 import { cn } from "@canopy/ui";
 import { Button } from "@canopy/ui";
@@ -56,6 +57,8 @@ interface TopbarProps {
    * so the topbar offers it too: signed out always shows a way to log in.
    */
   onSignIn?: () => void;
+  /** The processing button (what the space is working on in the background), beside refresh. */
+  processing?: ReactNode;
 }
 
 export function Topbar({
@@ -71,6 +74,7 @@ export function Topbar({
   onRefresh,
   syncing,
   onSignIn,
+  processing,
 }: TopbarProps) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:gap-3 sm:px-4">
@@ -163,6 +167,8 @@ export function Topbar({
         <kbd className="hidden rounded bg-muted px-1.5 font-mono text-[10.5px] md:inline">⌘</kbd>
         <kbd className="hidden rounded bg-muted px-1.5 font-mono text-[10.5px] md:inline">K</kbd>
       </button>
+
+      {processing}
 
       {/* Refresh — force a re-sync + reload of the current view */}
       {onRefresh && (

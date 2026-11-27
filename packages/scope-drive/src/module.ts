@@ -1346,6 +1346,33 @@ const operations = {
     return { file, version, canWrite: (await ctx.check(DRIVE_PERM.write, fileRef(file.id))).allowed };
   },
 
+  'drive/resolve-files': async (ctx, input) => {
+    const attachmentIds = [...new Set(input.attachmentIds ?? [])];
+    const byAttachment = new Map<string, string>();
+    if (attachmentIds.length) {
+      const rows = ctx.sql.query<{ blob_ref: string; file_id: string }>(
+        `SELECT DISTINCT blob_ref, file_id FROM drive_file_versions
+          WHERE source = 'blob' AND blob_ref IN (${attachmentIds.map(() => '?').join(', ')})`,
+        attachmentIds,
+      );
+      for (const r of rows) if (!byAttachment.has(r.blob_ref)) byAttachment.set(r.blob_ref, r.file_id);
+    }
+    const ids = [...new Set([...(input.fileIds ?? []), ...byAttachment.values()])];
+    const live = ids.length
+      ? ctx.sql.query<{ id: string; name: string; folder_id: string }>(
+          `SELECT id, name, folder_id FROM drive_files WHERE state = 'live' AND id IN (${ids.map(() => '?').join(', ')})`,
+          ids,
+        )
+      : [];
+    const files: { id: string; name: string; folder_id: string }[] = [];
+    for (const f of live) if ((await ctx.check(DRIVE_PERM.read, fileRef(f.id))).allowed) files.push(f);
+    const readable = new Set(files.map((f) => f.id));
+    const attachments = [...byAttachment]
+      .filter(([, fileId]) => readable.has(fileId))
+      .map(([attachmentId, fileId]) => ({ attachmentId, fileId }));
+    return { files, attachments };
+  },
+
   'drive/list-file-entries': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read, folderRef(input.folderId)));
     const limit = input.limit ?? 200;

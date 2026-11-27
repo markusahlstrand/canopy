@@ -881,6 +881,12 @@ export type ExtractResult = LabelResult;
 export const extractEntities = (target: { fileId: string } | { folderId: string; after?: string }) =>
   call<ExtractResult>('/extract-entities', { method: 'POST', body: JSON.stringify(target) });
 
+/** One background run in the space — reading text, Document AI, people and companies, a flow (`GET /api/processing`). */
+export type ProcessingRun = import('../../src/processing-routes').ProcessingRun;
+export type ProcessingList = import('../../src/processing-routes').ProcessingList;
+/** What the space is working on, and what it finished lately — only runs on files you can read. */
+export const getProcessing = () => call<ProcessingList>('/processing');
+
 export type GraphClaim = import('@canopy/scope-drive/spec/model').GraphClaim;
 export type GraphEntity = import('@canopy/scope-drive/spec/model').GraphEntity;
 export interface GraphConnection { entity: GraphEntity; depth: number; via: string[] }

@@ -69,6 +69,9 @@ import {
   Radio,
   Send,
   Inbox,
+  Activity,
+  LoaderCircle,
+  CircleX,
   type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties } from "react";
@@ -148,6 +151,9 @@ const MAP: Record<string, LucideIcon> = {
   radio: Radio,
   send: Send,
   inbox: Inbox,
+  activity: Activity,
+  loader: LoaderCircle,
+  "circle-x": CircleX,
 };
 
 /**
