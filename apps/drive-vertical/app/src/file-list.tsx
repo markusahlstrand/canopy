@@ -32,7 +32,7 @@ import type { FileItem, FileKind } from './items';
 import { FileIcon } from './file-icon';
 import { SearchHighlight } from './search-highlight';
 import { AiLabelContext, EntityExtractionContext } from './ai-label';
-import { actionsFor, type PluginMenuItem, type SortKey, type SortState } from './file-table';
+import { ActionMenuItems, actionsFor, type PluginMenuItem, type SortKey, type SortState } from './file-table';
 
 type SubEntityTableProps = DetailedHTMLProps<HTMLAttributes<SubEntityTable<FileItem, SortKey>>, SubEntityTable<FileItem, SortKey>> & {
   label?: string;
@@ -132,11 +132,7 @@ function RowMenu({ file, onAction, readOnly, trashed, mirrored }: { file: FileIt
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
-        {actions.map((a) => (
-          <DropdownMenuItem key={a} variant={a === 'Delete' ? 'destructive' : undefined} onSelect={() => onAction(a, file)}>
-            {a}
-          </DropdownMenuItem>
-        ))}
+        <ActionMenuItems actions={actions} onSelect={(a) => onAction(a, file)} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -386,12 +382,8 @@ export function FileList({
         </DropdownMenuTrigger>
         {menuFile ? (
           <DropdownMenuContent align="start" className="w-48">
-            {menuActions.map((a) => (
-              // Open is the double-click, so it goes straight there rather than through `onAction`.
-              <DropdownMenuItem key={a} variant={a === 'Delete' ? 'destructive' : undefined} onSelect={() => (a === 'Open' ? onOpen(menuFile) : onAction(a, menuFile))}>
-                {a}
-              </DropdownMenuItem>
-            ))}
+            {/* Open is the double-click, so it goes straight there rather than through `onAction`. */}
+            <ActionMenuItems actions={menuActions} onSelect={(a) => (a === 'Open' ? onOpen(menuFile) : onAction(a, menuFile))} />
             {menuPlugins.length > 0 && menuActions.length > 0 && <DropdownMenuSeparator />}
             {menuPlugins.map((item) => (
               <DropdownMenuItem key={item.pluginId + item.label} onSelect={() => onAction(item.label, menuFile)}>
