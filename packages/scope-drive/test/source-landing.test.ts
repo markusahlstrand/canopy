@@ -373,6 +373,18 @@ it('lists every live file at or below a folder, with its folder path and labels'
   expect((await list(ROOT_FOLDER_ID)).entries.map((f) => f.id)).toEqual(expect.arrayContaining([top, inA, inB]));
   expect((await list(ROOT_FOLDER_ID)).entries).toHaveLength(4);
 
+  // What a metadata view groups on: the category and who chose it, and the version's type.
+  await w.human.invoke('drive/set-file-category', { fileId: inA, category: 'receipt', source: 'ai', confidence: 0.8 });
+  await w.human.invoke('drive/set-file-category', { fileId: inB, category: 'tax', source: 'person' });
+  type Grouped = { entries: { id: string; category: string | null; category_source: string | null; mime: string | null }[] };
+  const grouped = Object.fromEntries((await w.human.invoke<Grouped>('drive/list-subtree-files', { folderId: ROOT_FOLDER_ID })).entries
+    .map((f) => [f.id, [f.category, f.category_source]]));
+  expect([grouped[top], grouped[inA], grouped[inB]]).toEqual([[null, null], ['receipt', 'ai'], ['tax', 'person']]);
+  await w.human.invoke('drive/set-file-category', { fileId: inA, category: null });
+  const cleared = (await w.human.invoke<Grouped>('drive/list-subtree-files', { folderId: a })).entries.find((f) => f.id === inA)!;
+  expect([cleared.category, cleared.category_source]).toEqual([null, null]);
+  expect(cleared).toHaveProperty('mime');
+
   const first = await list(a, { limit: 1 });
   expect(first.entries.map((f) => f.id)).toEqual([inA]);
   expect((await list(a, { after: first.next!, limit: 1 })).entries.map((f) => f.id)).toEqual([inB]);

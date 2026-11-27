@@ -1,10 +1,11 @@
+import { errorCodeOf } from '@substrat-run/contracts';
 import { connectors } from './connectors.js';
 import { hasFolderChecks } from './folder-checks.js';
 import { declareConnectorEvents } from '@substrat-run/vertical-host/connectors';
 import { mountMemberRemoval } from './member-removal-route.js';
 import { claimSafeInvite, claimSafeInviteByCapability, unbindProtectedPrincipal, mountInviteGuards, projectedInviteRoles } from './invite-safety.js';
 import { mountInviteSite } from './invite-site-route.js';
-import { mountSpaceSettings } from './space-settings-routes.js';
+import { mountSpaceSettings, mountSpaceViews } from './space-settings-routes.js';
 import { mountSource, type DriveSource } from './source-routes.js';
 import { mountMail } from './mail-routes.js';
 import { spaceSettingsSchema, parseSpaceSettings, provisionSpaceSettings, type SpaceSettings } from './space-settings.js';
@@ -937,6 +938,24 @@ mountSpaceSettings(app, async c => {
  await requirePeopleAdmin(c);
  const node=await nodeFor(c.req.raw,c.env);
  return {scope:node.scopeId,directory:identityDo(c.env,node)};
+});
+/**
+ * The space's saved metadata views, for every member: `drive/people-access` is the membership
+ * check (scope read) and says whether they own the space. Editing stays in the settings above.
+ */
+mountSpaceViews(app, async c => {
+ const principal = await principalFor(c.env, c.req.raw);
+ if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+ const node = await nodeFor(c.req.raw, c.env);
+ const stub = await hostFor(c.env).getScope(principal, node.tenantId, node.scopeId);
+ let canManage: boolean;
+ try { ({ canManage } = await stub.invoke<{ canManage: boolean }>('drive/people-access')); }
+ catch (error) {
+  // Refused means "not a member"; anything else is an outage and must not read as one.
+  if (['forbidden', 'not_found'].includes(errorCodeOf(error) ?? '')) throw new HTTPException(403, { message: 'only members of this space can see its views' });
+  throw error;
+ }
+ return { scope: node.scopeId, directory: identityDo(c.env, node), canManage };
 });
 /**
  * The ⌘K assistant, over every space this login can enter — each searched and read as the

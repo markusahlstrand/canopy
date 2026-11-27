@@ -16,3 +16,13 @@ it('moves creator settings once, cleans the handoff and preserves renamed settin
  const directory={readSpaceSettings:async(key:string)=>rows.get(key)??null,writeSpaceSettings:async(key:string,value:ReturnType<typeof defaultSpaceSettings>)=>{rows.set(key,value);},deleteSpaceSettings:async(key:string)=>{rows.delete(key);},recordSite:async()=>{},listSites:async()=>[]};
  expect(await provisionSpaceSettings(directory,'scope','owner')).toEqual(defaultSpaceSettings('Family'));expect(rows.has('creator:owner')).toBe(false);rows.set('scope',defaultSpaceSettings('Renamed'));expect((await provisionSpaceSettings(directory,'scope','owner'))?.name).toBe('Renamed');
 });
+
+it('keeps saved views bounded: known keys, each once, one id per view', () => {
+ const base = defaultSpaceSettings('Family');
+ const view = { id: 'by-category', name: 'By category', groupBy: ['category', 'year'] as const };
+ expect(spaceSettingsSchema.parse({ ...base, views: [view], defaultView: 'by-category' })).toEqual({ ...base, views: [view], defaultView: 'by-category' });
+ expect(spaceSettingsSchema.safeParse({ ...base, views: [{ ...view, groupBy: ['category', 'category'] }] }).success).toBe(false);
+ expect(spaceSettingsSchema.safeParse({ ...base, views: [{ ...view, groupBy: ['owner'] }] }).success).toBe(false);
+ expect(spaceSettingsSchema.safeParse({ ...base, views: [{ ...view, groupBy: [] }] }).success).toBe(false);
+ expect(spaceSettingsSchema.safeParse({ ...base, views: [view, view] }).success).toBe(false);
+});

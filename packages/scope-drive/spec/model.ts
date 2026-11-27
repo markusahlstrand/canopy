@@ -1093,9 +1093,13 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     }),
   },
 
-  /** Every live file at or below a folder, flat, with where it sits and its labels. */
+  /**
+   * Every live file at or below a folder, flat, with where it sits, its labels, its category
+   * (and whether a person or Document AI chose it) and its current version's type: everything a
+   * metadata view groups on, in one page.
+   */
   'drive/list-subtree-files': {
-    summary: 'Every live file at or below a folder, with its folder path and labels',
+    summary: 'Every live file at or below a folder, with its folder path, labels, category and type',
     permission: { key: 'drive:read', entity: 'folder', idFrom: 'folderId' },
     input: z.object({
       folderId: z.string(),
@@ -1103,7 +1107,11 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
       limit: z.number().int().min(1).max(500).optional(),
     }),
     output: z.object({
-      entries: z.array(driveEntities.file.fields.extend({ folder_path: z.string(), labels: z.array(z.string()) })),
+      entries: z.array(driveEntities.file.fields.extend({
+        folder_path: z.string(), labels: z.array(z.string()),
+        category: z.string().nullable(), category_source: z.enum(['ai', 'person']).nullable(),
+        mime: z.string().nullable(),
+      })),
       next: z.string().nullable(),
     }),
     http: { method: 'GET', path: '/folders/{folderId}/all-files' },

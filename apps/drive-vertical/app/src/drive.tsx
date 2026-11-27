@@ -31,6 +31,9 @@ import { watchDriveChanges } from './live-updates';
 import { PreviewPanel, type PreviewMode } from './preview';
 import { PreviewResizeHandle, PREVIEW_WIDTH_VAR, usePreviewWidth } from './preview-resize';
 import { AllFilesTable } from './all-files-table';
+import { SpaceViewBrowser } from './space-view-browser';
+import { ViewPicker } from './view-picker';
+import { activeView, filesUnder, pathLabels, readViewChoice, saveViewChoice, type SpaceViews } from './space-views';
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { AiLabelContext, EntityExtractionContext, FIND_ENTITIES, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
 import { SuggestionsDialog } from './graph-review';
@@ -95,6 +98,7 @@ import {
   labelWithAi,
   extractEntities,
   getSpaceSettings,
+  getSpaceViews,
   type DriveFile,
   type LabelResult,
   type DriveFolder,
@@ -157,6 +161,9 @@ const LIVE_REFRESH_GAP_MS = 3_000;
  * Only the first page decides whether the view is available: a later page that fails
  * stops the walk and keeps what loaded, with "Load more" resuming from there.
  */
+/** Pages a saved view reads at most: 20 × 500 files. Past that, its groups say they cover the first ones. */
+const LENS_PAGES = 20;
+
 async function readLoadedPages<T extends { id: string }>(
   read: (next?: string | null) => Promise<ListingPage<T>>, count: number, current: () => boolean,
 ): Promise<ListingPage<T>> {
@@ -360,6 +367,22 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     if (!offline) getSpaceSettings().then(settings => { if (current) { setAiLabel(settings.autoLabel === true); setAiExtract(settings.extractEntities === true); } }).catch(() => {});
     return () => { current = false; };
   }, [liveSpace, sourceTick, offline]);
+  /**
+   * The space's saved metadata views, and the person's own pick among them (this device). Read
+   * with the settings: a view an owner just saved is on offer once the dialog closes.
+   */
+  const [spaceViews, setSpaceViews] = useState<SpaceViews | null>(null);
+  const [viewChoice, setViewChoice] = useState<string | null>(() => readViewChoice(currentSite()));
+  useEffect(() => {
+    let current = true;
+    setViewChoice(readViewChoice(liveSpace ?? currentSite()));
+    if (!offline) getSpaceViews().then(next => { if (current) setSpaceViews(Array.isArray(next?.views) && Array.isArray(next.categories) ? next : null); }).catch(() => { if (current) setSpaceViews(null); });
+    return () => { current = false; };
+  }, [liveSpace, sourceTick, offline]);
+  /** Where in the open view the person is: the chosen value at each level. */
+  const [lensPath, setLensPath] = useState<string[]>([]);
+  const [lensFiles, setLensFiles] = useState<SubtreeFile[]>([]);
+  const [lensMore, setLensMore] = useState(false);
   /** What the last "Label with AI" queued, shown above the list until the next one — and how to go on when a folder had more. */
   const [labelNotice, setLabelNotice] = useState<{ text: string; more?: () => void } | null>(null);
   const labelItem = (item: FileItem, relabel: boolean, after?: string) => void act(async () => {
@@ -529,18 +552,29 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [sort, setSort] = useState<SortState>(savedView.sort);
   // Only files already loaded in the active listing participate. Match its sort
   // order, and use the same draft boundary as table and palette navigation.
-  const showingAll = allFiles && view === 'drive' && !offline;
+  /**
+   * The saved view on screen, or null for the folders. A view is the space's front page: it
+   * shows at the top of the space, and opening any folder (a link, the sidebar) shows that
+   * folder as it really is. Offline there is no view; the mirror holds folders.
+   */
+  const lens = view === 'drive' && folderId === ROOT_FOLDER_ID && !offline && !linkPending && !linkListingUnavailable
+    ? activeView(viewChoice, spaceViews) : null;
+  const lensId = lens?.id ?? null;
+  const lensNames = useMemo(() => new Map((spaceViews?.categories ?? []).map(c => [c.id, c.name])), [spaceViews]);
+  const lensLeaf = lens && lensPath.length >= lens.groupBy.length ? filesUnder(lensFiles, lens.groupBy, lensPath, lensNames) : [];
+  useEffect(() => { setLensPath([]); }, [lensId, liveSpace]);
+  const showingAll = allFiles && view === 'drive' && !offline && !lens;
   // A mirrored folder is checked against its source when it is opened (and on demand): the
   // listing shows what is indexed at once, and a check that lands changes re-reads it quietly.
-  const freshness = useFolderFreshness(folderId, mirrored && view === 'drive' && !allFiles && !offline, () => void refreshRef.current(false, true));
-  const driveRows: DriveFile[] = showingAll ? subtreeFiles : files;
+  const freshness = useFolderFreshness(folderId, mirrored && view === 'drive' && !allFiles && !offline && !lens, () => void refreshRef.current(false, true));
+  const driveRows: DriveFile[] = lens ? lensLeaf : showingAll ? subtreeFiles : files;
   const previewFiles = offline ? [] : view === 'drive' ? sorted(driveRows, sort) : view === 'search' ? sorted(visibleHits, sort) : [];
   const previewIndex = previewFiles.findIndex(file => file.id === previewing);
   const listedPreview = previewing ? (view === 'search' ? hits : driveRows).find(file => file.id === previewing) : undefined;
   const previewNavigation = previewIndex < 0 ? undefined : {
     previous: previewFiles[previewIndex - 1]?.id ?? null,
     next: previewFiles[previewIndex + 1]?.id ?? null,
-    moreAvailable: view === 'drive' && (showingAll ? subtreeNext : filesNext) !== null,
+    moreAvailable: view === 'drive' && !lens && (showingAll ? subtreeNext : filesNext) !== null,
     onOpen: (id: string) => { setPreviewing(id); },
   };
   const reads = useRef(latestOnly());
@@ -704,6 +738,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         if (!reads.current.current(ticket)) return;
         setTrash(bin.entries);
         setTrashNext(bin.next);
+      } else if (lensId) {
+        // A view groups the whole space, so it reads every file it can, up to a bound.
+        const contents = await readLoadedPages(next => listSubtreeFilesPage(ROOT_FOLDER_ID, next), LENS_PAGES, () => reads.current.current(ticket));
+        if (!reads.current.current(ticket)) return;
+        setLensFiles(contents.entries);
+        setLensMore(contents.next !== null);
       } else if (allFiles) {
         const contents = await readLoadedPages(next => listSubtreeFilesPage(folderId, next), listingDepth.current.files, () => reads.current.current(ticket));
         if (!reads.current.current(ticket)) return;
@@ -763,7 +803,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     } finally {
       if (reads.current.current(ticket)) setBusy(false);
     }
-  }, [folderId, view, term, matchFilter, onError, auth.principal, linkPending, allFiles]);
+  }, [folderId, view, term, matchFilter, onError, auth.principal, linkPending, allFiles, lensId]);
 
   const moreTrash = async () => {
     if (!trashNext || busy || loadingPage || offline) return;
@@ -1212,12 +1252,13 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const currentPin = offlinePins.find(pin => pin.folderId === folderId);
   const currentPinError = pinErrors[`${auth.principal}\n${cacheSpace}\n${folderId}`] ?? null;
   const pinSyncing = pinBusy || (currentPin?.status === 'syncing' && !currentPinError);
-  const folderActions = view === 'drive' && !offline && !linkPending && !linkListingUnavailable;
-  const pageTitle = view === 'trash' ? 'Trash' : view === 'search' ? 'Search' : view === 'shared' ? 'Shared with me' : crumbs.at(-1)?.name ?? rootLabel;
+  const folderActions = view === 'drive' && !offline && !linkPending && !linkListingUnavailable && !lens;
+  const lensLabels = lens ? pathLabels(lensFiles, lens.groupBy, lensPath, lensNames) : [];
+  const pageTitle = lens ? lensLabels.at(-1) ?? lens.name : view === 'trash' ? 'Trash' : view === 'search' ? 'Search' : view === 'shared' ? 'Shared with me' : crumbs.at(-1)?.name ?? rootLabel;
   /** Offline with nothing unsaved, the preview is the read-only saved copy, never full screen. */
   const offlinePreview = offline && !hasUnsavedDrafts();
   const previewCovers = previewMode === 'full' && !offlinePreview;
-  const pageCount = showingAll ? subtreeFiles.length : view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : shownFolders.length + files.length;
+  const pageCount = lens ? (lensPath.length >= lens.groupBy.length ? lensLeaf.length : filesUnder(lensFiles, lens.groupBy, lensPath, lensNames).length) : showingAll ? subtreeFiles.length : view === 'search' ? visibleHits.length : view === 'trash' ? trash.length : shownFolders.length + files.length;
   const saveCurrentFolderOffline = async () => {
     if (!auth.principal || !cacheSpace || pinBusy) return;
     const pin: FolderPin = { principal: auth.principal, space: cacheSpace, folderId,
@@ -1355,11 +1396,11 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       <div className="flex min-w-0 flex-1 flex-col">
       <Topbar
-        breadcrumb={activePlugin ? [pluginManifest(activePlugin).name] : view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : [rootLabel, ...crumbs.map((c) => c.name)]}
+        breadcrumb={activePlugin ? [pluginManifest(activePlugin).name] : view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : lens ? [rootLabel, lens.name, ...lensLabels] : [rootLabel, ...crumbs.map((c) => c.name)]}
         spaceName={activeSpaceName}
         onOpenSpaces={() => setSpacesOpen(true)}
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
-        onCrumbClick={view === 'drive' ? (index) => upTo(index - 1) : undefined}
+        onCrumbClick={view === 'drive' ? (index) => lens ? setLensPath(path => path.slice(0, Math.max(0, index - 1))) : upTo(index - 1) : undefined}
         onOpenMenu={() => setMobileNavOpen(true)}
         onOpenCmd={() => setCmdOpen(true)}
         onUpload={canUpload ? () => startWrite(() => uploadRef.current?.click()) : undefined}
@@ -1505,7 +1546,24 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           />
         </div>
 
-        {view === 'drive' && !offline ? (
+        {view === 'drive' && !offline && spaceViews && (spaceViews.views.length || spaceViews.canManage) ? (
+          <ViewPicker
+            spaceViews={spaceViews}
+            choice={viewChoice}
+            active={lens?.id ?? null}
+            onChoose={choice => {
+              saveViewChoice(liveSpace ?? currentSite(), choice);
+              setViewChoice(choice);
+              setLensPath([]);
+              setSelection(new Set());
+              // A view is the space's front page: choosing one goes there.
+              if (activeView(choice, spaceViews) && folderId !== ROOT_FOLDER_ID) upTo(-1);
+            }}
+            onEdit={spaceViews.canManage ? () => setSpaceSettingsOpen(true) : undefined}
+          />
+        ) : null}
+
+        {view === 'drive' && !offline && !lens ? (
           <Button
             variant={showingAll ? 'secondary' : 'outline'}
             size="sm"
@@ -1522,7 +1580,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           </Button>
         ) : null}
 
-        {view === 'drive' && !offline && !showingAll ? (
+        {view === 'drive' && !offline && !showingAll && !lens ? (
           // One click either way, in plain sight: a setting tucked into a menu read as fixed.
           <Button
             variant={hideEmptyFolders ? 'secondary' : 'outline'}
@@ -1543,7 +1601,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           </Button>
         ) : null}
 
-        {showingAll ? null : <Button
+        {showingAll || lens ? null : <Button
           variant="outline"
           size="sm"
           onClick={() => {
@@ -1558,7 +1616,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
             </div>
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'partial' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Some files are saved offline. Retry to complete this folder.</p> : null}
       {folderActions && cacheSpace && auth.principal && currentPin?.status === 'error' ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Offline download incomplete. Retry to save this folder.</p> : null}
-      {mirrored && view === 'drive' && !allFiles && !offline ? <FolderFreshness refresh={freshness.refresh} asking={freshness.asking} stalled={freshness.stalled} label={sourceLabel(source?.provider)} onCheck={freshness.check} /> : null}
+      {mirrored && view === 'drive' && !allFiles && !offline && !lens ? <FolderFreshness refresh={freshness.refresh} asking={freshness.asking} stalled={freshness.stalled} label={sourceLabel(source?.provider)} onCheck={freshness.check} /> : null}
       {labelNotice ? <p role="status" className="-mt-2 mb-3 flex items-center gap-2 text-xs text-muted-foreground">
         <Icon name="sparkles" className="size-3.5" />{labelNotice.text}
         {labelNotice.more ? <button type="button" className="ml-auto underline" disabled={offline} onClick={labelNotice.more}>Continue</button> : null}
@@ -1620,6 +1678,21 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           pluginMenuItems={() => []}
           loading={busy}
           empty={empty}
+        />
+      ) : lens && spaceViews ? (
+        <SpaceViewBrowser
+          view={lens}
+          files={lensFiles}
+          categories={spaceViews.categories}
+          path={lensPath}
+          onPath={path => { setLensPath(path); setSelection(new Set()); }}
+          toRow={rows => sorted(rows as SubtreeFile[], sort).map(file => ({ ...fileItem(file, file.mime), category: file.folder_path, labels: file.labels }))}
+          onOpen={id => setPreviewing(id)}
+          loading={busy}
+          more={lensMore}
+          sort={sort}
+          onSort={onSort}
+          onLabelsChanged={(id, labels) => setLensFiles(rows => rows.map(row => row.id === id ? { ...row, labels } : row))}
         />
       ) : showingAll ? (
         <AllFilesTable

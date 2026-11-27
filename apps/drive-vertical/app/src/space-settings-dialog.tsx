@@ -7,6 +7,7 @@ import { SourceSettings } from './source-settings';
 import { MailSettings } from './mail-settings';
 import { useUnsavedDraft, confirmDiscardDrafts } from './drafts';
 import { CategoriesEditor } from './categories-editor';
+import { ViewsEditor } from './views-editor';
 import { FlowsDialog } from './flows-dialog';
 export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;onOpenChange:(open:boolean)=>void;onSaved:()=>void}) {
   const [settings,setSettings] = useState<SpaceSettings>(defaultSpaceSettings(''));
@@ -58,6 +59,10 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
   const savedCategories = useMemo<NonNullable<SpaceSettings['categories']>>(() => {
     try { return (JSON.parse(initial || '{}') as SpaceSettings).categories ?? []; } catch { return []; }
   }, [initial]);
+  // Members keep their own pick by view id, so a saved view's id never follows a rename.
+  const savedViews = useMemo(() => {
+    try { return ((JSON.parse(initial || '{}') as SpaceSettings).views ?? []).map(view => view.id); } catch { return []; }
+  }, [initial]);
   return <>
   <FlowsDialog open={flowsOpen} onOpenChange={setFlowsOpen} space={currentSite()}/>
   <Dialog open={open} onOpenChange={next => {if(!busy && (next || confirmDiscardDrafts()))onOpenChange(next);}}>
@@ -88,6 +93,11 @@ export function SpaceSettingsDialog({open,onOpenChange,onSaved}: {open:boolean;o
               <p className="text-xs text-muted-foreground">Document AI also puts each document in one of these, and flows can act on the category. A category someone picks by hand is never changed.</p>
               <CategoriesEditor value={settings.categories ?? []} savedIds={savedCategories.map(c=>c.id)} disabled={busy} onChange={categories=>setSettings({...settings,categories:categories.length?categories:undefined})}/>
             </div>
+          </section>
+          <section className="space-y-2"><h3 className="text-xs font-medium text-muted-foreground">Views</h3>
+            <p className="text-xs text-muted-foreground">Other ways to see the same documents, grouped by what they carry: category, labels, when they were added, their type. Nothing is moved, and a new document shows up in its place by itself. Members open the default and can pick another for themselves.</p>
+            <ViewsEditor value={settings.views ?? []} defaultView={settings.defaultView} savedIds={savedViews} disabled={busy}
+              onChange={(views,defaultView)=>{const {views:_v,defaultView:_d,...rest}=settings;setSettings({...rest,...(views.length?{views}:{}),...(defaultView?{defaultView}:{})});}}/>
           </section>
           <section className="space-y-2"><h3 className="text-xs font-medium text-muted-foreground">Flows</h3>
             <div className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5">

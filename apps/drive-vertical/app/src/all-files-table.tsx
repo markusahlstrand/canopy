@@ -21,7 +21,7 @@ const headerArrow = (active: boolean, dir: 'asc' | 'desc') => active ? <Icon nam
  * the files that carry all of them. A document filed in two categories is one row per category,
  * as it is in the folders.
  */
-export function AllFilesTable({ files, below, sort, onSort, onOpen, loading, more = false, onLabelsChanged }: {
+export function AllFilesTable({ files, below, sort, onSort, onOpen, loading, more = false, onLabelsChanged, mark, empty }: {
   files: AllFilesRow[];
   /** The folder this view is limited to; null at the top of the space. */
   below: string | null;
@@ -33,6 +33,10 @@ export function AllFilesTable({ files, below, sort, onSort, onOpen, loading, mor
   more?: boolean;
   /** Labels were saved for a file. Without it, tags cannot be added or removed here. */
   onLabelsChanged?: (fileId: string, labels: string[]) => void;
+  /** Why a row is marked (a placement nobody has confirmed), or null for an unmarked row. */
+  mark?: (file: AllFilesRow) => string | null;
+  /** What to say when there are no files, instead of the folder wording. */
+  empty?: string;
 }) {
   const [picked, setPicked] = useState<string[]>([]);
   // One row's tag edit at a time: the open input, the save in flight, and what went wrong.
@@ -82,7 +86,7 @@ export function AllFilesTable({ files, below, sort, onSort, onOpen, loading, mor
 
   if (!files.length) {
     return <p role="status" className="rounded-lg border px-4 py-10 text-center text-sm text-muted-foreground">
-      {loading ? 'Loading files…' : below ? `No files in ${below} or below it.` : 'No files in this space yet.'}
+      {loading ? 'Loading files…' : empty ?? (below ? `No files in ${below} or below it.` : 'No files in this space yet.')}
     </p>;
   }
   const chip = (tag: string, count?: number) => {
@@ -138,6 +142,7 @@ export function AllFilesTable({ files, below, sort, onSort, onOpen, loading, mor
                 <button type="button" className="flex w-full min-w-0 items-center gap-2 text-left" onClick={() => onOpen(file.id)}>
                   <FileIcon kind={file.kind} />
                   <span className="block min-w-0 truncate font-medium">{file.name}</span>
+                  {mark?.(file) ? <span className="shrink-0" title={mark(file)!}><Badge variant="outline" className="gap-1 text-[11px] font-normal"><Icon name="sparkles" className="size-3" />AI</Badge><span className="sr-only">{mark(file)}</span></span> : null}
                 </button>
                 {/* Below `md` the tags column is gone; the tags go under the name instead. */}
                 <div className="mt-1 md:hidden">{chips}</div>

@@ -708,8 +708,11 @@ export const listTrashPage = (next: string | null = null) => readPage<DriveFile>
 export const listFoldersPage = (folderId: string, next: string | null = null, selectedSite = site) =>
   readPage<DriveFolder>(`/folders/${encodeURIComponent(folderId)}/folders`, next, 'listing', selectedSite);
 
-/** A file in the flat all-files view: where it sits, and its labels. */
-export interface SubtreeFile extends DriveFile { folder_path: string; labels: string[] }
+/** A file in the flat all-files view: where it sits, its labels, its category and its type. */
+export interface SubtreeFile extends DriveFile {
+  folder_path: string; labels: string[];
+  category: string | null; category_source: 'ai' | 'person' | null; mime: string | null;
+}
 /** Every live file at or below a folder; `next` is the last id of the page. */
 export const listSubtreeFilesPage = (folderId: string, next: string | null = null) =>
   call<ListingPage<SubtreeFile>>(`/folders/${encodeURIComponent(folderId)}/all-files${next ? `?after=${encodeURIComponent(next)}` : ''}`);
@@ -893,6 +896,8 @@ export const graphEntity = (entityId: string) =>
   call<{ entity: GraphEntity; claims: GraphClaim[]; connections: GraphConnection[] }>(`/graph/entities/${encodeURIComponent(entityId)}`);
 /** The selected space's settings, or (for a flow's categories) another space's the caller can read. */
 export const getSpaceSettings = (selectedSite = site) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', undefined, selectedSite);
+/** The space's saved metadata views, which any member may read and only an owner edits. */
+export const getSpaceViews = () => call<import('./space-views').SpaceViews>('/space-views');
 export const updateSpaceSettings = (settings: import('../../src/space-settings').SpaceSettings) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', {method:'PATCH',body:JSON.stringify(settings)});
 export type DriveSource = import('../../src/source-routes').DriveSource;
 /** The a3doc folder a space mirrors, or null; any member may read it, to know what the space allows. */
