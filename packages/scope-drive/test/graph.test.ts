@@ -228,3 +228,109 @@ describe('graph suggestions', () => {
     await expect(view(anaId)).rejects.toMatchObject({ code: 'not_found' });
   });
 });
+
+describe('merging entities', () => {
+  type Summary = { entity: { id: string; name: string; type: string; status: string }; documents: number };
+  type View = { entity: { id: string; name: string; status: string }; claims: GraphClaim[] };
+  type Merged = { entity: { id: string; name: string; status: string }; merged: number; moved: number; superseded: number };
+  const org = (ref: string, name: string) => ({ ref, type: 'Organization', name });
+
+  async function setup() {
+    const w = await world();
+    const list = async () => (await w.human.invoke<{ entities: Summary[]; canMerge: boolean }>('drive/graph-entities', {}));
+    const idOf = async (name: string) => (await list()).entities.find((e) => e.entity.name === name)!.entity.id;
+    const view = (entityId: string) => w.human.invoke<View>('drive/graph-entity', { entityId });
+    const merge = (entityId: string, mergeIds: string[]) => w.human.invoke<Merged>('drive/merge-graph-entities', { entityId, mergeIds });
+    const acceptAll = async (fileId: string) => w.decide(fileId, (await w.claims(fileId)).filter((c) => c.status === 'suggested').map((c) => c.id), 'accept');
+    return { ...w, list, idOf, view, merge, acceptAll };
+  }
+
+  it('lists the entities the caller’s documents name, with how many documents', async () => {
+    const w = await setup();
+    const a = await w.upload('a.pdf'), b = await w.upload('b.pdf');
+    await w.record(a, invoice);
+    await w.record(b, { entities: [org('x', 'Acme, S.L.')], claims: [{ subject: 'document', predicate: 'provider', object: { ref: 'x' } }] });
+    const got = await w.list();
+    expect(got.canMerge).toBe(true);
+    expect(got.entities.map((e) => [e.entity.name, e.documents])).toEqual([['Acme, S.L.', 2], ['Canopy AB', 1]]);
+    // Like suggestions: a folder guest cannot list the space.
+    await expect(w.reader.invoke('drive/graph-entities', {})).rejects.toMatchObject({ code: 'permission_denied' });
+  });
+
+  it('moves everything said about the merged entity, and its name finds the one kept from then on', async () => {
+    const w = await setup();
+    const a = await w.upload('a.pdf'), b = await w.upload('b.pdf');
+    await w.record(a, invoice);
+    await w.acceptAll(a.id);
+    await w.record(b, {
+      entities: [org('x', 'ACME Servicios'), { ref: 'p', type: 'Person', name: 'Ana López' }],
+      claims: [{ subject: 'document', predicate: 'customer', object: { ref: 'x' } }, { subject: 'p', predicate: 'worksFor', object: { ref: 'x' } }],
+    });
+    const acme = await w.idOf('Acme, S.L.'), servicios = await w.idOf('ACME Servicios');
+    const result = await w.merge(acme, [servicios]);
+    expect(result).toMatchObject({ entity: { id: acme, name: 'Acme, S.L.', status: 'accepted' }, merged: 1, moved: 2, superseded: 0 });
+
+    expect((await w.list()).entities.map((e) => e.entity.name)).toEqual(['Acme, S.L.', 'Canopy AB', 'Ana López']);
+    expect((await w.claims(b.id)).map(triple).sort()).toEqual(['Ana López worksFor Acme, S.L.', 'doc customer Acme, S.L.', 'doc mentions Ana López']);
+    // An old link lands on the one kept.
+    expect((await w.view(servicios)).entity.id).toBe(acme);
+
+    // The next document naming the merged one does not bring the duplicate back.
+    const c = await w.upload('c.pdf');
+    const again = await w.record(c, { entities: [org('y', 'Acme Servicios')], claims: [{ subject: 'document', predicate: 'provider', object: { ref: 'y' } }] });
+    expect(again.entities).toBe(0);
+    expect((await w.claims(c.id)).map(triple)).toEqual(['doc provider Acme, S.L.']);
+  });
+
+  it('settles what the merge made odd: an entity related to itself, a statement twice, a question already answered', async () => {
+    const w = await setup();
+    const a = await w.upload('a.pdf'), b = await w.upload('b.pdf');
+    await w.record(a, { entities: [org('o', 'Acme')], claims: [{ subject: 'o', predicate: 'telephone', object: { value: '+34 600 123 456' } }] });
+    await w.acceptAll(a.id);
+    await w.record(b, {
+      entities: [org('g', 'Acme Group'), org('o', 'Acme')],
+      claims: [
+        { subject: 'o', predicate: 'parentOrganization', object: { ref: 'g' } },
+        { subject: 'g', predicate: 'telephone', object: { value: '+34 600 123 456' } },
+      ],
+    });
+    const acme = await w.idOf('Acme'), group = await w.idOf('Acme Group');
+    const result = await w.merge(acme, [group]);
+    // "Acme is part of Acme", and b's two mentions now name one entity.
+    expect(result.superseded).toBe(2);
+    const now = await w.claims(b.id);
+    expect(now.map(triple).sort()).toEqual(['Acme telephone +34600123456', 'doc mentions Acme']);
+    // The same phone was already accepted from a: corroboration, not a question.
+    expect(now.find((c) => c.predicate === 'telephone')).toMatchObject({ status: 'accepted', decidedBy: 'auto:corroborates' });
+  });
+
+  it('keeps the latest of two accepted one-value facts, the other as history', async () => {
+    const w = await setup();
+    const a = await w.upload('a.pdf'), b = await w.upload('b.pdf');
+    await w.record(a, { validTime: '2026-01-01', entities: [org('o', 'Acme')], claims: [{ subject: 'o', predicate: 'address', object: { value: 'Calle Mayor 1, Madrid' } }] });
+    await w.record(b, { validTime: '2026-06-01', entities: [org('o', 'Acme Iberia')], claims: [{ subject: 'o', predicate: 'address', object: { value: 'Gran Vía 2, Madrid' } }] });
+    await w.acceptAll(a.id); await w.acceptAll(b.id);
+    const acme = await w.idOf('Acme');
+    await w.merge(acme, [await w.idOf('Acme Iberia')]);
+    const facts = (await w.view(acme)).claims.filter((c) => c.predicate === 'address');
+    expect(facts.map((c) => [c.object.kind === 'value' && c.object.display, c.status])).toEqual([['Gran Vía 2, Madrid', 'accepted']]);
+  });
+
+  it('refuses two accepted VAT numbers, two kinds, nothing to merge, and a caller who cannot write the space', async () => {
+    const w = await setup();
+    const a = await w.upload('a.pdf'), b = await w.upload('b.pdf', 'x', w.shared.id);
+    await w.record(a, { entities: [org('o', 'Acme'), { ref: 'p', type: 'Person', name: 'Ana López' }], claims: [{ subject: 'o', predicate: 'vatID', object: { value: 'ESB58818501' } }] });
+    await w.record(b, { entities: [org('o', 'Acme Iberia')], claims: [{ subject: 'o', predicate: 'vatID', object: { value: 'ESA58818501' } }] });
+    const acme = await w.idOf('Acme'), iberia = await w.idOf('Acme Iberia'), ana = await w.idOf('Ana López');
+
+    // Two VAT numbers someone accepted are two companies.
+    await w.acceptAll(a.id); await w.acceptAll(b.id);
+    await expect(w.merge(acme, [iberia])).rejects.toMatchObject({ code: 'conflict', message: expect.stringContaining('have different VAT number') });
+    await expect(w.merge(acme, [ana])).rejects.toMatchObject({ code: 'validation_failed' });
+    await expect(w.merge(acme, [acme])).rejects.toMatchObject({ code: 'validation_failed' });
+    await expect(w.merge(acme, ['nope'])).rejects.toMatchObject({ code: 'not_found' });
+    await expect(w.reader.invoke('drive/merge-graph-entities', { entityId: iberia, mergeIds: [acme] })).rejects.toMatchObject({ code: 'permission_denied' });
+    // Refused means untouched.
+    expect((await w.list()).entities).toHaveLength(3);
+  });
+});

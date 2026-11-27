@@ -33,7 +33,7 @@ export * from './flows.js';
 export * from './flow-graph.js';
 export * from './ontology.js';
 export * from './graph.js';
-import { graphClaim, graphConnection, graphEntity, graphExtraction } from './graph.js';
+import { graphClaim, graphConnection, graphEntity, graphEntitySummary, graphExtraction, graphMergeResult } from './graph.js';
 
 /**
  * One path segment: a folder or file name, never a path.
@@ -956,6 +956,26 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     input: z.object({ entityId: z.string(), depth: z.number().int().min(1).max(4).optional() }),
     output: z.object({ entity: graphEntity, claims: z.array(graphClaim), connections: z.array(graphConnection) }),
     http: { method: 'GET', path: '/graph/entities/{entityId}' },
+  },
+  /** The people, companies and places the caller's readable documents name, for finding the ones that are the same. */
+  'drive/graph-entities': {
+    summary: 'List graph entities',
+    permission: 'drive:read',
+    input: z.object({ limit: z.number().int().min(1).max(500).optional() }),
+    output: z.object({ entities: z.array(graphEntitySummary), canMerge: z.boolean() }),
+    http: { method: 'GET', path: '/graph/entities' },
+  },
+  /**
+   * Two or more entities are one: everything said about `mergeIds` moves to `entityId`, and their
+   * names find it from then on. Refused across types, and when both carry a different accepted
+   * value for an identifier that never changes (two VAT numbers are two companies).
+   */
+  'drive/merge-graph-entities': {
+    summary: 'Merge graph entities into one',
+    permission: 'drive:write',
+    input: z.object({ entityId: z.string(), mergeIds: z.array(z.string()).min(1).max(20) }),
+    output: graphMergeResult,
+    http: { method: 'POST', path: '/graph/entities/{entityId}/merge' },
   },
 
   'drive/keep-version': {

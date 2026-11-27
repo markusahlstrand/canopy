@@ -58,3 +58,18 @@ export type GraphExtraction = z.infer<typeof graphExtraction>;
 
 /** An entity reached from another, and how far away it is: documents count as a hop. */
 export const graphConnection = z.object({ entity: graphEntity, depth: z.number().int(), via: z.array(z.string()) });
+
+/** An entity as a list shows it: how many of the caller's readable documents it appears in. */
+export const graphEntitySummary = z.object({ entity: graphEntity, documents: z.number().int() });
+export type GraphEntitySummary = z.infer<typeof graphEntitySummary>;
+
+/** What a merge did: the entity kept, how many went into it, and how many claims moved or settled. */
+export const graphMergeResult = z.object({
+  entity: graphEntity,
+  merged: z.number().int(),
+  /** Claims now about the kept entity that were about one of the merged ones. */
+  moved: z.number().int(),
+  /** Claims that became history: the same statement twice in one document, or one entity said to relate to itself. */
+  superseded: z.number().int(),
+});
+export type GraphMergeResult = z.infer<typeof graphMergeResult>;
