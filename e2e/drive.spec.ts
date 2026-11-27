@@ -122,3 +122,22 @@ test('new folders and their contents remain reachable beyond the first listing p
   await action(page, 'Page folder 20', 'Open');
   await downloaded(page, 'last-page.txt', 'Bytes reached through the second folder page');
 });
+
+test('a file dragged by its name onto a folder row moves into it', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Mouse drag is the desktop gesture; a phone long-presses.');
+  const folder = `${testInfo.project.name} Drag target`;
+  const filename = `${testInfo.project.name}-dragged.txt`;
+  // A name is light DOM slotted into the table's row: the drag has to start from it.
+  const named = (name: string) => page.locator('sub-entity-table').getByText(name, { exact: true });
+  await signIn(page);
+  await createFolder(page, folder);
+  await upload(page, filename, 'Dragged into a folder\n');
+  await revealRow(page, folder);
+  const moved = page.waitForResponse(response => response.request().method() === 'POST' &&
+    new URL(response.url()).pathname.endsWith('/move'));
+  await named(filename).dragTo(named(folder));
+  expect((await moved).ok()).toBe(true);
+  await expect(page.getByRole('button', { name: `Actions for ${filename}`, exact: true })).toBeHidden();
+  await action(page, folder, 'Open');
+  await downloaded(page, filename, 'Dragged into a folder\n');
+});

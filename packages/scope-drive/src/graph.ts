@@ -15,6 +15,9 @@
  *    keys are claims themselves, so there is no second table that can drift from them.
  *  - **Decided once.** A statement already accepted elsewhere is recorded as corroboration, not
  *    asked again; one already rejected is not suggested again.
+ *  - **Two found to be one.** A person merges entities; every claim about them moves to the one
+ *    kept, the merged rows stay as pointers to it, and their names keep finding it. The merge is
+ *    logged with each claim as it was, so it is never a change that leaves no trace.
  *  - **You see what your documents say.** Every claim carries the file it was read from, and a
  *    claim, an entity or a connection is visible only through a live file the caller can read.
  *    A per-space graph joined at read time therefore never shows more than the reader's own
@@ -24,7 +27,7 @@ import { substratError, type HandlerInput, type HandlerOutput } from '@substrat-
 import { assertAllowed, ulid, type OperationContext, type OperationHandler } from '@substrat-run/kernel';
 import { DRIVE_PERM } from './manifest.js';
 import {
-  allowsObjectEntity, allowsSubject, isEntityType, nameKey, normalizeValue, predicateById,
+  allowsObjectEntity, allowsSubject, isEntityType, nameKey, normalizeValue, predicateById, PREDICATES,
   type driveOperations, type EntityType, type GraphClaim, type GraphEntity, type GraphNode, type SubjectType, type ValueKind,
 } from '../spec/model.js';
 
@@ -54,6 +57,29 @@ function readability(ctx: OperationContext) {
 }
 
 const entityOf = (row: EntityRow): GraphEntity => ({ id: row.id, type: row.type, name: row.name, status: row.status });
+
+/** The entity an id stands for now: itself, or the one it was merged into. */
+function canonicalEntity(ctx: OperationContext, id: string): EntityRow | undefined {
+  let row = ctx.sql.query<EntityRow>('SELECT * FROM graph_entities WHERE id = ?', [id])[0];
+  // A merge points straight at the entity kept, so one hop is the rule; the bound only guards a loop.
+  for (let hops = 0; row?.merged_into && hops < 5; hops++) {
+    row = ctx.sql.query<EntityRow>('SELECT * FROM graph_entities WHERE id = ?', [row.merged_into])[0];
+  }
+  return row?.merged_into ? undefined : row;
+}
+
+/** Whether anything still said about an entity comes from a live file the caller can read. */
+async function entityVisible(ctx: OperationContext, readable: (fileId: string) => Promise<boolean>, id: string): Promise<boolean> {
+  const files = ctx.sql.query<{ file_id: string }>(
+    `SELECT DISTINCT file_id FROM graph_claims WHERE ((subject_type = 'entity' AND subject_id = ?) OR object_entity_id = ?)
+      AND status IN ('suggested', 'accepted')`, [id, id],
+  );
+  for (const f of files) if (await readable(f.file_id)) return true;
+  return false;
+}
+
+const RANK: Record<GraphClaim['status'], number> = { accepted: 0, rejected: 1, suggested: 2, superseded: 3 };
+const tripleKey = (c: ClaimRow) => `${c.subject_type}|${c.subject_id}|${c.predicate}|${c.object_entity_id ?? ''}|${c.object_value ?? ''}`;
 
 /** Claim rows as the UI reads them: names resolved, values displayed, what accepting would replace. */
 function viewClaims(ctx: OperationContext, rows: readonly ClaimRow[]): GraphClaim[] {
@@ -114,16 +140,21 @@ function fileClaims(ctx: OperationContext, fileId: string): GraphClaim[] {
   return viewClaims(ctx, rows);
 }
 
-/** Suggested entities nothing refers to any more: a re-run replaced the claims that named them. */
+/**
+ * Suggested entities nothing refers to any more: a re-run replaced the claims that named them.
+ * A merged one stays: it is where an old link lands, and its name is an alias of the one kept.
+ */
 function pruneEntities(ctx: OperationContext): void {
   ctx.sql.exec(`DELETE FROM graph_entities WHERE status = 'suggested'
     AND NOT EXISTS (SELECT 1 FROM graph_claims c WHERE c.subject_type = 'entity' AND c.subject_id = graph_entities.id)
     AND NOT EXISTS (SELECT 1 FROM graph_claims c WHERE c.object_entity_id = graph_entities.id)
-    AND NOT EXISTS (SELECT 1 FROM graph_entities m WHERE m.merged_into = graph_entities.id)`);
+    AND NOT EXISTS (SELECT 1 FROM graph_entities m WHERE m.merged_into = graph_entities.id)
+    AND merged_into IS NULL`);
 }
 
 type Ops = typeof driveOperations;
-type GraphOp = 'drive/record-graph-suggestions' | 'drive/file-graph' | 'drive/decide-graph-claims' | 'drive/graph-suggestions' | 'drive/graph-entity';
+type GraphOp = 'drive/record-graph-suggestions' | 'drive/file-graph' | 'drive/decide-graph-claims' | 'drive/graph-suggestions' | 'drive/graph-entity'
+  | 'drive/graph-entities' | 'drive/merge-graph-entities';
 
 export const graphHandlers = {
   'drive/record-graph-suggestions': async (ctx, input) => {
@@ -188,10 +219,13 @@ export const graphHandlers = {
         )[0]?.id;
         if (id) break;
       }
-      id ??= ctx.sql.query<{ id: string }>(
-        `SELECT id FROM graph_entities WHERE type = ? AND name_key = ? AND merged_into IS NULL
-          ORDER BY status = 'accepted' DESC, created_at LIMIT 1`, [e.type, e.key],
+      // A merged entity's name is an alias of the one it went into: the next document naming it
+      // must not bring the duplicate back.
+      const named = ctx.sql.query<{ id: string }>(
+        `SELECT id FROM graph_entities WHERE type = ? AND name_key = ?
+          ORDER BY merged_into IS NULL DESC, status = 'accepted' DESC, created_at LIMIT 1`, [e.type, e.key],
       )[0]?.id;
+      if (!id && named) id = canonicalEntity(ctx, named)?.id;
       if (!id) {
         id = ulid();
         ctx.sql.exec(`INSERT INTO graph_entities (id, type, name, name_key, status, merged_into, created_at, created_by)
@@ -310,11 +344,8 @@ export const graphHandlers = {
   'drive/graph-entity': async (ctx, input) => {
     assertAllowed(await ctx.check(DRIVE_PERM.read));
     const readable = readability(ctx);
-    let row = ctx.sql.query<EntityRow>('SELECT * FROM graph_entities WHERE id = ?', [input.entityId])[0];
     // A merged entity answers as the one it was merged into.
-    for (let hops = 0; row?.merged_into && hops < 5; hops++) {
-      row = ctx.sql.query<EntityRow>('SELECT * FROM graph_entities WHERE id = ?', [row.merged_into])[0];
-    }
+    const row = canonicalEntity(ctx, input.entityId);
     const notFound = () => substratError('not_found', `entity not found: ${input.entityId}`);
     if (!row) throw notFound();
     const id = row.id;
@@ -375,6 +406,160 @@ export const graphHandlers = {
       .sort((a, b) => a.depth - b.depth || a.entity.name.localeCompare(b.entity.name));
 
     return { entity: entityOf(row), claims: viewClaims(ctx, claims), connections };
+  },
+
+  'drive/graph-entities': async (ctx, input) => {
+    // The gate on ASKING, like suggestions; each entity is then shown only through files the caller reads.
+    assertAllowed(await ctx.check(DRIVE_PERM.read));
+    const canMerge = (await ctx.check(DRIVE_PERM.write)).allowed;
+    const readable = readability(ctx);
+    const rows = ctx.sql.query<EntityRow & { file_id: string }>(
+      `SELECT e.*, x.file_id FROM graph_entities e JOIN (
+          SELECT subject_id AS entity_id, file_id FROM graph_claims WHERE subject_type = 'entity' AND status IN ('suggested', 'accepted')
+          UNION SELECT object_entity_id AS entity_id, file_id FROM graph_claims WHERE object_entity_id IS NOT NULL AND status IN ('suggested', 'accepted')
+        ) x ON x.entity_id = e.id
+        WHERE e.merged_into IS NULL ORDER BY e.type, e.name_key, e.id LIMIT 5000`,
+    );
+    const found = new Map<string, { row: EntityRow; documents: number }>();
+    for (const r of rows) {
+      if (!(await readable(r.file_id))) continue;
+      const seen = found.get(r.id);
+      if (seen) seen.documents++;
+      else found.set(r.id, { row: r, documents: 1 });
+    }
+    const entities = [...found.values()].slice(0, input.limit ?? 200).map(({ row, documents }) => ({ entity: entityOf(row), documents }));
+    return { entities, canMerge };
+  },
+
+  'drive/merge-graph-entities': async (ctx, input) => {
+    // Space-wide write: a merge moves what every document says about these entities, not one file's claims.
+    assertAllowed(await ctx.check(DRIVE_PERM.write));
+    const readable = readability(ctx);
+    const notFound = (id: string) => substratError('not_found', `entity not found: ${id}`);
+    const keep = canonicalEntity(ctx, input.entityId);
+    if (!keep || !(await entityVisible(ctx, readable, keep.id))) throw notFound(input.entityId);
+    const merging = new Map<string, EntityRow>();
+    for (const raw of new Set(input.mergeIds)) {
+      const row = canonicalEntity(ctx, raw);
+      if (!row || !(await entityVisible(ctx, readable, row.id))) throw notFound(raw);
+      if (row.id === keep.id) continue;
+      if (row.type !== keep.type) {
+        throw substratError('validation_failed', `“${row.name}” is a ${row.type.toLowerCase()} and “${keep.name}” a ${keep.type.toLowerCase()}: only the same kind can be merged`);
+      }
+      merging.set(row.id, row);
+    }
+    if (!merging.size) throw substratError('validation_failed', 'nothing to merge: pick at least one other entity');
+    const from = [...merging.keys()];
+    const all = [keep.id, ...from];
+    const marks = (ids: readonly string[]) => ids.map(() => '?').join(', ');
+
+    // An identifier that never changes, accepted with two different values, says these are two.
+    for (const p of PREDICATES) {
+      if (p.cardinality !== 'single' || p.temporality !== 'immutable' || !('value' in p.range)) continue;
+      const kind = p.range.value;
+      const values = [...new Set(ctx.sql.query<{ object_value: string }>(
+        `SELECT object_value FROM graph_claims WHERE subject_type = 'entity' AND subject_id IN (${marks(all)})
+          AND predicate = ? AND status = 'accepted' AND object_value IS NOT NULL`, [...all, p.id],
+      ).map((r) => r.object_value))];
+      if (values.length < 2) continue;
+      const shown = p.sensitive ? '' : ` (${values.map((v) => normalizeValue(kind, v)?.display ?? v).join(', ')})`;
+      throw substratError('conflict', `Not the same: they ${p.label.replace(/^has /, 'have different ')}${shown}, and that never changes. If one was misread, reject it first.`);
+    }
+
+    const now = ctx.now();
+    // Every claim the merge touches, as it was before: the log that makes it traceable.
+    const before = new Map<string, ClaimRow>();
+    const touch = (row: ClaimRow) => { if (!before.has(row.id)) before.set(row.id, { ...row }); };
+
+    const moving = ctx.sql.query<ClaimRow>(
+      `SELECT * FROM graph_claims WHERE (subject_type = 'entity' AND subject_id IN (${marks(from)})) OR object_entity_id IN (${marks(from)})`,
+      [...from, ...from],
+    );
+    for (const row of moving) {
+      touch(row);
+      const subjectId = row.subject_type === 'entity' && merging.has(row.subject_id) ? keep.id : row.subject_id;
+      const objectId = row.object_entity_id && merging.has(row.object_entity_id) ? keep.id : row.object_entity_id;
+      ctx.sql.exec('UPDATE graph_claims SET subject_id = ?, object_entity_id = ? WHERE id = ?', [subjectId, objectId, row.id]);
+    }
+
+    // Settle what the move made odd, by rule rather than by asking: the same statement twice,
+    // an entity related to itself, a question already answered elsewhere, two current values.
+    let superseded = 0;
+    const settle = (row: ClaimRow, status: GraphClaim['status'], decidedBy: string) => {
+      touch(row);
+      ctx.sql.exec('UPDATE graph_claims SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?', [status, decidedBy, now, row.id]);
+      row.status = status;
+      if (status === 'superseded') superseded++;
+    };
+    const claims = ctx.sql.query<ClaimRow>(
+      `SELECT * FROM graph_claims WHERE ((subject_type = 'entity' AND subject_id = ?) OR object_entity_id = ?) AND status <> 'superseded'
+        ORDER BY ingest_time, id`, [keep.id, keep.id],
+    );
+    const live = () => claims.filter((c) => c.status !== 'superseded');
+
+    // "Ana works for Ana": two ends of one relationship turned out to be one entity.
+    for (const c of live()) if (c.subject_type === 'entity' && c.subject_id === c.object_entity_id) settle(c, 'superseded', 'merge:same-entity');
+
+    // The same statement twice from one version of one document: keep the most decided one. A
+    // document's bare mention goes too when the same version ties it to the entity more strongly.
+    const byVersion = new Map<string, ClaimRow[]>();
+    for (const c of live()) {
+      const key = `${tripleKey(c)}|${c.file_id}|${c.version_id}`;
+      byVersion.set(key, [...(byVersion.get(key) ?? []), c]);
+    }
+    for (const group of byVersion.values()) {
+      if (group.length < 2) continue;
+      const ranked = [...group].sort((a, b) => RANK[a.status] - RANK[b.status] || a.ingest_time.localeCompare(b.ingest_time) || a.id.localeCompare(b.id));
+      for (const c of ranked.slice(1)) settle(c, 'superseded', 'merge:duplicate');
+    }
+    for (const c of live()) {
+      if (c.subject_type !== 'document' || c.predicate !== 'mentions' || c.status === 'accepted') continue;
+      const stronger = live().some((o) => o.id !== c.id && o.subject_type === 'document' && o.subject_id === c.subject_id
+        && o.version_id === c.version_id && o.object_entity_id === keep.id && o.predicate !== 'mentions');
+      if (stronger) settle(c, 'superseded', 'merge:duplicate');
+    }
+
+    // An open suggestion whose statement someone already decided, in any document: decided, as
+    // recording it fresh would have done.
+    const byTriple = new Map<string, ClaimRow[]>();
+    for (const c of live()) byTriple.set(tripleKey(c), [...(byTriple.get(tripleKey(c)) ?? []), c]);
+    for (const group of byTriple.values()) {
+      const accepted = group.some((c) => c.status === 'accepted');
+      const rejected = group.some((c) => c.status === 'rejected');
+      if (!accepted && !rejected) continue;
+      for (const c of group) {
+        if (c.status === 'suggested') settle(c, accepted ? 'accepted' : 'rejected', accepted ? 'auto:corroborates' : 'auto:rejected-before');
+      }
+    }
+
+    // One value at a time: two accepted values of a one-value predicate keep the one true latest
+    // (the document's date, then when it was read); the other becomes history, as accepting it would.
+    const byPredicate = new Map<string, ClaimRow[]>();
+    for (const c of live()) {
+      if (c.subject_type !== 'entity' || c.subject_id !== keep.id || c.status !== 'accepted') continue;
+      if (predicateById(c.predicate)?.cardinality !== 'single') continue;
+      byPredicate.set(c.predicate, [...(byPredicate.get(c.predicate) ?? []), c]);
+    }
+    for (const group of byPredicate.values()) {
+      const value = (c: ClaimRow) => `${c.object_entity_id ?? ''}|${c.object_value ?? ''}`;
+      if (new Set(group.map(value)).size < 2) continue;
+      const latest = [...group].sort((a, b) => (b.valid_time ?? '').localeCompare(a.valid_time ?? '') || b.ingest_time.localeCompare(a.ingest_time) || b.id.localeCompare(a.id))[0]!;
+      for (const c of group) if (value(c) !== value(latest)) settle(c, 'superseded', 'merge:older');
+    }
+
+    // The merged rows point at the one kept, and so does anything that was merged into them.
+    ctx.sql.exec(`UPDATE graph_entities SET merged_into = ? WHERE id IN (${marks(from)}) OR merged_into IN (${marks(from)})`, [keep.id, ...from, ...from]);
+    const real = [...merging.values()].some((e) => e.status === 'accepted') || live().some((c) => c.status === 'accepted');
+    if (real) ctx.sql.exec("UPDATE graph_entities SET status = 'accepted' WHERE id = ? AND status = 'suggested'", [keep.id]);
+
+    const log = [...before.values()].map((c) => ({
+      id: c.id, subjectId: c.subject_id, objectEntityId: c.object_entity_id, status: c.status, decidedBy: c.decided_by, decidedAt: c.decided_at,
+    }));
+    ctx.sql.exec('INSERT INTO graph_merges (id, into_id, from_ids, claims, merged_by, merged_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [ulid(), keep.id, JSON.stringify(from), JSON.stringify(log), ctx.principal, now]);
+
+    const kept = ctx.sql.query<EntityRow>('SELECT * FROM graph_entities WHERE id = ?', [keep.id])[0]!;
+    return { entity: entityOf(kept), merged: merging.size, moved: moving.length, superseded };
   },
 } satisfies {
   [K in GraphOp]: OperationHandler<HandlerInput<Ops[K]>, HandlerOutput<Ops[K]>>;

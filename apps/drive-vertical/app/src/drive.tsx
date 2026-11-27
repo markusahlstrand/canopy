@@ -390,9 +390,12 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const next = result.next;
     setLabelNotice({ text: labelNoticeFor(item, result), ...(next ? { more: () => labelItem(item, relabel, next) } : {}) });
   });
-  /** "Find people and companies" on a folder: queue its files for reading; a version already read is skipped by the runs. */
+  /**
+   * "Find people and companies": on a file, read it again now; on a folder, queue its files for
+   * reading — a version already read is skipped by the runs.
+   */
   const findEntitiesIn = (item: FileItem, after?: string) => void act(async () => {
-    const result = await extractEntities({ folderId: item.id, ...(after ? { after } : {}) });
+    const result = await extractEntities(item.isFolder ? { folderId: item.id, ...(after ? { after } : {}) } : { fileId: item.id });
     const next = result.next;
     setLabelNotice({ text: extractNoticeFor(item, result), ...(next ? { more: () => findEntitiesIn(item, next) } : {}) });
   });
@@ -1164,7 +1167,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       labelItem(item, action === RELABEL_WITH_AI);
       return;
     }
-    if (action === FIND_ENTITIES && item.isFolder) {
+    if (action === FIND_ENTITIES) {
       findEntitiesIn(item);
       return;
     }
@@ -1883,8 +1886,9 @@ export function labelNoticeFor(item: { name: string; isFolder: boolean }, result
     + (result.more ? ' More are waiting: continue to queue the next batch.' : '');
 }
 
-/** What a folder's "Find people and companies" queued, in words: suggestions show up as each file is read. */
-export function extractNoticeFor(item: { name: string }, result: LabelResult): string {
+/** What "Find people and companies" queued, in words: suggestions show up as each file is read. */
+export function extractNoticeFor(item: { name: string; isFolder?: boolean }, result: LabelResult): string {
+  if (item.isFolder === false) return `Reading “${item.name}” for people and companies. Suggestions appear in Suggestions in a minute or two.`;
   const files = (n: number) => `${n} ${n === 1 ? 'file' : 'files'}`;
   if (result.queued === 0) return `“${item.name}” has no files to read.`;
   return `Reading ${files(result.queued)} in “${item.name}” for people and companies. Files already read are skipped, and suggestions appear in Suggestions as each one finishes.`

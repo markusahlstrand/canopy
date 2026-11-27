@@ -32,7 +32,7 @@ import type { FileItem, FileKind } from './items';
 import { FileIcon } from './file-icon';
 import { SearchHighlight } from './search-highlight';
 import { AiLabelContext, EntityExtractionContext } from './ai-label';
-import { actionsFor, type PluginMenuItem, type SortKey, type SortState } from './file-table';
+import { ActionMenuItems, actionsFor, type PluginMenuItem, type SortKey, type SortState } from './file-table';
 
 type SubEntityTableProps = DetailedHTMLProps<HTMLAttributes<SubEntityTable<FileItem, SortKey>>, SubEntityTable<FileItem, SortKey>> & {
   label?: string;
@@ -132,11 +132,7 @@ function RowMenu({ file, onAction, readOnly, trashed, mirrored }: { file: FileIt
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
-        {actions.map((a) => (
-          <DropdownMenuItem key={a} variant={a === 'Delete' ? 'destructive' : undefined} onSelect={() => onAction(a, file)}>
-            {a}
-          </DropdownMenuItem>
-        ))}
+        <ActionMenuItems actions={actions} onSelect={(a) => onAction(a, file)} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -336,6 +332,11 @@ export function FileList({
   const menuFile = menu ? byId.get(menu.file.id) ?? menu.file : null;
   const menuActions = menuFile ? actionsFor(menuFile, readOnly, trashed, mirrored, aiLabel, aiExtract) : [];
   const menuPlugins = menuFile && !readOnly ? pluginMenuItems(menuFile.kind) : [];
+  // The row is draggable, but Chromium starts no drag from slotted light-DOM content: a
+  // press on the name (where people grab a row) only selects text. So the cells drawn
+  // here are draggable themselves; their dragstart travels through the slot to the row,
+  // which handles it like one on its own padding.
+  const draggable = !!onMove && !readOnly;
 
   return (
     <>
@@ -350,14 +351,14 @@ export function FileList({
         row-select={narrow ? undefined : true}
         row-open={narrow ? undefined : true}
         row-click
-        row-draggable={!!onMove && !readOnly ? true : undefined}
+        row-draggable={draggable ? true : undefined}
       />
       {[...mounted.entries()].map(([slot, { cell, column, id }]) => {
         const f = byId.get(id);
         if (!f) return null;
         return createPortal(
           column === 'name' ? (
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 items-center gap-3" draggable={draggable || undefined}>
               <FileIcon kind={f.kind} />
               <div className="min-w-0">
                 <span className="block max-w-[calc(100vw-9rem)] truncate font-medium md:max-w-none">
@@ -371,7 +372,7 @@ export function FileList({
               </div>
             </div>
           ) : column === 'modified' ? (
-            <span className="font-mono text-[12.5px] text-muted-foreground">{f.modified}</span>
+            <span className="font-mono text-[12.5px] text-muted-foreground" draggable={draggable || undefined}>{f.modified}</span>
           ) : (
             <RowMenu file={f} onAction={onAction} readOnly={readOnly} trashed={trashed} mirrored={mirrored} />
           ),
@@ -386,12 +387,8 @@ export function FileList({
         </DropdownMenuTrigger>
         {menuFile ? (
           <DropdownMenuContent align="start" className="w-48">
-            {menuActions.map((a) => (
-              // Open is the double-click, so it goes straight there rather than through `onAction`.
-              <DropdownMenuItem key={a} variant={a === 'Delete' ? 'destructive' : undefined} onSelect={() => (a === 'Open' ? onOpen(menuFile) : onAction(a, menuFile))}>
-                {a}
-              </DropdownMenuItem>
-            ))}
+            {/* Open is the double-click, so it goes straight there rather than through `onAction`. */}
+            <ActionMenuItems actions={menuActions} onSelect={(a) => (a === 'Open' ? onOpen(menuFile) : onAction(a, menuFile))} />
             {menuPlugins.length > 0 && menuActions.length > 0 && <DropdownMenuSeparator />}
             {menuPlugins.map((item) => (
               <DropdownMenuItem key={item.pluginId + item.label} onSelect={() => onAction(item.label, menuFile)}>

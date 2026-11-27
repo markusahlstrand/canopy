@@ -894,6 +894,14 @@ export const graphSuggestions = (limit = 50) => call<{ claims: GraphClaim[] }>(`
 /** One entity, what is said about it, and who or what it connects to. */
 export const graphEntity = (entityId: string) =>
   call<{ entity: GraphEntity; claims: GraphClaim[]; connections: GraphConnection[] }>(`/graph/entities/${encodeURIComponent(entityId)}`);
+/** An entity as the merge list shows it: how many of your readable documents name it. */
+export interface GraphEntitySummary { entity: GraphEntity; documents: number }
+/** The people, companies and places this space's documents name, and whether you may merge them. */
+export const graphEntities = (limit = 500) => call<{ entities: GraphEntitySummary[]; canMerge: boolean }>(`/graph/entities?limit=${limit}`);
+/** `mergeIds` are the same as `entityId`: everything said about them moves to it. */
+export const mergeGraphEntities = (entityId: string, mergeIds: string[]) =>
+  call<{ entity: GraphEntity; merged: number; moved: number; superseded: number }>(
+    `/graph/entities/${encodeURIComponent(entityId)}/merge`, { method: 'POST', body: JSON.stringify({ mergeIds }) });
 /** The selected space's settings, or (for a flow's categories) another space's the caller can read. */
 export const getSpaceSettings = (selectedSite = site) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', undefined, selectedSite);
 /** The space's saved metadata views, which any member may read and only an owner edits. */

@@ -371,4 +371,22 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
     changes INTEGER NOT NULL DEFAULT 0
   );` },
 
+  /**
+   * Two graph entities found to be one (`src/graph.ts`, `drive/merge-graph-entities`).
+   *
+   * A merge moves every claim about the merged entities to the one kept and points the merged
+   * rows at it (`graph_entities.merged_into`). One row here per merge: who did it and when, which
+   * entities went into which, and `claims` — each claim the merge touched, as it was before (its
+   * subject, object and status as JSON). Without it a merge would be the one change to the graph
+   * that leaves no trace of what it replaced, and could not be undone.
+   */
+  { version: '0020', sql: `CREATE TABLE graph_merges (
+    id TEXT PRIMARY KEY NOT NULL,
+    into_id TEXT NOT NULL REFERENCES graph_entities(id),
+    from_ids TEXT NOT NULL,
+    claims TEXT NOT NULL,
+    merged_by TEXT NOT NULL, merged_at TEXT NOT NULL
+  );
+  CREATE INDEX graph_merges_into ON graph_merges (into_id);` },
+
 ];

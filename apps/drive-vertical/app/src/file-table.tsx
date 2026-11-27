@@ -1,6 +1,6 @@
 import { useContext, useRef, useState, useLayoutEffect, type ReactNode, type KeyboardEvent } from "react";
 import type { FileItem } from './items';
-import { AiLabelContext, EntityExtractionContext, FIND_ENTITIES, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
+import { AiLabelContext, EntityExtractionContext, FIND_ENTITIES, isReprocess, LABEL_WITH_AI, RELABEL_WITH_AI, REPROCESS } from './ai-label';
 import { SearchHighlight } from "./search-highlight";
 import { FileIcon } from './file-icon';
 import { FileList, type FolderTree } from './file-list';
@@ -9,6 +9,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@canopy/ui";
 import { Skeleton } from "@canopy/ui";
@@ -140,21 +143,58 @@ const COLUMNS: { key: SortKey; label: string; className: string }[] = [
 /**
  * What the menus offer, per row — and nothing beyond what `onAction` can perform.
  *
- * `Share` and `Reprocess` came across with the component and have no operations behind
- * them; a folder cannot be downloaded or trashed either, so those are file-only. The rule
- * is the same one the rest of this UI follows: an item that does nothing is worse than an
- * item that is absent.
+ * `Share` came across with the component for every row; a folder cannot be downloaded or
+ * trashed either, so those are file-only. The rule is the same one the rest of this UI
+ * follows: an item that does nothing is worse than an item that is absent.
+ *
+ * The AI items (`isReprocess`) are drawn under a "Reprocess" submenu by `ActionMenuItems`,
+ * and only where the space turned the feature on: anywhere else they would do nothing. A
+ * mirrored space offers them too — its tree is the source's, but a file's label, description
+ * and category are the space's own, and its synced files are labelled like any other.
  */
 export function actionsFor(file: FileItem, readOnly = false, trashed = false, mirrored = false, aiLabel = false, aiExtract = false): string[] {
   if (readOnly) return ['Open'];
-  if (mirrored) return trashed ? [] : file.isFolder ? ['Open', 'Share'] : ['Open', 'Download'];
+  const ai = [
+    ...(aiLabel ? (file.isFolder ? [LABEL_WITH_AI, RELABEL_WITH_AI] : [LABEL_WITH_AI]) : []),
+    ...(aiExtract ? [FIND_ENTITIES] : []),
+  ];
+  if (mirrored) return trashed ? [] : file.isFolder ? ['Open', 'Share', ...ai] : ['Open', 'Download', ...ai];
   if (trashed) return ['Restore'];
   // Share is a FOLDER action and only a folder action: a grant narrows onto a folder and
   // reaches what is under it, so there is no such thing as sharing one file here.
-  // The AI items only where the space turned Document AI on: anywhere else they would do nothing.
   return file.isFolder
-    ? ['Open', 'Share', 'Rename', 'Move', ...(aiLabel ? [LABEL_WITH_AI, RELABEL_WITH_AI] : []), ...(aiExtract ? [FIND_ENTITIES] : [])]
-    : ['Open', 'Download', 'Rename', 'Move', ...(aiLabel ? [LABEL_WITH_AI] : []), 'Delete'];
+    ? ['Open', 'Share', 'Rename', 'Move', ...ai]
+    : ['Open', 'Download', 'Rename', 'Move', ...ai, 'Delete'];
+}
+
+/**
+ * A row's menu entries, in `actions` order: the AI ones gathered under one "Reprocess"
+ * submenu where the first of them stands, so Delete stays last. Every row menu draws
+ * through this — the table's, the list's and its right-click menu — so they never differ.
+ */
+export function ActionMenuItems({ actions, onSelect }: { actions: readonly string[]; onSelect: (action: string) => void }) {
+  const item = (a: string) => (
+    <DropdownMenuItem key={a} variant={a === 'Delete' ? 'destructive' : undefined} onSelect={() => onSelect(a)}>
+      {a}
+    </DropdownMenuItem>
+  );
+  const ai = actions.filter(isReprocess);
+  const entries: ReactNode[] = [];
+  for (const a of actions) {
+    if (!isReprocess(a)) entries.push(item(a));
+    else if (a === ai[0]) {
+      entries.push(
+        <DropdownMenuSub key={REPROCESS}>
+          <DropdownMenuSubTrigger>
+            <Icon name="sparkles" size={15} />
+            {REPROCESS}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-56">{ai.map(item)}</DropdownMenuSubContent>
+        </DropdownMenuSub>,
+      );
+    }
+  }
+  return <>{entries}</>;
 }
 
 function RowActions({ file, onAction, readOnly, trashed, mirrored }: { file: FileItem; onAction: (action: string, f: FileItem) => void; readOnly: boolean; trashed?: boolean; mirrored?: boolean }) {
@@ -172,15 +212,7 @@ function RowActions({ file, onAction, readOnly, trashed, mirrored }: { file: Fil
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
-        {actions.map((a) => (
-          <DropdownMenuItem
-            key={a}
-            variant={a === "Delete" ? "destructive" : undefined}
-            onSelect={() => onAction(a, file)}
-          >
-            {a}
-          </DropdownMenuItem>
-        ))}
+        <ActionMenuItems actions={actions} onSelect={(a) => onAction(a, file)} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

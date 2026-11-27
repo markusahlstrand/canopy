@@ -262,6 +262,20 @@ The first slice follows the principles above. It lives in the drive itself, not 
   the old version's open suggestions.
 - **Review**: the file's Details tab (per-claim and "accept all"), the space's Suggestions list
   (surest first, grouped by file), and an entity card with its facts, documents and connections.
+- **Merging** (`drive/merge-graph-entities`, the "People and companies" tab in Suggestions). A
+  person merges entities that the matchers could not tell apart. The list shows names that look
+  alike first: same kind, and every word of the shorter name in the longer one once case, accents
+  and legal form are set aside. The merge itself is deterministic. Every claim about the merged
+  entities moves to the one kept. The merged rows stay with `merged_into` pointing at it, so an old
+  link still lands, and their names become aliases: the next document naming one resolves to the
+  kept entity instead of recreating the duplicate. What the move makes odd is settled by rule: an
+  entity related to itself or the same statement twice in one version becomes history; a
+  suggestion whose statement was decided elsewhere takes that decision; two accepted values of a
+  one-value predicate keep the one with the latest document date. A merge is refused across kinds,
+  and when the entities carry different accepted values of an identifier that never changes (two
+  VAT numbers are two companies). It needs write on the whole space, because it moves what every
+  document says. Each merge is logged in `graph_merges` (migration 0020) with every claim it
+  touched as it was, so it leaves a trace and can be undone later.
 - **Permission comes from provenance.** A claim, an entity or a connection is visible only
   through a live file the caller can read. Connections are walked breadth-first over accepted
   claims, with documents as hops ("issued by X, addressed to Y" ties X to Y). This is not one
@@ -279,7 +293,7 @@ came from, which the space already holds.
 
 ### Not built yet
 
-- Merging two entities by hand (`merged_into` is in the schema and read paths already follow it).
+- Undoing a merge. The log holds what is needed; there is no operation or button yet.
 - Auto-promotion by trust and corroboration. Only identical-triple corroboration is automatic today.
 - `valid_to` intervals. Supersession is a status today, not a closed interval.
 - The cross-space read-time view, the core proposals inbox, and Vectorize-based semantic dedup.
