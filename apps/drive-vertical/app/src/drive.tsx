@@ -1683,7 +1683,8 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
           empty={empty}
         />
       ) : lens && spaceViews ? (
-        <SpaceViewBrowser
+        // A failed read is the error and its retry, never "No documents here" over stale or no rows.
+        loadFailed ? empty : <SpaceViewBrowser
           view={lens}
           files={lensFiles}
           categories={spaceViews.categories}

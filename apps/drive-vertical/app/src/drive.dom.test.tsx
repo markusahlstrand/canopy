@@ -2558,6 +2558,20 @@ describe('saved metadata views', () => {
     expect(JSON.parse(localStorage.getItem('canopy.drive.space-view')!)).toEqual({ version: 1, bySpace: { '': 'folders' } });
   });
 
+  it('shows a failed read as the error and its retry, not as an empty view', async () => {
+    await renderDrive([], [file('01T', 'top.txt')]);
+    await answer('/space-views', views);
+    await flush();
+    await answerWith('/folders/root/all-files', 403, { detail: 'forbidden' });
+    expect(screen.getByText("Couldn't load this view")).toBeTruthy();
+    expect(screen.queryByText('No documents here.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await flush();
+    await answer('/folders/root/all-files', { next: null, entries });
+    expect(screen.queryByText("Couldn't load this view")).toBeNull();
+    expect(within(screen.getByRole('list', { name: 'Category' })).getAllByRole('button')).toHaveLength(2);
+  });
+
   it('stays on the folders for a space with no views', async () => {
     await renderDrive([], [file('01T', 'top.txt')]);
     await answer('/space-views', { ...views, views: [], defaultView: null });
