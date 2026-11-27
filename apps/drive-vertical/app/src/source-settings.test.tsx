@@ -136,7 +136,7 @@ it('leaves Enter alone while an input method is composing', async () => {
   expect(fetcher.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false);
 });
 
-it('offers only what a3doc can do on a mirrored row', () => {
+it('offers only what a3doc can do on a mirrored row (the AI items aside, which the space owns)', () => {
   const file = { id: 'f', name: 'a.pdf', isFolder: false } as Parameters<typeof actionsFor>[0];
   const folder = { ...file, isFolder: true };
   expect(actionsFor(file, false, false, true)).toEqual(['Open', 'Download']);

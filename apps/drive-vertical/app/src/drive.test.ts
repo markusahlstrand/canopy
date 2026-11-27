@@ -225,10 +225,10 @@ describe('the table offers only what the screen can perform', () => {
     ]);
   });
 
-  it('still offers no Reprocess, and no Share on a FILE', () => {
-    // Reprocess came across with the component and has no operation behind it to this day.
-    // Share earned its place; it stays off files, because sharing one is not a thing the
-    // drive can do — the grant narrows onto a folder.
+  it('offers no Reprocess entry of its own, and no Share on a FILE', () => {
+    // Reprocess is a submenu the AI items are drawn under, not an action: with the AI off
+    // there is nothing under it, so nothing is offered. Share earned its place; it stays off
+    // files, because sharing one is not a thing the drive can do — the grant narrows onto a folder.
     const file = actionsFor({ id: '01A', name: 'a', kind: 'doc', modified: '—', size: '—', isFolder: false });
     const folder = actionsFor({ id: '01F', name: 'f', kind: 'folder', modified: '—', size: '—', isFolder: true });
     expect(file).not.toContain('Share');
@@ -269,26 +269,34 @@ describe('the AI labelling items', () => {
     expect(actionsFor(file, false, false, false, true)).toEqual(['Open', 'Download', 'Rename', 'Move', LABEL_WITH_AI, 'Delete']);
     expect(actionsFor(folder, false, false, false, true)).toEqual(['Open', 'Share', 'Rename', 'Move', LABEL_WITH_AI, RELABEL_WITH_AI]);
   });
-  it('stay off read-only, mirrored and trashed rows', () => {
+  it('stay off read-only and trashed rows', () => {
     expect(actionsFor(file, true, false, false, true)).toEqual(['Open']);
-    expect(actionsFor(file, false, false, true, true)).not.toContain(LABEL_WITH_AI);
     expect(actionsFor(file, false, true, false, true)).toEqual(['Restore']);
+    expect(actionsFor(file, false, true, true, true)).toEqual([]);
+  });
+  it('are on mirrored rows too: a synced file’s label is the space’s own', () => {
+    expect(actionsFor(file, false, false, true, true)).toEqual(['Open', 'Download', LABEL_WITH_AI]);
+    expect(actionsFor(folder, false, false, true, true, true)).toEqual(['Open', 'Share', LABEL_WITH_AI, RELABEL_WITH_AI, FIND_ENTITIES]);
   });
 });
 
 describe('the find people and companies item', () => {
   const file = { id: '01A', name: 'a.pdf', kind: 'pdf', modified: 'today', size: '1 kB', isFolder: false } as const;
   const folder = { id: '01F', name: 'Invoices', kind: 'folder', modified: '—', size: '—', isFolder: true } as const;
-  it('is on folders only, where the space reads people and companies', () => {
+  it('is on files and folders where the space reads people and companies', () => {
     expect(actionsFor(folder, false, false, false, false, true)).toEqual(['Open', 'Share', 'Rename', 'Move', FIND_ENTITIES]);
     expect(actionsFor(folder, false, false, false, true, true)).toEqual(['Open', 'Share', 'Rename', 'Move', LABEL_WITH_AI, RELABEL_WITH_AI, FIND_ENTITIES]);
+    expect(actionsFor(file, false, false, false, true, true)).toEqual(['Open', 'Download', 'Rename', 'Move', LABEL_WITH_AI, FIND_ENTITIES, 'Delete']);
     expect(actionsFor(folder)).not.toContain(FIND_ENTITIES);
-    expect(actionsFor(file, false, false, false, false, true)).not.toContain(FIND_ENTITIES);
+    expect(actionsFor(file)).not.toContain(FIND_ENTITIES);
   });
-  it('stays off read-only, mirrored and trashed folders', () => {
+  it('stays off read-only and trashed rows', () => {
     expect(actionsFor(folder, true, false, false, false, true)).toEqual(['Open']);
-    expect(actionsFor(folder, false, false, true, false, true)).not.toContain(FIND_ENTITIES);
     expect(actionsFor(folder, false, true, false, false, true)).toEqual(['Restore']);
+  });
+  it('says what a file request queued', async () => {
+    const { extractNoticeFor } = await import('./drive');
+    expect(extractNoticeFor(file, { queued: 1, skipped: 0, more: false })).toMatch(/^Reading “a\.pdf” for people and companies\./);
   });
   it('says what a folder request queued', async () => {
     const { extractNoticeFor } = await import('./drive');
