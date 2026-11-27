@@ -1368,10 +1368,17 @@ const operations = {
     if (!folder) throw substratError('not_found', `folder not found: ${input.folderId}`);
     const limit = input.limit ?? 500;
     // `substr`, not LIKE: a folder's name may hold `%` or `_`.
-    const rows = ctx.sql.query<FileRow & { folder_path: string; labels_json: string | null }>(
-      `SELECT f.*, d.path AS folder_path, x.labels_json AS labels_json FROM drive_files f
+    const rows = ctx.sql.query<FileRow & {
+      folder_path: string; labels_json: string | null; category: string | null; category_source: 'ai' | 'person' | null; mime: string | null;
+    }>(
+      `SELECT f.*, d.path AS folder_path, x.labels_json AS labels_json,
+              c.category AS category, CASE WHEN c.category IS NULL THEN NULL ELSE c.source END AS category_source,
+              v.mime AS mime
+         FROM drive_files f
          JOIN drive_folders d ON d.id = f.folder_id
          LEFT JOIN drive_file_details x ON x.file_id = f.id
+         LEFT JOIN drive_file_categories c ON c.file_id = f.id
+         LEFT JOIN drive_file_versions v ON v.id = f.current_version_id
         WHERE f.state = 'live' AND f.id > ?
           AND (? = '' OR d.path = ? OR substr(d.path, 1, length(?) + 1) = ? || '/')
         ORDER BY f.id LIMIT ?`,

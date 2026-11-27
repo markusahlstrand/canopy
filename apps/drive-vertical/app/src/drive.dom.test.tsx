@@ -2512,3 +2512,71 @@ describe('opening a folder in place', () => {
     expect((history.state as { crumbs: { name: string }[] }).crumbs.map(crumb => crumb.name)).toEqual(['Papers', 'Drafts', 'Old']);
   });
 });
+
+describe('saved metadata views', () => {
+  const views = {
+    views: [{ id: 'by-category', name: 'By category', groupBy: ['category'] }],
+    defaultView: 'by-category', canManage: false,
+    categories: [{ id: 'invoice', name: 'Invoices' }],
+  };
+  const entries = [
+    { ...file('01A', 'march.pdf'), folder_path: 'Bank/2026', labels: [], category: 'invoice', category_source: 'ai', mime: 'application/pdf' },
+    { ...file('01B', 'april.pdf'), folder_path: 'Bank', labels: [], category: 'invoice', category_source: 'person', mime: 'application/pdf' },
+    { ...file('01C', 'loose.txt'), folder_path: '', labels: [], category: null, category_source: null, mime: 'text/plain' },
+  ];
+  afterEach(() => localStorage.removeItem('canopy.drive.space-view'));
+
+  it('opens the space default, walks into a group, marks AI placements, and lets a person pick the folders', async () => {
+    await renderDrive([{ id: '01F', parent_id: 'root', name: 'Bank', path: 'Bank' }], [file('01T', 'top.txt')]);
+    await answer('/space-views', views);
+    await flush();
+    await answer('/folders/root/all-files', { next: null, entries });
+
+    // Grouped by category, wherever the files really sit; the unconfirmed AI choice is counted.
+    const groups = within(screen.getByRole('list', { name: 'Category' }));
+    expect(groups.getAllByRole('button').map(b => b.textContent)).toEqual([
+      expect.stringMatching(/^Invoices1 by AI2/), expect.stringMatching(/^No category1/),
+    ]);
+    expect(screen.getByRole('button', { name: 'View: By category' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Files with folders as tags' })).toBeNull();
+
+    fireEvent.click(groups.getByRole('button', { name: /^Invoices/ }));
+    await flush();
+    const rows = screen.getAllByRole('row').slice(1);
+    expect(rows.map(row => row.querySelector('td button')?.textContent)).toEqual(['april.pdf', 'march.pdfAIDocument AI chose this category and nobody has confirmed it yet.']);
+    expect(screen.getByText('2 items')).toBeTruthy();
+
+    // A person's own pick: the folders, kept for this space.
+    fireEvent.keyDown(screen.getByRole('button', { name: 'View: By category' }), { key: 'Enter' });
+    await flush();
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Folders' }));
+    await flush();
+    await answer('/folders/root/folders', [{ id: '01F', parent_id: 'root', name: 'Bank', path: 'Bank' }]);
+    await answer('/folders/root/files', [file('01T', 'top.txt')]);
+    expect(screen.getByText('top.txt')).toBeTruthy();
+    expect(screen.queryByRole('list', { name: 'Category' })).toBeNull();
+    expect(JSON.parse(localStorage.getItem('canopy.drive.space-view')!)).toEqual({ version: 1, bySpace: { '': 'folders' } });
+  });
+
+  it('shows a failed read as the error and its retry, not as an empty view', async () => {
+    await renderDrive([], [file('01T', 'top.txt')]);
+    await answer('/space-views', views);
+    await flush();
+    await answerWith('/folders/root/all-files', 403, { detail: 'forbidden' });
+    expect(screen.getByText("Couldn't load this view")).toBeTruthy();
+    expect(screen.queryByText('No documents here.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await flush();
+    await answer('/folders/root/all-files', { next: null, entries });
+    expect(screen.queryByText("Couldn't load this view")).toBeNull();
+    expect(within(screen.getByRole('list', { name: 'Category' })).getAllByRole('button')).toHaveLength(2);
+  });
+
+  it('stays on the folders for a space with no views', async () => {
+    await renderDrive([], [file('01T', 'top.txt')]);
+    await answer('/space-views', { ...views, views: [], defaultView: null });
+    await flush();
+    expect(screen.getByText('top.txt')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^View:/ })).toBeNull();
+  });
+});

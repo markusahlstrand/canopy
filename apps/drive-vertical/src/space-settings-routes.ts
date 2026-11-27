@@ -18,3 +18,22 @@ export function mountSpaceSettings<E extends Env>(app:Hono<E>, resolve:(c:Contex
   return c.json(settings.data);
  });
 }
+
+/**
+ * What any member needs to browse the space's saved views: the views, the default an owner set,
+ * and the categories' names (a view groups on category ids). Never the rest of the settings,
+ * which stay with the owners. `resolve` refuses a caller who is not in the space and says
+ * whether they own it, so the client knows whether to offer editing.
+ */
+export function mountSpaceViews<E extends Env>(app: Hono<E>, resolve: (c: Context<E>) => Promise<{ scope: string; directory: SettingsDirectory; canManage: boolean }>) {
+ app.get('/api/space-views', async c => {
+  const { scope, directory, canManage } = await resolve(c);
+  const settings = await directory.readSpaceSettings(scope);
+  const views = settings?.views ?? [];
+  const defaultView = settings?.defaultView && views.some(view => view.id === settings.defaultView) ? settings.defaultView : null;
+  return c.json({
+   views, defaultView, canManage,
+   categories: (settings?.categories ?? []).map(({ id, name }) => ({ id, name })),
+  });
+ });
+}
