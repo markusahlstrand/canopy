@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { EntityExtractionContext, FileGraphPanel, SuggestionsDialog } from './graph-review';
-import type { GraphClaim } from './api';
+import { EntityExtractionContext, FileGraphPanel, lookAlikes, SuggestionsDialog } from './graph-review';
+import type { GraphClaim, GraphEntity, GraphEntitySummary } from './api';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -92,5 +92,107 @@ describe('the space’s suggestions', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'factura.pdf' })).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'memo.pdf' }));
     expect(onOpenFile).toHaveBeenCalledWith('f2');
+  });
+});
+
+const summary = (id: string, name: string, type: GraphEntity['type'] = 'Organization', documents = 1, status: GraphEntity['status'] = 'suggested'): GraphEntitySummary =>
+  ({ entity: { id, type, name, status }, documents });
+
+describe('look-alike entities', () => {
+  it('groups names whose words agree once case, accents and legal form are set aside', () => {
+    const groups = lookAlikes([
+      summary('o1', 'Acme, S.L.'), summary('o2', 'ACME Servicios'), summary('o3', 'Canopy AB'),
+      summary('p1', 'Ana López', 'Person'), summary('p2', 'Ana Lopez Garcia', 'Person'), summary('p3', 'Ana Martín', 'Person'),
+      summary('x1', 'Acme', 'Place'),
+    ]);
+    expect(groups.map((g) => g.map((s) => s.entity.id))).toEqual([['o1', 'o2'], ['p1', 'p2']]);
+  });
+
+  it('does not go on a first name alone', () => {
+    expect(lookAlikes([summary('p1', 'Ana', 'Person'), summary('p2', 'Ana López', 'Person')])).toEqual([]);
+  });
+});
+
+describe('merging people and companies in Suggestions', () => {
+  function mockEntities(entities: GraphEntitySummary[], options: { canMerge?: boolean; mergeError?: string } = {}) {
+    let list = entities;
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/merge')) {
+        if (options.mergeError) return new Response(JSON.stringify({ detail: options.mergeError }), { status: 409, statusText: 'Conflict' });
+        const keep = decodeURIComponent(url.split('/graph/entities/')[1]!.replace('/merge', ''));
+        const body = JSON.parse(init!.body as string) as { mergeIds: string[] };
+        const kept = list.find((s) => s.entity.id === keep)!;
+        list = list.filter((s) => !body.mergeIds.includes(s.entity.id));
+        return new Response(JSON.stringify({ entity: kept.entity, merged: body.mergeIds.length, moved: 3, superseded: 0 }));
+      }
+      if (url.includes('/graph/entities?')) return new Response(JSON.stringify({ entities: list, canMerge: options.canMerge ?? true }));
+      if (url.includes('/graph/suggestions')) return new Response(JSON.stringify({ claims: [] }));
+      return new Response('{}', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    return fetch;
+  }
+  const openPeople = async () => {
+    render(<SuggestionsDialog open onOpenChange={() => {}} />);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'People and companies' }));
+    await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull());
+    return screen.queryByRole('region', { name: 'Possibly the same' });
+  };
+
+  it('offers look-alikes together, keeps the confirmed name by default, and merges', async () => {
+    const fetch = mockEntities([
+      summary('e1', 'Acme S.L.', 'Organization', 2, 'accepted'), summary('e3', 'ACME Servicios', 'Organization', 3), summary('e2', 'Canopy AB'),
+    ]);
+    const alike = await openPeople();
+    expect(within(alike!).getByText('Acme S.L.')).toBeTruthy();
+    expect(within(alike!).getByText('ACME Servicios')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Everyone else' })).getByText('Canopy AB')).toBeTruthy();
+
+    fireEvent.click(within(alike!).getByRole('button', { name: 'Merge these 2…' }));
+    const confirm = await screen.findByRole('region', { name: 'Merge' });
+    // Confirmed beats more documents.
+    expect((within(confirm).getByRole('radio', { name: /Acme S\.L\./ }) as HTMLInputElement).checked).toBe(true);
+    const before = fetch.mock.calls.filter(([u]) => String(u).includes('/graph/suggestions')).length;
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Merge' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/graph/entities/e1/merge', expect.objectContaining({ method: 'POST', body: JSON.stringify({ mergeIds: ['e3'] }) })));
+    expect(await screen.findByText('Merged 2 into “Acme S.L.”.')).toBeTruthy();
+    expect(screen.queryByText('ACME Servicios')).toBeNull();
+    // The statements name the kept entity now: they are read again.
+    await waitFor(() => expect(fetch.mock.calls.filter(([u]) => String(u).includes('/graph/suggestions')).length).toBe(before + 1));
+  });
+
+  it('merges a hand-picked selection into the name chosen, and will not mix kinds', async () => {
+    const fetch = mockEntities([summary('o1', 'Northwind'), summary('o2', 'NW Trading'), summary('p1', 'Bo Ek', 'Person')]);
+    await openPeople();
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Northwind' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Bo Ek' }));
+    expect(screen.getByText(/Only the same kind can be merged/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Merge 2…' }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Bo Ek' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select NW Trading' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Merge 2…' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /NW Trading/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/graph/entities/o2/merge', expect.objectContaining({ body: JSON.stringify({ mergeIds: ['o1'] }) })));
+  });
+
+  it('says why the space refused a merge, and stays on the choice', async () => {
+    mockEntities([summary('e1', 'Acme'), summary('e2', 'Acme Iberia')], { mergeError: 'Not the same: they have different VAT number (ESB1, ESA1), and that never changes.' });
+    const alike = await openPeople();
+    fireEvent.click(within(alike!).getByRole('button', { name: 'Merge these 2…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('different VAT number');
+    expect(screen.getByRole('region', { name: 'Merge' })).toBeTruthy();
+  });
+
+  it('readers see the list without anything to merge with, and can search it', async () => {
+    mockEntities([summary('e1', 'Acme'), summary('e2', 'Acme Iberia'), summary('e3', 'Canopy AB')], { canMerge: false });
+    await openPeople();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Merge/ })).toBeNull();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Find a person or company' }), { target: { value: 'canópy' } });
+    expect(screen.getByText('Canopy AB')).toBeTruthy();
+    expect(screen.queryByText('Acme')).toBeNull();
   });
 });

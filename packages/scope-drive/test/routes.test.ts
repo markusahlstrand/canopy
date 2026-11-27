@@ -38,6 +38,7 @@ describe('the derived route table', () => {
       'GET /api/folders/:folderId/shares',
       'GET /api/folders/by-path',
       'GET /api/folders/shared-with-me',
+      'GET /api/graph/entities',
       'GET /api/graph/entities/:entityId',
       'GET /api/graph/suggestions',
       'GET /api/people',
@@ -67,6 +68,7 @@ describe('the derived route table', () => {
       'POST /api/folders/:folderId/shares',
       'POST /api/folders/:parentId/ensure-path',
       'POST /api/folders/:parentId/folders',
+      'POST /api/graph/entities/:entityId/merge',
       'PUT /api/files/:fileId/category',
       'PUT /api/plugins',
     ]);

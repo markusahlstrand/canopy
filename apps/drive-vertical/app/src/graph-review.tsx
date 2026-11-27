@@ -4,15 +4,18 @@
  * from; a person accepts it (a fact) or rejects it (never asked again).
  *
  * Three places: a file's Details tab (what was read from this file), the space's Suggestions
- * (every open one, surest first, grouped by file), and an entity's card (what is known about it
- * and who or what it connects to).
+ * (every open one, surest first, grouped by file; and the people and companies, where two found
+ * to be one are merged), and an entity's card (what is known about it and who or what it
+ * connects to).
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Icon } from '@canopy/ui';
-import { predicateById } from '@canopy/scope-drive/spec/model';
 import {
-  decideGraphClaims, extractEntities, fileGraph, graphEntity, graphSuggestions,
-  type GraphClaim, type GraphConnection, type GraphEntity,
+  Button, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Icon, Input, Tabs, TabsContent, TabsList, TabsTrigger,
+} from '@canopy/ui';
+import { nameKey, predicateById } from '@canopy/scope-drive/spec/model';
+import {
+  decideGraphClaims, extractEntities, fileGraph, graphEntities, graphEntity, graphSuggestions, mergeGraphEntities,
+  type GraphClaim, type GraphConnection, type GraphEntity, type GraphEntitySummary,
 } from './api';
 import { EntityExtractionContext } from './ai-label';
 
@@ -223,15 +226,16 @@ function EntityCard({ entityId, onOpen, onClose }: { entityId: string | null; on
   );
 }
 
-/** The space's review queue: every open suggestion from files you can read, surest first, by file. */
+/** The space's review queue: open suggestions, and the people and companies to tidy by merging. */
 export function SuggestionsDialog({ open, onOpenChange, onOpenFile }: { open: boolean; onOpenChange: (open: boolean) => void; onOpenFile?: (fileId: string) => void }) {
+  const [tab, setTab] = useState<'statements' | 'entities'>('statements');
   const [claims, setClaims] = useState<GraphClaim[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
     try { setClaims((await graphSuggestions(100)).claims); setError(null); } catch (e) { setError(message(e, 'Could not load suggestions.')); }
   }, []);
-  useEffect(() => { if (open) { setClaims(null); void load(); } }, [open, load]);
+  useEffect(() => { if (open) { setClaims(null); setTab('statements'); void load(); } }, [open, load]);
 
   // Grouped by file, files in the order their surest suggestion ranks.
   const groups = useMemo(() => {
@@ -256,31 +260,221 @@ export function SuggestionsDialog({ open, onOpenChange, onOpenFile }: { open: bo
           <DialogDescription>People, companies and facts the AI read from this space’s documents. Accept what is right; rejected ones aren’t suggested again.</DialogDescription>
         </DialogHeader>
         <EntityCardHost>
-          <div className="min-h-0 space-y-4 overflow-y-auto px-5 py-4 text-sm">
-            {error ? <p role="alert" className="text-destructive">{error}</p> : null}
-            {claims === null && !error ? <p role="status" className="text-xs text-muted-foreground">Loading…</p> : null}
-            {claims?.length === 0 ? <p className="text-muted-foreground">Nothing waiting. New documents are read as they arrive, when “Suggest people and companies” is on in space settings.</p> : null}
-            {groups.map(([fileId, list]) => (
-              <section key={fileId} aria-label={list[0]!.fileName ?? 'Document'} className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  {onOpenFile ? (
-                    <button type="button" className="truncate text-left text-xs font-medium hover:underline" onClick={() => onOpenFile(fileId)}>{list[0]!.fileName ?? 'Document'}</button>
-                  ) : <span className="truncate text-xs font-medium">{list[0]!.fileName ?? 'Document'}</span>}
-                  {list.length > 1 ? <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void decide(fileId, list.map((c) => c.id), 'accept')}>Accept all {list.length}</Button> : null}
-                </div>
-                <ul className="space-y-2">
-                  {list.map((c) => (
-                    <li key={c.id} className="flex items-start justify-between gap-2 rounded border px-2 py-1.5">
-                      <ClaimLine claim={c} selfFileId={fileId} />
-                      <DecideButtons disabled={busy} onAccept={() => void decide(fileId, [c.id], 'accept')} onReject={() => void decide(fileId, [c.id], 'reject')} />
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ))}
-          </div>
+          <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="flex min-h-0 flex-1 flex-col gap-0">
+            <TabsList className="mx-5 mt-3">
+              <TabsTrigger value="statements">Statements{claims?.length ? ` (${claims.length})` : ''}</TabsTrigger>
+              <TabsTrigger value="entities">People and companies</TabsTrigger>
+            </TabsList>
+            <TabsContent value="statements" className="min-h-0 space-y-4 overflow-y-auto px-5 py-4 text-sm">
+              {error ? <p role="alert" className="text-destructive">{error}</p> : null}
+              {claims === null && !error ? <p role="status" className="text-xs text-muted-foreground">Loading…</p> : null}
+              {claims?.length === 0 ? <p className="text-muted-foreground">Nothing waiting. New documents are read as they arrive, when “Suggest people and companies” is on in space settings.</p> : null}
+              {groups.map(([fileId, list]) => (
+                <section key={fileId} aria-label={list[0]!.fileName ?? 'Document'} className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    {onOpenFile ? (
+                      <button type="button" className="truncate text-left text-xs font-medium hover:underline" onClick={() => onOpenFile(fileId)}>{list[0]!.fileName ?? 'Document'}</button>
+                    ) : <span className="truncate text-xs font-medium">{list[0]!.fileName ?? 'Document'}</span>}
+                    {list.length > 1 ? <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void decide(fileId, list.map((c) => c.id), 'accept')}>Accept all {list.length}</Button> : null}
+                  </div>
+                  <ul className="space-y-2">
+                    {list.map((c) => (
+                      <li key={c.id} className="flex items-start justify-between gap-2 rounded border px-2 py-1.5">
+                        <ClaimLine claim={c} selfFileId={fileId} />
+                        <DecideButtons disabled={busy} onAccept={() => void decide(fileId, [c.id], 'accept')} onReject={() => void decide(fileId, [c.id], 'reject')} />
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </TabsContent>
+            <TabsContent value="entities" className="flex min-h-0 flex-col text-sm">
+              {/* Statements name entities: after a merge they read the kept name. */}
+              {open && tab === 'entities' ? <EntitiesPanel onMerged={() => void load()} /> : null}
+            </TabsContent>
+          </Tabs>
         </EntityCardHost>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const words = (e: GraphEntity) => nameKey(e.type, e.name).split(' ').filter(Boolean);
+
+/**
+ * Entities that are probably one, grouped: same kind, and every word of the shorter name is in
+ * the longer one once case, accents and legal form are set aside ("Acme" and "ACME Servicios";
+ * "Ana López" and "Ana López García"). A person needs two words to go on, since a first name alone
+ * says little. Groups are joined through a shared longer name, so "Ana López" and "Ana García" land
+ * together beside "Ana López García", who may go by either. A hint for a person to judge, never a
+ * merge on its own.
+ */
+export function lookAlikes(list: readonly GraphEntitySummary[]): GraphEntitySummary[][] {
+  const parent = list.map((_, i) => i);
+  const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i]!)));
+  const keys = list.map((s) => words(s.entity));
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const a = list[i]!.entity, b = list[j]!.entity;
+      if (a.type !== b.type) continue;
+      const [short, long] = keys[i]!.length <= keys[j]!.length ? [keys[i]!, keys[j]!] : [keys[j]!, keys[i]!];
+      if (!short.length) continue;
+      if (a.type === 'Person' ? short.length < 2 : !short.some((w) => w.length >= 3)) continue;
+      const inLong = new Set(long);
+      if (short.every((w) => inLong.has(w))) parent[root(j)] = root(i);
+    }
+  }
+  const groups = new Map<number, GraphEntitySummary[]>();
+  list.forEach((s, i) => groups.set(root(i), [...(groups.get(root(i)) ?? []), s]));
+  return [...groups.values()].filter((g) => g.length > 1);
+}
+
+/** The one a merge keeps by default: a confirmed one, then the one most documents name. */
+const preferred = (list: readonly GraphEntitySummary[]) =>
+  [...list].sort((a, b) => Number(b.entity.status === 'accepted') - Number(a.entity.status === 'accepted') || b.documents - a.documents || a.entity.name.localeCompare(b.entity.name))[0];
+
+function EntityRow({ item, selectable, checked, onCheck }: { item: GraphEntitySummary; selectable: boolean; checked: boolean; onCheck: (on: boolean) => void }) {
+  const openEntity = useContext(OpenEntityContext);
+  const { entity } = item;
+  return (
+    <li className="flex items-center gap-2 rounded px-1 py-1 hover:bg-muted/50">
+      {selectable ? <Checkbox checked={checked} onCheckedChange={(v) => onCheck(v === true)} aria-label={`Select ${entity.name}`} /> : null}
+      <button type="button" className="min-w-0 truncate text-left font-medium text-primary underline-offset-2 hover:underline" onClick={() => openEntity(entity.id)}>{entity.name}</button>
+      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+        {[TYPE_LABEL[entity.type], `${item.documents} ${item.documents === 1 ? 'document' : 'documents'}`, entity.status === 'suggested' ? 'suggested' : null].filter(Boolean).join(' · ')}
+      </span>
+    </li>
+  );
+}
+
+/** The space's people, companies and places: find the ones that are the same, and merge them. */
+function EntitiesPanel({ onMerged }: { onMerged: () => void }) {
+  const [items, setItems] = useState<GraphEntitySummary[] | null>(null);
+  const [canMerge, setCanMerge] = useState(false);
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+  const [keepId, setKeepId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const got = await graphEntities();
+      setItems(Array.isArray(got?.entities) ? got.entities : []); setCanMerge(got?.canMerge === true); setError(null);
+    } catch (e) { setError(message(e, 'Could not load people and companies.')); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const shown = useMemo(() => {
+    const q = nameKey('Person', query);
+    return (items ?? []).filter((s) => !q || nameKey('Person', s.entity.name).includes(q));
+  }, [items, query]);
+  const alike = useMemo(() => lookAlikes(shown), [shown]);
+  const rest = useMemo(() => {
+    const grouped = new Set(alike.flat().map((s) => s.entity.id));
+    return shown.filter((s) => !grouped.has(s.entity.id));
+  }, [shown, alike]);
+
+  const chosen = (items ?? []).filter((s) => selected.has(s.entity.id));
+  const mixed = new Set(chosen.map((s) => s.entity.type)).size > 1;
+  const toggle = (ids: string[], on: boolean) => setSelected((now) => {
+    const next = new Set(now);
+    for (const id of ids) { if (on) next.add(id); else next.delete(id); }
+    return next;
+  });
+  const startMerge = (list: readonly GraphEntitySummary[]) => {
+    setSelected(new Set(list.map((s) => s.entity.id)));
+    setKeepId(preferred(list)?.entity.id ?? null);
+    setConfirming(true); setError(null); setNotice(null);
+  };
+
+  const merge = async () => {
+    const keep = chosen.find((s) => s.entity.id === keepId);
+    if (!keep) return;
+    setBusy(true); setError(null);
+    try {
+      const done = await mergeGraphEntities(keep.entity.id, chosen.filter((s) => s !== keep).map((s) => s.entity.id));
+      setNotice(`Merged ${done.merged + 1} into “${done.entity.name}”.`);
+      setConfirming(false); setSelected(new Set());
+      await load();
+      onMerged();
+    } catch (e) { setError(message(e, 'Could not merge these.')); } finally { setBusy(false); }
+  };
+
+  const row = (item: GraphEntitySummary) => (
+    <EntityRow key={item.entity.id} item={item} selectable={canMerge} checked={selected.has(item.entity.id)} onCheck={(on) => toggle([item.entity.id], on)} />
+  );
+
+  if (confirming) {
+    return (
+      <section aria-label="Merge" className="min-h-0 space-y-3 overflow-y-auto px-5 py-4">
+        <h3 className="font-medium">Merge {chosen.length} into one</h3>
+        <fieldset className="space-y-1.5">
+          <legend className="mb-1 text-xs text-muted-foreground">Keep the name</legend>
+          {chosen.map((s) => (
+            <label key={s.entity.id} className="flex items-center gap-2">
+              <input type="radio" name="keep" checked={keepId === s.entity.id} onChange={() => setKeepId(s.entity.id)} />
+              <span className="font-medium">{s.entity.name}</span>
+              <span className="text-xs text-muted-foreground">{s.documents} {s.documents === 1 ? 'document' : 'documents'}</span>
+            </label>
+          ))}
+        </fieldset>
+        <p className="text-xs text-muted-foreground">Everything the documents say about the others moves to the one you keep, and their names find it when new documents mention them.</p>
+        {error ? <p role="alert" className="text-destructive">{error}</p> : null}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => { setConfirming(false); setError(null); }}>Cancel</Button>
+          <Button type="button" disabled={busy || !keepId} onClick={() => void merge()}>Merge</Button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <div className="space-y-2 px-5 pt-4">
+        <Input type="search" placeholder="Find a person or company" aria-label="Find a person or company" value={query} onChange={(e) => setQuery(e.target.value)} />
+        {notice ? <p role="status" className="text-xs text-muted-foreground">{notice}</p> : null}
+        {error ? <p role="alert" className="text-destructive">{error}</p> : null}
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-3">
+        {items === null && !error ? <p role="status" className="text-xs text-muted-foreground">Loading…</p> : null}
+        {items?.length === 0 ? <p className="text-muted-foreground">No people or companies yet. They appear here as documents are read.</p> : null}
+        {items?.length && !shown.length ? <p className="text-muted-foreground">No one by that name.</p> : null}
+        {alike.length ? (
+          <section aria-label="Possibly the same" className="space-y-2">
+            <h3 className="text-xs font-medium text-muted-foreground">Possibly the same</h3>
+            {alike.map((group) => (
+              <div key={group[0]!.entity.id} className="rounded border px-2 py-1.5">
+                <ul>{group.map(row)}</ul>
+                {canMerge ? (
+                  <div className="flex justify-end">
+                    <Button type="button" size="sm" variant="outline" onClick={() => startMerge(group)}>Merge these {group.length}…</Button>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </section>
+        ) : null}
+        {rest.length ? (
+          <section aria-label={alike.length ? 'Everyone else' : 'Everyone'} className="space-y-1">
+            {alike.length ? <h3 className="text-xs font-medium text-muted-foreground">Everyone else</h3> : null}
+            <ul>{rest.map(row)}</ul>
+          </section>
+        ) : null}
+      </div>
+      {canMerge && chosen.length ? (
+        <div className="flex items-center justify-between gap-2 border-t px-5 py-3">
+          <span className="text-xs text-muted-foreground">
+            {mixed ? 'Only the same kind can be merged: people with people, companies with companies.' : `${chosen.length} selected`}
+          </span>
+          <div className="flex gap-2">
+            <Button type="button" size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+            <Button type="button" size="sm" disabled={chosen.length < 2 || mixed} onClick={() => startMerge(chosen)}>Merge {chosen.length}…</Button>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
