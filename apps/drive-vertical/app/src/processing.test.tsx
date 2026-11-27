@@ -111,6 +111,27 @@ describe('keeping the list fresh', () => {
     expect(getProcessing).toHaveBeenCalledTimes(before + 1);
   });
 
+  it('lets a read slower than the interval land, rather than starting another over it', async () => {
+    const SLOW = PROCESSING_ACTIVE_POLL_MS + 1_000;
+    let answer = 0;
+    getProcessing.mockImplementation(() => new Promise((resolve) => {
+      const n = ++answer;
+      setTimeout(() => resolve({ runs: [run({})], active: n }), SLOW);
+    }));
+    render(<Probe enabled nudge={0} open />);
+    await act(async () => { vi.advanceTimersByTime(SLOW); });
+    await flush();
+    expect(screen.getByText('active 1')).toBeTruthy();
+    // Ticks while the next read is out are skipped, so its answer is the one that lands.
+    await act(async () => { vi.advanceTimersByTime(PROCESSING_ACTIVE_POLL_MS); });
+    expect(getProcessing).toHaveBeenCalledTimes(2);
+    await act(async () => { vi.advanceTimersByTime(PROCESSING_ACTIVE_POLL_MS); });
+    expect(getProcessing).toHaveBeenCalledTimes(2);
+    await act(async () => { vi.advanceTimersByTime(SLOW); });
+    await flush();
+    expect(screen.getByText('active 2')).toBeTruthy();
+  });
+
   it('reads nothing while signed out or offline', async () => {
     render(<Probe enabled={false} nudge={0} />);
     await act(async () => { vi.advanceTimersByTime(PROCESSING_IDLE_POLL_MS * 2); });

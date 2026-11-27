@@ -77,8 +77,12 @@ export function useProcessing({ enabled, space, nudge, open }: { enabled: boolea
   const [error, setError] = useState<string | null>(null);
   // A read started for another space, or before the latest nudge, must not land.
   const seq = useRef(0);
+  // Reads still waiting for an answer. A tick skips while one is, so a server slower than the
+  // interval still lands each answer instead of every tick superseding the read before it.
+  const pending = useRef(0);
   const load = useCallback(async () => {
     const mine = ++seq.current;
+    pending.current++;
     try {
       const next = await getProcessing();
       // An answer without the list (a worker from before this route) is no list, not an empty one.
@@ -86,6 +90,8 @@ export function useProcessing({ enabled, space, nudge, open }: { enabled: boolea
       if (mine === seq.current) { setList(next); setError(null); }
     } catch (e) {
       if (mine === seq.current) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      pending.current--;
     }
   }, []);
 
@@ -97,7 +103,7 @@ export function useProcessing({ enabled, space, nudge, open }: { enabled: boolea
   const busy = (list?.active ?? 0) > 0;
   useEffect(() => {
     if (!enabled) return;
-    const id = window.setInterval(() => { if (!document.hidden) void load(); }, busy || open ? PROCESSING_ACTIVE_POLL_MS : PROCESSING_IDLE_POLL_MS);
+    const id = window.setInterval(() => { if (!document.hidden && !pending.current) void load(); }, busy || open ? PROCESSING_ACTIVE_POLL_MS : PROCESSING_IDLE_POLL_MS);
     return () => window.clearInterval(id);
   }, [enabled, busy, open, load]);
 
