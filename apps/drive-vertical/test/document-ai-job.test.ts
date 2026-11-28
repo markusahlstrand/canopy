@@ -14,6 +14,7 @@ import type { ModelHost } from '@substrat-run/vertical-host/model';
 import { DRIVE_PERM, ROOT_FOLDER_ID, driveManifest, driveModule } from '@canopy/scope-drive';
 import { ROLES } from '@canopy/scope-drive/provision';
 import { AUTO_LABEL_JOB, autoLabelJob, type AutoLabelPayload } from '../src/document-ai';
+import { processingList, type RunRecord } from '../src/processing-routes';
 
 let dir: string;
 let host: SqliteScopeHost;
@@ -101,5 +102,24 @@ describe('Document AI on a kernel host', () => {
     await host.runDueJobs(tenant, scope);
     expect((await host.jobRuns(tenant, scope, { moduleId: DRIVE, job: AUTO_LABEL_JOB, instance: file.id })).find((r) => r.id === again.id))
       .toMatchObject({ status: 'done', counters: { labelled: 1 } });
+  });
+
+  it('shows in the processing list while it waits, and how it ended once it is done', async () => {
+    const list = async (who = ada) => processingList({
+      scope: await host.getScope(who, tenant, scope), driveModuleId: DRIVE, now: () => Date.now(),
+      runs: async (filter) => (await host.jobRuns(tenant, scope, filter)) as RunRecord[],
+    });
+    const file = await upload('lease.txt', 'Lease agreement between C and D');
+    await start(file);
+    const before = (await list()).runs.filter((r) => r.file?.id === file.id);
+    expect(before.map((r) => [r.kind, r.state]).sort()).toEqual([['label', 'queued'], ['text', 'queued']]);
+    expect(before.every((r) => r.file?.name === 'lease.txt')).toBe(true);
+    // Someone outside the space sees none of it.
+    expect((await list(principalId.parse(ulid()))).runs).toEqual([]);
+
+    await host.runDueJobs(tenant, scope);
+    const after = (await list()).runs.filter((r) => r.file?.id === file.id);
+    expect(after.find((r) => r.kind === 'label')).toMatchObject({ state: 'done', outcome: 'labelled' });
+    expect(after.find((r) => r.kind === 'text')).toMatchObject({ state: 'done' });
   });
 });

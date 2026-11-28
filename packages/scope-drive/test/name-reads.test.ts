@@ -100,3 +100,34 @@ describe('drive/list-file-entries', () => {
     expect(second.next).toBeNull();
   });
 });
+
+describe('drive/resolve-files', () => {
+  interface Resolved { files: { id: string; name: string; folder_id: string }[]; attachments: { attachmentId: string; fileId: string }[] }
+  const blobOf = async (fileId: string) =>
+    (await (await as(ada)).invoke<{ version: { blob_ref: string } }>('drive/get-file', { fileId })).version.blob_ref;
+
+  it('names live files by file id and by attachment id', async () => {
+    const one = await write(ROOT_FOLDER_ID, 'resolve-one.txt', 'one');
+    const two = await write(ROOT_FOLDER_ID, 'resolve-two.txt', 'two');
+    const blob = await blobOf(two.id);
+    const out = await (await as(bjorn)).invoke<Resolved>('drive/resolve-files', { fileIds: [one.id, 'missing'], attachmentIds: [blob, 'nope'] });
+    expect(out.files.map((f) => f.name).sort()).toEqual(['resolve-one.txt', 'resolve-two.txt']);
+    expect(out.attachments).toEqual([{ attachmentId: blob, fileId: two.id }]);
+  });
+
+  it('leaves out trashed files and files the caller may not read', async () => {
+    const owner = await as(ada);
+    const trashed = await write(ROOT_FOLDER_ID, 'resolve-trashed.txt', 'gone');
+    await owner.invoke('drive/trash-file', { fileId: trashed.id });
+    const outside = await write(ROOT_FOLDER_ID, 'resolve-private.txt', 'no');
+    // Not a member of the space: nothing in it is theirs to read, so nothing is named to them.
+    const stranger = principalId.parse(ulid());
+
+    expect((await owner.invoke<Resolved>('drive/resolve-files', { fileIds: [trashed.id] })).files).toEqual([]);
+    const seen = await (await as(stranger)).invoke<Resolved>('drive/resolve-files', {
+      fileIds: [outside.id], attachmentIds: [await blobOf(outside.id)],
+    });
+    expect(seen.files).toEqual([]);
+    expect(seen.attachments).toEqual([]);
+  });
+});

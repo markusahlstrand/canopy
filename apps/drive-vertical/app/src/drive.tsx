@@ -63,6 +63,7 @@ import { NameDialog } from './name-dialog';
 import { FileDropZone } from './file-drop-zone';
 import { useUploadQueue } from './upload-queue';
 import { CommandPalette } from './command-palette';
+import { ProcessingButton, ProcessingPanel, useProcessing } from './processing';
 import type { Me } from './api';
 import { kindOf, type FileItem } from './items';
 import {
@@ -385,10 +386,15 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const [lensMore, setLensMore] = useState(false);
   /** What the last "Label with AI" queued, shown above the list until the next one — and how to go on when a folder had more. */
   const [labelNotice, setLabelNotice] = useState<{ text: string; more?: () => void } | null>(null);
+  /** The processing panel: what the space is working on in the background. `nudge` re-reads it after a request queues work. */
+  const [processingOpen, setProcessingOpen] = useState(false);
+  const [processingNudge, setProcessingNudge] = useState(0);
+  const processing = useProcessing({ enabled: !!auth.user && !offline, space: liveSpace, nudge: processingNudge, open: processingOpen });
   const labelItem = (item: FileItem, relabel: boolean, after?: string) => void act(async () => {
     const result = await labelWithAi(item.isFolder ? { folderId: item.id, relabel, ...(after ? { after } : {}) } : { fileId: item.id });
     const next = result.next;
     setLabelNotice({ text: labelNoticeFor(item, result), ...(next ? { more: () => labelItem(item, relabel, next) } : {}) });
+    setProcessingNudge(n => n + 1);
   });
   /**
    * "Find people and companies": on a file, read it again now; on a folder, queue its files for
@@ -398,6 +404,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
     const result = await extractEntities(item.isFolder ? { folderId: item.id, ...(after ? { after } : {}) } : { fileId: item.id });
     const next = result.next;
     setLabelNotice({ text: extractNoticeFor(item, result), ...(next ? { more: () => findEntitiesIn(item, next) } : {}) });
+    setProcessingNudge(n => n + 1);
   });
   // An empty mirrored folder is a question, so it answers with what the last sync found.
   const [syncNote, setSyncNote] = useState<ReturnType<typeof sourceSyncNote>>(null);
@@ -1414,6 +1421,18 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
         offline={offline}
         writeBlocked={linkPending || linkListingUnavailable}
         onSignIn={auth.user ? undefined : onSignIn}
+        processing={processing.list ? <ProcessingButton active={processing.list.active} onClick={() => setProcessingOpen(true)} /> : undefined}
+      />
+      <ProcessingPanel
+        open={processingOpen}
+        onOpenChange={setProcessingOpen}
+        list={processing.list}
+        error={processing.error}
+        onOpenFile={(fileId) => {
+          if (activePluginId) { if (!exitPluginApp()) return; changePreview(fileId); }
+          else if (!setPreviewing(fileId)) return;
+          setProcessingOpen(false);
+        }}
       />
 
       {linkMessage ? <p role="status" className="px-4 py-2 text-sm">{linkMessage}</p> : null}
@@ -1624,8 +1643,9 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
       {mirrored && view === 'drive' && !allFiles && !offline && !lens ? <FolderFreshness refresh={freshness.refresh} asking={freshness.asking} stalled={freshness.stalled} label={sourceLabel(source?.provider)} onCheck={freshness.check} /> : null}
       {labelNotice ? <p role="status" className="-mt-2 mb-3 flex items-center gap-2 text-xs text-muted-foreground">
         <Icon name="sparkles" className="size-3.5" />{labelNotice.text}
-        {labelNotice.more ? <button type="button" className="ml-auto underline" disabled={offline} onClick={labelNotice.more}>Continue</button> : null}
-        <button type="button" className={labelNotice.more ? 'underline' : 'ml-auto underline'} onClick={() => setLabelNotice(null)}>Dismiss</button>
+        <button type="button" className="ml-auto underline" onClick={() => setProcessingOpen(true)}>See progress</button>
+        {labelNotice.more ? <button type="button" className="underline" disabled={offline} onClick={labelNotice.more}>Continue</button> : null}
+        <button type="button" className="underline" onClick={() => setLabelNotice(null)}>Dismiss</button>
       </p> : null}
       {pinBusy && pinProgress ? <p role="status" className="-mt-2 mb-3 text-xs text-muted-foreground">Saving {pinProgress.files} files in {pinProgress.folders} folders for offline reading…</p> : null}
       {currentPinError ? <p role="alert" className="-mt-2 mb-3 text-xs text-destructive">Offline copy incomplete: {currentPinError}</p> : null}

@@ -1090,6 +1090,33 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
   },
 
   /**
+   * The live files behind a list of background runs, by file id and by attachment id (a
+   * version's `blob_ref`, which is what the kernel's text extraction is keyed on), keeping
+   * only the ones the caller may read. What the processing list names its rows with: a run
+   * whose file this leaves out is not shown, so the list never says what someone else's
+   * file is called, or that it exists.
+   *
+   * No `http` block: the worker's `/api/jobs` route calls it through the scope stub.
+   */
+  'drive/resolve-files': {
+    summary: 'The readable live files behind these file and attachment ids',
+    permission: {
+      key: 'drive:read',
+      entity: 'file',
+      resolved: 'many files at once — the handler checks each one and drops what the caller may not read',
+    },
+    input: z.object({
+      fileIds: z.array(z.string()).max(200).optional(),
+      attachmentIds: z.array(z.string()).max(200).optional(),
+    }),
+    output: z.object({
+      files: z.array(z.object({ id: z.string(), name: z.string(), folder_id: z.string() })),
+      /** Each readable attachment's file: a version of it, current or not, holds those bytes. */
+      attachments: z.array(z.object({ attachmentId: z.string(), fileId: z.string() })),
+    }),
+  },
+
+  /**
    * A folder's live files with the size and type of their current versions, by name.
    *
    * `list-folder` returns file rows only, so a client that must show sizes for a whole

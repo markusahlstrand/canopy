@@ -18,6 +18,7 @@ import { defaultAttachmentExtractors } from '@substrat-run/attachment-extractors
 import { createModelHost } from '@substrat-run/vertical-host/model';
 import { AUTO_LABEL_JOB, autoLabelJob, DEFAULT_DOCUMENT_AI_MODEL, latestWrote, manualInstance, MAX_TEXT_CHARS, planRun, settledBy, type AutoLabelPayload } from './document-ai.js';
 import { mountLabel } from './label-routes.js';
+import { mountProcessing, type RunRecord } from './processing-routes.js';
 import { alreadyReadBy, EXTRACT_ENTITIES_JOB, extractEntitiesJob, manualExtractInstance, type ExtractPayload } from './entity-extraction.js';
 import { mountExtract } from './extract-routes.js';
 import { isLockedName } from './editable-text.js';
@@ -1123,6 +1124,19 @@ mountLabel(app, async (c) => {
         console.error('drive.document-ai.run-failed', { error: error instanceof Error ? error.message : String(error) });
       }));
     },
+  };
+});
+mountProcessing(app, async (c) => {
+  const principal = await principalFor(c.env, c.req.raw);
+  if (!principal) throw new HTTPException(401, { message: 'unauthorized' });
+  const node = await nodeFor(c.req.raw, c.env);
+  const host = hostFor(c.env);
+  return {
+    // As the caller: the list names only files they can read.
+    scope: await host.getScope(principal, node.tenantId, node.scopeId),
+    driveModuleId: DRIVE_MODULE_ID,
+    runs: async (filter) => (await host.jobRuns(node.tenantId, node.scopeId, filter)) as RunRecord[],
+    now: () => Date.now(),
   };
 });
 mountMail(app, async (c) => {
