@@ -908,6 +908,25 @@ export const graphEntities = (limit = 500) => call<{ entities: GraphEntitySummar
 export const mergeGraphEntities = (entityId: string, mergeIds: string[]) =>
   call<{ entity: GraphEntity; merged: number; moved: number; superseded: number }>(
     `/graph/entities/${encodeURIComponent(entityId)}/merge`, { method: 'POST', body: JSON.stringify({ mergeIds }) });
+export type Task = import('@canopy/scope-drive/spec/model').Task;
+export type TaskStatus = import('@canopy/scope-drive/spec/model').TaskStatus;
+export type CalendarEvent = import('@canopy/scope-drive/spec/model').CalendarEvent;
+/** The space's tasks: open ones soonest due first; `all` adds the most recently finished. */
+export const listTasks = (show: 'open' | 'all' = 'open') => call<{ tasks: Task[]; canWrite: boolean }>(`/tasks?show=${show}`);
+export const createTask = (input: { title: string; notes?: string; due?: string | null }) =>
+  call<Task>('/tasks', { method: 'POST', body: JSON.stringify(input) });
+/** Change a task as read: a 409 means someone changed it since, so read it again. */
+export const updateTask = (taskId: string, revision: number, change: { title?: string; notes?: string; due?: string | null; status?: TaskStatus }) =>
+  call<Task>(`/tasks/${encodeURIComponent(taskId)}`, { method: 'PATCH', body: JSON.stringify({ revision, ...change }) });
+export const deleteTask = (taskId: string) => call<{ ok: true }>(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+/** What the calendar shows between two local dates (`to` exclusive): events, and open tasks due then. */
+export const readCalendar = (from: string, to: string) =>
+  call<{ events: CalendarEvent[]; tasks: Task[]; canWrite: boolean }>(`/calendar?from=${from}&to=${to}`);
+export interface EventInput { title: string; notes?: string; location?: string; allDay: boolean; start: string; end: string; timeZone?: string | null }
+export const createEvent = (input: EventInput) => call<CalendarEvent>('/events', { method: 'POST', body: JSON.stringify(input) });
+export const updateEvent = (eventId: string, revision: number, change: Partial<EventInput>) =>
+  call<CalendarEvent>(`/events/${encodeURIComponent(eventId)}`, { method: 'PATCH', body: JSON.stringify({ revision, ...change }) });
+export const deleteEvent = (eventId: string) => call<{ ok: true }>(`/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' });
 /** The selected space's settings, or (for a flow's categories) another space's the caller can read. */
 export const getSpaceSettings = (selectedSite = site) => call<import('../../src/space-settings').SpaceSettings>('/space-settings', undefined, selectedSite);
 /** The space's saved metadata views, which any member may read and only an owner edits. */

@@ -37,6 +37,9 @@ import { activeView, filesUnder, pathLabels, readViewChoice, saveViewChoice, typ
 import { FileTable, type SortKey, type SortState } from './file-table';
 import { AiLabelContext, EntityExtractionContext, FIND_ENTITIES, LABEL_WITH_AI, RELABEL_WITH_AI } from './ai-label';
 import { SuggestionsDialog } from './graph-review';
+import { builtinApp, TASKS_APP } from './builtin-apps';
+import { TasksView } from './tasks-view';
+import { CalendarView } from './calendar-view';
 import type { FolderPage, FolderTree } from './file-list';
 import { Topbar } from './topbar';
 import { AccountMenu } from './account-menu';
@@ -327,6 +330,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
   const installedPlugins = useInstalledPlugins();
   const pluginApps = effectivePlugins(installedPlugins).filter(row => row.enabled === 1 && !!pluginManifest(row).contributes.detailView);
   const activePlugin = pluginApps.find(row => row.id === activePluginId);
+  const activeBuiltin = builtinApp(activePluginId);
   const creators = pluginCreators(installedPlugins).map(({ row, creator }) => ({ key: `${row.id}:${creator.id}`, label: creator.label, icon: creator.icon, creator }));
   const startCreate = (key: string) => {
     const chosen = creators.find(entry => entry.key === key)?.creator;
@@ -1408,7 +1412,7 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       <div className="flex min-w-0 flex-1 flex-col">
       <Topbar
-        breadcrumb={activePlugin ? [pluginManifest(activePlugin).name] : view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : lens ? [rootLabel, lens.name, ...lensLabels] : [rootLabel, ...crumbs.map((c) => c.name)]}
+        breadcrumb={activeBuiltin ? [activeBuiltin.label] : activePlugin ? [pluginManifest(activePlugin).name] : view === 'trash' ? ['Trash'] : view === 'search' ? ['Search'] : view === 'shared' ? ['Shared with me'] : lens ? [rootLabel, lens.name, ...lensLabels] : [rootLabel, ...crumbs.map((c) => c.name)]}
         spaceName={activeSpaceName}
         onOpenSpaces={() => setSpacesOpen(true)}
         // The topbar counts the root as crumb 0; `upTo` counts it as -1.
@@ -1492,7 +1496,10 @@ export function DriveScreen({ onError, auth, onSignIn, onSignOut }: DriveScreenP
 
       {/* The one scrolling region: the rail and the topbar stay put. */}
       <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-3 sm:px-8 sm:pb-8 sm:pt-[22px]">
-      {activePluginId ? <section className="flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border bg-card">
+      {activeBuiltin ? (offline
+        ? <p role="status" className="flex-1 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">Offline — {activeBuiltin.label} needs a connection. Your files are still here.</p>
+        : activeBuiltin.id === TASKS_APP ? <TasksView key={liveSpace} /> : <CalendarView key={liveSpace} />)
+      : activePluginId ? <section className="flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border bg-card">
         <div className="flex items-center gap-2 border-b px-4 py-3"><Icon name="plugin" size={18} /><h2 className="min-w-0 flex-1 truncate font-medium">{activePlugin ? pluginManifest(activePlugin).name : 'Plugin unavailable'}</h2><Button size="sm" variant="outline" onClick={() => exitPluginApp()}>Back to drive</Button></div>
         {activePlugin ? <div className="min-h-0 flex-1"><SandboxPlugin plugin={activePlugin} /></div> : <p role="alert" className="p-4 text-sm text-muted-foreground">This plugin is no longer enabled in this space.</p>}
       </section> : <>

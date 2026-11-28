@@ -19,10 +19,13 @@ describe('the derived route table', () => {
     // declaration carries `/folders/{folderId}/files` and the mount decides how that
     // reaches a router. Pinning what it actually mounted is the point.
     expect(mounted.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
+      'DELETE /api/events/:eventId',
       'DELETE /api/files/:fileId',
       'DELETE /api/files/:fileId/comments/:commentId',
       'DELETE /api/folders/:folderId/shares',
       'DELETE /api/plugins/:id',
+      'DELETE /api/tasks/:taskId',
+      'GET /api/calendar',
       'GET /api/changes',
       'GET /api/files/:fileId',
       'GET /api/files/:fileId/comments',
@@ -47,12 +50,16 @@ describe('the derived route table', () => {
       'GET /api/plugins/:id/source',
       'GET /api/search',
       'GET /api/source',
+      'GET /api/tasks',
       'GET /api/trash',
+      'PATCH /api/events/:eventId',
       'PATCH /api/files/:fileId',
       'PATCH /api/files/:fileId/details',
       'PATCH /api/files/:fileId/versions/:versionId',
       'PATCH /api/folders/:folderId',
       'PATCH /api/plugins/:id',
+      'PATCH /api/tasks/:taskId',
+      'POST /api/events',
       'POST /api/files/:fileId/comments',
       'POST /api/files/:fileId/graph/decisions',
       'POST /api/files/:fileId/move',
@@ -69,6 +76,7 @@ describe('the derived route table', () => {
       'POST /api/folders/:parentId/ensure-path',
       'POST /api/folders/:parentId/folders',
       'POST /api/graph/entities/:entityId/merge',
+      'POST /api/tasks',
       'PUT /api/files/:fileId/category',
       'PUT /api/plugins',
     ]);
