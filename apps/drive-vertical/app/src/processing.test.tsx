@@ -68,6 +68,12 @@ describe('the panel', () => {
     expect(screen.queryByRole('region', { name: 'Recently finished' })).toBeNull();
   });
 
+  it('keeps the last list when a refresh fails, and says it may be out of date', () => {
+    render(<ProcessingPanel open onOpenChange={() => {}} list={{ runs: [run({ state: 'running' })], active: 1 }} error="offline" />);
+    expect(screen.getByRole('alert').textContent).toContain('may be out of date: offline');
+    expect(screen.getByText('Working on it…')).toBeTruthy();
+  });
+
   it('shows why the list could not be read', () => {
     render(<ProcessingPanel open onOpenChange={() => {}} list={null} error="offline" />);
     expect(screen.getByRole('alert').textContent).toContain('offline');

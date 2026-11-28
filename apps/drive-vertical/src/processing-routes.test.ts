@@ -22,6 +22,8 @@ function app(o: { runs: RunRecord[]; readable?: string[]; attachments?: Record<s
   const readable = new Set(o.readable ?? []);
   const invoke = vi.fn(async (op: string, input?: Record<string, unknown>) => {
     if (op === 'drive/resolve-files') {
+      // As the operation's schema does: at most 200 ids of each kind.
+      if (((input!.fileIds as string[]) ?? []).length > 200 || ((input!.attachmentIds as string[]) ?? []).length > 200) throw new Error('too many ids');
       const attachments = ((input!.attachmentIds as string[]) ?? [])
         .flatMap((attachmentId) => {
           const fileId = o.attachments?.[attachmentId];
@@ -86,6 +88,23 @@ describe('the processing list', () => {
     const list = await app({ runs: [old, ...done], readable: ['mine'] }).get();
     expect(list.runs[0]).toMatchObject({ id: old.id, state: 'queued', manual: true });
     expect(list.runs.filter((r) => r.state === 'done')).toHaveLength(PROCESSING_RECENT_MAX);
+  });
+
+  it('fills the finished slots with runs the caller can read, past any number they cannot', async () => {
+    const readableDone = run({ fileId: 'mine', status: 'done', endedAt: new Date(NOW - 60_000).toISOString() });
+    const hidden = Array.from({ length: PROCESSING_RECENT_MAX + 5 }, (_, i) => run({ fileId: `theirs${i}`, status: 'done', endedAt: new Date(NOW).toISOString() }));
+    const list = await app({ runs: [readableDone, ...hidden], readable: ['mine'] }).get();
+    expect(list.runs.map((r) => r.id)).toEqual([readableDone.id]);
+  });
+
+  it('names every run, however many files they touch, in bounded batches', async () => {
+    const activeRuns = Array.from({ length: 200 }, (_, i) => run({ fileId: `busy${i}` }));
+    const done = run({ fileId: 'finished', status: 'done', endedAt: new Date(NOW).toISOString() });
+    const a = app({ runs: [...activeRuns, done], readable: ['finished', ...activeRuns.map((r) => r.instance)] });
+    const list = await a.get();
+    expect(list.active).toBe(200);
+    expect(list.runs.find((r) => r.id === done.id)?.file?.name).toBe('finished.pdf');
+    expect(a.invoke.mock.calls.filter(([op]) => op === 'drive/resolve-files')).toHaveLength(2);
   });
 
   it('asks for no file names when nothing is running', async () => {

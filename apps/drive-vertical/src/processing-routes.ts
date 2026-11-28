@@ -97,6 +97,8 @@ export interface ProcessingList {
 export const PROCESSING_ACTIVE_MAX = 200;
 export const PROCESSING_RECENT_MAX = 30;
 const ERROR_MAX = 300;
+/** The most ids of each kind one `drive/resolve-files` call takes (its input schema's max). */
+const RESOLVE_BATCH = 200;
 
 function kindOf(run: RunRecord, driveModuleId: string): ProcessingKind | null {
   if (run.moduleId === ATTACHMENT_TEXT_MODULE) return run.job === ATTACHMENT_TEXT_JOB ? 'text' : null;
@@ -151,18 +153,14 @@ export async function processingList(access: ProcessingAccess): Promise<Processi
   ]);
   const now = access.now();
   const seen = new Set<string>();
+  // Every candidate, finished ones included: the cap on finished runs is applied after the
+  // caller's files are known, so runs on files they cannot read never take a slot.
   const picked: { run: RunRecord; kind: ProcessingKind }[] = [];
-  let finished = 0;
   for (const run of [...active, ...recent]) {
     if (seen.has(run.id)) continue;
     seen.add(run.id);
     const kind = kindOf(run, access.driveModuleId);
-    if (!kind) continue;
-    if (run.status !== 'running') {
-      if (finished >= PROCESSING_RECENT_MAX) continue;
-      finished++;
-    }
-    picked.push({ run, kind });
+    if (kind) picked.push({ run, kind });
   }
 
   const fileIds = new Set<string>();
@@ -174,20 +172,28 @@ export async function processingList(access: ProcessingAccess): Promise<Processi
       if (fileId) fileIds.add(fileId);
     }
   }
-  const resolved = fileIds.size || attachmentIds.size
-    ? await access.scope.invoke<{ files: { id: string; name: string; folder_id: string }[]; attachments: { attachmentId: string; fileId: string }[] }>(
-        'drive/resolve-files', { fileIds: [...fileIds].slice(0, 200), attachmentIds: [...attachmentIds].slice(0, 200) },
-      )
-    : { files: [], attachments: [] };
-  const files = new Map(resolved.files.map((f) => [f.id, { id: f.id, name: f.name, folderId: f.folder_id }]));
-  const byAttachment = new Map(resolved.attachments.map((a) => [a.attachmentId, a.fileId]));
+  // `drive/resolve-files` takes at most RESOLVE_BATCH ids of each kind, so every id is asked about in batches.
+  const fileList = [...fileIds];
+  const attachmentList = [...attachmentIds];
+  const batches = Math.ceil(Math.max(fileList.length, attachmentList.length) / RESOLVE_BATCH);
+  const resolved = await Promise.all(Array.from({ length: batches }, (_, i) =>
+    access.scope.invoke<{ files: { id: string; name: string; folder_id: string }[]; attachments: { attachmentId: string; fileId: string }[] }>(
+      'drive/resolve-files', {
+        fileIds: fileList.slice(i * RESOLVE_BATCH, (i + 1) * RESOLVE_BATCH),
+        attachmentIds: attachmentList.slice(i * RESOLVE_BATCH, (i + 1) * RESOLVE_BATCH),
+      },
+    )));
+  const files = new Map(resolved.flatMap((r) => r.files).map((f) => [f.id, { id: f.id, name: f.name, folderId: f.folder_id }]));
+  const byAttachment = new Map(resolved.flatMap((r) => r.attachments).map((a) => [a.attachmentId, a.fileId]));
   // A run over the whole space names no file, so it is shown to those who read the space's root.
   const readsSpace = picked.some((p) => p.kind === 'flow-backfill')
     ? await access.scope.invoke('drive/get-folder', { folderId: ROOT_FOLDER_ID }).then(() => true, () => false)
     : false;
 
   const runs: ProcessingRun[] = [];
+  let finished = 0;
   for (const { run, kind } of picked) {
+    if (run.status !== 'running' && finished >= PROCESSING_RECENT_MAX) continue;
     let file: ProcessingRun['file'] = null;
     if (kind === 'flow-backfill') {
       if (!readsSpace) continue;
@@ -196,6 +202,7 @@ export async function processingList(access: ProcessingAccess): Promise<Processi
       file = (fileId && files.get(fileId)) || null;
       if (!file) continue;
     }
+    if (run.status !== 'running') finished++;
     runs.push({ ...viewOf(run, kind, now), file });
   }
   const isActive = (r: ProcessingRun) => r.state !== 'done' && r.state !== 'failed';

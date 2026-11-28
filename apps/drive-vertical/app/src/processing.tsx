@@ -169,6 +169,10 @@ export function ProcessingPanel({ open, onOpenChange, list, error, onOpenFile }:
         {error && !list ? <p role="alert" className="px-4 py-3 text-sm text-destructive">Couldn’t load what is being processed: {error}</p> : null}
         {!list && !error ? <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p> : null}
         {list ? <>
+          {error ? <p role="alert" className="flex items-start gap-1.5 border-b px-4 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <Icon name="alert-triangle" size={13} className="mt-px shrink-0" />
+            <span>Couldn’t refresh, so this may be out of date: {error}</span>
+          </p> : null}
           <section aria-label="In progress">
             <h3 className="px-4 pb-1 pt-3 text-xs font-medium text-muted-foreground">In progress · {active.length}</h3>
             {active.length
