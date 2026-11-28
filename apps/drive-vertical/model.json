@@ -1,5 +1,87 @@
 {
   "entities": {
+    "calendar_event": {
+      "table": "drive_events",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "all_day": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "notes",
+          "location",
+          "all_day",
+          "start",
+          "end",
+          "time_zone",
+          "created_at",
+          "created_by",
+          "updated_at",
+          "updated_by",
+          "revision",
+          "deleted_at"
+        ],
+        "additionalProperties": false
+      },
+      "erasable": [
+        "location",
+        "notes",
+        "title"
+      ]
+    },
     "file": {
       "table": "drive_files",
       "fields": {
@@ -360,6 +442,87 @@
       "key": [
         "plugin_id",
         "principal"
+      ]
+    },
+    "task": {
+      "table": "drive_tasks",
+      "fields": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "due": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "notes",
+          "status",
+          "due",
+          "created_at",
+          "created_by",
+          "updated_at",
+          "updated_by",
+          "completed_at",
+          "completed_by",
+          "revision",
+          "deleted_at"
+        ],
+        "additionalProperties": false
+      },
+      "erasable": [
+        "notes",
+        "title"
       ]
     }
   }

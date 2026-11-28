@@ -34,6 +34,8 @@ export * from './flow-graph.js';
 export * from './ontology.js';
 export * from './graph.js';
 import { graphClaim, graphConnection, graphEntity, graphEntitySummary, graphExtraction, graphMergeResult } from './graph.js';
+export * from './scheduling.js';
+import { calendarEvent, calendarWindow, createEventInput, createTaskInput, task, updateEventInput, updateTaskInput } from './scheduling.js';
 
 /**
  * One path segment: a folder or file name, never a path.
@@ -165,6 +167,38 @@ export const driveEntities = defineEntities({
       revision: z.number().int(), updated_at: z.string(), updated_by: z.string(),
     }),
     key: ['file_id'], parents: ['file'],
+  },
+
+  /**
+   * Something to be done in this space (`spec/scheduling.ts`). Space-wide, like membership: a
+   * member who reads the space reads its tasks, and an editor writes them. Removed is
+   * `deleted_at`, not a missing row, so a sync can tell gone from never-seen.
+   */
+  task: {
+    table: 'drive_tasks',
+    fields: z.object({
+      id: z.string(), title: z.string(), notes: z.string(),
+      status: z.string(), due: z.string().nullable(),
+      created_at: z.string(), created_by: z.string(), updated_at: z.string(), updated_by: z.string(),
+      completed_at: z.string().nullable(), completed_by: z.string().nullable(),
+      revision: z.number().int(), deleted_at: z.string().nullable(),
+    }),
+    erasable: ['title', 'notes'],
+  },
+
+  /**
+   * Something that happens at a time in this space (`spec/scheduling.ts`): all-day on local
+   * dates, or timed between UTC instants with the zone it was planned in. Space-wide, as tasks.
+   */
+  calendar_event: {
+    table: 'drive_events',
+    fields: z.object({
+      id: z.string(), title: z.string(), notes: z.string(), location: z.string(),
+      all_day: z.number().int().min(0).max(1), start: z.string(), end: z.string(), time_zone: z.string().nullable(),
+      created_at: z.string(), created_by: z.string(), updated_at: z.string(), updated_by: z.string(),
+      revision: z.number().int(), deleted_at: z.string().nullable(),
+    }),
+    erasable: ['title', 'notes', 'location'],
   },
 
   /** Display identity only. The principal is the row key; no permission is granted on it. */
@@ -976,6 +1010,76 @@ export const driveOperations = defineOperations(driveEntities, DRIVE_PERMISSIONS
     input: z.object({ entityId: z.string(), mergeIds: z.array(z.string()).min(1).max(20) }),
     output: graphMergeResult,
     http: { method: 'POST', path: '/graph/entities/{entityId}/merge' },
+  },
+
+  /**
+   * The space's tasks (`spec/scheduling.ts`): open ones first, soonest due first, then those with
+   * no date. `show: 'all'` adds the most recently finished. Space-wide: read with the space.
+   */
+  'drive/list-tasks': {
+    summary: "List the space's tasks",
+    permission: 'drive:read',
+    input: z.object({ show: z.enum(['open', 'all']).optional() }),
+    output: z.object({ tasks: z.array(task), canWrite: z.boolean() }),
+    http: { method: 'GET', path: '/tasks' },
+  },
+  'drive/create-task': {
+    summary: 'Add a task to the space',
+    permission: 'drive:write',
+    input: createTaskInput,
+    output: task,
+    http: { method: 'POST', path: '/tasks' },
+  },
+  /** Change a task the caller read: refused as a conflict when someone changed it since (`revision`). */
+  'drive/update-task': {
+    summary: 'Change or tick off a task',
+    permission: 'drive:write',
+    input: updateTaskInput,
+    output: task,
+    http: { method: 'PATCH', path: '/tasks/{taskId}' },
+    patchException: 'A partial edit names the revision it read; without it two people editing the same entry would silently overwrite each other.',
+  },
+  'drive/delete-task': {
+    summary: 'Remove a task',
+    permission: 'drive:write',
+    input: z.object({ taskId: z.string() }),
+    output: z.object({ ok: z.literal(true) }),
+    http: { method: 'DELETE', path: '/tasks/{taskId}' },
+  },
+  /**
+   * What the space's calendar shows between two local dates (`to` exclusive): its events, and
+   * the open tasks due in that window. Timed events are read a day wider on each side, because
+   * a local day is not a UTC day; the client places each one in its own zone.
+   */
+  'drive/calendar': {
+    summary: "Read the space's calendar between two dates",
+    permission: 'drive:read',
+    input: calendarWindow,
+    output: z.object({ events: z.array(calendarEvent), tasks: z.array(task), canWrite: z.boolean() }),
+    http: { method: 'GET', path: '/calendar' },
+  },
+  'drive/create-event': {
+    summary: "Add an event to the space's calendar",
+    permission: 'drive:write',
+    input: createEventInput,
+    output: calendarEvent,
+    http: { method: 'POST', path: '/events' },
+  },
+  /** Move or change an event the caller read: refused as a conflict when someone changed it since. */
+  'drive/update-event': {
+    summary: 'Move or change a calendar event',
+    permission: 'drive:write',
+    input: updateEventInput,
+    output: calendarEvent,
+    http: { method: 'PATCH', path: '/events/{eventId}' },
+    patchException: 'A partial edit names the revision it read; without it two people editing the same entry would silently overwrite each other.',
+  },
+  'drive/delete-event': {
+    summary: 'Remove a calendar event',
+    permission: 'drive:write',
+    input: z.object({ eventId: z.string() }),
+    output: z.object({ ok: z.literal(true) }),
+    http: { method: 'DELETE', path: '/events/{eventId}' },
   },
 
   'drive/keep-version': {

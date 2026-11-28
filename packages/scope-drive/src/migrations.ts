@@ -389,4 +389,37 @@ UPDATE drive_plugin_installs SET granted_capabilities = CASE WHEN json_valid(man
   );
   CREATE INDEX graph_merges_into ON graph_merges (into_id);` },
 
+  /**
+   * The space's tasks and calendar (`spec/scheduling.ts`, `src/scheduling.ts`).
+   *
+   * - `drive_tasks`: `status` is JSCalendar's progress vocabulary; `due` a local date. Who ticked
+   *   it off and when is kept beside the status, because "who did this" is the first question a
+   *   shared list is asked.
+   * - `drive_events`: `all_day` decides how `start`/`end` read — local dates with `end` the last
+   *   day, or UTC instants with `end` exclusive — so one window query per kind stays a plain range.
+   *
+   * Both carry `revision` for optimistic concurrency and `deleted_at` for removal.
+   */
+  { version: '0021', sql: `CREATE TABLE drive_tasks (
+    id TEXT PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'needs-action' CHECK (status IN ('needs-action', 'in-process', 'completed', 'cancelled')),
+    due TEXT,
+    created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL,
+    completed_at TEXT, completed_by TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
+    deleted_at TEXT
+  );
+  CREATE INDEX drive_tasks_open ON drive_tasks (deleted_at, status, due);
+  CREATE TABLE drive_events (
+    id TEXT PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', location TEXT NOT NULL DEFAULT '',
+    all_day INTEGER NOT NULL CHECK (all_day IN (0, 1)),
+    start TEXT NOT NULL, "end" TEXT NOT NULL, time_zone TEXT,
+    created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    deleted_at TEXT
+  );
+  CREATE INDEX drive_events_window ON drive_events (deleted_at, all_day, start);` },
+
 ];

@@ -41,6 +41,7 @@ import {
 import { openSpace, spaceLabel } from './space-navigation';
 import { pluginManifest } from './installed-plugins';
 import { currentSite, listSites, type PluginInstall, type Site } from './api';
+import { BUILTIN_APPS } from './builtin-apps';
 
 /** The views this screen has. The portal's Home, Starred and Settings are not among them. */
 const NAV = [
@@ -65,6 +66,8 @@ export const SIDEBAR_ICONS = [
   'users',
   'model',
   'sparkles',
+  'check-square',
+  'calendar',
 ] as const;
 
 /** Collapsed-or-not outlives a reload, the way it did in the portal's settings. */
@@ -315,6 +318,8 @@ export function Sidebar({ active, onNavigate, onNewFolder, onUpload, creators = 
               onClick={() => onNavigate(n.id)}
             />
           ))}
+          {onOpenPlugin ? BUILTIN_APPS.map(app => <NavRow key={app.id} icon={app.icon} label={app.label} active={activePluginId === app.id}
+            collapsed={narrow} disabled={offline} onClick={() => onOpenPlugin(app.id)} />) : null}
           {onFlows ? <NavRow icon="model" label="Flows" active={false} collapsed={narrow} disabled={offline} onClick={onFlows} /> : null}
           {onSuggestions ? <NavRow icon="sparkles" label="Suggestions" active={false} collapsed={narrow} disabled={offline} onClick={onSuggestions} /> : null}
         </nav>

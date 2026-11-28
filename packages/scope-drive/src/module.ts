@@ -3,6 +3,7 @@ import { landedMailAttachment, landMailChange, mailSummary } from './mail-landin
 import { searchSnippet, SNIPPET_SCAN_LIMIT } from './search-snippet.js';
 import { automationHandlers, queueArrival, readCategory, readOrigin, readSend } from './automation.js';
 import { graphHandlers } from './graph.js';
+import { schedulingHandlers } from './scheduling.js';
 import { folderRefreshHandlers } from './folder-refresh.js';
 /**
  * The drive's handlers — the first canopy operations written as scope-local code.
@@ -1752,6 +1753,7 @@ const operations = {
   },
   ...automationHandlers,
   ...graphHandlers,
+  ...schedulingHandlers,
   ...folderRefreshHandlers,
 } satisfies {
   [K in keyof typeof driveOperations]: OperationHandler<
