@@ -138,6 +138,18 @@ describe('keeping the list fresh', () => {
     expect(screen.getByText('active 2')).toBeTruthy();
   });
 
+  it('keeps polling when a read a nudge superseded never answers', async () => {
+    getProcessing.mockImplementationOnce(() => new Promise(() => {}));
+    getProcessing.mockResolvedValue({ runs: [run({})], active: 1 });
+    const view = render(<Probe enabled nudge={0} open />);
+    view.rerender(<Probe enabled nudge={1} open />);
+    await flush();
+    expect(screen.getByText('active 1')).toBeTruthy();
+    const calls = getProcessing.mock.calls.length;
+    await act(async () => { vi.advanceTimersByTime(PROCESSING_ACTIVE_POLL_MS); });
+    expect(getProcessing.mock.calls.length).toBe(calls + 1);
+  });
+
   it('reads nothing while signed out or offline', async () => {
     render(<Probe enabled={false} nudge={0} />);
     await act(async () => { vi.advanceTimersByTime(PROCESSING_IDLE_POLL_MS * 2); });
